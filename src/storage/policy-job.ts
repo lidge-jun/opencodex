@@ -6,6 +6,7 @@
  * proxy event loop stays responsive.
  */
 import type { CleanupMode, CleanupResult } from "./cleanup";
+import { spawnWorker } from "../lib/worker-embed";
 import { resolveCodexHomeDir } from "../codex/home";
 import {
   tryBeginStorageMutation,
@@ -310,7 +311,7 @@ function runInWorker(opts: RequestPolicyRunOptions & { blockMs?: number }): Prom
     let settled = false;
     let worker: Worker;
     try {
-      worker = new Worker(new URL("./policy-worker.ts", import.meta.url).href);
+      worker = spawnWorker(new URL("./policy-worker.ts", import.meta.url).href, "policy-worker");
       reservation.bind(worker);
     } catch (error) {
       reservation.release();

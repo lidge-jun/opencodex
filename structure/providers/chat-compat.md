@@ -498,6 +498,14 @@ reasoning.
 
 > Decision record: [ADR-0068](../decisions/ADR-0068-reasoning-display-parity-hidethinkingsummary.md)
 
+`src/chat/inbound.ts` translates legacy Chat `functions`, assistant `function_call`, and textual
+`role: "function"` results as one Responses function exchange. Missing or null assistant
+`function_call` fields mean no call and preserve ordinary assistant text. The translator assigns
+bounded sequential call IDs and pairs results by function name; malformed or orphan results fail
+explicitly, and image-bearing legacy results remain unsupported rather than losing media.
+
+> Decision record: [ADR-0111](../decisions/ADR-0111-legacy-chat-function-history.md)
+
 ## Chat streamed tool-call identity
 
 `src/adapters/openai-chat.ts` retains a call's first observed non-negative safe integer

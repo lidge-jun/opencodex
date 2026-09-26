@@ -341,7 +341,8 @@ async function handleChatCompletionsWithBudget(
   } else if (internalBody.store === undefined) {
     internalBody.store = false;
   }
-  if (settledRoute && internalBody.reasoning !== undefined) {
+  if (settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy"
+    && internalBody.reasoning !== undefined) {
     const { stripEmptyLadderEffort, supportedLadderFor } = await import("./effort-policy");
     const ladder = supportedLadderFor({ provider: settledRoute.provider, modelId: settledRoute.modelId });
     const next = stripEmptyLadderEffort(internalBody.reasoning, ladder);

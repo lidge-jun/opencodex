@@ -6,6 +6,21 @@
 
 `src/remote-control/workspace-agent-connection.ts` intersects presence with enrollment authority and negotiates explicit session grants. `src/remote-control/workspace-rpc.ts` snapshots session/device/root/capabilities and rejects mismatches before invoking the executor. The paired Hub is trusted to select an approved root over authenticated WSS; workspace control traffic is not an untrusted opaque relay protocol.
 
+Encrypted RPC v2 prepares a request with a bounded executor lifetime without invoking it. Only a
+separate authenticated grant admits execution. The coordinator sends that grant after prepare
+delivery settles, checking the original pending request again when the serialized grant send starts.
+A prepare whose send is still backpressured at coordinator timeout therefore cannot execute later.
+The endpoint starts its relative deadline on prepare receipt, never resets it on grant, and removes
+ungranted requests on cancellation or expiry. Granted work receives the same abort signal through
+the executor queue. The default 65-second RPC window exceeds the supported 60-second command ceiling.
+Timeout requests cancellation but does not confirm it: an already-sent grant can still be delayed
+in transit or its operation can already be running. The wire framing and encryption are unchanged;
+RPC v1 peers fail closed and must upgrade together rather than fall back to immediate execution.
+
+> Decision record: [ADR-0108](decisions/ADR-0108-remote-workspace-rpc-deadlines.md)
+
+> Decision record: [ADR-0121](decisions/ADR-0121-remote-workspace-execution-grants.md)
+
 `src/remote-control/workspace-executor.ts` checks approved root identity, relative paths, file size and write preconditions. File reads and write preconditions open descriptors nonblocking before verifying regular-file identity, so special files cannot wait for a peer during open. Its optional command runner lives in `src/remote-control/workspace-command-runner.ts`. Linux uses bubblewrap outside writable workspace roots and checks executable/parent permissions before invocation. The official Windows and macOS native helpers refuse commands; file tools remain independent of command availability.
 
 `src/remote-control/workspace-hub.ts`, `src/remote-control/workspace-device.ts` and `src/remote-control/workspace-sessions.ts` own separate persisted state. `src/remote-control/workspace-secret-store.ts` requires private permissions and rejects access failures rather than treating them as first-run absence. Publication reuses `src/config/atomic-write.ts`; workspace file publication uses the remote-workspace publisher in `src/lib/windows-atomic-replace.ts`.

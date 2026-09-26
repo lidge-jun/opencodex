@@ -20,7 +20,9 @@
  * to gateway never flips a working Desktop under the operator.
  */
 import { getConfigDir } from "../config/paths";
+import { join } from "node:path";
 import type { OcxConfig } from "../types";
+import { claudeConfigDir } from "./auth-detect";
 import { inspectDesktop3pConfigLibrary } from "./desktop-3p";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCa } from "./intercept/local-ca";
 import { claudeInterceptEnabled, claudeInterceptProxyPort } from "./intercept/runtime";
@@ -201,7 +203,8 @@ export function observeClaudeDesktopMode(
   }
   try {
     const kind = inspectDesktopFirstParty(config, options).settings.kind;
-    observed.ownedFirstPartySettings = kind === "applied" || kind === "stale";
+    observed.ownedFirstPartySettings = config.claudeCode?.cliFirstParty === true
+      ? false : kind === "applied" || kind === "stale";
   } catch { // no-excuse-ok: catch -- unreadable settings are no first-party evidence.
     observed.ownedFirstPartySettings = false;
   }
@@ -234,8 +237,14 @@ export function applyDesktopFirstParty(
   return { ok: true, changed: written.changed, path: written.path, env: target.env, proxyPort: target.proxyPort };
 }
 
-/** Remove the first-party env. Only values anchored on our CA path are touched. */
-export function removeDesktopFirstParty(options: DesktopFirstPartyOptions = {}): ClaudeInterceptSettingsWrite {
+/** Remove Desktop's share of the env, retaining the shared pair for a desired CLI. */
+export function removeDesktopFirstParty(
+  config: Pick<OcxConfig, "claudeCode" | "runtimeRole">,
+  options: DesktopFirstPartyOptions = {},
+): ClaudeInterceptSettingsWrite & { retainedFor?: "cli" } {
+  if (config.claudeCode?.cliFirstParty === true) {
+    return { ok: true, changed: false, path: join(options.claudeConfigDir ?? claudeConfigDir(), "settings.json"), retainedFor: "cli" };
+  }
   const caCertPath = claudeInterceptCaCertPath(options.opencodexConfigDir ?? getConfigDir());
   return removeClaudeInterceptSettings(caCertPath, options.claudeConfigDir);
 }

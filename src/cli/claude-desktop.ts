@@ -53,10 +53,12 @@ function printDesktopHelp(): void {
   console.log(`Usage:
   ocx claude desktop [apply] [--first-party | --gateway [--static|--hybrid|--discovery-only]]
       --gateway      (default) install the third-party gateway profile for the whole app
-      --first-party  keep Desktop on claude.ai; route only the Code tab's Claude Code through the
-                     local intercept proxy via ~/.claude/settings.json env. Account risk: this sends
-                     Claude subscription traffic through a local interception proxy, and Anthropic
-                     may suspend the account.
+      --first-party  keep Desktop on claude.ai; route its Code tab through the local
+                     intercept proxy via shared ~/.claude/settings.json env. A standalone
+                     claude CLI also reads that env and transits the proxy unchanged when
+                     CLI first-party is off. For fully native shell use, set NO_PROXY='*'.
+                     Account risk: Claude subscription traffic crosses local TLS interception;
+                     Anthropic may suspend the account.
   ocx claude desktop show [--json]
   ocx claude desktop status [--json]
   ocx claude desktop picker on|off|status|trust
@@ -353,7 +355,7 @@ export function gatewayModeExplanation(input: {
       : "because gateway is the default for Claude Desktop";
   return [
     `Applied the gateway profile ${reason}.`,
-    "First-party keeps Desktop on your claude.ai account and routes only the Code tab through the local proxy:",
+    "First-party keeps Desktop on your claude.ai account and routes its Code tab through the local proxy. The standalone claude CLI reads the same settings env and may transit the proxy unchanged; use NO_PROXY='*' in the shell for fully native traffic:",
     "  ocx claude desktop apply --first-party",
     `Account risk: ${FIRST_PARTY_ACCOUNT_RISK.message}`,
   ];
@@ -425,9 +427,12 @@ export async function applyDesktop(
   const modeSaved = saveDesktopMode("gateway", deps);
   const warning = [result.warning, modeSaved ? "" : "desktop mode marker was not saved"].filter(Boolean).join(" ");
   // The gateway mode is committed before retiring first-party settings.
-  const removed = removeDesktopFirstParty();
+  const removed = removeDesktopFirstParty(loadConfig());
   if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable",
     warning: ["gateway applied; first-party cleanup remains incomplete", warning].filter(Boolean).join(" ") };
+  if (removed.retainedFor === "cli") {
+    return { ...result, warning: [warning, "Shared first-party settings remain for Claude Code CLI."].filter(Boolean).join(" ") };
+  }
   if (warning) return { ...result, warning };
   return result;
 }

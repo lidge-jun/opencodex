@@ -160,7 +160,12 @@ export async function executeResponsesSidecars(
     retryAfter: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
-  ): Promise<ProviderAdapter | null> => {
+  ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
+    // Which credential axis actually moved. The main routed path already reports these three
+    // separately (`adapter-dispatch`: key-429 / anthropic-oauth-429 / oauth-account-429); the
+    // sidecar loops used to flatten all three to `key-429`, so an account rotation read as a key
+    // rotation in the attempt row and in the Logs UI.
+    let recoveryKind: AttemptRecoveryKind = "key-429";
     const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
@@ -209,6 +214,7 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
+      recoveryKind = "oauth-account-429";
       hop.permit?.use();
     } else if (
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
@@ -252,6 +258,7 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
+      recoveryKind = "anthropic-oauth-429";
       hop.permit?.use();
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
@@ -281,7 +288,7 @@ export async function executeResponsesSidecars(
       provider: route.provider,
       adapterName: rotatedAdapter.name,
     });
-    return rotatedAdapter;
+    return { adapter: rotatedAdapter, recoveryKind };
   };
   if ((imgPlan || vidPlan) && wsPlan) {
     // Web search takes priority when both are active — the media bridge cannot run

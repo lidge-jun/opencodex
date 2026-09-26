@@ -26,13 +26,18 @@ afterEach(() => {
 
 type Snapshot = { selected: string | null; token: number; provider: string | null };
 
-async function mount(names: string[] | null) {
+async function mount(names: string[] | null, onAccounts?: (name: string, choose: (name: string | null) => void) => void) {
   const seen: Snapshot[] = [];
   let choose!: (name: string | null) => void;
   function Harness({ providerNames }: { providerNames: string[] | null }) {
     const [selected, setSelected] = useState<string | null>(null);
     choose = setSelected;
-    const focus = useProviderSettingsDeepLink(providerNames, selected, setSelected);
+    const focus = useProviderSettingsDeepLink(
+      providerNames,
+      selected,
+      setSelected,
+      onAccounts ? name => onAccounts(name, setSelected) : undefined,
+    );
     seen.push({ selected, ...focus });
     return null;
   }
@@ -91,5 +96,31 @@ test("choosing another provider drops the link so a refresh does not reopen it",
   const view = await mount(["alpha", "beta"]);
   await view.choose("alpha");
   expect(testWindow.location.hash).toBe("#providers");
+  await view.unmount();
+});
+
+test("an accounts link opens Accounts through onAccounts and never also focuses Settings", async () => {
+  const opened: string[] = [];
+  const view = await mount(["alpha", "beta"], (name, select) => { opened.push(name); select(name); });
+  const settingsToken = view.last().token;
+  await hash("providers?provider=alpha&tab=accounts");
+  expect(opened).toEqual(["alpha"]);
+  expect(view.last()).toMatchObject({ selected: "alpha", token: 0, provider: null });
+  // The link stays in the URL, so following it again can re-apply it.
+  expect(testWindow.location.hash).toBe("#providers?provider=alpha&tab=accounts");
+  await hash("providers?provider=alpha&tab=accounts");
+  expect(opened).toEqual(["alpha", "alpha"]);
+  // A later settings link is a fresh Settings request again.
+  await hash("providers?provider=beta");
+  expect(view.last()).toMatchObject({ selected: "beta", provider: "beta" });
+  expect(view.last().token).toBeGreaterThan(settingsToken);
+  await view.unmount();
+});
+
+test("without onAccounts an accounts link falls back to the Settings behavior", async () => {
+  const view = await mount(["alpha", "beta"]);
+  await hash("providers?provider=alpha&tab=accounts");
+  expect(view.last()).toMatchObject({ selected: "alpha", provider: "alpha" });
+  expect(view.last().token).toBeGreaterThan(0);
   await view.unmount();
 });

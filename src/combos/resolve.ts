@@ -204,6 +204,8 @@ export function pickComboTarget(
     exclude?: Iterable<string>;
     eligible?: (target: NormalizedComboTarget) => boolean;
     now?: number;
+    /** Inspect a round-robin choice without mutating its sticky/weight state. */
+    preview?: boolean;
   } = {},
 ): ComboPick | null {
   const writerGeneration = captureConfigGeneration();
@@ -222,7 +224,13 @@ export function pickComboTarget(
     let state = selectionState.get(comboId);
     if (!state) {
       state = { successes: 0, currentWeights: new Map(), successfulUses: new Map() };
-      selectionState.set(comboId, state);
+      if (!options.preview) selectionState.set(comboId, state);
+    } else if (options.preview) {
+      state = {
+        ...state,
+        currentWeights: new Map(state.currentWeights),
+        successfulUses: new Map(state.successfulUses),
+      };
     }
     if (state.activeKey) {
       targetIndex = combo.targets.findIndex(target => targetKey(target) === state.activeKey && eligible(target));
@@ -542,11 +550,11 @@ export function clearComboSelectionState(comboId?: string): void {
   selectionState.delete(comboId);
 }
 
-export function tryPickComboModel(config: OcxConfig, modelId: string): ComboPick | null {
+export function tryPickComboModel(config: OcxConfig, modelId: string, preview = false): ComboPick | null {
   const comboId = resolveComboId(config, modelId);
   if (!comboId) return null;
   if (!getCombo(config, comboId)) throw new UnknownComboError(comboId);
-  const picked = pickComboTarget(config, comboId);
+  const picked = pickComboTarget(config, comboId, { preview });
   if (!picked) throw new NoAvailableComboTargetsError(comboId);
   return picked;
 }

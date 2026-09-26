@@ -110,19 +110,22 @@ Anthropic 可能认为这违反其条款并暂停你的账户。默认模式是�
 只有接受这一风险时才选择第一方模式。
 :::
 
-Desktop 保持登录 claude.ai，聊天、连接器和远程控制仍可使用。OpenCodex 只在
-`~/.claude/settings.json`（支持 `CLAUDE_CONFIG_DIR`）的 `env` 中写入 `HTTPS_PROXY`
-和 `NODE_EXTRA_CA_CERTS`。Code 标签页启动的 Claude Code、子代理及独立的 `claude` CLI
-经过本地代理；其他 `api.anthropic.com` 路径会转发给 Anthropic。CA 不会安装到操作系统
-信任存储中，只有读取 `NODE_EXTRA_CA_CERTS` 的 Node 进程会信任它。
+Desktop 第一方模式通过 OpenCodex 处理 Code 标签页及其子代理。独立的 Claude Code CLI 有单独开关。两者读取同一份 `settings.json` 代理与 CA 设置：只开启其中一个时，另一个仍会经过本地代理，TLS 在本地终止，但 Messages 请求会原样转发给 Anthropic。
 
 模式保存在 `claudeCode.desktopMode`。此前明确应用第一方模式或在本版本之前应用过
 第一方模式的安装会保留该模式；现有网关安装也保持不变。没有明确设置时，依次检查
 OpenCodex 拥有的已选网关条目、保存的网关指纹、`settings.json` 中属于 OpenCodex 的
-第一方设置；都没有时使用网关。目录同步和模型列表更新绝不会在已解析为第一方模式的
+第一方设置；都没有时使用网关。仅为 CLI 第一方模式写入的环境变量，不能证明 Desktop 处于第一方模式。目录同步和模型列表更新绝不会在已解析为第一方模式的
 安装上写入网关配置档案。若 `claudeCode.intercept.enabled: false`，现有第一方安装的
 应用操作会以 `intercept_disabled` 拒绝，新安装则应用网关。不会覆盖其他代理的设置。
 切换模式后请完全退出并重新打开 Desktop。
+
+### Claude Code CLI 第一方模式
+
+在 Claude → Code 中开启 CLI 开关，或运行 `ocx claude config set --first-party on`；关闭时用 `off`。若本地代理不可用、CA 无法准备、设置无法读取，或代理键由其他程序所有，开启请求会被拒绝。关闭操作始终可以保存。仅开启 Desktop 第一方模式时，要让终端完全原生直连，请在 shell 中设置 `NO_PROXY='*'`。上述账户风险也适用于 CLI。
+关闭 Claude 路由会保留由 OpenCodex 管理的代理设置。监听器仍运行时，所有 Messages 请求原样转发；停止后，运行 OpenCodex 或关闭 Desktop/CLI 第一方模式之前，直接运行 `claude` 无法连接。`ocx claude` 原生启动仅在有自有设置且未继承外部 HTTPS 代理时设置 `NO_PROXY=*`。否则保留外部代理，并警告设置中的拦截仍生效；请关闭第一方模式或取消该设置。
+界面区分设置不可读（unknown）、带 opencodex 令牌的代理 URL 却搭配外部 CA（foreign：手动修正 HTTPS_PROXY / NODE_EXTRA_CA_CERTS），以及 Claude 路由已关闭但仍有监听器原样转发请求（disabled：重启前关闭第一方模式以清除设置）。没有监听器时为 stopped；使用受管理的 CA 但端口或令牌不匹配时为 broken。第一方模式开启但无法提供拦截服务时，stopped 和 broken 都显示 routingOff：Claude 路由或拦截功能已关闭，或此设备是另一台 opencodex 中枢的客户端；请在此设备上重新启用拦截服务，或关闭第一方模式以移除设置。仅在拦截服务可用时，stopped 才提示启动 opencodex，broken 才提示运行 `ocx ensure` 或重启。CLI 已开启但没有代理设置为未应用；仅开启一个客户端且代理正常时提示共享转发；两个客户端都关闭但代理设置仍在时提示残留。
+unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外部 CA 搭配 127.0.0.1 上无令牌的代理时显示 local：归属无法确认；如果不再使用，请从 ~/.claude/settings.json 中删除 HTTPS_PROXY。disabled 仅在设置与运行中的监听器匹配时出现；端口或令牌不匹配时，即使路由关闭也显示 broken。
 
 ### Picker 模式：在第一方 Code 标签页中显示 opencodex 模型
 

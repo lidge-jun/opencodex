@@ -5,8 +5,10 @@ import { readModelsTab } from "../src/pages/models-tab";
 import {
   compatibilityPairHash,
   protocolPairUpstream,
+  providerAccountsHash,
   providerSettingsHash,
   readCompatibilityPair,
+  readProviderDeepLinkTab,
   readProviderSettingsTarget,
 } from "../src/protocol-deep-links";
 
@@ -43,6 +45,17 @@ describe("provider settings hash", () => {
     expect(readProviderSettingsTarget("#providers?provider=%20")).toBeNull();
     expect(readProviderSettingsTarget(`#providers?provider=${"p".repeat(201)}`)).toBeNull();
     expect(readProviderSettingsTarget("#models?provider=x")).toBeNull();
+  });
+
+  test("an accounts link names the provider and the Accounts tab; anything else is Settings", () => {
+    const hash = providerAccountsHash("my provider/1");
+    expect(hash).toBe("providers?provider=my+provider%2F1&tab=accounts");
+    expect(readProviderSettingsTarget(`#${hash}`)).toBe("my provider/1");
+    expect(readProviderDeepLinkTab(`#${hash}`)).toBe("accounts");
+    expect(readProviderDeepLinkTab(`#${providerSettingsHash("x")}`)).toBe("settings");
+    expect(readProviderDeepLinkTab("#providers?provider=x&tab=usage")).toBe("settings");
+    expect(readProviderDeepLinkTab("#models?provider=x&tab=accounts")).toBe("settings");
+    expect(resolveAppHashChange(hash)).toEqual({ page: "providers", replaceTo: null });
   });
 });
 

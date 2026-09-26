@@ -173,7 +173,8 @@ test("the picker follows the effective mode reported by /status and shows the pr
 
   const bar = container.querySelector(".claude-status-bar")!;
   expect(bar.className).toContain("applied");
-  expect(bar.textContent ?? "").toContain("First-party: Code tab routed through the local proxy");
+  expect(bar.textContent ?? "").toContain("First-party: Desktop Code tab routed through the local proxy");
+  expect(container.textContent ?? "").toContain("the standalone CLI has its own switch");
   expect(bar.textContent ?? "").toContain("127.0.0.1:10200");
   expect(applyButton().textContent).toBe("Save & apply");
 });

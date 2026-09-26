@@ -86,6 +86,13 @@ Serialized request and buffered-response observations use byte counts without me
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
 
+The buffered Chat collector in `src/chat/outbound.ts` computes a split surrogate pair's incremental
+UTF-8 cost from the runtime's measured separate and joined sizes. It does not assume how a Bun
+version prices a lone surrogate, so retained content, reasoning, and refusal fields enforce and
+release the same exact budget on every supported runtime.
+
+> Decision record: [ADR-0112](../decisions/ADR-0112-chat-collector-unicode-accounting.md)
+
 `src/lib/translator-budget.ts` admits an event batch atomically from per-event serialized byte sizes
 plus exact separators, without joining a second full JSON array. `src/lib/admission.ts` counts and
 truncates diagnostic text at UTF-8 code-point boundaries without allocating arrays per character;

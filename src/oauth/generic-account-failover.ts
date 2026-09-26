@@ -41,7 +41,6 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 3;
 
 const DEFAULT_COOLDOWN_MS = 60_000;
-const MAX_COOLDOWN_MS = 15 * 60_000;
 
 /**
  * How long a presence answer may be reused before the store is consulted again.
@@ -349,12 +348,15 @@ export function rotateGenericOAuthAccountOn429(
   // A single stored account has nowhere to go; rotating to itself would just replay the 429.
   if (!set || set.accounts.length < 2) return null;
 
-  const parsed = parseRetryAfterMs(retryAfterHeader, now, { preserveImmediate: true });
+  // `preserveServerDelay` keeps the delay the server actually stated, bounded by the parser's
+  // one-day ceiling, exactly as the combo path does. Truncating it locally only guarantees a
+  // second 429 on an account we were told to leave alone.
+  const parsed = parseRetryAfterMs(retryAfterHeader, now, { preserveImmediate: true, preserveServerDelay: true });
   // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
   // A Retry-After from upstream still wins — it is the server's own instruction.
   const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
-  const cooldownMs = exhausted ?? Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
+  const cooldownMs = exhausted ?? parsed ?? DEFAULT_COOLDOWN_MS;
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
   health.set(healthKey(providerName, failedAccountId, family), {
     cooldownUntil: now + cooldownMs,

@@ -139,24 +139,23 @@ Anthropic이 이를 약관 위반으로 판단해 계정을 정지할 수 있어
 이 위험을 받아들일 때만 1P를 선택하세요.
 :::
 
-Desktop은 claude.ai에 로그인된 채로 남아 채팅, 커넥터, 원격 제어를 계속 사용할 수 있어요.
-OpenCodex는 `~/.claude/settings.json`(`CLAUDE_CONFIG_DIR` 지원)의 `env`에
-`HTTPS_PROXY`와 `NODE_EXTRA_CA_CERTS`만 써요. Code 탭이 실행한 Claude Code와 그
-서브에이전트, 터미널의 `claude` CLI만 로컬 프록시를 거쳐요. 프록시 주소는
-`http://opencodex:<설치별 토큰>@127.0.0.1:<포트>` 형태이고, 토큰은 소유자만 읽을 수 있는
-`~/.opencodex/claude-intercept/proxy-token`에 보관해요. 프록시는 모든 CONNECT를 이 토큰으로
-인증해요. 그 밖의 `api.anthropic.com`
-경로는 Anthropic으로 전달돼요. CA는 OS 신뢰 저장소에 설치하지 않고,
-`NODE_EXTRA_CA_CERTS`를 읽는 Node 프로세스만 신뢰해요.
+Desktop 1P를 켜면 Code 탭과 서브에이전트의 요청을 OpenCodex가 처리해요. 독립 실행 Claude Code CLI에는 별도 1P 스위치가 있어요. 두 클라이언트는 같은 `settings.json` 프록시·CA 설정을 읽기 때문에 하나만 켜도 다른 쪽 트래픽이 로컬 프록시를 거칠 수 있어요. 그때 TLS는 로컬에서 끝나지만 Messages 요청은 바꾸지 않고 Anthropic으로 전달해요.
 
 모드는 `claudeCode.desktopMode`에 저장돼요. 명시적으로 1P를 적용했거나 이번 업데이트 전에
 적용한 설치는 1P를 유지하고, 기존 게이트웨이 설치도 그대로 유지해요. 명시 설정이 없다면
 OpenCodex 소유의 선택된 게이트웨이 항목, 저장된 게이트웨이 지문, `settings.json`의 소유된
-1P 설정 순으로 확인하고, 아무 증거도 없으면 게이트웨이를 선택해요. 카탈로그 동기화와 모델
+1P 설정 순으로 확인하고, 아무 증거도 없으면 게이트웨이를 선택해요. CLI 1P만을 위해 작성된 env는 Desktop이 1P 모드라는 증거가 아니에요. 카탈로그 동기화와 모델
 목록 업데이트는 1P 설치 위에 게이트웨이 프로필을 쓰지 않아요.
 `claudeCode.intercept.enabled: false`라면 기존 1P 설치의 apply는 `intercept_disabled`로
 거절되고, 새 설치는 게이트웨이를 적용해요. 회사 프록시 같은 외부 설정은 덮어쓰지 않아요.
 모드 전환 후에는 Desktop을 완전히 종료하고 다시 열어 주세요.
+
+### Claude Code CLI 1P
+
+Claude → Code에서 CLI 1P를 켜거나 `ocx claude config set --first-party on`을 실행하세요. 끌 때는 `off`를 사용해요. 프록시가 꺼져 있거나 실행 중이지 않거나, CA·설정 파일을 준비할 수 없거나, 다른 프로그램이 프록시 설정을 소유하면 켜기 요청은 거절돼요. 끄기는 프록시 상태와 관계없이 저장돼요. Desktop 1P만 켜진 상태에서 터미널을 완전히 직접 연결하려면 셸에 `NO_PROXY='*'`를 설정하세요. 위의 계정 위험은 CLI 1P에도 적용돼요.
+Claude 라우팅을 꺼도 소유한 설정 환경 변수는 남아요. 리스너가 실행 중이면 모든 Messages 요청을 그대로 전달하지만, 프록시가 멈추면 OpenCodex를 실행하거나 Desktop/CLI 1P를 끄기 전까지 일반 `claude`는 연결할 수 없어요. `ocx claude`는 소유한 설정 환경 변수가 있고 상속된 외부 HTTPS 프록시가 없을 때만 `NO_PROXY=*`를 설정해요. 외부 프록시가 있으면 보존하고, 설정의 인터셉트가 계속 적용되므로 1P를 끄거나 설정을 해제하라는 경고를 표시해요.
+화면은 설정을 읽지 못한 상태(unknown), opencodex 토큰이 있는 프록시에 관리 대상이 아닌 CA가 붙은 상태(foreign), Claude 라우팅이 꺼졌지만 리스너는 살아 있어 요청을 그대로 전달하는 상태(disabled)를 구분해요. foreign이면 HTTPS_PROXY / NODE_EXTRA_CA_CERTS를 직접 고치고, disabled이면 재시작 전에 1P를 꺼서 설정을 지우세요. 리스너가 없으면 stopped, 관리 대상 CA를 쓰지만 포트·토큰이 다르면 broken이에요. 1P가 켜진 상태에서 인터셉트를 제공할 수 없으면 stopped와 broken 모두 routingOff 경고를 보여 줘요. Claude 라우팅이나 인터셉트가 꺼졌거나 이 기기가 다른 opencodex 허브의 클라이언트일 수 있으므로, 이 기기에서 다시 켜거나 1P를 꺼서 설정을 지우라고 안내해요. 인터셉트가 가능한 설정일 때만 stopped는 opencodex 실행, broken은 `ocx ensure` 또는 재시작을 안내해요. CLI 1P만 켰는데 프록시 설정이 없으면 미적용, 한쪽만 켜고 프록시가 정상이면 공유 전달, 둘 다 껐는데 설정이 남으면 잔여 설정으로 표시해요.
+unknown은 설정이 아직 opencodex 프록시를 가리키는지 판단할 수 없다는 뜻이에요. 외부 CA와 토큰 없는 127.0.0.1 프록시가 함께 있으면 local로 표시해요. opencodex 소유인지 확인할 수 없으므로 더 이상 사용하지 않는다면 ~/.claude/settings.json에서 HTTPS_PROXY를 지우세요. disabled는 현재 리스너와 설정이 정확히 맞을 때만 나타나고, 포트나 토큰이 어긋나면 라우팅이 꺼져 있어도 broken이에요.
 
 ### Picker 모드: 1P Code 탭에 opencodex 모델 표시하기
 

@@ -27,6 +27,16 @@ lifecycle owner can retain cleanup authority through cancellation. Missing comma
 falls back to executing on the Hub.
 :::
 
+## RPC compatibility and timeouts
+
+Remote Workspace uses encrypted RPC v2. The Hub and every Executor must support v2; RPC v1 peers
+fail closed instead of falling back to immediate execution, so upgrade the Hub and Executors
+together.
+
+A timeout requests executor cancellation but does not confirm it. A grant may already be in transit,
+or its operation may already be running. The default RPC timeout is 65 seconds, and `timeoutMs`
+accepts inclusive values from 1 through 120,000 milliseconds.
+
 ## Set up the Hub
 
 Computer 1 owns every coding-agent login and model session. Install and log in to whichever agents

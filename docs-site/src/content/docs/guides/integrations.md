@@ -28,6 +28,13 @@ Generated catalogs include only enabled models from each provider selection. Thi
 downloads and managed integrations, including Pi and Aside. The management model list still shows
 the full roster so you can enable additional models.
 
+`ocx uninstall` disables recorded integrations, including all owned Aside profiles, before deleting
+OpenCodex's recovery state. Unreadable ownership, missing profile registration or a conflicting edit
+stops that deletion. Cleanup is sequential: earlier successful disables are not undone when a later
+one fails. If compensation also fails, a client file may be left in an intermediate state. Inspect
+the reported client files and retained recovery snapshots before retrying; retained state does not
+mean every client was restored or left unchanged.
+
 For Gajae built-in presets, keep the routing choice in `~/.gjc/agent/config.yml`:
 
 ```yaml

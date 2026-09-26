@@ -26,7 +26,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `codexAutoStart?` | `boolean` | `true` | Autorise le lanceur intermédiaire Codex à exécuter `ocx ensure` avant de démarrer Codex. Avec la valeur false, cette vérification ne fait rien. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restaure le lanceur intermédiaire installé après son remplacement par une mise à jour externe de Codex terminée. Désactivation par variable d'environnement : `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Compatibilité historique Codex App réversible. Les métadonnées originales sont sauvegardées et restaurées par `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | désactivé | Redirigez les appels Codex helper/shadow reconnus vers un modèle choisi tout en conservant l'effort de raisonnement configuré pour la requête. Le préfixe source par défaut est `gpt-5.6-luna` ; les clients plus anciens via 0.144.x utilisaient `gpt-5.4-mini`, que `sourceModels` peut restaurer. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | désactivé | Redirigez les appels Codex helper/shadow reconnus vers un modèle choisi tout en conservant l'effort de raisonnement configuré pour la requête. Le préfixe source par défaut est `gpt-6-luna`, `gpt-5.6-luna` ; les clients plus anciens via 0.144.x utilisaient `gpt-5.4-mini`, que `sourceModels` peut restaurer. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de recherche Web. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de description d'images. |
 | `images?` | `OcxImagesConfig` | sélection automatique OpenAI | Options de relais d'images autonomes pour Codex `image_gen`. |
@@ -185,15 +185,16 @@ Codex utilise de petits modèles auxiliaires pour des tâches telles que les tit
 `shadowCallIntercept` pour rediriger les préfixes de modèle source reconnus vers un autre modèle configuré. Le
 modèle de remplacement conserve l'effort de raisonnement configuré pour la requête. Définissez `sourceModels` uniquement lorsqu'un client utilise d'autres identifiants de modèles auxiliaires.
 L'interception dépend du modèle : toute requête dont l'identifiant de modèle nu correspond à `sourceModels`
-peut être redirigée, y compris une requête normale portant `request_kind: "turn"`.
-`x-codex-turn-metadata` n'exempte pas une requête correspondante.
+peut être redirigée, y compris une requête normale portant `request_kind: "turn"`. Les requêtes marquées
+comme enfants générés par `x-openai-subagent: collab_spawn` ou par `subagent_kind: "thread_spawn"` dans
+l'en-tête JSON `x-codex-turn-metadata` sont exemptées, afin qu'un sous-agent explicitement généré conserve son modèle.
 
 ```json
 {
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.6-luna"]
+    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna"]
   }
 }
 ```

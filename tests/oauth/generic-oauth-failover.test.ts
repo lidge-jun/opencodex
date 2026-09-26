@@ -278,6 +278,17 @@ describe("#2568 generic OAuth account failover", () => {
     expect(genericFailoverRetryAfterSeconds("xai")).toBeGreaterThan(500);
   });
 
+  test("a stated Retry-After past the local cap is honoured, not truncated", async () => {
+    const ids = await seed(2);
+    const now = Date.now();
+    // One hour. Retrying before it elapses buys a second 429 on an account upstream already
+    // told us to leave alone — the exact wasted send this pool exists to avoid.
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", ids[0]!, "3600", now)).toBe(ids[1]);
+    expect(genericFailoverRetryAfterSeconds("xai", now)).toBe(3600);
+    // Still cooled long after any local truncation would have released it.
+    expect(eligibleFailoverAccounts("xai", now + 20 * 60_000)).toEqual([ids[1]!]);
+  });
+
   test("an excluded provider is never enabled, however many accounts it has", async () => {
     await seed(2);
     // Codex and Anthropic own quota scopes, probe leases and affinity that this must not

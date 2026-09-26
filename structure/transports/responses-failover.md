@@ -206,6 +206,15 @@ Native Chat applies qualifying effort ceilings independently of model pins; pin 
 
 Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates; account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority. Raw-byte readers on this path supply their own byte and deadline budgets under the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
+Translated Chat requests preserve caller reasoning intent until a combo or policy selects a
+concrete target. Empty-ladder stripping and effort mapping apply to each attempt copy, never the
+shared ingress body, so a later capable fallback still receives the caller's requested effort.
+`src/server/responses/core-normalize.ts` strips an empty ladder from both parsed adapter options
+and raw reasoning on each translated Chat attempt, preserving summary controls. Policy fallback
+captures the original body before this normalization, including for its first candidate.
+
+> Decision record: [ADR-0110](../decisions/ADR-0110-chat-reasoning-failover-intent.md)
+
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
 Translated Chat request construction uses the [inline-image budget](streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.

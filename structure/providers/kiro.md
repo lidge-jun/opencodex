@@ -20,6 +20,16 @@ shared POSIX bin directories (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/b
 unrelated `kiro` such as the Kiro IDE launcher can live. Coverage:
 `tests/providers/kiro/kiro-windows-cli-executable-path.test.ts`.
 
+## Forced-login credential rollback
+
+A forced login uses a receipt-bearing auth-store write naming its exact account, credential
+generation, selection revision, and prior slot. If later provider publication fails, rollback is
+one serialized compare-and-swap mutation: it removes or restores only that still-owned generation.
+A concurrent account addition, selection, or credential refresh wins and is never inferred from a
+before/after account-ID set.
+
+> Decision record: [ADR-0109](../decisions/ADR-0109-kiro-login-rollback-ownership.md)
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends

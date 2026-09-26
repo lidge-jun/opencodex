@@ -515,7 +515,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    than the catalog. It sits above the tab strip so it is visible on every models
    sub-tab, not only the catalog one. */
 .page-head-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.codex-stale-banner { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); color: var(--text); }
+.codex-stale-banner { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); color: var(--text); }
 .codex-stale-banner-text { flex: 1 1 auto; min-width: 0; font-size: var(--text-control); }
 .page-sub { color: var(--muted); font-size: var(--text-body); margin: 4px 0 22px; max-width: var(--prose-measure); }
 

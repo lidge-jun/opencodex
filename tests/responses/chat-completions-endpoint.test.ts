@@ -2553,7 +2553,9 @@ test("collectChatCompletion accounts split surrogate content incrementally and r
         expect(await collectChatCompletion(stream, "mock/test-model", budget)).toMatchObject({
           choices: [{ message: { content: "😀", reasoning_content: "😀", refusal: "😀" } }],
         });
-        expect(budget.snapshot().currentBytes).toBe(12);
+        // Three retained fields each contain one completed scalar. This must match the runtime's
+        // full-string UTF-8 sizing even when its isolated-surrogate sizing differs.
+        expect(budget.snapshot().currentBytes).toBe(3 * Buffer.byteLength("😀"));
       }
     } finally { budget.dispose(); }
   }

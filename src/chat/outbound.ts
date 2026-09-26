@@ -154,9 +154,11 @@ function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: st
   const fragmentFirst = fragment.charCodeAt(0);
   if (previousLast >= 0xd800 && previousLast <= 0xdbff
     && fragmentFirst >= 0xdc00 && fragmentFirst <= 0xdfff) {
-    // Buffer.byteLength() replaces each isolated surrogate with three bytes, while the joined
-    // pair is one four-byte scalar. Preserve full-string sizing without re-encoding the prefix.
-    nextBytes -= 2;
+    // Buffer implementations disagree on the encoded size of an isolated surrogate. Measure
+    // the join delta so incremental accounting equals the completed scalar on every runtime.
+    const tail = previous[previous.length - 1]!;
+    const head = fragment[0]!;
+    nextBytes += Buffer.byteLength(tail + head) - Buffer.byteLength(tail) - Buffer.byteLength(head);
   }
   return nextBytes;
 }

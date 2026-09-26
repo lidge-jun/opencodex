@@ -189,8 +189,12 @@ function createOwnedStage(scopeDir, pkgName, deps = {}) {
       pid: process.pid,
       createdAt: (deps.now ?? Date.now)(),
     }), { flag: "wx" });
+    // npm's strict script policy plans the global tree before it creates the prefix layout, so
+    // `-g --prefix` into a bare stage fails with ENOENT on <stage>/lib (#5760). POSIX global
+    // prefixes keep packages under lib/; Windows installs into the prefix itself.
+    if (process.platform !== "win32") mkdir(join(stageRoot, "lib"));
   } catch (error) {
-    // Still empty and created by this call: remove it rather than leave an unmarked stage.
+    // Created by this call and not yet handed to npm: remove it rather than leave a partial stage.
     try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* reported by the caller */ }
     throw error;
   }

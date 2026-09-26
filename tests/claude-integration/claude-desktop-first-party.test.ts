@@ -19,6 +19,7 @@ import { claudeInterceptProxyTokenPath, readClaudeInterceptProxyToken } from "..
 import { claudeInterceptProxyUrl } from "../../src/claude/intercept/settings";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
+import { firstPartyDesired } from "../../src/claude/first-party-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -139,7 +140,7 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
   expect(refreshed.ok && refreshed.changed).toBe(true);
   expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10400));
 
-  const removed = removeDesktopFirstParty();
+  const removed = removeDesktopFirstParty(config());
   expect(removed).toMatchObject({ ok: true, changed: true });
   expect(settings()).toEqual({ theme: "dark", env: { FOO: "bar" } });
 });
@@ -149,7 +150,7 @@ test("first-party apply refuses foreign proxy env and disabled intercept", () =>
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } }));
   expect(applyDesktopFirstParty(config())).toMatchObject({ ok: false, reason: "foreign_env" });
   expect(settings().env).toEqual({ HTTPS_PROXY: "http://corp-proxy:3128" });
-  expect(removeDesktopFirstParty()).toMatchObject({ ok: true, changed: false });
+  expect(removeDesktopFirstParty(config())).toMatchObject({ ok: true, changed: false });
   expect(applyDesktopFirstParty(config({ runtimeRole: "client" }))).toMatchObject({ ok: false, reason: "intercept_disabled" });
 });
 
@@ -247,6 +248,16 @@ test("native toggle: explicit first-party enable warns about the account risk an
   expect(disabled.status).toBe(200);
   expect(disabled.body).toMatchObject({ ok: true, changed: true, state: "absent", desiredEnabled: false });
   expect(settings().env?.HTTPS_PROXY).toBeUndefined();
+});
+
+test("native first-party ON pins the committed mode on a stale live config", async () => {
+  writeFileSync(join(root, "config.json"), JSON.stringify(config({ claudeCode: { desktopMode: "first-party" } })));
+  const live = config({ claudeCode: { desktopMode: "gateway" } });
+  const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, live);
+  expect(enabled.status).toBe(200);
+  expect(enabled.body).toMatchObject({ ok: true, state: "current", desiredEnabled: true });
+  expect(live.claudeCode?.desktopMode).toBe("first-party");
+  expect(firstPartyDesired(live).desktop).toBe(true);
 });
 
 test("native toggle: enabling into explicit first-party pivots an applied gateway profile and saves the mode marker", async () => {

@@ -211,6 +211,27 @@ function toolCallsToItems(
   }
 }
 
+function legacyFunctionCallToItem(
+  value: unknown,
+  input: Rec[],
+  knownNameByCallId: Map<string, string>,
+  awaitingToolResult: Set<string>,
+  sequence: number,
+): { callId: string; name: string } | null {
+  if (value === undefined) return null;
+  if (!isRec(value) || typeof value.name !== "string" || value.name.length === 0) {
+    throw new ChatCompletionsRequestError("assistant function_call requires a name");
+  }
+  const args = typeof value.arguments === "string"
+    ? value.arguments
+    : JSON.stringify(value.arguments ?? {});
+  const callId = `call_legacy_${String(sequence).padStart(4, "0")}`;
+  knownNameByCallId.set(callId, value.name);
+  awaitingToolResult.add(callId);
+  input.push({ type: "function_call", call_id: callId, name: value.name, arguments: args });
+  return { callId, name: value.name };
+}
+
 function toolsToResponses(tools: unknown): Rec[] | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   const out: Rec[] = [];
@@ -243,6 +264,24 @@ function toolsToResponses(tools: unknown): Rec[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+function legacyFunctionsToResponses(functions: unknown): Rec[] | undefined {
+  if (functions === undefined) return undefined;
+  if (!Array.isArray(functions)) throw new ChatCompletionsRequestError("functions must be an array");
+  const out: Rec[] = [];
+  for (const raw of functions) {
+    if (!isRec(raw) || typeof raw.name !== "string" || raw.name.length === 0) {
+      throw new ChatCompletionsRequestError("functions entries require a name");
+    }
+    out.push({
+      type: "function",
+      name: raw.name,
+      ...(typeof raw.description === "string" ? { description: raw.description } : {}),
+      ...(isRec(raw.parameters) ? { parameters: raw.parameters } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function toolChoiceToResponses(choice: unknown, body: Rec): void {
   if (choice === undefined || choice === null) return;
   if (choice === "auto" || choice === "none" || choice === "required") {
@@ -267,6 +306,18 @@ function toolChoiceToResponses(choice: unknown, body: Rec): void {
   if (isRec(choice.function) && typeof choice.function.name === "string") {
     body.tool_choice = { type: "function", name: choice.function.name };
   }
+}
+
+function legacyFunctionChoiceToResponses(choice: unknown, body: Rec): void {
+  if (choice === undefined || choice === null) return;
+  if (choice === "auto" || choice === "none") {
+    body.tool_choice = choice;
+    return;
+  }
+  if (!isRec(choice) || typeof choice.name !== "string" || choice.name.length === 0) {
+    throw new ChatCompletionsRequestError("function_call requires auto, none, or a function name");
+  }
+  body.tool_choice = { type: "function", name: choice.name };
 }
 
 /**
@@ -389,6 +440,8 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   // Recover replace-style tool calls incrementally instead of rebuilding the
   // call-id index from the entire translated transcript for every message.
   const knownNameByCallId = new Map<string, string>();
+  const legacyAwaiting: Array<{ callId: string; name: string }> = [];
+  let legacyCallSequence = 0;
   // Tool calls whose result has not arrived yet. Several adapters need a call and its output
   // to stay adjacent — Kiro refuses an interrupted pair (src/adapters/kiro/payload.ts) and the
   // Anthropic and Google mappers synthesize a missing result — so an instruction that arrives
@@ -405,6 +458,7 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   const beginConversationTurn = (): void => {
     releaseHeldInstructions();
     awaitingToolResult.clear();
+    legacyAwaiting.length = 0;
   };
 
   for (const msg of raw.messages) {
@@ -462,6 +516,16 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         if (msg.tool_calls !== undefined) {
           toolCallsToItems(msg.tool_calls, input, knownNameByCallId, awaitingToolResult);
         }
+        if (msg.function_call !== undefined && msg.function_call !== null) {
+          const call = legacyFunctionCallToItem(
+            msg.function_call,
+            input,
+            knownNameByCallId,
+            awaitingToolResult,
+            ++legacyCallSequence,
+          );
+          if (call) legacyAwaiting.push(call);
+        }
         break;
       }
       case "function": {
@@ -472,6 +536,17 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
             "Legacy function-result image translation is not implemented. Use tool_calls and role:tool with tool_call_id.",
           );
         }
+        const name = typeof msg.name === "string" ? msg.name : "";
+        if (!name) throw new ChatCompletionsRequestError("function messages require a name");
+        const pendingIndex = legacyAwaiting.findIndex(call => call.name === name);
+        if (pendingIndex < 0) {
+          throw new ChatCompletionsRequestError(`function result has no pending call named ${name}`);
+        }
+        const [call] = legacyAwaiting.splice(pendingIndex, 1);
+        const output = contentToText(msg.content);
+        input.push({ type: "function_call_output", call_id: call!.callId, output });
+        awaitingToolResult.delete(call!.callId);
+        if (awaitingToolResult.size === 0) releaseHeldInstructions();
         break;
       }
       case "tool": {
@@ -507,9 +582,13 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
 
   if (systemParts.length > 0) body.instructions = systemParts.join("\n\n");
 
-  const tools = toolsToResponses(raw.tools);
-  if (tools) body.tools = tools;
-  toolChoiceToResponses(raw.tool_choice, body);
+  const tools = [
+    ...(toolsToResponses(raw.tools) ?? []),
+    ...(legacyFunctionsToResponses(raw.functions) ?? []),
+  ];
+  if (tools.length > 0) body.tools = tools;
+  if (raw.tool_choice !== undefined) toolChoiceToResponses(raw.tool_choice, body);
+  else legacyFunctionChoiceToResponses(raw.function_call, body);
 
   const maxTokens = typeof raw.max_completion_tokens === "number"
     ? raw.max_completion_tokens

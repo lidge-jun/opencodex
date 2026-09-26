@@ -1148,7 +1148,7 @@ describe("web-search sidecar native web_search_call emission", () => {
         if (!retryParsed) throw new Error("the loop must pass the iteration request to on429");
         retryParsed._kiroAuthContext = { apiRegion: "ap-southeast-2", profileArn: "account-b" };
         delete retryParsed._providerContinuation;
-        return rotatedAdapter;
+        return { adapter: rotatedAdapter, recoveryKind: "key-429" };
       },
     });
     expect(response.status).toBe(200);
@@ -1421,7 +1421,7 @@ describe("web-search sidecar native web_search_call emission", () => {
       settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
       connectTimeoutMs: 100,
-      on429: () => rotatedAdapter,
+      on429: () => ({ adapter: rotatedAdapter, recoveryKind: "key-429" }),
     });
     expect(response.status).toBe(504);
     const body = await response.json() as { error?: { message?: string } };

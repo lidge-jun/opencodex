@@ -182,23 +182,14 @@ working. OpenCodex only writes two variables into the `env` block of `~/.claude/
 }
 ```
 
-Claude Code — the process Desktop spawns for its Code tab, every subagent it launches, and the
-standalone `claude` CLI — reads that env and sends its `api.anthropic.com` traffic through the
-local intercept proxy. The proxy listens on the public port + 100 (`claudeCode.intercept.port`
-overrides it), terminates TLS with a per-install CA stored under `~/.opencodex/claude-intercept/`
-(never installed into the OS trust store; only Node processes that read `NODE_EXTRA_CA_CERTS`
-trust it), authenticates every CONNECT against a per-install token kept owner-only at
-`~/.opencodex/claude-intercept/proxy-token`, and hands `POST /v1/messages` and `POST /v1/messages/count_tokens` to the same
-Messages handler `ocx claude` uses. Every other path on `api.anthropic.com` (OAuth, profile,
-usage) is relayed byte-for-byte to Anthropic, and unrelated hosts are tunnelled untouched, so your
-subscription login keeps working. Existing OpenCodex features — `modelMap`, aliases, native
-passthrough, sidecars, auto-context — apply the same way they do for `ocx claude`.
+Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels.
 
 Mode is persisted as `claudeCode.desktopMode`. Installs that already applied either mode retain it,
 including first-party installs from before the mode was persisted. An explicit mode takes priority;
 otherwise an owned selected gateway row, an applied gateway fingerprint, or owned first-party
 settings in `~/.claude/settings.json` determine the existing mode before the gateway default.
 A catalog sync or roster update never writes a gateway profile over a resolved first-party install.
+A CLI-only first-party env is not evidence that Desktop is in first-party mode.
 Switching first applies the replacement,
 then removes the other mode's configuration (only values OpenCodex wrote — a foreign `HTTPS_PROXY` or
 `NODE_EXTRA_CA_CERTS`, for example a corporate proxy, is never overwritten and the apply is
@@ -258,11 +249,11 @@ next request; Desktop does not need a restart.
   global `claudeCode.modelMap` still applies everywhere, and a binding wins over it for the same id.
 - `ocx claude desktop status --json` reports the bindings in effect under `firstParty.modelBindings`.
 
-### Claude Code CLI compatibility
+### Claude Code CLI first-party
 
-The same `settings.json` env drives the standalone `claude` CLI, so a first-party apply also
-covers terminal sessions, `claude -p`, and subagents without `ocx claude`'s
-`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` shell env. Differences from `ocx claude`:
+Turn on the CLI switch in Claude → Code, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
+Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
+The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged until restart; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. Only when interception is eligible does stopped advise starting opencodex and broken advise `ocx ensure` or restart. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
 - Model discovery (`/model` → "From gateway") is not available; Claude Code only queries
   `GET /v1/models` on a configured gateway. Bind a built-in Anthropic model id to a route

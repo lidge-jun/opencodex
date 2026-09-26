@@ -110,4 +110,33 @@ describe("reasoning effort preserves visible thinking when summary is omitted", 
     const child = concreteComboRequestBody(body, target, "high", ["high"]);
     expect(child.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
+
+  test("Chat final-route normalization strips both shapes without losing summary or later-route effort", async () => {
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "a",
+      providers: {
+        a: { adapter: "anthropic", baseUrl: "https://a.example.test/v1", reasoningEfforts: [] },
+        b: { adapter: "anthropic", baseUrl: "https://b.example.test/v1", reasoningEfforts: ["low", "high"] },
+      },
+    };
+    for (const [provider, expectedEffort] of [["a", undefined], ["b", "high"]] as const) {
+      // Policy fallback parses each attempt from its preserved wire snapshot. Keep these
+      // cases independent so the empty-ladder mutation cannot manufacture the capable result.
+      const parsed = parseRequest({
+        model: `${provider}/test-model`, input: [], reasoning: { effort: "high", summary: "auto" },
+      });
+      const route = routeModel(config, `${provider}/test-model`);
+      await applyFinalRouteRequestNormalization({
+        parsed, route, config,
+        req: new Request("http://localhost/v1/responses"),
+        logCtx: { model: parsed.modelId, provider },
+        inboundWire: "chat",
+      });
+      expect(parsed.options.reasoning).toBe(expectedEffort);
+      expect((parsed._rawBody as { reasoning: { effort?: string; summary: string } }).reasoning)
+        .toEqual(expectedEffort ? { effort: expectedEffort, summary: "auto" } : { summary: "auto" });
+      expect(parsed.options.hideThinkingSummary).toBeUndefined();
+    }
+  });
 });
