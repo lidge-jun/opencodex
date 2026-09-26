@@ -585,6 +585,9 @@ deleted as an unsafe best-effort rollback.
 
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
+If installation is refused or the resulting shim is unhealthy, the command exits nonzero and
+the dashboard reports the failure reason. A healthy existing shim still counts as success.
+For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
 
 Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
 service startup is bypassed. It refuses the change and rolls back when the launcher resolves
