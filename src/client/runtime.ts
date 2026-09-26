@@ -58,6 +58,11 @@ export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string):
 
 async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<void> {
   const port = activePort;
+  // Capture the one-use sibling handoff while this process still owns its runtime record.
+  // A failed issuance leaves the listener up instead of stopping it without a replacement.
+  const replacementEnv = port && process.env.OCX_SERVICE !== "1"
+    ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
+    : null;
   try {
     await activeSupervisor?.stop();
   } catch (error) {
@@ -88,12 +93,13 @@ async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<
     process.exit(1);
   }
   if (port) {
+    if (!replacementEnv) throw new Error("Standalone recycle has no replacement environment.");
     const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(port)]), {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
       // A sibling's replacement stays a sibling even if the owner is down while it probes.
-      env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff),
+      env: replacementEnv,
     });
     child.unref();
   }

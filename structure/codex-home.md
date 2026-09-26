@@ -165,7 +165,8 @@ the stop leaves that proxy running, clears the stale sibling records and exits 0
 exit removes that record; a later `ocx stop` refuses a discovered listener unless it proves possession of this home's runtime-record secret through a fresh `/healthz` challenge, so the configured-port fallback cannot stop the owner. The sibling's own drain-and-restart (`src/server/management/system-restart.ts`) and standalone recycle
 (`src/client/runtime.ts`) hand the mark to their replacement through `OCX_SIBLING_OF_PORT` and
 `OCX_SIBLING_HANDOFF_NONCE`, backed by a one-use `src/codex/sibling-handoff.ts` record bound to the
-prior sibling runtime and `OPENCODEX_HOME`. `handleStart` consumes that record before any probe;
+prior sibling runtime and `OPENCODEX_HOME`. Connected-client recycle issues it before stopping
+the listener or removing that runtime record. `handleStart` consumes the record before any probe;
 a forged port env or replay grants no sibling status. A valid replacement stays a sibling while
 the owner is down, and its journal recovery remains skipped.
 Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`

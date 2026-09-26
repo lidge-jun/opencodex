@@ -648,8 +648,10 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_HANDOFF_NONCE;");
     expect(readFileSync(repoPath("src/server/management/system-restart.ts"), "utf8"))
       .toContain("const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env, issueSiblingHandoff);");
-    expect(readFileSync(repoPath("src/client/runtime.ts"), "utf8"))
-      .toContain("env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff),");
+    const runtime = readFileSync(repoPath("src/client/runtime.ts"), "utf8");
+    const prepareAt = runtime.indexOf("withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)");
+    expect(prepareAt).toBeGreaterThan(-1);
+    expect(prepareAt).toBeLessThan(runtime.indexOf("  cleanup();", prepareAt));
   });
 
   test("a sibling handoff is bound to its live runtime and home, then consumed once", () => {
