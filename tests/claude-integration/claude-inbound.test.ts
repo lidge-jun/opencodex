@@ -302,9 +302,11 @@ describe("claude inbound translation", () => {
 
   test("strict schema property membership does not repeatedly scan required", () => {
     const required = ["answer"];
-    Object.defineProperty(required, "includes", {
-      value: () => { throw new Error("linear membership scan"); },
-    });
+    for (const name of ["includes", "indexOf", "lastIndexOf"] as const) {
+      Object.defineProperty(required, name, {
+        value: () => { throw new Error(`linear membership scan via ${name}`); },
+      });
+    }
 
     expect(satisfiesOpenAiStrictSchema({
       type: "object",
