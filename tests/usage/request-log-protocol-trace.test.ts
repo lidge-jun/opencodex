@@ -10,6 +10,7 @@ import {
   beginRequestAttempt,
   filterRequestLogs,
   filteredRequestLogCount,
+  queryRequestLogs,
   requestLogEntryFromPersistedUsage,
   type RequestLogContext,
   type RequestLogEntry,
@@ -124,5 +125,26 @@ describe("protocolMode filter", () => {
   test("an unrecognised mode matches nothing instead of being ignored", () => {
     expect(ids("protocolMode=verified")).toEqual([]);
     expect(ids("")).toEqual(["bridge", "native", "blocked", "old"]);
+  });
+
+  test("combined filters retain protocol mode through tail, count and pagination", () => {
+    const native = { ...bridgeTrace, mode: "native" as const, requestPath: ["chat", "chat"] as ProtocolTraceV1["requestPath"], responsePath: ["chat", "chat"] as ProtocolTraceV1["responsePath"] };
+    const matching = (requestId: string, status = 200) => ({
+      ...row(requestId, native), accountLogLabel: "account-a", status,
+    });
+    const entries = [
+      matching("first"),
+      matching("middle", 204),
+      matching("error", 500),
+      { ...matching("other-provider"), provider: "q" },
+      { ...matching("other-mode"), protocolTrace: bridgeTrace },
+      matching("last"),
+    ];
+    const params = new URLSearchParams("provider=p&model=m&account=account-a&status=2xx&protocolMode=native&tail=2&limit=1&offset=1");
+    const result = queryRequestLogs(entries, params);
+    expect(result.total).toBe(2);
+    expect(result.logs.map(entry => entry.requestId)).toEqual(["middle"]);
+    expect(filterRequestLogs(entries, params).map(entry => entry.requestId)).toEqual(["middle"]);
+    expect(filteredRequestLogCount(entries, params)).toBe(2);
   });
 });

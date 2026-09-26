@@ -39,9 +39,10 @@ export function queryRequestLogs(
   // request failed over between pool accounts, a search for the account that finally served it
   // has to find that request, not only the account that first refused it.
   const account = params.get("account")?.trim();
+  const protocolMode = params.get("protocolMode")?.trim().toLowerCase();
   const status = params.get("status")?.trim().toLowerCase();
 
-  const hasFilters = Boolean(provider || conversationId || model || account || status);
+  const hasFilters = Boolean(provider || conversationId || model || account || protocolMode || status);
   let filtered: RequestLogEntry[];
   if (!hasFilters) {
     filtered = logs;
@@ -53,6 +54,7 @@ export function queryRequestLogs(
       if (conversationId && !matchesLogConversationId(entry.conversationId, conversationId)) continue;
       if (model && entry.model !== model && !entry.attempts?.some(attempt => attempt.model === model)) continue;
       if (account && entry.accountLogLabel !== account && !entry.attempts?.some(attempt => attempt.accountLogLabel === account)) continue;
+      if (protocolMode && !matchesProtocolMode(entry, protocolMode)) continue;
       if (status && (statusClass === undefined ? String(entry.status) !== status : Math.floor(entry.status / 100) !== statusClass)) continue;
       filtered.push(entry);
     }
