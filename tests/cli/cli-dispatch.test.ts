@@ -364,6 +364,33 @@ describe("start probes the configured port before shadowing it (source-level)", 
       .toBe("refuse");
   });
 
+  test("a restart replacement awaits only its own draining parent", () => {
+    // The live proxy is the exact pid that spawned this start as its replacement: wait, do not refuse.
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: 4242, restartParentPid: 4242, requestedPort: 10100, ocxService: undefined }))
+      .toBe("await-parent");
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: 4242, restartParentPid: 4242, requestedPort: undefined, ocxService: undefined }))
+      .toBe("await-parent");
+    // Any other live owner keeps the ordinary table.
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: 4243, restartParentPid: 4242, requestedPort: 10100, ocxService: undefined }))
+      .toBe("refuse");
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: null, restartParentPid: 4242, requestedPort: 10100, ocxService: undefined }))
+      .toBe("refuse");
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: 4243, restartParentPid: 4242, requestedPort: 10198, ocxService: undefined }))
+      .toBe("sibling");
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: 4242, restartParentPid: null, requestedPort: 10100, ocxService: undefined }))
+      .toBe("refuse");
+    expect(decideStartWithLiveOwner({ livePort: 10100, livePid: 4243, restartParentPid: 4242, requestedPort: 10100, ocxService: "1" }))
+      .toBe("service-stay-out");
+  });
+
+  test("handleStart waits out its restart parent and refuses it on both paths after the wait", () => {
+    const start = cliSource.slice(cliSource.indexOf("async function handleStart("));
+    expect(start).toContain("takeRestartHandoffMarkers(process.env)");
+    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true }), restartParent)");
+    expect(start.match(/decision === "refuse" \|\| decision === "await-parent"/g)?.length).toBe(2);
+    expect(start).toContain("livePid: fencedLive.pid, restartParentPid: restartParent.restartParentPid,");
+  });
+
   test("handleStart routes its live-owner branch through the shared decision", () => {
     expect(cliSource).toContain("decideStartWithLiveOwner({");
     // No leftover inline refusal that could bypass the tested decision.
@@ -615,7 +642,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     const start = slice("async function handleStart(", "function detachedStartEnvironment(");
     const honorAt = start.indexOf("let siblingStart = honorSiblingMarker(process.env) !== null;");
     expect(honorAt).toBeGreaterThan(-1);
-    expect(honorAt).toBeLessThan(start.indexOf("await findProxyOwnerBeforeJournalRecovery("));
+    expect(honorAt).toBeLessThan(start.indexOf("findProxyOwnerBeforeJournalRecovery("));
     const owner = slice("async function findProxyOwnerBeforeJournalRecovery(", "async function handleStart(");
     expect(owner).toContain("if (!currentExternalCodexModelProvider() && siblingOfLivePort() === null) {");
     expect(slice("function detachedStartEnvironment(", "async function handleEnsure("))

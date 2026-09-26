@@ -202,7 +202,7 @@ holder is refused with the same message the owner check prints (exit 0 instead u
 `OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
 is reported as such rather than called foreign, because an identity probe cannot distinguish a
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
-pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS". A restart replacement that finds its own draining parent waits for it instead ([restart handoff](ops/service-and-sidecars.md#restart-handoff)).
 
 Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
 for its resolved OpenCodex state directory before loading configuration or binding a listener.

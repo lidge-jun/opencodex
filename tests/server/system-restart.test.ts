@@ -9,6 +9,7 @@ import {
   MEMORY_DRAIN_RESTART_MS,
   REPLACEMENT_READY_TIMEOUT_MS,
   acceptSystemRestart,
+  replacementStartEnvironment,
   setSystemRestartIoForTests,
   waitForReplacementReady,
 } from "../../src/server/management/system-restart";
@@ -675,6 +676,90 @@ describe("acceptSystemRestart", () => {
       await scheduled!();
       expect(calls).toEqual(["drain", "start", "exit:1"]);
       expect(process.env.OCX_SERVICE).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prev;
+    }
+  });
+
+  describe("a failed handoff after a committed join", () => {
+    // connectClient already routed Codex to the client runtime the next start serves on this port.
+    // Restoring native Codex on the way out was a silent local fallback while state said connected.
+    function failingRestart(isClientConnected: () => boolean, deadline: boolean) {
+      const calls: string[] = [];
+      let scheduled: (() => void | Promise<void>) | null = null;
+      let fireDeadline: (() => void) | null = null;
+      setSystemRestartIoForTests(); // one accepted restart per process; each case starts fresh
+      acceptSystemRestart({
+        isDraining: () => false,
+        getActiveTurnCount: () => 0,
+        isSupervisedServiceChild: () => false,
+        listenPort: () => 10123,
+        schedule: (fn) => { scheduled = fn; },
+        scheduleDeadline: (fn) => { fireDeadline = fn; return () => {}; },
+        setDraining: () => {},
+        drainAndShutdown: deadline
+          ? () => { calls.push("drain"); return new Promise<void>(() => {}); }
+          : async () => { calls.push("drain"); },
+        stopListener: () => { calls.push("stop"); },
+        spawnStart: async () => {
+          calls.push("start");
+          throw Object.assign(new Error("child_exit"), { code: "child_exit" });
+        },
+        markRecycling: () => { calls.push("recycle"); },
+        isClientConnected,
+        exitProcess: (code) => { calls.push(`exit:${code}`); },
+      });
+      return {
+        calls,
+        async run() {
+          const running = scheduled!();
+          if (deadline) {
+            await Promise.resolve();
+            await Promise.resolve();
+            fireDeadline?.();
+          }
+          await running;
+        },
+      };
+    }
+
+    test("keeps Codex routing on the completed-drain path", async () => {
+      const restart = failingRestart(() => true, false);
+      await restart.run();
+      expect(restart.calls).toEqual(["drain", "stop", "start", "recycle", "exit:1"]);
+    });
+
+    test("keeps Codex routing on the deadline path", async () => {
+      const restart = failingRestart(() => true, true);
+      await restart.run();
+      expect(restart.calls).toEqual(["drain", "stop", "start", "recycle", "exit:1"]);
+    });
+
+    test("a standalone restart, or an unreadable client state, still restores on the way out", async () => {
+      for (const isClientConnected of [() => false, () => { throw new Error("unreadable state"); }]) {
+        for (const deadline of [false, true]) {
+          const restart = failingRestart(isClientConnected, deadline);
+          await restart.run();
+          expect(restart.calls).toEqual(["drain", "stop", "start", "exit:1"]);
+        }
+      }
+    });
+  });
+
+  test("the replacement environment drops the service marker and marks only a parent-exit lease wait", () => {
+    const prev = process.env.OCX_SERVICE;
+    process.env.OCX_SERVICE = "1";
+    try {
+      const ready = replacementStartEnvironment(true, 4242);
+      expect(ready.OCX_SERVICE).toBeUndefined();
+      expect(ready.OCX_SPEND_LEDGER_RESTART_PARENT_PID).toBeUndefined();
+      // spawnReplacementStart adds the restart-parent marker itself (tests/server/restart-replacement.test.ts).
+      expect(ready.OCX_RESTART_PARENT_PID).toBeUndefined();
+      const deferred = replacementStartEnvironment(false, 4242);
+      expect(deferred.OCX_SERVICE).toBeUndefined();
+      expect(deferred.OCX_SPEND_LEDGER_RESTART_PARENT_PID).toBe("4242");
+      expect(process.env.OCX_SERVICE).toBe("1");
     } finally {
       if (prev === undefined) delete process.env.OCX_SERVICE;
       else process.env.OCX_SERVICE = prev;

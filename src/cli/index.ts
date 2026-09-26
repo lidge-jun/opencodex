@@ -84,6 +84,7 @@ import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
 import { redactUrlForLog } from "../lib/redact";
 import { dispatchCommand, decideBusyPreferredPort, decideStartExitTeardown, decideStartWithLiveOwner, startupLeftCodexNativeLine } from "./dispatch";
+import { probeOwnerPastRestartParent, takeRestartHandoffMarkers } from "./restart-handoff";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import {
   findLiveProxy,
@@ -419,13 +420,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   // already passes this; `handleStart` is the path that did not. A sibling's own replacement is
   // marked before it (`honorSiblingMarker`): an owner down for that moment must not make it one.
   let siblingStart = honorSiblingMarker(process.env) !== null;
-  const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
+  // A restart replacement waits out its draining parent instead of refusing it, and bounds its handoff log (restart-handoff.ts).
+  const restartParent = { restartParentPid: takeRestartHandoffMarkers(process.env), requestedPort, ocxService: process.env.OCX_SERVICE };
+  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true }), restartParent);
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
     const decision = decideStartWithLiveOwner({
       livePort: owner.live.port,
-      requestedPort,
-      ocxService: process.env.OCX_SERVICE,
+      livePid: owner.live.pid, ...restartParent,
     });
     if (decision === "service-stay-out") {
       // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
@@ -436,7 +438,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       console.log(`Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}); service wrapper staying out of the way.`);
       process.exit(0);
     }
-    if (decision === "refuse") {
+    if (decision === "refuse" || decision === "await-parent") {
       console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
       process.exit(1);
     }
@@ -494,6 +496,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         if (fencedLive) {
           const decision = decideStartWithLiveOwner({
             livePort: fencedLive.port,
+            livePid: fencedLive.pid, restartParentPid: restartParent.restartParentPid,
             requestedPort,
             ocxService: process.env.OCX_SERVICE,
           });
@@ -501,7 +504,7 @@ async function handleStart(options: { block?: boolean } = {}) {
             console.log(`Proxy already running (PID ${fencedLive.pid ?? "unknown"}, port ${fencedLive.port}); service wrapper staying out of the way.`);
             throw new StartCommandExit(0);
           }
-          if (decision === "refuse") {
+          if (decision === "refuse" || decision === "await-parent") {
             console.error(`⚠️  Proxy appeared before bind (PID ${fencedLive.pid ?? "unknown"}, port ${fencedLive.port}). Use 'ocx stop' first.`);
             throw new StartCommandExit(1);
           }
