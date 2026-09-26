@@ -1,7 +1,7 @@
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
-import { createClaudeCliAdapter } from "./claude-cli/adapter";
+import { createClaudeAgentSdkAdapter } from "./claude-agent-sdk/adapter";
 import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-deepseek-v4-tool-replay";
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
@@ -17,6 +17,7 @@ import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
+import { resolveDeprecatedProviderId } from "../providers/deprecated-provider-aliases";
 import { withInputMediaGuard } from "./input-media-guard";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
@@ -140,12 +141,12 @@ export const ADAPTER_REGISTRY = {
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createQoderAdapter(provider),
   },
-  "claude-cli": {
-    // Claude Code speaks the same stream-json contract this repo already parses for CodeBuddy and
-    // Qoder, so the contract is inherited rather than restated. The family owns its args and env,
-    // and the CLI owns the credential: the adapter stores and injects none.
+  "claude-agent-sdk": {
+    // Anthropic's Claude Agent SDK drives the same harness this repo already reaches through the
+    // CodeBuddy and Qoder CLIs, so the contract is inherited rather than restated. The family owns
+    // its options and env, and the harness owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeAgentSdkAdapter(provider),
   },
 } as const satisfies Record<string, AdapterDefinition>;
 
@@ -157,8 +158,14 @@ export function adapterDefinitions(): Array<[AdapterId, RegisteredAdapterDefinit
 }
 
 export function getAdapterDefinition(adapterId: unknown): RegisteredAdapterDefinition | undefined {
-  if (typeof adapterId !== "string" || !Object.hasOwn(ADAPTER_REGISTRY, adapterId)) return undefined;
-  return ADAPTER_REGISTRY[adapterId as AdapterId];
+  if (typeof adapterId !== "string") return undefined;
+  // A retired provider id is also a retired adapter id, and the adapter string is the half a saved
+  // row can still carry: the rename projection leaves a row in place when the destination is taken,
+  // and a hand-edited config never runs the projection at all. No other form of that mechanism
+  // exists, so both lookups read one table and cannot disagree about what an id means.
+  const resolved = resolveDeprecatedProviderId(adapterId);
+  if (!Object.hasOwn(ADAPTER_REGISTRY, resolved)) return undefined;
+  return ADAPTER_REGISTRY[resolved as AdapterId];
 }
 
 export function effectiveAdapterContract(adapterId: string): Readonly<{
