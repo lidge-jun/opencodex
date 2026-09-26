@@ -118,7 +118,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -169,6 +169,7 @@ où l'ordre ne s'applique pas, comme les comptes OAuth et les clés API. Avec au
 en privilégiant celui dont l'allocation restante connue est la plus élevée ; la rotation est activée par la présence de plusieurs comptes et ne peut pas être désactivée — `oauthAccountFailover.enabled: false` refuse la préférence de compte avant envoi, pas la récupération après un 429 ; `ocx account login kiro` ajoute les comptes au pool un par un. Un résultat vide est toujours un succès.
 
 Pour Kiro, les refus de débit, de quota mensuel confirmé et de suspension confirmée peuvent changer de compte avant toute sortie. Le quota mensuel exclut seulement ce compte jusqu’à la réinitialisation ou l’expiration des données ; une réponse terminée du même compte efface un ancien verdict. Le réglage du fournisseur prime sur le réglage global pour la préférence proactive, sans désactiver la rotation réactive.
+Kiro peut choisir `least-loaded` pour placer les requêtes de façon proactive lorsque `pool.kernel` et la préférence proactive sont activés. `maxConcurrentPerAccount` (1–100) crée une file bornée par compte et par processus : un compte sélectionné saturé attend au plus 250 ms, puis renvoie 503 `account_capacity` avec `Retry-After: 1`. Cette limite ne déplace pas la requête vers un autre compte.
 
 `--json` renvoie :
 

@@ -8,6 +8,7 @@ import { parseRequest } from "../../src/responses/parser";
 import { inlineDocumentMarker } from "../../src/responses/inline-document";
 import { responsesRequestSchema } from "../../src/responses/schema";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { satisfiesOpenAiStrictSchema } from "../../src/adapters/anthropic-output-schema";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import type { OcxProviderConfig } from "../../src/types";
 
@@ -229,7 +230,7 @@ describe("claude inbound translation", () => {
       ...base,
       thinking: { type: "adaptive", display: "omitted" },
       output_config: { effort: "high" },
-    }))).toEqual({ summary: "auto", effort: "high" });
+    }))).toEqual({ summary: "none", effort: "high" });
     // effort passes through the whole known ladder
     for (const effort of ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
       expect(reasoningOf(anthropicToResponsesBody({
@@ -297,6 +298,22 @@ describe("claude inbound translation", () => {
     expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema: optional, strict: false } });
     expect((body.text as { format: { schema: { required: string[] } } }).format.schema.required).toEqual(["answer"]);
     expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
+  test("strict schema property membership does not repeatedly scan required", () => {
+    const required = ["answer"];
+    for (const name of ["includes", "indexOf", "lastIndexOf"] as const) {
+      Object.defineProperty(required, name, {
+        value: () => { throw new Error(`linear membership scan via ${name}`); },
+      });
+    }
+
+    expect(satisfiesOpenAiStrictSchema({
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required,
+      additionalProperties: false,
+    })).toBe(true);
   });
 
   test("an open object drops the strict claim even when every property is required", () => {

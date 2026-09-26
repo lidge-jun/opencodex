@@ -83,6 +83,19 @@ describe("native compact response body deadline", () => {
     } finally { source.close(); await pending; }
   }));
 
+  test("local upstream silence retains the default deadline", () => withCompactBodyClock(async () => {
+    const source = compactBodySource();
+    const pending = bufferCompactResponse(new Response(source.body), new AbortController().signal, undefined, true);
+    try {
+      await source.waitingForRead();
+      jest.advanceTimersByTime(300_000);
+      const response = await pending;
+      expect(response.status).toBe(504);
+      expect(source.cancellationReasons).toHaveLength(1);
+      expect(source.body.locked).toBe(false);
+    } finally { source.close(); await pending; }
+  }));
+
   test("nonempty chunks rearm the deadline and success preserves exact bytes and header hints", () => withCompactBodyClock(async () => {
     const source = compactBodySource();
     const expected = new Uint8Array([0, 255, 128, 195, 40]);

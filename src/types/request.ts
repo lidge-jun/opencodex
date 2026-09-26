@@ -438,6 +438,8 @@ export interface OcxUrlCitation {
  * - `totalTokens` = inputTokens + outputTokens. Never re-add cache detail on top.
  */
 export interface OcxUsage {
+  /** Provider-reported credit spend, independent of token estimates and USD pricing. */
+  providerCredits?: number;
   inputTokens: number;
   outputTokens: number;
   /**

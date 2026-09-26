@@ -494,6 +494,9 @@ in process, and an eligible alternate is admitted under the shared rotation and 
 send budget. The original response remains readable if alternate admission fails. A
 terminal OAuth refresh rejection can use an eligible alternate only after the original
 generation is marked for reauthentication. Final Kiro 5xx errors have fixed public text.
+The Kiro replacement reserves a no-wait account lease before committing OAuth selection;
+a full replacement leaves the original refusal in place. A successful rotation transfers
+the request's lease before the replacement send, and the final response body releases it.
 Organization or project exhaustion
 allows an initial alternate attempt because the response does not identify the refusing scope. After
 resolving an alternate, organization-level retry is withheld only when both credentials have the same

@@ -17,14 +17,17 @@ describe("key attempt accounting", () => {
     const key = (reference: string) => ({ adapter: "openai-chat" as const, authMode: "key" as const,
       baseUrl: "https://example.test", _apiKeyAttempt: { reference } });
     noteProviderAttemptSend(child, "test", key("synthetic-a"), undefined);
-    recordKeyAttemptUsage(child, { inputTokens: 100, outputTokens: 10 });
+    recordKeyAttemptUsage(child, { inputTokens: 100, outputTokens: 10, providerCredits: 0.04 });
     const parent = { ...child };
     noteProviderAttemptSend(child, "test", key("synthetic-b"), undefined, "key-429");
-    recordKeyAttemptUsage(child, { inputTokens: 200, outputTokens: 20 });
+    recordKeyAttemptUsage(child, { inputTokens: 200, outputTokens: 20, providerCredits: 0.01 });
     const rows: RequestLogEntry[] = [];
     addFinalRequestLog("stream-key-switch", Date.now(), parent, 200, undefined, row => rows.push(row));
     expect(rows[0].attempts?.map(attempt => attempt.usage?.inputTokens)).toEqual([100, 200]);
-    expect(rows[0].usage).toMatchObject({ inputTokens: 300, outputTokens: 30 });
+    expect(rows[0].usage).toMatchObject({ inputTokens: 300, outputTokens: 30, providerCredits: 0.05 });
+    const persisted = normalizeUsageEntryForTest({ ...rows[0], timestamp: 1, durationMs: 1 });
+    expect(persisted.usage?.providerCredits).toBe(0.05);
+    expect(persisted.attempts?.map(attempt => attempt.usage?.providerCredits)).toEqual([0.04, 0.01]);
   });
 
   test("a reader takes the attempts or the request total, never both", () => {

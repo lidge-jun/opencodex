@@ -445,14 +445,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // them that kind honours.
   if (url.pathname === "/api/pool/settings" && (req.method === "GET" || req.method === "PUT" || req.method === "PATCH")) {
     const {
-      poolSettingsCapability, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold, parseGenericStickyLimit,
+      poolSettingsCapability, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold, parseGenericStickyLimit, parseKiroAccountCap,
       unifiedPoolSettingsDto,
     } = await import("../../oauth/pool-settings-capability");
     const rawBody = req.method === "GET" ? {} : await readManagementJsonBodyOr(req, {});
     if (req.method !== "GET" && !isPlainRecord(rawBody)) {
       return jsonResponse({ error: "body must be an object" }, 400);
     }
-    const fields = rawBody as { provider?: unknown; enabled?: unknown; strategy?: unknown; stickyLimit?: unknown; autoSwitchThreshold?: unknown; quotaWindow?: unknown };
+    const fields = rawBody as { provider?: unknown; enabled?: unknown; strategy?: unknown; stickyLimit?: unknown; autoSwitchThreshold?: unknown; quotaWindow?: unknown; maxConcurrentPerAccount?: unknown };
     const provider = req.method === "GET"
       ? (url.searchParams.get("provider") ?? "").trim().toLowerCase()
       : (typeof fields.provider === "string" ? fields.provider.trim().toLowerCase() : "");
@@ -464,10 +464,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // sticky limit is refused identically whichever pool is addressed.
     let strategy: string | undefined;
     if (fields.strategy !== undefined) {
-      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy) : parseGenericPoolStrategy(fields.strategy);
+      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy) : parseGenericPoolStrategy(fields.strategy, provider);
       if (parsed === null) return jsonResponse({ error: kind === "codex"
         ? "strategy must be one of: quota, round-robin, fill-first, reset-first"
-        : "strategy must be one of: quota, round-robin, fill-first" }, 400);
+        : `strategy must be one of: quota, round-robin, fill-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
       strategy = parsed;
     }
     let stickyLimit: number | undefined;
@@ -495,6 +495,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (kind === "codex") return jsonResponse({ error: "enabled is not part of the codex pool contract" }, 400);
       if (typeof fields.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
+    let accountCap: number | null | undefined;
+    if (fields.maxConcurrentPerAccount !== undefined) {
+      if (provider !== "kiro" || kind !== "generic") return jsonResponse({ error: "maxConcurrentPerAccount is only supported for Kiro OAuth" }, 400);
+      accountCap = fields.maxConcurrentPerAccount === null ? null : parseKiroAccountCap(fields.maxConcurrentPerAccount);
+      if (accountCap === null && fields.maxConcurrentPerAccount !== null) return jsonResponse({ error: "maxConcurrentPerAccount must be an integer 1-100 or null" }, 400);
+    }
 
     if (req.method !== "GET") {
       if (kind === "codex") {
@@ -514,6 +520,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         const next = { ...(prov.oauthAccountFailover ?? {}) };
         if (fields.enabled !== undefined) next.enabled = fields.enabled as boolean;
         if (strategy !== undefined) next.strategy = strategy as never;
+        if (accountCap === null) delete next.maxConcurrentPerAccount;
+        else if (accountCap !== undefined) next.maxConcurrentPerAccount = accountCap;
         if (stickyLimit !== undefined) next.stickyLimit = stickyLimit;
         if (autoSwitchThreshold !== undefined) next.autoSwitchThreshold = autoSwitchThreshold;
         if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
@@ -564,12 +572,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       strategy?: unknown;
       stickyLimit?: unknown;
       quotaWindow?: unknown;
+      maxConcurrentPerAccount?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     if (provider !== "anthropic") {
       const {
         poolSettingsCapability, genericPoolSettingsDto, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold,
-        parseGenericStickyLimit,
+        parseGenericStickyLimit, parseKiroAccountCap,
       } = await import("../../oauth/pool-settings-capability");
       const prov = config.providers[provider];
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
@@ -586,8 +595,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (body.strategy !== undefined) {
         if (body.strategy === null) delete next.strategy;
         else {
-          const parsed = parseGenericPoolStrategy(body.strategy);
-          if (parsed === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+          const parsed = parseGenericPoolStrategy(body.strategy, provider);
+          if (parsed === null) return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
           next.strategy = parsed;
         }
       }
@@ -606,6 +615,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           if (parsed === null) return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
           next.stickyLimit = parsed;
         }
+      }
+      if (body.maxConcurrentPerAccount !== undefined) {
+        if (provider !== "kiro") return jsonResponse({ error: "maxConcurrentPerAccount is only supported for Kiro OAuth" }, 400);
+        const cap = body.maxConcurrentPerAccount === null ? null : parseKiroAccountCap(body.maxConcurrentPerAccount);
+        if (cap === null && body.maxConcurrentPerAccount !== null) return jsonResponse({ error: "maxConcurrentPerAccount must be an integer 1-100 or null" }, 400);
+        if (cap === null) delete next.maxConcurrentPerAccount;
+        else next.maxConcurrentPerAccount = cap;
       }
       if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
       else delete prov.oauthAccountFailover;

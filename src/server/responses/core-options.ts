@@ -16,6 +16,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
+import type { AccountLease } from "../../oauth/kiro-account-load";
 
 export interface ConsumedComboFailure {
   response: Response;
@@ -52,6 +53,8 @@ export interface ClientEncoderOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Private holder for the Kiro serving-account lease. */
+  accountLoad?: { lease: AccountLease | null };
   /** Internal Claude replay identity; consumed only by the final canonical Go transport. */
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */

@@ -451,8 +451,8 @@ describe("a busy preferred port never becomes a second proxy (#5004)", () => {
     expect(fn).toMatch(/decision === "refuse-live-proxy"[\s\S]{0,400}?StartCommandExit\(1\)/);
     expect(fn).toContain("Use 'ocx stop' first.");
     expect(fn).toMatch(/decision === "refuse-unidentified-holder"[\s\S]{0,700}?StartCommandExit\(1\)/);
-    // The wrapper's `if %ERRORLEVEL% NEQ 0` loop still terminates on a served port.
-    expect(fn).toMatch(/decision === "service-stay-out"[\s\S]{0,500}?StartCommandExit\(0\)/);
+    // The wrapper receives an explicit stay-out signal for a served port.
+    expect(fn).toMatch(/decision === "service-stay-out"[\s\S]{0,500}?StartCommandExit\(serviceStayOutExitCode\(\)\)/);
   });
 
   test("the pre-bind owner probe spends the same budget before it deletes state", () => {

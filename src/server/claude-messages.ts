@@ -28,6 +28,7 @@ import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
+import { carriesMessageThread, messageThreadUnsupportedResponse } from "../claude/message-threads";
 import {
   applyReplayRefusalClientHeaders,
   carryReplayRefusal,
@@ -843,6 +844,12 @@ async function handleClaudeMessagesWithBudget(
       recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
+    // Only Anthropic holds message-thread state; the error makes Claude Code resend the full turn.
+    if (carriesMessageThread(anthropicBody)) {
+      logCtx.errorCode = "claude_thread_unsupported";
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return messageThreadUnsupportedResponse();
+    }
     // Capture source semantics before effort rewriting or translation drops fields.
     // This policy is uniform across translated targets, including later fallback attempts.
     const compatibilityMode: unknown = config.claudeCode?.compatibility;
@@ -1550,6 +1557,8 @@ export async function handleClaudeCountTokens(
     if (wantsNativePassthrough(req, config, requestPolicy, model, cc)) {
       return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
     }
+    // A thread delta would undercount; refuse it exactly as the translated Messages path does.
+    if (carriesMessageThread(raw)) return messageThreadUnsupportedResponse();
     // PF-08: an eligible managed-key route counts the body the native lane would send.
     const nativeCountBody = resolveProtocolSettings(config).rollout.managedMessagesNative
       ? (await import("./messages-native")).nativeMessagesCountBody(config, cc, raw, { fastRow: countFastRow !== null })

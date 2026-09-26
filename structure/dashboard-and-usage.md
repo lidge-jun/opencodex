@@ -166,6 +166,11 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
+`OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
+through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
+is a measured value. Separate attempts add credits when usage is merged. The field is independent
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage.
+
 ### Upstream key account attribution
 
 API-key attempts in `src/usage/log.ts` carry `accountLogLabel` as `k` plus 32 lowercase

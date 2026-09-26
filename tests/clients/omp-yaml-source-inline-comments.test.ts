@@ -291,4 +291,21 @@ describe("OMP managed YAML inline comments", () => {
     );
     expect(result).toContain("providers:\n\n  other:");
   });
+
+  test("disable scans a long blank run inside the managed block once", () => {
+    const source = [
+      "providers:",
+      "  opencodex:",
+      "    api: openai-completions",
+      ...Array.from({ length: 40_000 }, () => ""),
+      "    baseUrl: http://127.0.0.1:10100/v1",
+      "",
+    ].join("\n");
+
+    expect(patchOmpYamlSource(
+      source,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBe("");
+  }, { timeout: 1_000 });
 });

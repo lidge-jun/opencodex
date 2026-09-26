@@ -239,7 +239,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -384,6 +384,10 @@ confirmed suspension refusals can rotate before output. Monthly exhaustion exclu
 that login until reset or evidence expiry; completed service clears an older verdict.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool.
+Kiro can opt into proactive `least-loaded` placement with `pool.kernel` and account preference enabled.
+Its optional `maxConcurrentPerAccount` cap is a bounded per-account queue: a full selected account
+waits up to 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap is local to
+each proxy process and does not move a request; reactive rotation remains available after a refusal.
 
 ### `ocx account current <provider> [--json]`
 
