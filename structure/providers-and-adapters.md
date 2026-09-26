@@ -73,6 +73,9 @@ quorum, while refusal-aware first admission follows the proactive preference set
 Kiro's `least-loaded` strategy selects the fewest in-flight eligible requests under
 `pool.kernel` and proactive preference; unknown quota remains eligible. Its optional
 per-account cap is validated only for Kiro and never persists in-flight counts.
+Kiro management model lists are per-account, identity-fenced, TTL-cached observations with a
+24-hour last-good bound. A list only prefers an otherwise eligible account; it is never
+credential authority or a reason to reject an unknown model ID.
 
 The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
 and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`

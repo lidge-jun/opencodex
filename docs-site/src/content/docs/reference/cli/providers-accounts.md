@@ -338,7 +338,8 @@ Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chos
 `selected`. `PRIORITY` is the signed Codex selection order (`0` when unset) and shows `-` for rows
 where ordering does not apply, such as OAuth accounts and API keys. With two stored Kiro accounts,
 rate, confirmed monthly-quota, and suspension refusals can rotate to an eligible account
-before output; selection prefers known remaining allowance. Reactive rotation is
+before output; positive cached model-list evidence is preferred among eligible accounts before
+the ordinary pool strategy. Reactive rotation is
 presence-driven and cannot be turned off — `oauthAccountFailover.enabled: false` declines
 pre-dispatch account preference, not refusal recovery, and a provider override takes precedence; `ocx account login kiro`
 adds accounts to the pool one at a time. An empty result is still success. `--json`
@@ -385,6 +386,10 @@ that login until reset or evidence expiry; completed service clears an older ver
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool.
 Kiro can opt into proactive `least-loaded` placement with `pool.kernel` and account preference enabled.
+Proactive model preference also requires that account preference be explicitly enabled globally
+or for Kiro; an unset or false setting leaves a healthy active account in place. Model lists are
+learned after an account serves, so an inactive sibling may initially have no evidence. A model
+ID absent from every cached list is still sent upstream.
 Its optional `maxConcurrentPerAccount` cap is a bounded per-account queue: a full selected account
 waits up to 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap is local to
 each proxy process and does not move a request; reactive rotation remains available after a refusal.

@@ -36,6 +36,18 @@ are bound independently by observation time, reset, and login identity, never by
 or raw account label; removal, identity change, expiry, or malformed disk degrades routing
 evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
 
+After an account is admitted, a detached `ListAvailableModels` request reads that account's
+regional management host with its own timeout and account-paired bearer/profile. The request
+never waits for discovery. `OPENCODEX_KIRO_MODEL_DISCOVERY=0` disables this optional path at
+call time, primarily for tests or operational rollback. The process-local list is fenced to
+the login identity, refreshed after one hour, and retained as last good for at most 24 hours.
+Malformed or empty replies preserve the static model roster. Observed model membership only
+prefers accounts already eligible and with room under a configured cap; unknown IDs remain
+callable. Reported `tokenLimits.maxInputTokens` informs a conservative catalog and token
+estimate window, including the static limit when any live account lacks evidence. Only accounts
+that have served acquire list evidence; inactive siblings may remain unknown until refusal
+rotation reaches them.
+
 `src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
 confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account
 verdict. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent

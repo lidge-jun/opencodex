@@ -78,6 +78,7 @@ import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/
 import { capEstimateAtContextWindow } from "../lib/token-estimate";
 import { inferCursorContextWindow } from "../adapters/cursor/discovery";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
+import { kiroObservedContextWindow } from "../providers/kiro-model-catalog";
 import { DEVIN_MODEL_CONTEXT_WINDOWS } from "../adapters/devin/live-models";
 import { modelRecordValue } from "../reasoning-effort";
 import {
@@ -1629,7 +1630,8 @@ function contextWindowForModel(adapter: string, modelId: string | undefined): nu
   if (adapter === "kiro" || adapter.startsWith("kiro-")) {
     const normalized = normalizeKiroModelId(modelId);
     if (normalized === "auto") return undefined;
-    return modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
+    return kiroObservedContextWindow(modelId)
+      ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
       ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, normalized);
   }
   if (adapter === "cursor" || adapter.startsWith("cursor-")) {

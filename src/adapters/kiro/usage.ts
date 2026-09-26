@@ -1,5 +1,6 @@
 import { estimateTokens, estimateTokensFromCharacterCounts } from "../../lib/token-estimate";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../../providers/kiro-models";
+import { kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
 import { modelRecordValue } from "../../reasoning-effort";
 import { sniffImageDimensions } from "../anthropic-image-guard";
 import type { KiroImage } from "../kiro-images";
@@ -219,7 +220,8 @@ export function kiroUpstreamContextWindow(modelId: string | undefined): number |
   if (!modelId) return undefined;
   const normalizedModelId = normalizeKiroModelId(modelId);
   if (normalizedModelId === "auto") return undefined;
-  const window = modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
+  const window = kiroObservedContextWindow(modelId)
+    ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
     ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, normalizedModelId);
   return typeof window === "number" && Number.isFinite(window) && window > 0 ? window : undefined;
 }

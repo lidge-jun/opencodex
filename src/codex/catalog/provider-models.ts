@@ -6,6 +6,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { resolveProviderApiKey } from "../../providers/key-store";
+import { getAccountSet } from "../../oauth/store";
+import { readKiroAccountModels, kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
   clearModelCache,
@@ -214,6 +216,23 @@ export async function fetchProviderModelsWithAuth(
   // discovery failure left by an older live configuration even when the account is logged out.
   if (prov.liveModels === false) {
     clearProviderDiscoveryStatus(name);
+    if (name === "kiro") {
+      const ids = [...configuredIds];
+      for (const account of getAccountSet("kiro")?.accounts ?? []) {
+        if (account.needsReauth === true) continue;
+        for (const row of readKiroAccountModels(account) ?? []) {
+          if (!ids.includes(row.modelId)) ids.push(row.modelId);
+        }
+      }
+      return observed(ids.map(id => {
+        const hints = catalogHintsFromProviderConfig(name, prov, id, contextCap,
+          metadataModelIdCaseFold, captured.effectiveAlias);
+        const observedWindow = kiroObservedContextWindow(id);
+        return { id, provider: name, ...hints,
+          ...(observedWindow !== undefined
+            ? { contextWindow: applyProviderContextCap(observedWindow, contextCap) } : {}) };
+      }), "authoritative");
+    }
     return observed(configured, "authoritative");
   }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
