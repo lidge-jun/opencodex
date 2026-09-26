@@ -38,6 +38,7 @@ mod resolve;
 mod runtime_stop;
 mod sidecar;
 mod startup;
+mod supervisor;
 mod tray;
 mod tray_availability;
 mod updater;
@@ -59,6 +60,9 @@ pub struct AppState {
     child: Mutex<Option<CommandChild>>,
     /// The pid of the child this app started, if it started one.
     child_pid: Mutex<Option<u32>>,
+    /// When that child was spawned, so a later run can tell a child still starting from one that
+    /// will never answer (`startup::waits_on_child`).
+    child_spawned: Mutex<Option<std::time::Instant>>,
     /// Whether the process answering the endpoint has been confirmed to be that child.
     ///
     /// Durable consent and current process ownership are different facts. Consent is a recorded
@@ -77,6 +81,7 @@ impl AppState {
             proxy: Mutex::new(None),
             child: Mutex::new(None),
             child_pid: Mutex::new(None),
+            child_spawned: Mutex::new(None),
             confirmed: AtomicBool::new(false),
             watch: sidecar::SidecarWatch::default(),
         }
@@ -104,6 +109,12 @@ impl AppState {
         *Self::slot(&self.child_pid)
     }
 
+    /// How long ago the child this app tracks was spawned; nothing when it tracks none.
+    pub fn child_age(&self) -> Option<std::time::Duration> {
+        self.child_pid()?;
+        Self::slot(&self.child_spawned).map(|spawned| spawned.elapsed())
+    }
+
     /// Confirm that the instance answering is the child this app started.
     ///
     /// This is the only thing that grants ownership. A spawn records a pid; it does not record that
@@ -117,6 +128,7 @@ impl AppState {
 
     pub fn adopt(&self, child: CommandChild) {
         *Self::slot(&self.child_pid) = Some(child.pid());
+        *Self::slot(&self.child_spawned) = Some(std::time::Instant::now());
         *Self::slot(&self.child) = Some(child);
         // Spawned, not yet confirmed: the health probe is what establishes that this pid is the
         // one answering.
@@ -130,6 +142,7 @@ impl AppState {
     pub fn release(&self) {
         self.confirmed.store(false, Ordering::Release);
         let _ = Self::slot(&self.child_pid).take();
+        let _ = Self::slot(&self.child_spawned).take();
         let _ = Self::slot(&self.child).take();
     }
 }
@@ -178,8 +191,11 @@ fn startup_phases() -> Vec<startup::PhaseInfo> {
 }
 
 /// Run the startup sequence again. A run already in flight is left alone.
+///
+/// A person asking for a runtime again also resumes supervision, even after the tray's Stop.
 #[tauri::command]
 fn retry_startup(app: tauri::AppHandle) {
+    supervisor::resume(&app);
     startup::begin(&app);
 }
 
@@ -282,6 +298,8 @@ pub fn run() {
             app.manage(tray::TrayState::default());
             app.manage(exit::ExitCoordinator::new());
             app.manage(startup::Startup::new());
+            // Registers the exit hook and an idle watchdog; it starts no runtime of its own.
+            supervisor::watch_runtime(app.handle());
 
             // D7: the window is created and shown before anything is registered, resolved, probed
             // or started, so every state below has somewhere to be reported. A login launch stays

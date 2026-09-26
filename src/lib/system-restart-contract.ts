@@ -50,6 +50,74 @@ export function takeRestartParentMarker(
   return pid;
 }
 
+/**
+ * The env var the desktop app sets on the `ocx start` it spawns and waits on
+ * (`desktop/src-tauri/src/sidecar.rs`). Under it a restart spawns no detached replacement: it marks
+ * recycling and exits {@link DESKTOP_RESTART_EXIT_CODE}, and the app starts the replacement itself.
+ * A detached grandchild is a process the app can neither see nor stop, and one that failed to start
+ * left no proxy until somebody relaunched the app. `handleStart` consumes the marker before its
+ * first probe, so no child of the runtime inherits it.
+ */
+export const DESKTOP_SUPERVISED_ENV = "OCX_DESKTOP_SUPERVISED";
+/** EX_TEMPFAIL, "run me again": the desktop's supervisor restarts promptly on exactly this code. */
+export const DESKTOP_RESTART_EXIT_CODE = 75;
+/**
+ * The link-mode port-reclaim budget under the desktop app. With the pinned port's prefer-retry after
+ * it (`PINNED_PREFER_RETRY_MS` in `src/client/runtime.ts`) a start that cannot bind gives up within
+ * 25 seconds, inside the app's 30-second startup deadline, so the app sees it exit instead of giving
+ * up on it while it still waits.
+ */
+export const DESKTOP_SUPERVISED_PORT_WAIT_MS = 20_000;
+
+/** The desktop app's pid, recorded when the marker was taken; null when nothing supervises this process. */
+let desktopParentPid: number | null = null;
+
+/**
+ * Consume an inherited desktop-supervision marker, removing it from `env` either way. It is recorded
+ * only against a real parent process, so {@link isDesktopSupervised} can later check that the same
+ * app is still there.
+ */
+export function takeDesktopSupervisedMarker(env: RestartEnv, actualParentPid: number = process.ppid): boolean {
+  const raw = env[DESKTOP_SUPERVISED_ENV]?.trim();
+  delete env[DESKTOP_SUPERVISED_ENV];
+  desktopParentPid = raw === "1" && Number.isSafeInteger(actualParentPid) && actualParentPid > 1
+    ? actualParentPid
+    : null;
+  return desktopParentPid !== null;
+}
+
+export interface DesktopSupervisionIo {
+  parentPid?: () => number;
+  isAlive?: (pid: number) => boolean;
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | null)?.code === "EPERM";
+  }
+}
+
+/**
+ * Whether the desktop app that started this process is still there to start its replacement: the
+ * marker was taken, the parent recorded then is still this process's parent, and it is alive. An app
+ * that crashed leaves the runtime re-parented (POSIX) or its parent dead (Windows), and a restart then
+ * falls back to the detached replacement instead of exiting into nothing. Read only when a restart
+ * or a link-mode start needs it, never on the request path.
+ */
+export function isDesktopSupervised(io: DesktopSupervisionIo = {}): boolean {
+  if (desktopParentPid === null) return false;
+  if ((io.parentPid ?? (() => process.ppid))() !== desktopParentPid) return false;
+  return (io.isAlive ?? processExists)(desktopParentPid);
+}
+
+/** Test seam: forget a marker a test took. */
+export function resetDesktopSupervisionForTests(): void {
+  desktopParentPid = null;
+}
+
 const BASE64URL_256 = /^[A-Za-z0-9_-]{43}$/;
 
 export type ExpectedSystemRestartPid =

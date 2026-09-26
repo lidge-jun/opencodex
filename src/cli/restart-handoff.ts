@@ -16,25 +16,28 @@
  *
  * {@link takeRestartHandoffMarkers} also consumes the handoff-log flag: a replacement whose output
  * its parent sent to `restart-handoff.log` bounds that file itself from then on
- * (`armRestartHandoffLogCap` in `src/server/restart-replacement.ts`).
+ * (`armRestartHandoffLogCap` in `src/server/restart-replacement.ts`). It consumes the desktop app's
+ * supervision marker too, so a later restart exits to the app instead of spawning past it.
  */
 import { isProcessAlive } from "../lib/process-control";
-import { takeRestartParentMarker } from "../lib/system-restart-contract";
+import { takeDesktopSupervisedMarker, takeRestartParentMarker } from "../lib/system-restart-contract";
 import { armRestartHandoffLogCap, type RestartHandoffLogCapIo } from "../server/restart-replacement";
 import { decideStartWithLiveOwner } from "./dispatch";
 
 export { takeRestartParentMarker };
 
 /**
- * Consume everything a restarting parent handed this start, before its first probe: arm the
- * handoff log's cap when the flag is set, and return the restart-parent pid, honored only for this
- * process's real parent. Both markers are removed from `env`, so no later child inherits them.
+ * Consume everything a parent handed this start, before its first probe: arm the handoff log's cap
+ * when the flag is set, record the desktop app's supervision, and return the restart-parent pid,
+ * honored only for this process's real parent. Every marker is removed from `env`, so no later child
+ * inherits one.
  */
 export function takeRestartHandoffMarkers(
   env: Record<string, string | undefined>,
   logCap: RestartHandoffLogCapIo = {},
 ): number | null {
   armRestartHandoffLogCap(env, logCap);
+  takeDesktopSupervisedMarker(env);
   return takeRestartParentMarker(env);
 }
 
