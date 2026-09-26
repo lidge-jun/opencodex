@@ -26,6 +26,7 @@ export interface OAuthStatus {
   email?: string;
   error?: string;
   done?: boolean;
+  hint?: import("../components/login-url-block").LoginHintData;
   needsReauth?: boolean;
   activeAccountId?: string | null;
 }

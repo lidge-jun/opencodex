@@ -9,20 +9,19 @@ Makine bağlantısı, bir OpenCodex **Home** bilgisayarını bir **Child** bilgi
 
 - Home bilgisayarı, Child bilgisayarına OpenSSH anahtarıyla giriş yapabilir.
 - Child tarafından başlatılan bağlantı için Child, Home bilgisayarına OpenSSH anahtarıyla giriş yapabilmelidir (parola girişi desteklenmez).
-- Child bilgisayarında OpenCodex kuruludur.
+- Child bilgisayarında OpenCodex 2.66.0 veya sonrası kuruludur (Child tarafından başlatılan bağlantıda Home üzerinde de).
 - Her iki bilgisayar da macOS veya Linux çalıştırır.
-- Home kontrol panelinde tam bir eşleştirilmiş oturum vardır.
+- Bağlantı Home tarafından başlatılır: kontrol paneli Home bilgisayarının kendisinde (bağımsız kurulumda tarayıcı veya masaüstü uygulaması) ya da eşleştirilmiş bir Hub oturumu üzerinden açılır.
 
-Parolalı SSH ve Windows mevcut akışın dışındadır. Child üzerinden bağlantı başlatmak için bağımsız çalışan Child kontrol panelinde **Çocuk** → **Home'u bul** seçeneklerini izleyin, Home için SSH ana bilgisayarını seçin, ana bilgisayar anahtarı parmak izini kontrol edip onaylayın ve ardından **Çocuk olarak bağlan** seçeneğini seçin. Child, Home bilgisayarına SSH anahtarıyla giriş yapabilmelidir (parola girişi desteklenmez) ve Home üzerinde `ocx` çalışıyor olmalıdır. İstemci tüneli portu `1024` veya daha yüksek olmalıdır. Katılma işleminden sonra Child yeniden başlar ve Home bilgisayarına bağlanır. Bu seçenek yalnızca standalone çalışma zamanında kullanılabilir.
+Parolalı SSH ve Windows mevcut akışın dışındadır. Bu sürümde bir bilgisayarı kontrol panelinden Child olarak bağlamak (Child tarafından başlatılan bağlantı) kullanılamaz: katılmak o bilgisayardaki OpenCodex'i yeniden başlatır ve çalışan Codex bağlantılarını keser; bu yüzden kontrol panelinde **Çocuk** rolü kullanılamaz. Desteklenen yol, Home tarafından başlatılan bağlantıdır: Home olacak bilgisayarda **Home** seçeneğini seçin ve diğer bilgisayarı aşağıda anlatıldığı gibi Child olarak ekleyin.
 
 ## `#remote` üzerinden Child ekleme
 
 1. Kontrol panelinde `#remote` sayfasını açın ve Remote Link'i açın.
-2. **Home** seçeneğini seçin.
-3. **Add child** seçeneğini seçin.
-4. SSH adaylarından bir ana bilgisayar seçin veya SSH yapılandırmasındaki diğer adı girin.
-5. Bağlantı testini çalıştırın ve gösterilen ana bilgisayar parmak izini bağlanmak istediğiniz bilgisayarın parmak iziyle karşılaştırın. Karşılaştırma, SSH ana bilgisayara güvenmeden önce yanlış bilgisayarı veya değişmiş anahtarını fark etmenize yardımcı olur.
-6. Parmak izini onaylayın, ardından Child'ı bağlayın.
+2. **Home** seçeneğini seçin, ardından **Continue** düğmesine basın. SSH ana bilgisayar listesi açılır.
+3. SSH adaylarından bir ana bilgisayar seçin veya SSH yapılandırmasındaki diğer adı girin.
+4. Bağlantı testini çalıştırın ve gösterilen ana bilgisayar parmak izini bağlanmak istediğiniz bilgisayarın parmak iziyle karşılaştırın. Karşılaştırma, SSH ana bilgisayara güvenmeden önce yanlış bilgisayarı veya değişmiş anahtarını fark etmenize yardımcı olur.
+5. Parmak izini onaylayın, ardından Child'ı bağlayın.
 
 Kontrol paneli belirteç girmenizi istemez. Önce ana bilgisayarı yoklar ve parmak izini açıkça onaylamadan bağlantıyı uygulamaz.
 

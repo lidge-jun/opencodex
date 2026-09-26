@@ -8,6 +8,7 @@ import {
 import { hostname } from "node:os";
 import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
+import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import {
   inspectRemoteDesktopStore, readDesktopDisconnectReceipt, writeDesktopDisconnectReceipt,
   replaceRemoteDesktopCredential, restoreRemoteDesktopStore, finishRemoteDesktopCleanup,
@@ -538,6 +539,9 @@ export async function connectClient(
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
   let committed = false;
+  // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
+  // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   try {
     linkMode = (options.transport ?? "hub") === "link";
     if (linkMode) {
@@ -750,6 +754,7 @@ export async function syncConnectedClient(
   _options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
 ): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean }> {
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertNoClientDisconnectPending();
     const state = readClientConnectionState();
@@ -891,6 +896,7 @@ export async function disconnectClient(
   desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
   restartRequired: boolean;
 }> {
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const keepCatalog = options.keepCatalog === true;
   const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();

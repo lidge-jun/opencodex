@@ -284,8 +284,10 @@ desktop and the wrong one in two common cases: you need a different browser prof
 identity, a second account), or the dashboard is open against a proxy running somewhere else.
 
 Every login surface shows the authorization URL with a copy button, the device code when the
-provider issues one, and a field to paste the redirect URL or authorization code back. So you can
-always finish a login by hand.
+provider issues one, and the current instructions. Browser callback flows also show a field to
+paste the redirect URL or authorization code back. During device approval that field is hidden:
+enter the displayed code on the provider's verification page instead. If the provider switches
+to manual input, the dashboard replaces the old code and instructions on its next status poll.
 
 To stop the proxy from opening a browser at all, tick **Don't open a browser on the proxy machine**
 beside the login button, or set it permanently:
@@ -302,7 +304,7 @@ Two cases behave differently, and it is worth knowing which you are in:
 
 - **A different browser profile on the same machine** works with the copied link alone. The
   loopback callback on `127.0.0.1` still completes the flow.
-- **A browser on a different machine** also needs the paste fallback, because the redirect URI is
+- **A browser callback flow on a different machine** also needs the paste fallback, because the redirect URI is
   still `http://127.0.0.1:<port>/callback` on the proxy's host. Finish the login there, then paste
   the redirect URL (or just the code) back into the dashboard or `ocx account code`.
 
@@ -774,6 +776,9 @@ including add-account and reauthentication. A raw admin token or forged GUI head
 `403 oauth_consent_required` before a credential is read or a grant starts. This gate uses
 the server-resolved session principal, not a separately recorded warning-checkbox receipt.
 Direct `ocx login meta-muse` and other OAuth providers keep their existing login policies.
+The management OAuth provider list therefore omits Meta Muse for raw-admin-token dashboards;
+open a session-authenticated dashboard to use that login flow. This changes discovery only,
+not the admission checks on login start or manual continuation.
 
 Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use

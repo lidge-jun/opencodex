@@ -8,6 +8,7 @@
 import type { CleanupMode, CleanupResult } from "./cleanup";
 import { spawnWorker } from "../lib/worker-embed";
 import { resolveCodexHomeDir } from "../codex/home";
+import { siblingOfLivePort } from "../codex/sibling-start";
 import {
   tryBeginStorageMutation,
 } from "./storage-mutation-coordinator";
@@ -452,11 +453,14 @@ export function requestStorageCleanupPolicyRun(
 /**
  * Fire-and-forget entry for startup / schedule ticks.
  * Skips the single-flight slot when disabled or not due so manual runs stay free.
+ * A sibling instance never runs one: the archived sessions belong to the shared CODEX_HOME the
+ * live owner serves (`src/codex/sibling-start.ts`), and the manual run route is refused there too.
  */
 export function maybeRequestStorageCleanupPolicyRun(
   reason: PolicyRunReason,
   opts?: Omit<RequestPolicyRunOptions, "reason">,
 ): void {
+  if (siblingOfLivePort() !== null) return;
   try {
     const policy = readStorageCleanupPolicyFromConfig();
     if (!policy.enabled) return;

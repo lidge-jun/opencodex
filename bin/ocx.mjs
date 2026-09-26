@@ -447,6 +447,9 @@ function runPackageManagerSelfUpdate(manager) {
     }
     const env = mutationChildEnvironment();
     delete env.OCX_SERVICE;
+    // The restarted proxy is an ordinary owner; only a sibling's own replacement carries this.
+    delete env.OCX_SIBLING_OF_PORT;
+    delete env.OCX_SIBLING_HANDOFF_NONCE;
     console.log(`Attempting to restart the proxy on port ${bakePort}.`);
     const child = spawn(process.execPath, [postUpdateLauncher, "start", "--port", String(bakePort)], {
       detached: true,

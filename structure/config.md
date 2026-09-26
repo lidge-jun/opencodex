@@ -64,8 +64,8 @@ silently move the active installation.
 
 `src/config/process-state.ts` derives `ocx.pid` and `runtime-port.json` from that resolved directory.
 It owns their byte-compatible writes, parsing, expected-PID filters, cheap liveness, full OCX command
-identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` remains optional,
-owner-only state and is validated before a record is returned. `src/config.ts` re-exports the same
+identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` and `siblingOfPort` (the live owner's port, written only by a sibling instance) remain optional,
+owner-only state and are validated before a record is returned. `src/config.ts` re-exports the same
 symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
 
 Replacing config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared

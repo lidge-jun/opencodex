@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { Server } from "bun";
+import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
+import { issueSiblingHandoff } from "../codex/sibling-handoff";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
@@ -56,6 +58,11 @@ export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string):
 
 async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<void> {
   const port = activePort;
+  // Capture the one-use sibling handoff while this process still owns its runtime record.
+  // A failed issuance leaves the listener up instead of stopping it without a replacement.
+  const replacementEnv = port && process.env.OCX_SERVICE !== "1"
+    ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
+    : null;
   try {
     await activeSupervisor?.stop();
   } catch (error) {
@@ -86,11 +93,13 @@ async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<
     process.exit(1);
   }
   if (port) {
+    if (!replacementEnv) throw new Error("Standalone recycle has no replacement environment.");
     const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(port)]), {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: standaloneRecycleEnv(process.env, disconnectedTokenFingerprint),
+      // A sibling's replacement stays a sibling even if the owner is down while it probes.
+      env: replacementEnv,
     });
     child.unref();
   }
@@ -134,7 +143,7 @@ export async function startClientRuntime(
   supervisor?.start();
   installCrashGuards();
   writePid(process.pid);
-  writeRuntimePort({ pid: process.pid, port: boundPort, hostname: "127.0.0.1" });
+  writeRuntimePort({ pid: process.pid, port: boundPort, hostname: "127.0.0.1", ...siblingRuntimeField() });
 
   let shuttingDown = false;
   const shutdown = () => {

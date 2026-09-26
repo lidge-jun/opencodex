@@ -1,4 +1,66 @@
+import { homedir } from "node:os";
+
 const DEFAULT_OUTPUT_BYTES = 64 * 1024;
+const HINT_MAX_CHARS = 160;
+// Written as escapes on purpose: invisible and bidi controls must never sit literally in source.
+const ANSI_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]|\u001b[@-_]/g;
+const HINT_CONTROL = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
+const HINT_SECRET = /\bocx_(data|admin|session|pair)_[A-Za-z0-9_-]+/g;
+const HINT_URL_QUERY = /\b(https?:\/\/[^\s?#]*)[?#]\S*/g;
+
+type SpawnEnv = Record<string, string | undefined>;
+
+/**
+ * PATH for ssh and ssh-keygen children on POSIX. A desktop sidecar inherits launchd's minimal
+ * PATH, so a ProxyCommand helper installed by Homebrew or into ~/.bun/bin would not resolve.
+ * Inherited entries keep their order and precedence; the common helper directories are appended
+ * once. Windows keeps its inherited environment untouched and gets undefined.
+ */
+export function linkSshPath(env: SpawnEnv = process.env, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform === "win32") return undefined;
+  const home = env.HOME || homedir();
+  const extra = ["/opt/homebrew/bin", "/usr/local/bin", ...(home ? [`${home}/.bun/bin`, `${home}/.local/bin`] : [])];
+  return [...new Set([...(env.PATH ?? "").split(":").filter(Boolean), ...extra])].join(":");
+}
+
+/** The environment ssh runs with: the inherited one with `linkSshPath`, or undefined on Windows. */
+export function linkSshSpawnEnv(env: SpawnEnv = process.env, platform: NodeJS.Platform = process.platform): SpawnEnv | undefined {
+  const path = linkSshPath(env, platform);
+  return path === undefined ? undefined : { ...env, PATH: path };
+}
+
+/**
+ * One hint line as the dashboard may see it: control and bidi characters removed, OpenCodex
+ * secrets and URL queries redacted, whitespace collapsed, capped at 160 code points. The cut is
+ * made between code points, so an astral character is never split into a lone surrogate.
+ */
+export function boundHint(line: string): string | undefined {
+  const clean = line.replace(HINT_CONTROL, " ").replace(HINT_SECRET, "ocx_$1_[redacted]")
+    .replace(HINT_URL_QUERY, "$1").replace(/\s+/g, " ").trim();
+  if (!clean) return undefined;
+  const points = Array.from(clean);
+  return points.length > HINT_MAX_CHARS ? `${points.slice(0, HINT_MAX_CHARS - 1).join("")}\u2026` : clean;
+}
+
+/**
+ * A short reason for a failed ssh command: the last non-empty stderr line, with terminal escapes,
+ * control and bidi characters removed, OpenCodex secrets and URL queries redacted, capped at 160
+ * code points. It reads stderr only; stdout and stdin can carry keys. Callers return it to the
+ * dashboard and never log it.
+ */
+export function sshFailureHint(stderr: string): string | undefined {
+  const lines = stderr.replace(ANSI_SEQUENCE, "").split(/\r\n|\r|\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const hint = boundHint(lines[index]!);
+    if (hint) return hint;
+  }
+  return undefined;
+}
+
+/** The runner's own failure (spawn, timeout, output limit) as a hint; other errors give none. */
+export function sshRunnerErrorHint(error: unknown): string | undefined {
+  return error instanceof SshRunnerError ? boundHint(error.message) : undefined;
+}
 
 export interface SshRunResult {
   code: number;
@@ -71,14 +133,19 @@ function defaultKill(process: Bun.Subprocess, signal?: NodeJS.Signals): void {
   process.kill(signal);
 }
 
-export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: number } = {}): SshRunner {
+export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: number; env?: () => SpawnEnv | undefined } = {}): SshRunner {
   const spawn = deps.spawn ?? ((argv, options) => Bun.spawn(argv, options));
   const defaultTimeoutMs = deps.timeoutMs ?? 30_000;
+  // Read per spawn so a PATH change reaches the next command; Windows passes no env key at all.
+  const spawnEnv = (): { env?: SpawnEnv } => {
+    const env = (deps.env ?? (() => linkSshSpawnEnv()))();
+    return env ? { env } : {};
+  };
 
   const spawnChild = (argv: readonly string[]): SshChild => {
     let child: Bun.Subprocess;
     try {
-      child = spawn([...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      child = spawn([...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", ...spawnEnv() });
     } catch (error) {
       throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
     }
@@ -108,6 +175,7 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
           stdin: options.stdin === undefined ? "ignore" : "pipe",
           stdout: "pipe",
           stderr: "pipe",
+          ...spawnEnv(),
         });
       } catch (error) {
         throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });

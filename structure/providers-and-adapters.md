@@ -22,6 +22,9 @@ device login, add-account and reauthentication. This principal is not a checkbox
 forged GUI headers and raw management credentials do not substitute for it. Direct CLI login
 and other OAuth providers retain their existing policies. `src/oauth/meta-muse-device.ts`
 cancels unparsed authorization/mint failures, including mint429, without reflecting their bodies.
+Management discovery and changing device/manual instructions follow the
+[OAuth continuation contract](gui-and-management-api.md#oauth-login-continuations); discovery
+filters the current principal without changing the direct CLI roster or relaxing login admission.
 
 The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
 the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.

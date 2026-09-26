@@ -3,11 +3,13 @@ import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import RemoteLink from "../src/pages/RemoteLink";
-import { LINK_ERROR_CODES, LinkApiError, parseRemoteLinkStatus, readLinkJson, type RemoteLinkStatusWire } from "../src/remote-link-api";
+import { boundLinkHint, LINK_ERROR_CODES, LinkApiError, parseRemoteLinkStatus, readLinkJson, type RemoteLinkStatusWire } from "../src/remote-link-api";
 import { LanguageProvider } from "../src/i18n/provider";
 import { LOCALES } from "../src/i18n/shared";
 
-const baseStatus: RemoteLinkStatusWire = { role: "home", listener: { state: "listening", port: 44123 }, links: [], child: null };
+const baseStatus: RemoteLinkStatusWire = { role: "home", listener: { state: "listening", port: 44123 }, links: [], child: null, joinAvailable: false };
+// A paired session on a standalone runtime: the only status that lets the dashboard join as a Child.
+const joinableStatus: RemoteLinkStatusWire = { ...baseStatus, role: "standalone", joinAvailable: true };
 let win: Window;
 let root: Root | null = null;
 let previous: Record<string, unknown>;
@@ -58,6 +60,15 @@ test("parses every wire state without changing the DTO", () => {
   expect(parseRemoteLinkStatus({ ...baseStatus, role: "standalone", listener: { state: "off", port: null }, child: { alias: "child", state: "idle", since: "now", reason: null } }).child?.state).toBe("idle");
 });
 
+test("joinAvailable is true only when the server says exactly true", () => {
+  const withoutJoin: Record<string, unknown> = { ...baseStatus };
+  delete withoutJoin.joinAvailable;
+  expect(parseRemoteLinkStatus(withoutJoin).joinAvailable).toBe(false);
+  expect(parseRemoteLinkStatus({ ...baseStatus, joinAvailable: "true" }).joinAvailable).toBe(false);
+  expect(parseRemoteLinkStatus({ ...baseStatus, joinAvailable: 1 }).joinAvailable).toBe(false);
+  expect(parseRemoteLinkStatus({ ...baseStatus, joinAvailable: true }).joinAvailable).toBe(true);
+});
+
 test("session gate makes no link request", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async input => { calls.push(String(input)); return response(baseStatus); }) as typeof fetch;
@@ -81,7 +92,7 @@ test("off state and role choice issue no mutation request", async () => {
 });
 
 test("Child role is disabled unless the served runtime is standalone", async () => {
-  globalThis.fetch = (async () => response({ ...baseStatus, role: "home" })) as typeof fetch;
+  globalThis.fetch = (async () => response({ ...baseStatus, role: "home", joinAvailable: true })) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
   const child = [...host.querySelectorAll('[role="radio"]')][1] as HTMLButtonElement;
@@ -98,6 +109,58 @@ test("Child role is disabled unless the served runtime is standalone", async () 
   expect(standaloneChild.getAttribute("aria-disabled")).toBe("false");
 });
 
+test("local dashboard without join keeps Child disabled, explains why, and never sends a join", async () => {
+  declareRuntimeRole("standalone");
+  const calls: Array<{ path: string; method: string }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    calls.push({ path, method: init?.method ?? "GET" });
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "home-one", source: "ssh_config" }] });
+    if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.66.0" });
+    if (path === "/api/link/join") return response({ linkId: "lnk_1234567890abcdef", alias: "home-one", restarting: true }, 202);
+    if (path === "/api/link/apply") return response({ linkId: "lnk_1234567890abcdef" }, 202);
+    return response({ ...baseStatus, role: "standalone", joinAvailable: false });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  const radios = () => [...host.querySelectorAll('[role="radio"]')] as HTMLButtonElement[];
+  expect(radios()[1]?.getAttribute("aria-disabled")).toBe("true");
+  expect(radios()[1]?.tabIndex).toBe(-1);
+  expect(host.textContent).toContain("Connecting this computer as a Child from the dashboard is not available in this release");
+  expect(host.textContent).toContain("would drop existing Codex connections");
+  expect(host.textContent).toContain("choose Home and add the other computer as a Child");
+  expect(host.textContent).not.toContain("paired");
+  expect(host.textContent).not.toContain("Child links can only be started from a standalone runtime.");
+
+  await act(async () => { radios()[1]?.click(); });
+  await act(async () => { radios()[1]?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Home", bubbles: true })); });
+  for (const key of ["ArrowRight", "ArrowDown", "End"]) {
+    await act(async () => { radios()[0]?.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true })); });
+  }
+  await flush();
+  expect(radios()[1]?.getAttribute("aria-checked")).toBe("false");
+  expect(radios()[1]?.tabIndex).toBe(-1);
+  expect((host.querySelector(".remote-link-sheet") as HTMLDialogElement).open).toBe(false);
+  expect(calls.some(call => call.path === "/api/link/candidates")).toBe(false);
+
+  // The Home side still works from this dashboard: Continue opens the host sheet and applies.
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Continue")?.click(); });
+  await flush();
+  expect((host.querySelector(".remote-link-sheet") as HTMLDialogElement).open).toBe(true);
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  expect([...host.querySelectorAll("button")].some(button => button.textContent?.includes("Connect as Child"))).toBe(false);
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect child"))?.click(); });
+  await flush();
+  expect(calls.some(call => call.path === "/api/link/apply" && call.method === "POST")).toBe(true);
+  expect(calls.some(call => call.path === "/api/link/join")).toBe(false);
+});
+
 test("standalone Child flow joins with exactly the confirmed alias and shows restart waiting", async () => {
   declareRuntimeRole("standalone");
   const calls: Array<{ path: string; method: string; body?: string }> = [];
@@ -108,7 +171,7 @@ test("standalone Child flow joins with exactly the confirmed alias and shows res
     if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
     if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
     if (path === "/api/link/join") return response({ linkId: "lnk_1234567890abcdef", alias: "home-one", restarting: true }, 202);
-    return response({ ...baseStatus, role: "standalone" });
+    return response(joinableStatus);
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
@@ -120,6 +183,7 @@ test("standalone Child flow joins with exactly the confirmed alias and shows res
   await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
   await flush();
+  expect(calls.some(call => call.path === "/api/link/join")).toBe(false);
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect as Child"))?.click(); });
   await flush();
   expect(calls.find(call => call.path === "/api/link/join")?.body).toBe(JSON.stringify({ alias: "home-one" }));
@@ -140,7 +204,7 @@ test("join failure maps actionable errors and Retry re-joins the confirmed alias
       joins += 1;
       return joins === 1 ? response({ error: { code: "join_tunnel_failed" } }, 502) : response({ linkId: "lnk_1234567890abcdef", alias: "home-one", restarting: true }, 202);
     }
-    return response({ ...baseStatus, role: "standalone" });
+    return response(joinableStatus);
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
@@ -169,7 +233,7 @@ test("join maps standalone_required to an actionable message", async () => {
     if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
     if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
     if (path === "/api/link/join") return response({ error: { code: "standalone_required" } }, 409);
-    return response({ ...baseStatus, role: "standalone" });
+    return response(joinableStatus);
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
@@ -194,7 +258,7 @@ test("join_restart_failed shows restart guidance without Retry", async () => {
     if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
     if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
     if (path === "/api/link/join") return response({ error: { code: "join_restart_failed" } }, 500);
-    return response({ ...baseStatus, role: "standalone" });
+    return response(joinableStatus);
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
@@ -257,26 +321,71 @@ test("readLinkJson preserves unknown server codes and status", async () => {
   expect(caught).toBeInstanceOf(LinkApiError);
   expect((caught as LinkApiError).code).toBe("future_code");
   expect((caught as LinkApiError).status).toBe(418);
+  expect((caught as LinkApiError).hint).toBeNull();
   expect(LOCALES).toHaveLength(10);
+  let hinted: unknown;
+  try { await readLinkJson(new Response(JSON.stringify({ error: { code: "probe_failed", hint: `bad\u202e\u0007 line ${"x".repeat(300)}` } }), { status: 502 })); } catch (error) { hinted = error; }
+  const hint = (hinted as LinkApiError).hint ?? "";
+  expect(hint.startsWith("bad line x")).toBe(true);
+  expect(hint).toHaveLength(160);
+  expect(hint.endsWith("…")).toBe(true);
+  expect(boundLinkHint(42)).toBeNull();
+  expect(boundLinkHint(" \n ")).toBeNull();
+});
+
+test("boundLinkHint caps astral hints by code point and never leaves a lone surrogate", () => {
+  const astral = String.fromCodePoint(0x1f511);
+  // 200 astral characters are 400 UTF-16 units; a unit-based cut at 159 would split a pair.
+  const points = Array.from(boundLinkHint(astral.repeat(200)) ?? "");
+  expect(points).toHaveLength(160);
+  expect(points.at(-1)).toBe(String.fromCodePoint(0x2026));
+  expect(points.slice(0, -1).every(point => point === astral)).toBe(true);
+  expect(points.every(point => { const code = point.codePointAt(0)!; return code < 0xd800 || code > 0xdfff; })).toBe(true);
+  expect(boundLinkHint(astral.repeat(160))).toBe(astral.repeat(160));
+});
+
+test("choosing Home then Continue opens the SSH host sheet with candidates", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    calls.push(path);
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh_config" }] });
+    return response({ ...baseStatus, role: "standalone" });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toContain("Home");
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Continue")?.click(); });
+  await flush();
+  expect((host.querySelector(".remote-link-sheet") as HTMLDialogElement).open).toBe(true);
+  expect(calls).toContain("/api/link/candidates");
+  expect(host.querySelector(".remote-link-candidate")?.textContent).toContain("child-one");
+});
+
+test("Continue stays disabled while this computer is already a Child", async () => {
+  globalThis.fetch = (async () => response({ ...baseStatus, role: "child", child: { alias: "home-one", state: "connected", since: "now", reason: null } })) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  expect(([...host.querySelectorAll("button")].find(button => button.textContent === "Continue") as HTMLButtonElement).disabled).toBe(true);
 });
 
 test("probe failure stays visible and Retry probes the failed alias", async () => {
   let probes = 0;
   globalThis.fetch = (async input => {
     const path = new URL(String(input)).pathname;
-    if (path === "/api/link/probe") { probes += 1; return response({ error: { code: "probe_failed" } }, 502); }
+    if (path === "/api/link/probe") { probes += 1; return response({ error: { code: "probe_failed", hint: "child-one: Permission denied (publickey)." } }, 502); }
     if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
     return response(baseStatus);
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
   await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
-  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
   await flush();
   await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
   await flush();
-  expect(host.textContent).toContain("Remote link request could not be completed.");
+  expect(host.textContent).toContain("Could not connect to the SSH host. Check that it accepts your SSH key");
+  expect(host.querySelector(".remote-link-hint code")?.textContent).toBe("child-one: Permission denied (publickey).");
   expect(host.textContent).toContain("Retry");
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Retry"))?.click(); });
   await flush();
@@ -296,7 +405,6 @@ test("apply failure stays retryable and Retry reapplies the confirmed alias", as
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
   await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
-  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
   await flush();
   await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
@@ -314,7 +422,7 @@ test("apply failure stays retryable and Retry reapplies the confirmed alias", as
 
 test("role radios use roving tabIndex and arrow, Home, and End keys", async () => {
   declareRuntimeRole("standalone");
-  globalThis.fetch = (async () => response(baseStatus)) as typeof fetch;
+  globalThis.fetch = (async () => response(joinableStatus)) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
   const radios = () => [...host.querySelectorAll('[role="radio"]')] as HTMLButtonElement[];
@@ -397,7 +505,6 @@ test("cancelling a failed apply leaves no dead Retry behind", async () => {
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
   await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
-  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
   await flush();
   await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
@@ -424,7 +531,7 @@ test("cancelling a join ignores a late failure", async () => {
     if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
     if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
     if (path === "/api/link/join") return joinResponse;
-    return response({ ...baseStatus, role: "standalone" });
+    return response(joinableStatus);
   }) as typeof fetch;
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
@@ -459,7 +566,6 @@ test("cancelling candidates prevents a late response from appearing in a new att
   const host = await mount();
   await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
   await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
-  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Cancel")?.click(); });
   await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
   await flush();
