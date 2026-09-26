@@ -43,8 +43,6 @@ import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-ca
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
-import { applyZenFreeIdentity, isZenFreeEndpoint } from "../opencode-free-session";
-import { withZenFreeGateDeclarations, zenFreeGateResponsesTool } from "../opencode-free-tools";
 import { observeOutbound } from "../../usage/cache-diagnostic";
 
 /**
@@ -254,12 +252,6 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // client fingerprint. This is a single non-credential fallback, not broader caller-header
       // forwarding. Static provider headers remain authoritative in either auth mode.
       applyCallerUserAgentFallback(headers, incoming);
-      // Keyless Zen tier admission on the Responses wire (Muse Spark ids route
-      // here via the registry wire default). Same gate as the Chat transport:
-      // canonical endpoint only, operator-configured values win.
-      if (isZenFreeEndpoint(provider.baseUrl)) {
-        applyZenFreeIdentity(headers, provider, { parsed, incomingHeaders: incoming?.headers });
-      }
 
       const forward = provider.authMode === "forward";
       let convertedRoutedCustomToolNames: Set<string> | undefined;
@@ -540,17 +532,6 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       observeOutbound(parsed._rawBody, finalBody, headers);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
-      }
-      // Keyless Zen tier gate declarations; policy lives in the shared
-      // helper, this wire only supplies its tool shape.
-      if (isPlainObject(finalBody)) {
-        const gated = withZenFreeGateDeclarations(
-          provider,
-          Array.isArray(finalBody.tools) ? finalBody.tools : undefined,
-          item => isPlainObject(item) && typeof item.name === "string" ? item.name : undefined,
-          zenFreeGateResponsesTool,
-        );
-        if (gated !== undefined) (finalBody as Record<string, unknown>).tools = gated;
       }
       const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(

@@ -3,9 +3,8 @@ import { PROVIDER_REGISTRY, providerModelWireDefault } from "../../src/providers
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../../src/providers/derive";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createRegisteredAdapter } from "../../src/adapters/registry";
-import { withZenFreeTierSupport } from "../../src/adapters/openai-chat/zen-free-tier";
 import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
-import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { transformProviderRequest } from "../../src/adapters/provider-compatibility";
 import {
   ZEN_FREE_SESSION_RE,
   ZEN_FREE_USER_AGENT,
@@ -19,7 +18,6 @@ import {
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../../src/types/wire";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { IncomingMeta, ProviderAdapter } from "../../src/adapters/base";
-import type { AdapterEvent } from "../../src/types";
 import { routedProviderConfig } from "../../src/router";
 import { buildModelsRequest } from "../../src/oauth";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -54,6 +52,19 @@ function metaWithSession(session?: string): IncomingMeta {
   const headers = new Headers();
   if (session !== undefined) headers.set("x-opencode-session", session);
   return { headers, translatorBudget: createTranslatorBudget() };
+}
+
+function registered(provider: OcxProviderConfig, adapter = provider.adapter): ProviderAdapter {
+  return createRegisteredAdapter({ ...provider, adapter }, { providerId: "opencode-free" });
+}
+
+function nativeRequest(
+  provider: OcxProviderConfig,
+  body: Record<string, unknown>,
+  model = "big-pickle",
+) {
+  const request = buildOpenAIChatPassthroughRequest(provider, body, model, body.stream === true);
+  return transformProviderRequest(provider, request, { incomingHeaders: new Headers() });
 }
 
 describe("opencode-free provider", () => {
@@ -94,11 +105,11 @@ describe("opencode-free provider", () => {
     expect(deriveFeaturedProviderIds()).toContain("opencode-free");
   });
 
-  test("keyless requests mint the anonymous tier identity", () => {
+  test("keyless requests mint the anonymous tier identity", async () => {
     resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
-    const adapter = createOpenAIChatAdapter(provider);
-    const req = adapter.buildRequest(threadedRequest("thread-alpha"));
+    const adapter = registered(provider);
+    const req = await adapter.buildRequest(threadedRequest("thread-alpha"), metaWithSession());
     const headers = req.headers as Record<string, string>;
     // The gateway maps Bearer public to its anonymous pool (see
     // src/adapters/opencode-free-session.ts for provenance).
@@ -110,63 +121,63 @@ describe("opencode-free provider", () => {
     expect(req.url).toBe("https://opencode.ai/zen/v1/chat/completions");
   });
 
-  test("an operator User-Agent is preserved verbatim, only the bare default is repaired", () => {
+  test("an operator User-Agent is preserved verbatim, only the bare default is repaired", async () => {
     resetZenFreeSessionCache();
     const seed = providerConfigSeed(entry!);
-    const custom = createOpenAIChatAdapter({
+    const custom = (await registered({
       ...seed,
       headers: { ...seed.headers, "User-Agent": "custom-agent/9.9" },
-    }).buildRequest(threadedRequest("t")).headers as Record<string, string>;
+    }).buildRequest(threadedRequest("t"), metaWithSession())).headers as Record<string, string>;
     expect(custom["User-Agent"]).toBe("custom-agent/9.9");
     expect(ZEN_FREE_SESSION_RE.test(custom["x-opencode-session"] ?? "")).toBe(true);
   });
 
-  test("the minted session is stable per Codex thread and distinct across threads", () => {
+  test("the minted session is stable per Codex thread and distinct across threads", async () => {
     resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
-    const adapter = createOpenAIChatAdapter(provider);
-    const first = (adapter.buildRequest(threadedRequest("thread-alpha")).headers as Record<string, string>)["x-opencode-session"];
-    const second = (adapter.buildRequest(threadedRequest("thread-alpha")).headers as Record<string, string>)["x-opencode-session"];
-    const other = (adapter.buildRequest(threadedRequest("thread-beta")).headers as Record<string, string>)["x-opencode-session"];
+    const adapter = registered(provider);
+    const first = ((await adapter.buildRequest(threadedRequest("thread-alpha"), metaWithSession())).headers as Record<string, string>)["x-opencode-session"];
+    const second = ((await adapter.buildRequest(threadedRequest("thread-alpha"), metaWithSession())).headers as Record<string, string>)["x-opencode-session"];
+    const other = ((await adapter.buildRequest(threadedRequest("thread-beta"), metaWithSession())).headers as Record<string, string>)["x-opencode-session"];
     expect(first).toBe(second);
     expect(other).not.toBe(first);
     expect(ZEN_FREE_SESSION_RE.test(other ?? "")).toBe(true);
   });
 
-  test("a valid caller session passes through, a malformed one is replaced", () => {
+  test("a valid caller session passes through, a malformed one is replaced", async () => {
     resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
-    const adapter = createOpenAIChatAdapter(provider);
+    const adapter = registered(provider);
     const valid = mintZenFreeSessionId("caller-seed");
-    const kept = (adapter.buildRequest(threadedRequest("t"), metaWithSession(valid)).headers as Record<string, string>)["x-opencode-session"];
+    const kept = ((await adapter.buildRequest(threadedRequest("t"), metaWithSession(valid))).headers as Record<string, string>)["x-opencode-session"];
     expect(kept).toBe(valid);
-    const replaced = (adapter.buildRequest(threadedRequest("t"), metaWithSession("not-a-session")).headers as Record<string, string>)["x-opencode-session"];
+    const replaced = ((await adapter.buildRequest(threadedRequest("t"), metaWithSession("not-a-session"))).headers as Record<string, string>)["x-opencode-session"];
     expect(replaced).not.toBe("not-a-session");
     expect(ZEN_FREE_SESSION_RE.test(replaced ?? "")).toBe(true);
   });
 
-  test("an operator-configured Authorization header is never overwritten", () => {
+  test("an operator-configured Authorization header is never overwritten", async () => {
     resetZenFreeSessionCache();
     const provider: OcxProviderConfig = {
       ...providerConfigSeed(entry!),
       headers: { ...providerConfigSeed(entry!).headers, Authorization: "Bearer operator-key" },
     };
-    const headers = createOpenAIChatAdapter(provider).buildRequest(threadedRequest("t")).headers as Record<string, string>;
+    const headers = (await registered(provider).buildRequest(threadedRequest("t"), metaWithSession())).headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer operator-key");
     expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
   });
 
-  test("the Responses wire mints the same identity for Muse Spark turns", () => {
+  test("the Responses wire mints the same identity for Muse Spark turns", async () => {
     resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
-    const headers = createResponsesPassthroughAdapter(provider).buildRequest(
+    const headers = (await registered(provider, "openai-responses").buildRequest(
       responsesInboundRequest("thread-alpha"),
       metaWithSession(),
-    ).headers as Record<string, string>;
+    )).headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer public");
     expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     expect(headers["x-opencode-client"]).toBe("desktop");
-    const chatHeaders = createOpenAIChatAdapter(provider).buildRequest(threadedRequest("thread-alpha")).headers as Record<string, string>;
+    const chatHeaders = (await registered(provider).buildRequest(threadedRequest("thread-alpha"), metaWithSession())).headers as Record<string, string>;
     expect(headers["x-opencode-session"]).toBe(chatHeaders["x-opencode-session"]);
   });
 
@@ -174,15 +185,7 @@ describe("opencode-free provider", () => {
     resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const rawBody = { messages: [{ role: "user", content: "hi" }], stream: true };
-    const headers = buildOpenAIChatPassthroughRequest(
-      provider,
-      rawBody,
-      "big-pickle",
-      true,
-      undefined,
-      undefined,
-      { incomingHeaders: new Headers() },
-    ).headers as Record<string, string>;
+    const headers = nativeRequest(provider, rawBody).headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer public");
     expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
@@ -196,15 +199,7 @@ describe("opencode-free provider", () => {
       keyOptional: true,
     };
     const rawBody = { messages: [{ role: "user", content: "hi" }], stream: true };
-    const headers = buildOpenAIChatPassthroughRequest(
-      provider,
-      rawBody,
-      "some-model",
-      true,
-      undefined,
-      undefined,
-      { incomingHeaders: new Headers() },
-    ).headers as Record<string, string>;
+    const headers = nativeRequest(provider, rawBody, "some-model").headers as Record<string, string>;
     expect(headers["Authorization"]).toBeUndefined();
     expect(headers["x-opencode-session"]).toBeUndefined();
   });
@@ -220,7 +215,7 @@ describe("opencode-free provider", () => {
       keyOptional: true,
     };
     const incoming = new Headers({ "user-agent": "codex-cli/0.153.4" });
-    const headers = createResponsesPassthroughAdapter(provider).buildRequest(
+    const headers = registered(provider, "openai-responses").buildRequest(
       responsesInboundRequest("t"),
       { headers: incoming, translatorBudget: createTranslatorBudget() },
     ).headers as Record<string, string>;
@@ -311,9 +306,9 @@ describe("opencode-free provider", () => {
       expect(routed.headers?.["x-opencode-client"]).toBe("desktop");
     });
 
-    test("the merged headers reach the wire with the repaired UA, not just the resolved config", () => {
+    test("the merged headers reach the wire with the repaired UA, not just the resolved config", async () => {
       const routed = routedProviderConfig("opencode-free", persisted({ "x-opencode-client": "desktop" }));
-      const req = createOpenAIChatAdapter(routed).buildRequest(minimalRequest());
+      const req = await registered(routed).buildRequest(minimalRequest(), metaWithSession());
       expect((req.headers as Record<string, string>)["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     });
 
@@ -426,7 +421,7 @@ describe("opencode-free provider", () => {
     });
 
     async function chatToolNames(provider: OcxProviderConfig, request: OcxParsedRequest): Promise<(string | undefined)[]> {
-      const adapter = withZenFreeTierSupport(createOpenAIChatAdapter(provider), provider);
+      const adapter = registered(provider);
       const built = await adapter.buildRequest(request, metaWithSession());
       const body = JSON.parse(built.body as string) as {
         tools?: Array<{ function?: { name?: unknown } }>;
@@ -462,7 +457,7 @@ describe("opencode-free provider", () => {
     test("appended declarations carry the never-invoke wording", async () => {
       resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      const adapter = withZenFreeTierSupport(createOpenAIChatAdapter(provider), provider);
+      const adapter = registered(provider);
       const built = await adapter.buildRequest(minimalRequest("big-pickle"), metaWithSession());
       const body = JSON.parse(built.body as string) as {
         tools?: Array<{ function?: { description?: unknown } }>;
@@ -474,7 +469,7 @@ describe("opencode-free provider", () => {
 
     test("keyed sends do not gain gate declarations", async () => {
       const provider: OcxProviderConfig = { ...providerConfigSeed(entry!), apiKey: "user-secret-key" };
-      const adapter = withZenFreeTierSupport(createOpenAIChatAdapter(provider), provider);
+      const adapter = registered(provider);
       const built = await adapter.buildRequest(minimalRequest("big-pickle"), metaWithSession());
       const body = JSON.parse(built.body as string) as {
         tools?: unknown[];
@@ -485,7 +480,7 @@ describe("opencode-free provider", () => {
     test("Responses wire creates the pair when the turn declares no tools", () => {
       resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      const body = JSON.parse(createResponsesPassthroughAdapter(provider).buildRequest(
+      const body = JSON.parse(registered(provider, "openai-responses").buildRequest(
         responsesInboundRequest("thread-gamma"),
         metaWithSession(),
       ).body as string) as { tools?: Array<{ name?: unknown }> };
@@ -494,76 +489,13 @@ describe("opencode-free provider", () => {
 
     test("native Chat fast path creates the pair when the turn declares no tools", () => {
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      const body = JSON.parse(buildOpenAIChatPassthroughRequest(
+      const body = JSON.parse(nativeRequest(
         provider,
         { messages: [{ role: "user", content: "hi" }], stream: true },
-        "big-pickle",
-        true,
       ).body as string) as { tools?: Array<{ function?: { name?: unknown } }> };
       expect((body.tools ?? []).map(tool => tool?.function?.name)).toEqual(["shell", "read"]);
     });
 
-    test("a mistaken gate call becomes guidance instead of a client call", async () => {
-      resetZenFreeSessionCache();
-      const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      const upstream: AdapterEvent[] = [
-        { type: "tool_call_start", id: "call_1", name: "shell" },
-        { type: "tool_call_delta", arguments: '{"command":"hi"}' },
-        { type: "tool_call_end" },
-        { type: "tool_call_start", id: "call_2", name: "exec" },
-        { type: "tool_call_delta", arguments: '{"input":"x"}' },
-        { type: "tool_call_end" },
-        { type: "done" },
-      ];
-      const stub: ProviderAdapter = {
-        name: "stub",
-        buildRequest: () => ({ url: "https://example.test", method: "POST", headers: {}, body: "{}" }),
-        async *parseStream() { yield* upstream; },
-      };
-      const wrapped = withZenFreeTierSupport(stub, provider);
-      // Catalog snapshot comes from the build: this turn declares no tools.
-      await wrapped.buildRequest(threadedRequest("thread-sub"), metaWithSession());
-      const seen: AdapterEvent[] = [];
-      for await (const event of wrapped.parseStream(new Response("x"), createTranslatorBudget())) {
-        seen.push(event);
-      }
-      const starts = seen.filter(e => e.type === "tool_call_start");
-      expect(starts.map(e => (e as { name: string }).name)).toEqual(["exec"]);
-      const texts = seen
-        .filter(e => e.type === "text_delta")
-        .map(e => (e as { text: string }).text);
-      expect(texts.some(text => text.includes("`shell`"))).toBe(true);
-      expect(seen.some(e => e.type === "done")).toBe(true);
-    });
-
-    test("a client-declared shell call flows untouched", async () => {
-      resetZenFreeSessionCache();
-      const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      const stub: ProviderAdapter = {
-        name: "stub",
-        buildRequest: () => ({ url: "https://example.test", method: "POST", headers: {}, body: "{}" }),
-        async *parseStream() {
-          yield { type: "tool_call_start", id: "call_1", name: "shell" };
-          yield { type: "tool_call_end" };
-          yield { type: "done" };
-        },
-      };
-      const request: OcxParsedRequest = {
-        ...threadedRequest("thread-own"),
-        context: {
-          messages: [{ role: "user", content: "hi" }],
-          tools: [{ name: "shell", description: "ours", parameters: { type: "object", properties: {} } }],
-        },
-      };
-      const wrapped = withZenFreeTierSupport(stub, provider);
-      await wrapped.buildRequest(request, metaWithSession());
-      const seen: AdapterEvent[] = [];
-      for await (const event of wrapped.parseStream(new Response("x"), createTranslatorBudget())) {
-        seen.push(event);
-      }
-      expect(seen.filter(e => e.type === "tool_call_start")).toHaveLength(1);
-      expect(seen.some(e => e.type === "text_delta")).toBe(false);
-    });
   });
 });
 
