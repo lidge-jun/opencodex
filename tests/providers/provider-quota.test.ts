@@ -3557,7 +3557,7 @@ describe("fetchProviderQuotaReports", () => {
           pinnedPost: async url => { posted.push(url); return new Response(null, { status, headers: { location: modelsUrl } }); },
         });
         expect((await fetchProviderQuotaReports(config(), true)).reports).toEqual([]);
-        expect(posted).toEqual([summaryUrl]);
+        expect(posted).toEqual(status === 403 ? [summaryUrl, summaryUrl] : [summaryUrl]);
         expect(plainFetchCalls).toEqual([]);
       });
     }
