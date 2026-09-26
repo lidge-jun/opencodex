@@ -336,10 +336,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "kiro" && url.searchParams.has("flowId")) {
-      const status = await statusKiroDeviceLogin(url.searchParams.get("flowId") ?? "", principal ?? "admin-token");
+      const flowId = url.searchParams.get("flowId") ?? "";
+      const baseline = kiroDeviceConfigBaseline(flowId, principal ?? "admin-token");
+      const status = await statusKiroDeviceLogin(flowId, principal ?? "admin-token");
       if (!status) return jsonResponse({ error: "unknown login flow" }, 404);
       if (status.state === "done") {
-        reconcileLiveConfigFromDisk(config, kiroDeviceConfigBaseline(status.flowId, principal ?? "admin-token") ?? structuredClone(config));
+        reconcileLiveConfigFromDisk(config, baseline ?? structuredClone(config));
         reconcileLiveStateStores();
       }
       return jsonResponse(status);

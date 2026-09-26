@@ -34,13 +34,19 @@ interface Flow {
   polling?: Promise<KiroDeviceView>;
   configBaseline?: OcxConfig;
   commitAccepted?: boolean;
+  terminalAt?: number;
+  retentionTimer?: ReturnType<typeof setTimeout>;
 }
 export type KiroDevicePost = (url: string, body: Record<string, unknown>) => Promise<Response>;
 const SOCIAL = "https://prod.us-east-1.auth.desktop.kiro.dev";
 const OIDC = "https://oidc.us-east-1.amazonaws.com";
 const MAX_KIRO_DEVICE_FLOWS = 4;
+const MAX_KIRO_DEVICE_ENTRIES = 16;
+const TERMINAL_RETENTION_MS = 60_000;
 const MAX_LIFETIME_MS = 15 * 60_000;
 const PROFILE_ARN = /^arn:[a-z0-9-]+:codewhisperer:[a-z0-9-]+:\d{12}:profile\/[A-Za-z0-9-]+$/;
+const USER_CODE = /^[A-Za-z0-9-]{4,32}$/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 const flows = new Map<string, Flow>();
 
 async function defaultPost(url: string, body: Record<string, unknown>): Promise<Response> {
@@ -69,7 +75,11 @@ export function setKiroDeviceClockForTests(now?: () => number): void { clock = n
 export function setKiroDevicePublishForTests(publish?: () => void | Promise<void>): void {
   publishConfig = publish ?? defaultPublishConfig;
 }
-export function clearKiroDeviceFlowsForTests(): void { flows.clear(); transport = defaultPost; setKiroDeviceClockForTests(); setKiroDevicePublishForTests(); }
+export function clearKiroDeviceFlowsForTests(): void {
+  for (const flow of flows.values()) clearTimeout(flow.retentionTimer);
+  flows.clear(); transport = defaultPost; setKiroDeviceClockForTests(); setKiroDevicePublishForTests();
+}
+export function kiroDeviceFlowCountForTests(): number { return flows.size; }
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -88,27 +98,63 @@ async function reply(url: string, body: Record<string, unknown>): Promise<{ stat
 }
 function positive(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value > 0; }
 function publicView(flow: Flow): KiroDeviceView { return { ...flow.view }; }
+function forgetFlow(id: string): void {
+  const flow = flows.get(id);
+  if (flow?.retentionTimer) clearTimeout(flow.retentionTimer);
+  flows.delete(id);
+}
 function terminal(flow: Flow, state: State, warning?: KiroDeviceView["warning"]): KiroDeviceView {
   flow.view.state = state;
+  if (flow.terminalAt === undefined) {
+    flow.terminalAt = clock();
+    flow.retentionTimer = setTimeout(() => {
+      if (flows.get(flow.view.flowId) === flow) forgetFlow(flow.view.flowId);
+    }, TERMINAL_RETENTION_MS);
+    flow.retentionTimer.unref();
+  }
   if (warning) flow.view.warning = warning;
   delete flow.deviceCode;
   delete flow.clientId;
   delete flow.clientSecret;
+  delete flow.configBaseline;
   return publicView(flow);
+}
+function pruneFlows(): void {
+  const now = clock();
+  for (const [id, flow] of flows) {
+    if (flow.view.state === "pending" && now >= flow.deadline) terminal(flow, "expired");
+    if (flow.terminalAt !== undefined && now - flow.terminalAt >= TERMINAL_RETENTION_MS) forgetFlow(id);
+  }
+  while (flows.size >= MAX_KIRO_DEVICE_ENTRIES) {
+    const oldest = [...flows].find(([, flow]) => flow.view.state !== "pending");
+    if (!oldest) break;
+    forgetFlow(oldest[0]);
+  }
 }
 function owned(flowId: string, principal: KiroDevicePrincipal): Flow | undefined {
   const flow = flows.get(flowId);
   if (!flow || flow.ownerPrincipal !== principal) return undefined;
   if (clock() >= flow.deadline) {
     terminal(flow, "expired");
-    flows.delete(flowId);
+    forgetFlow(flowId);
     return undefined;
   }
   return flow;
 }
 function code(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function verificationUri(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048 || CONTROL.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch { return false; }
+}
 function viewFromAuthorization(flow: Flow, data: Record<string, unknown>, scale: number): void {
-  if (!code(data.deviceCode) || !code(data.userCode) || !code(data.verificationUri)) throw new Error("Kiro device authorization failed");
+  if (!code(data.deviceCode) || typeof data.userCode !== "string" || !USER_CODE.test(data.userCode)
+    || !verificationUri(data.verificationUri)
+    || (data.verificationUriComplete !== undefined && !verificationUri(data.verificationUriComplete))) {
+    throw new Error("Kiro device authorization failed");
+  }
   const now = clock();
   const lifetime = positive(data.expiresInMilliseconds) && scale === 1 ? data.expiresInMilliseconds
     : positive(data.expiresIn) && scale === 1000 ? data.expiresIn * 1000 : scale === 1 ? 300_000 : 600_000;
@@ -121,17 +167,18 @@ function viewFromAuthorization(flow: Flow, data: Record<string, unknown>, scale:
   flow.view = {
     flowId: flow.view.flowId, method: flow.view.method, state: "pending", userCode: data.userCode,
     verificationUri: data.verificationUri,
-    ...(code(data.verificationUriComplete) ? { verificationUriComplete: data.verificationUriComplete } : {}),
+    ...(data.verificationUriComplete ? { verificationUriComplete: data.verificationUriComplete } : {}),
     expiresAt: flow.deadline,
   };
 }
 
 export async function startKiroDeviceLogin(method: KiroDeviceMethod, principal: KiroDevicePrincipal, configBaseline?: OcxConfig): Promise<KiroDeviceView> {
   // Reserve before the first await, so concurrent starts cannot evade the cap.
-  for (const [id, flow] of flows) if (clock() >= flow.deadline) { terminal(flow, "expired"); flows.delete(id); }
+  pruneFlows();
   if ([...flows.values()].filter(flow => flow.view.state === "pending").length >= MAX_KIRO_DEVICE_FLOWS) {
     throw new Error("Too many Kiro device logins in progress");
   }
+  if (flows.size >= MAX_KIRO_DEVICE_ENTRIES) throw new Error("Too many Kiro device logins in progress");
   const flowId = randomBytes(32).toString("base64url");
   const flow: Flow = {
     view: { flowId, method, state: "pending" }, ownerPrincipal: principal,
@@ -167,7 +214,7 @@ export async function startKiroDeviceLogin(method: KiroDeviceMethod, principal: 
   } catch {
     throw new Error("Kiro device login could not start");
   } finally {
-    if (!started) { terminal(flow, "failed"); flows.delete(flowId); }
+    if (!started) { terminal(flow, "failed"); forgetFlow(flowId); }
   }
 }
 
@@ -202,7 +249,7 @@ async function poll(flow: Flow, principal: KiroDevicePrincipal): Promise<KiroDev
       if (data.status === "authorization_pending") return publicView(flow);
       if (data.status === "expired_token" || data.status === "expired") return terminal(flow, "expired");
     }
-    if (result.status !== 200 || error || (builder && (data.status !== undefined || !positive(data.expiresIn) || !isStorableKiroClientPart(flow.clientId)
+    if (result.status !== 200 || Object.hasOwn(data, "error") || error || (builder && (data.status !== undefined || !positive(data.expiresIn) || !isStorableKiroClientPart(flow.clientId)
       || !isStorableKiroClientPart(flow.clientSecret)))
       || (!builder && (data.status !== undefined && data.status !== "approved"))) return terminal(flow, "failed");
     if (!code(data.accessToken) || !code(data.refreshToken)
@@ -238,11 +285,18 @@ async function poll(flow: Flow, principal: KiroDevicePrincipal): Promise<KiroDev
 }
 
 export async function statusKiroDeviceLogin(flowId: string, principal: KiroDevicePrincipal): Promise<KiroDeviceView | null> {
+  pruneFlows();
   const flow = owned(flowId, principal);
   if (!flow) return null;
-  if (flow.view.state !== "pending" || clock() < flow.nextPollAt) return publicView(flow);
+  if (flow.view.state !== "pending") {
+    forgetFlow(flowId);
+    return publicView(flow);
+  }
+  if (clock() < flow.nextPollAt) return publicView(flow);
   if (!flow.polling) flow.polling = poll(flow, principal).finally(() => { flow.polling = undefined; });
-  return await flow.polling;
+  const result = await flow.polling;
+  if (result.state !== "pending") forgetFlow(flowId);
+  return result;
 }
 
 export function cancelKiroDeviceLogin(flowId: string, principal: KiroDevicePrincipal): KiroDeviceView | null {
@@ -251,7 +305,7 @@ export function cancelKiroDeviceLogin(flowId: string, principal: KiroDevicePrinc
   if (flow.commitAccepted && flow.view.state === "pending") return { ...flow.view, state: "done" };
   if (flow.view.state === "pending") {
     terminal(flow, "cancelled");
-    flows.delete(flowId);
+    forgetFlow(flowId);
   }
   return publicView(flow);
 }

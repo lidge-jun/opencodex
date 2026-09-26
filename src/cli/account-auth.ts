@@ -101,6 +101,14 @@ const STDIN_SENTINEL = "-";
 
 /** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
+const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
+  return [
+    stripTerminalControls(start.verificationUriComplete ?? start.verificationUri ?? ""),
+    start.userCode ? `User code: ${stripTerminalControls(start.userCode)}` : "",
+    start.flowId ? `Flow: ${stripTerminalControls(start.flowId)}` : "",
+  ].filter(Boolean).join("\n");
+}
 
 const ARGV_WARNING =
   "warning: the authorization code was passed as a command-line argument, so it is now in your shell history and was visible in the process list while this ran. Pipe it on stdin instead, or pass `-` to read from stdin.";
@@ -167,11 +175,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       method: "POST", body: JSON.stringify({ provider: "kiro", method }),
     }, deps);
     if (!wantsJson) {
-      const block = [
-        start.verificationUriComplete ?? start.verificationUri ?? "",
-        start.userCode ? `User code: ${start.userCode}` : "",
-        start.flowId ? `Flow: ${start.flowId}` : "",
-      ].filter(Boolean).join("\n");
+      const block = formatKiroDeviceInstructions(start);
       if (block) writeStdoutFully(`${block}\n`);
     }
     if (noWait) { printData(start, wantsJson, []); return; }

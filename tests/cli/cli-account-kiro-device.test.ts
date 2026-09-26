@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { handleAccountAuthCommand } from "../../src/cli/account-auth";
+import { formatKiroDeviceInstructions, handleAccountAuthCommand } from "../../src/cli/account-auth";
 
 interface Sent { path: string; body?: Record<string, unknown> }
 async function run(command: "login" | "cancel", args: string[]) {
@@ -26,6 +26,14 @@ async function run(command: "login" | "cancel", args: string[]) {
 }
 
 describe("Kiro CLI native device login", () => {
+  test("human-readable instructions contain no terminal control bytes", () => {
+    const block = formatKiroDeviceInstructions({
+      verificationUriComplete: "https://example.test/verify\u001b]0;owned\u0007",
+      userCode: "ABCD\u001b[31m", flowId: "flow\u009b1m",
+    });
+    expect(block).toContain("User code: ABCD[31m");
+    expect(block).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+  });
   test("--method starts native flow and prints only the public view", async () => {
     const result = await run("login", ["kiro", "--method", "google", "--no-wait", "--json"]);
     expect(result.code).toBe(0);

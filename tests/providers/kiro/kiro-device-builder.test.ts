@@ -79,4 +79,34 @@ describe("Kiro Builder ID device grant", () => {
     }
     expect(isStorableKiroClientPart(" valid ")).toBe(false);
   });
+
+  test("hostile verification fields fail before reaching a public view", async () => {
+    for (const override of [
+      { verificationUri: "https://example.test/verify\u001b]8;;https://evil.test\u0007" },
+      { verificationUriComplete: "https://example.test/verify\u009b31m" },
+      { verificationUri: "https://user:pass@example.test/verify" },
+      { verificationUri: "http://example.test/verify" },
+      { verificationUri: `https://example.test/${"a".repeat(2048)}` },
+      { userCode: "ABCD\u001b[31m" },
+    ]) {
+      fixture = kiroDeviceFixture();
+      fixture.setPost(async url => url.endsWith("/client/register")
+        ? response({ clientId: "id", clientSecret: "secret" }) : response({ ...authorization, ...override }));
+      await expect(startKiroDeviceLogin("builder-id", "admin-token")).rejects.toThrow("could not start");
+      expect(getAccountSet("kiro")).toBeNull();
+      await fixture.close(); fixture = undefined;
+    }
+  });
+
+  test("a 200 approval with a non-string error persists nothing", async () => {
+    fixture = kiroDeviceFixture();
+    fixture.setPost(async url => url.endsWith("/client/register")
+      ? response({ clientId: "id", clientSecret: "secret" })
+      : url.endsWith("/device_authorization") ? response(authorization)
+      : response({ accessToken: "token", refreshToken: "refresh", expiresIn: 3600, error: { message: "denied" } }));
+    const start = await startKiroDeviceLogin("builder-id", "admin-token");
+    fixture.advance(5_000);
+    expect((await statusKiroDeviceLogin(start.flowId, "admin-token"))?.state).toBe("failed");
+    expect(getAccountSet("kiro")).toBeNull();
+  });
 });
