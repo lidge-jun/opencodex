@@ -453,6 +453,21 @@ describe("anthropic extended-thinking gate", () => {
 });
 
 describe("Anthropic Messages stored-OAuth round trip", () => {
+  test("Messages adaptive display omission survives the stored OAuth round trip", async () => {
+    const inbound = anthropicToResponsesBody({
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Keep thinking hidden" }],
+      thinking: { type: "adaptive", display: "omitted" },
+      output_config: { effort: "high" },
+    });
+
+    const body = await bodyOf(parseRequest(inbound), { ...provider, authMode: "oauth" });
+
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect(body.output_config).toEqual({ effort: "high" });
+  });
+
   test("Messages structured output survives the stored OAuth round trip", async () => {
     const schema = {
       type: "object",
