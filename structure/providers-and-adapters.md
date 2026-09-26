@@ -139,6 +139,14 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+Provider request pacing in `src/providers/request-pacing.ts` combines start intervals with optional
+`maxConcurrentRequests` limits. Provider capacity is shared across models; exact-model limits
+apply in addition to that capacity. Admission reserves both counters atomically, and eligible
+sibling models may bypass a saturated model lane. Releases are idempotent, wake queued requests,
+and retain interval deadlines. Active aborts release capacity; dispatch owners release on response
+body completion, cancellation, or failure. Capacity waits use the same bounded queue and retryable
+queue-overload errors as interval waits.
+
 ## TypeSafe JEV decision provider
 
 `src/providers/registry/entries-extended.ts` owns the canonical `jev` key preset at

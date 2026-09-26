@@ -35,13 +35,17 @@ interface Waiter {
   modelIntervalMs: number;
   queuedAt: number;
   signal?: AbortSignal;
-  resolve: () => void;
+  providerMaxConcurrent: number;
+  modelMaxConcurrent: number;
+  resolve: (release: () => void) => void;
   reject: (reason: unknown) => void;
   abort?: () => void;
 }
 
 interface ProviderPacer {
   queue: Waiter[];
+  inFlight: number;
+  modelInFlight: Map<string, number>;
   providerNextStartAt: number;
   modelNextStartAt: Map<string, number>;
   timer?: unknown;
@@ -109,6 +113,33 @@ function requestPacingIntervals(provider: OcxProviderConfig, modelId?: string): 
   };
 }
 
+function concurrencyAvailable(state: ProviderPacer, waiter: Waiter): boolean {
+  return state.inFlight < waiter.providerMaxConcurrent
+    && (state.modelInFlight.get(waiter.modelId ?? "") ?? 0) < waiter.modelMaxConcurrent;
+}
+
+function acquireConcurrency(providerName: string, state: ProviderPacer, waiter: Waiter): () => void {
+  const model = waiter.modelId ?? "";
+  state.inFlight += 1;
+  state.modelInFlight.set(model, (state.modelInFlight.get(model) ?? 0) + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    waiter.signal?.removeEventListener("abort", release);
+    state.inFlight -= 1;
+    const remaining = (state.modelInFlight.get(model) ?? 1) - 1;
+    if (remaining > 0) state.modelInFlight.set(model, remaining);
+    else state.modelInFlight.delete(model);
+    if (state.timer) runtime.clearTimer(state.timer);
+    state.timer = undefined;
+    runQueue(providerName, state);
+  };
+  waiter.signal?.addEventListener("abort", release, { once: true });
+  if (waiter.signal?.aborted) release();
+  return release;
+}
+
 function waiterReadyAt(state: ProviderPacer, modelId: string | undefined): number {
   return Math.max(
     state.providerNextStartAt,
@@ -163,13 +194,14 @@ function runQueue(providerName: string, state: ProviderPacer): void {
   const providerReadyAt = Math.max(now, state.providerNextStartAt);
   const waiterIndex = state.queue.findIndex(waiter => {
     const modelReadyAt = waiter.modelId ? (state.modelNextStartAt.get(waiter.modelId) ?? 0) : 0;
-    return Math.max(providerReadyAt, modelReadyAt) <= now;
+    return concurrencyAvailable(state, waiter) && Math.max(providerReadyAt, modelReadyAt) <= now;
   });
   if (waiterIndex < 0) {
     let earliestAt = Number.POSITIVE_INFINITY;
     for (const waiter of state.queue) {
       const modelReadyAt = waiter.modelId ? (state.modelNextStartAt.get(waiter.modelId) ?? 0) : 0;
-      const readyAt = Math.max(providerReadyAt, modelReadyAt);
+      const readyAt = concurrencyAvailable(state, waiter)
+        ? Math.max(providerReadyAt, modelReadyAt) : Number.POSITIVE_INFINITY;
       const expiresAt = waiter.queuedAt + maxQueueAgeMs;
       earliestAt = Math.min(earliestAt, readyAt, expiresAt);
     }
@@ -190,22 +222,29 @@ function runQueue(providerName: string, state: ProviderPacer): void {
   if (waiter.modelId && waiter.modelIntervalMs > 0) {
     state.modelNextStartAt.set(waiter.modelId, startedAt + waiter.modelIntervalMs);
   }
-  waiter.resolve();
+  waiter.resolve(acquireConcurrency(providerName, state, waiter));
   runtime.enqueueMicrotask(() => runQueue(providerName, state));
 }
 
+/** Reserve a request start and capacity until the caller releases it or the signal aborts. */
 export async function waitForProviderRequestSlot(
   providerName: string,
   provider: OcxProviderConfig,
   modelId?: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<() => void> {
   const intervals = requestPacingIntervals(provider, modelId);
-  if (Math.max(intervals.providerIntervalMs, intervals.modelIntervalMs) <= 0) return;
+  const policy = provider.requestPacing?.enabled ? provider.requestPacing : undefined;
+  const providerMaxConcurrent = policy?.maxConcurrentRequests ?? Number.POSITIVE_INFINITY;
+  const modelMaxConcurrent = (modelId ? policy?.models?.[modelId]?.maxConcurrentRequests : undefined)
+    ?? Number.POSITIVE_INFINITY;
+  if (Math.max(intervals.providerIntervalMs, intervals.modelIntervalMs) <= 0
+    && !Number.isFinite(providerMaxConcurrent) && !Number.isFinite(modelMaxConcurrent)) return () => {};
   if (signal?.aborted) throw abortReason(signal);
 
   const state = pacers.get(providerName) ?? {
-    queue: [], providerNextStartAt: 0, modelNextStartAt: new Map<string, number>(),
+    queue: [], inFlight: 0, modelInFlight: new Map<string, number>(),
+    providerNextStartAt: 0, modelNextStartAt: new Map<string, number>(),
   };
   pacers.set(providerName, state);
 
@@ -225,8 +264,11 @@ export async function waitForProviderRequestSlot(
     );
   }
 
-  await new Promise<void>((resolve, reject) => {
-    const waiter: Waiter = { modelId, ...intervals, queuedAt: runtime.now(), signal, resolve, reject };
+  return new Promise<() => void>((resolve, reject) => {
+    const waiter: Waiter = {
+      modelId, ...intervals, providerMaxConcurrent, modelMaxConcurrent,
+      queuedAt: runtime.now(), signal, resolve, reject,
+    };
     waiter.abort = () => {
       const index = state.queue.indexOf(waiter);
       if (index >= 0) state.queue.splice(index, 1);
