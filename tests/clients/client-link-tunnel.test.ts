@@ -16,6 +16,7 @@ import {
 import type { ClientLinkState } from "../../src/client/link-state";
 import type { SshChild, SshRunner } from "../../src/link/ssh-runner";
 import { buildTunnelArgv } from "../../src/link/ssh-argv";
+import { relayLinkDataRequest } from "../../src/client/link-relay";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -453,6 +454,7 @@ function supervisorHarness(overrides: Partial<ClientLinkSupervisorDeps> = {}) {
     now: () => view.clock,
     random: () => 0.5,
     linkKey: () => LINK_KEY,
+    scanListenPids: () => ({ ok: true, pids: ssh.live().map(item => item.child.pid) }),
     fetchImpl: (async (input, init) => {
       probes.push({ url: String(input), keyed: new Headers(init?.headers).get("x-opencodex-api-key") === LINK_KEY, cache: init?.cache });
       if (view.readyz === "refused") throw Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
@@ -490,6 +492,33 @@ function supervisorHarness(overrides: Partial<ClientLinkSupervisorDeps> = {}) {
     },
   };
 }
+
+test("a competing listener cannot receive the probe key or relayed traffic before ssh owns the port", async () => {
+  const received: Array<{ path: string; key: string | null; authorization: string | null; body: string }> = [];
+  const competing = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    received.push({ path: new URL(req.url).pathname, key: req.headers.get("x-opencodex-api-key"),
+      authorization: req.headers.get("authorization"), body: await req.text() });
+    return Response.json({ service: "opencodex", status: "ready" });
+  } });
+  const h = supervisorHarness({
+    fetchImpl: fetch,
+    scanListenPids: () => ({ ok: true, pids: [process.pid] }),
+  });
+  h.view.sidecar = { ...sidecar(), tunnelPort: competing.port! };
+  try {
+    await h.start();
+    await h.step();
+    const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: '{"input":"private"}',
+    }), { tunnelPort: competing.port!, admissionKey: LINK_KEY }, { tunnel: h.supervisor, holdMs: 10, fetchImpl: fetch });
+    expect(response.status).toBe(503);
+    expect(h.supervisor.connected()).toBe(false);
+    expect(received).toEqual([]);
+  } finally {
+    await h.close();
+    competing.stop(true);
+  }
+});
 
 test("after a six-minute outage the tunnel is back within a minute of the Home returning", async () => {
   const h = supervisorHarness();
@@ -750,7 +779,7 @@ test("a macOS orphan with the exact argv under launchd is reaped and replaced", 
   }
 });
 
-test("a macOS tunnel that cannot be verified is watched, never signalled, and replaced once it dies", async () => {
+test("an unverified adopted tunnel is watched without ever receiving the link key", async () => {
   const signals: Array<[number, NodeJS.Signals]> = [];
   let orphanAlive = true;
   const h = supervisorHarness({
@@ -766,20 +795,70 @@ test("a macOS tunnel that cannot be verified is watched, never signalled, and re
     await h.start();
     expect(h.ssh.children).toHaveLength(0);
     expect(h.supervisor.status()).toMatchObject({ kind: "tunnel", state: { kind: "connecting" }, pid: 42 });
-    // Past the five-minute window the link reads failed, but the adopted tunnel is still probed.
+    expect(h.probes).toHaveLength(0);
+    // An unverified adopted PID is observed until it exits, never probed with the key.
     for (let elapsed = 0; elapsed < 6 * 60_000; elapsed += 5_000) await h.step(5_000);
     expect(h.state()).toBe("failed");
     expect(h.ssh.children).toHaveLength(0);
     h.view.readyz = 200;
-    for (let elapsed = 0; elapsed < 31_000 && h.state() !== "connected"; elapsed += 1_000) await h.step();
-    expect(h.state()).toBe("connected");
+    for (let elapsed = 0; elapsed < 31_000; elapsed += 1_000) await h.step();
+    expect(h.state()).toBe("failed");
     expect(h.ssh.children).toHaveLength(0);
+    expect(h.probes).toHaveLength(0);
     orphanAlive = false;
     await h.step();
     expect(h.ssh.children).toHaveLength(1);
     await h.step();
     expect(h.state()).toBe("connected");
     expect(signals).toEqual([]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("an adopted tunnel is probed only when pidfile identity and socket owner agree", async () => {
+  const argv = buildTunnelArgv({ alias: sidecar().alias, direction: "L", bindPort: 19002,
+    targetPort: 19001, knownHostsFile: "/tmp/ocx-known-hosts" });
+  const h = supervisorHarness({
+    platform: "darwin",
+    isAlive: pid => pid === 42 || pid === process.pid,
+    readProcessInfo: pid => pid === 42 ? { ppid: process.pid, args: argv.join(" "), startTime: "adopted-start" } : null,
+    scanListenPids: () => ({ ok: true, pids: [42] }),
+  });
+  mkdirSync(join(h.configDir, "link"), { recursive: true });
+  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
+    linkId: sidecar().linkId, pid: 42, argv, ownerPid: process.pid, startTime: "adopted-start" }));
+  try {
+    await h.start();
+    expect(h.ssh.children).toHaveLength(0);
+    await h.step();
+    expect(h.supervisor.connected()).toBe(true);
+    expect(h.probes).toHaveLength(1);
+    expect(h.probes[0]?.keyed).toBe(true);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a connected tunnel stops relaying when another PID takes its port", async () => {
+  let owners: number[] = [];
+  const h = supervisorHarness({ scanListenPids: () => ({ ok: true, pids: owners }) });
+  let forwarded = 0;
+  try {
+    await h.start();
+    owners = [h.ssh.children[0]!.child.pid];
+    await h.step();
+    expect(h.supervisor.connected()).toBe(true);
+    owners = [process.pid];
+    expect(h.supervisor.connected()).toBe(false);
+    const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
+      method: "POST", body: '{"input":"private"}',
+    }), { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
+      tunnel: h.supervisor, holdMs: 10,
+      fetchImpl: (async () => { forwarded += 1; return Response.json({ relayed: true }); }) as typeof fetch,
+    });
+    expect(response.status).toBe(503);
+    expect(forwarded).toBe(0);
   } finally {
     await h.close();
   }

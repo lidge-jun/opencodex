@@ -48,6 +48,7 @@ The **Child** role is available only while OpenCodex runs on its configured port
 
 A failed link does not silently switch to a local provider.
 The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
+It also keeps the key local when another process owns the tunnel port; free that port so the Child's SSH tunnel can bind it.
 
 ## Remove a Child
 

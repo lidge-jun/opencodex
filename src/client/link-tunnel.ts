@@ -17,6 +17,7 @@ import {
   type TunnelState,
 } from "../link/tunnel-state";
 import { isLinkPort } from "../link/ports";
+import { scanListenPids, type ListenPidScan } from "../server/port-reclaim";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { clientLinkStatePath, readClientLinkState, type ClientLinkState } from "./link-state";
 import type { LinkTunnelGate } from "./link-relay";
@@ -128,6 +129,8 @@ export interface ClientLinkSupervisorDeps extends ClientLinkTunnelDeps, OrphanRe
   onLinkEnded?: () => void;
   /** The link key for the keyed readiness probe. The runtime passes its cached key source. */
   linkKey?: () => string | null;
+  /** Local TCP LISTEN ownership; an unknown or foreign owner never receives the link key. */
+  scanListenPids?: (port: number) => ListenPidScan;
   fetchImpl?: typeof fetch;
   now?: () => number;
   random?: () => number;
@@ -480,6 +483,8 @@ async function isOpencodexReadiness(response: Response, signal: AbortSignal): Pr
  * `GET /readyz` through the tunnel with the link key; the key is sent as a header only. The Home's
  * link listener answers 401 before it reaches `/readyz`, so both a 200 and a 503 carrying the
  * Home's readiness body prove that the forward reaches that listener and that the key is admitted.
+ * The caller first proves the local LISTEN socket belongs to its SSH process; an arbitrary 200
+ * from a competing process never earns a keyed request.
  * The 503 only means the Home's own startup readiness is pending or failed, which does not stop
  * relayed requests; it is reported as `home_not_ready`, for display.
  */
@@ -511,6 +516,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   const policy = CLIENT_TUNNEL_RETRY_POLICY;
   const isAlive = deps.isAlive ?? defaultIsAlive;
   const linkKey = deps.linkKey ?? (() => null);
+  const scanOwner = deps.scanListenPids ?? scanListenPids;
   const fetchImpl = deps.fetchImpl ?? fetch;
   const setSupervisorTimer = deps.setTimer ?? ((callback: () => void, ms: number) => {
     const interval = setInterval(callback, ms);
@@ -528,6 +534,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let child: ClientLinkTunnelHandle | undefined;
   /** A leftover tunnel this supervisor may not signal: watched, and replaced once it dies. */
   let adopted: number | null = null;
+  let tunnelPort: number | null = null;
   let state: TunnelState = IDLE;
   let linkId: string | null = null;
   let failure: ClientLinkSupervisorStatus | undefined;
@@ -545,14 +552,32 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   /** The tunnel is being (re)established, so a request may wait for it instead of failing. */
   const pending = (): boolean => !stopping && failure === undefined
     && ((started && !initialized) || state.kind === "connecting" || state.kind === "reconnecting");
+  const listenerOwnedByTunnel = (port: number): boolean => {
+    const pid = child?.pid ?? adopted;
+    if (pid === null || pid === undefined) return false;
+    if (adopted !== null) {
+      // An old or unreadable pidfile can be watched, but it grants no authority to send a key.
+      const record = readPidfile(clientTunnelPidfilePath(deps.configDir));
+      if (!record || record.pid !== adopted || record.linkId !== linkId
+        || tunnelIdentity(record, deps.platform ?? process.platform, deps, isAlive).kind !== "ours") return false;
+    }
+    try {
+      const scan = scanOwner(port);
+      const pids = scan.ok ? new Set(scan.pids) : null;
+      return pids !== null && pids.size === 1 && pids.has(pid);
+    } catch {
+      return false;
+    }
+  };
   const connected = (): boolean => started && !stopping && failure === undefined
-    && state.kind === "connected" && linkId !== null && (child !== undefined || adopted !== null);
+    && state.kind === "connected" && linkId !== null && tunnelPort !== null
+    && listenerOwnedByTunnel(tunnelPort);
 
   const settleWaiters = (): void => {
     if (waiters.size === 0) return;
-    const connected = !stopping && failure === undefined && state.kind === "connected";
-    if (!connected && pending()) return;
-    for (const settle of [...waiters]) settle(connected);
+    const ready = connected();
+    if (!ready && pending()) return;
+    for (const settle of [...waiters]) settle(ready);
   };
 
   const setState = (next: TunnelState): void => {
@@ -598,6 +623,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
 
   const stopTunnel = async (): Promise<void> => {
     adopted = null;
+    tunnelPort = null;
     setState(reduceTunnel(state, { type: "stop" }));
     await killChild();
   };
@@ -631,6 +657,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       return;
     }
     linkId = sidecar.linkId;
+    tunnelPort = sidecar.tunnelPort;
     probe = null;
     probeFailures = 0;
     nextProbeAt = timestamp;
@@ -681,10 +708,11 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   };
 
   /**
-   * Starts one keyed probe without waiting for it, so a slow Home never delays the check that
-   * notices a disconnect, and stop() aborts it instead of waiting up to the probe timeout.
+   * Starts one keyed probe only after a local socket-owner check. A slow Home never delays the
+   * check that notices a disconnect, and stop() aborts it instead of waiting for probe timeout.
    */
   const startProbe = (tunnelPort: number, key: string): void => {
+    if (!listenerOwnedByTunnel(tunnelPort)) return;
     const flight = { child, adopted, abort: new AbortController() };
     probeFlight = flight;
     const wasConnected = state.kind === "connected";
@@ -692,7 +720,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       // An aborted probe, or one whose tunnel exited meanwhile, says nothing about the next tunnel.
       if (probeFlight !== flight) return;
       probeFlight = undefined;
-      if (stopping || child !== flight.child || adopted !== flight.adopted) return;
+      if (stopping || child !== flight.child || adopted !== flight.adopted
+        || !listenerOwnedByTunnel(tunnelPort)) return;
       applyProbe(result, wasConnected);
     }, () => {
       if (probeFlight === flight) probeFlight = undefined;
@@ -701,7 +730,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
 
   /**
    * Settles a leftover tunnel pidfile once, before this supervisor's first spawn: a proven orphan
-   * is reaped and a live tunnel that may not be ours is adopted. It needs a valid, matching read
+   * is reaped and a live tunnel that may not be ours is watched without a keyed probe until its
+   * process identity and LISTEN ownership are verified. It needs a valid, matching read
    * after the reap; without one it stays pending and the next check that has one runs it again.
    */
   const settleLeftover = async (): Promise<void> => {
@@ -711,10 +741,11 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     if (afterReap.invalid || !afterReap.sidecar || readConnectedLinkId() !== afterReap.sidecar.linkId) return;
     reapPending = false;
     if ((orphan.tunnel === "owned" || orphan.tunnel === "unresolved") && orphan.pid !== undefined && isAlive(orphan.pid)) {
-      // A leftover tunnel that may not be ours to stop: watch it and probe through it, and
-      // start our own once it dies. It is never signalled.
+      // A leftover tunnel that may not be ours to stop: watch it, probe only after identity and
+      // socket ownership match, and start our own once it dies. It is never signalled.
       adopted = orphan.pid;
       linkId = afterReap.sidecar.linkId;
+      tunnelPort = afterReap.sidecar.tunnelPort;
       nextProbeAt = now();
       setState({ kind: "connecting", since: now() });
       return;
@@ -757,12 +788,13 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     if (adopted !== null && !isAlive(adopted)) {
       // The leftover tunnel is gone: start our own on this tick.
       adopted = null;
+      tunnelPort = null;
       probe = null;
       setState(IDLE);
     }
     setState(reduceTunnel(state, { type: "tick", now: now() }, random, policy));
-    // An adopted tunnel is the attempt in flight: it is never killed, so a timeout leaves it
-    // probed, and it can still be promoted, until it dies.
+    // An adopted tunnel is never killed. Failed identity or socket-owner proof keeps it
+    // unprobed and unable to promote, even when the process stays alive after a timeout.
     if (state.kind === "failed" && !state.inFlight && adopted !== null) setState({ ...state, inFlight: true });
     if (state.kind === "failed" && !state.inFlight && child) await killChild();
     // A probe still running for a tunnel that has since exited or died answers nothing useful.
