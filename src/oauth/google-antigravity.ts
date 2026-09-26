@@ -94,15 +94,34 @@ function extractProjectId(data: Record<string, unknown> | undefined): string | u
   return undefined;
 }
 
-async function loadCodeAssistProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
+/**
+ * Subscription tier from a loadCodeAssist response's `paidTier`. The free account reports
+ * `{ id: "free-tier", name: "Antigravity Starter Quota" }` and a paid one `{ id: "g1-pro-tier",
+ * name: "Google AI Pro" }`, so the id decides Free and an explicit "Google AI <name>" label is
+ * carried verbatim. Anything else stays unknown: `currentTier.name` is the bare product name
+ * ("Antigravity") even for free accounts, and guessing from it would invent tiers.
+ */
+function extractPaidTierPlan(data: Record<string, unknown> | undefined): string | null | undefined {
+  if (!data || !Object.hasOwn(data, "paidTier")) return undefined;
+  const paidTier = data.paidTier;
+  if (!paidTier || typeof paidTier !== "object") return null;
+  const tier = paidTier as { id?: unknown; name?: unknown };
+  if (tier.id === "free-tier") return "Free";
+  if (typeof tier.name === "string" && /^Google AI\s+\S/.test(tier.name.trim())) return tier.name.trim();
+  return null;
+}
+
+async function loadCodeAssistDiscovery(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan?: string | null }> {
   const response = await fetch(`${PROD_API}/${API_VERSION}:loadCodeAssist`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "*/*", "Content-Type": "application/json", "User-Agent": antigravityUserAgent() },
     body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
     signal: requestSignal(signal),
   });
-  if (!response.ok) return undefined;
-  return extractProjectId((await response.json().catch(() => undefined)) as Record<string, unknown> | undefined);
+  if (!response.ok) return {};
+  const data = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+  const plan = extractPaidTierPlan(data);
+  return { projectId: extractProjectId(data), ...(plan !== undefined ? { plan } : {}) };
 }
 
 async function onboardProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
@@ -136,9 +155,21 @@ async function onboardProject(accessToken: string, signal?: AbortSignal): Promis
   return undefined;
 }
 
+/**
+ * Discover the CCA project and subscription tier for an access token
+ * (loadCodeAssist → onboardUser fallback). The tier comes only from the loadCodeAssist
+ * response; an account that needed onboarding has no reported tier and stays unknown.
+ */
+export async function discoverAntigravityAccount(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan?: string | null }> {
+  const discovery = await loadCodeAssistDiscovery(accessToken, signal);
+  if (discovery.projectId) return discovery;
+  const onboarded = await onboardProject(accessToken, signal);
+  return { ...(onboarded ? { projectId: onboarded } : {}), ...(discovery.plan !== undefined ? { plan: discovery.plan } : {}) };
+}
+
 /** Discover the CCA project for an access token (loadCodeAssist → onboardUser fallback). */
 export async function discoverAntigravityProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
-  return (await loadCodeAssistProject(accessToken, signal)) ?? (await onboardProject(accessToken, signal));
+  return (await discoverAntigravityAccount(accessToken, signal)).projectId;
 }
 
 function credentialsFromPayload(payload: GoogleTokenPayload, refreshFallback = ""): OAuthCredentials {
@@ -207,13 +238,13 @@ class AntigravityOAuthFlow extends OAuthCallbackFlow {
     }, this.ctrl.signal);
     const creds = credentialsFromPayload(payload);
     this.ctrl.onProgress?.("Discovering Cloud Code Assist project");
-    const projectId = await discoverAntigravityProject(creds.access, this.ctrl.signal);
-    if (!projectId) {
+    const discovery = await discoverAntigravityAccount(creds.access, this.ctrl.signal);
+    if (!discovery.projectId) {
       // Fail the login rather than persisting a credential that every request would reject for a
       // missing CCA project — otherwise status shows "logged in" while all calls fail closed.
       throw new Error("Antigravity login could not discover a Cloud Code Assist project for this account. Ensure the account has Antigravity/Cloud Code Assist access and try again.");
     }
-    return { ...creds, projectId };
+    return { ...creds, projectId: discovery.projectId, ...(discovery.plan !== undefined ? { plan: discovery.plan } : {}) };
   }
 }
 
@@ -230,9 +261,10 @@ export async function refreshAntigravityToken(refreshToken: string, signal?: Abo
     refresh_token: refreshToken,
   }, signal);
   const creds = credentialsFromPayload(payload, refreshToken);
-  // Re-discover the project on refresh so a newly-onboarded account fills in projectId.
-  const projectId = await discoverAntigravityProject(creds.access, signal).catch(() => undefined);
-  return projectId ? { ...creds, projectId } : creds;
+  // Re-discover the project on refresh so a newly-onboarded account fills in projectId, and
+  // refresh the reported tier in the same call.
+  const discovery = await discoverAntigravityAccount(creds.access, signal).catch(() => ({} as { projectId?: string; plan?: string | null }));
+  return { ...creds, ...(discovery.projectId ? { projectId: discovery.projectId } : {}), ...(discovery.plan !== undefined ? { plan: discovery.plan } : {}) };
 }
 
 /**

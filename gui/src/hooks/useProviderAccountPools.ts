@@ -21,6 +21,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   active: boolean;
   needsReauth?: boolean;
   expiresAt?: number;
+  plan?: string | null;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

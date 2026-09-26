@@ -58,6 +58,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   email?: string;
   active: boolean;
   needsReauth?: boolean;
+  plan?: string | null;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

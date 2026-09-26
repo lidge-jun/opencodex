@@ -65,6 +65,12 @@ export type OAuthCredentials = {
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
   projectId?: string;
   /**
+   * Display-only subscription tier: undefined means no new observation (retain the previous
+   * plan on refresh); a string is a recognized tier; null means an explicitly observed
+   * unknown tier (clear the previous plan). Never infer "Free" from missing data.
+   */
+  plan?: string | null;
+  /**
    * GitHub Copilot allowlisted API origin from token `endpoints.api` (HTTPS `*.githubcopilot.com` only).
    * Never reuse for Antigravity projectId; validated on write and again at request time.
    */

@@ -78,6 +78,7 @@
 .pwi-auth-row-main:focus-visible,
 .pwi-auth-row-remove:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .pwi-auth-row-label  { font-size: var(--text-control); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pwi-auth-row-heading { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .pwi-auth-row-remove {
   background: none; border: none; cursor: pointer; padding: 2px;
   color: var(--muted); border-radius: var(--radius-2xs);

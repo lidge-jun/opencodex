@@ -825,11 +825,13 @@ function clearObservedAnthropicRefreshIntent(
     : clearOAuthRefreshIntent(provider, accountId, pendingIntent.generation);
 }
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
-function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
+/** @internal Exported only so refresh-retention tests can assert it directly. */
+export function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
     source: previous.source === "local-cli" ? "oauth" : fresh.source ?? previous.source ?? "oauth",
     ...(fresh.projectId === undefined && previous.projectId ? { projectId: previous.projectId } : {}),
+    ...(fresh.plan === undefined && previous.plan !== undefined ? { plan: previous.plan } : {}),
     ...(fresh.apiBaseUrl === undefined && previous.apiBaseUrl ? { apiBaseUrl: previous.apiBaseUrl } : {}),
     ...(fresh.email === undefined && previous.email ? { email: previous.email } : {}),
     ...(fresh.accountId === undefined && previous.accountId ? { accountId: previous.accountId } : {}),
@@ -1748,10 +1750,10 @@ export interface OAuthAccountSummary {
    * version looked and upstream did not say. Omitting it would make those indistinguishable and
    * invite a consumer to assume a tier.
    *
-   * Every OAuth provider reports `null` today. Anthropic's `/api/oauth/usage` returns quota
-   * buckets only — `five_hour`, `seven_day`, the model-scoped weekly windows and `limits[]` —
-   * and carries no subscription/tier field, and its token response carries none either. See
-   * `fetchAnthropicUsageQuota` in `src/providers/quota.ts`.
+   * Google Antigravity can report a plan from loadCodeAssist paidTier. Anthropic's
+   * `/api/oauth/usage` returns quota buckets only — `five_hour`, `seven_day`, the model-scoped
+   * weekly windows and `limits[]` — and carries no subscription/tier field, and its token
+   * response carries none either. See `fetchAnthropicUsageQuota` in `src/providers/quota.ts`.
    */
   plan: string | null;
 }
@@ -1775,11 +1777,12 @@ export function getLoginStatus(provider: string, maskEmails = true): { loggedIn:
     active: a.id === set.activeAccountId,
     ...(a.needsReauth ? { needsReauth: true } : {}),
     expiresAt: a.credential.expires,
-    // Explicitly null rather than omitted — see OAuthAccountSummary.plan. No OAuth provider
-    // exposes a subscription tier today, so there is nothing truthful to put here; deriving one
-    // from quota percentages is not possible, because they are normalized per account and a
-    // half-consumed small seat is indistinguishable from a half-consumed large one.
-    plan: null,
+    // Explicitly null rather than omitted — see OAuthAccountSummary.plan. Only providers that
+    // actually report a subscription tier (google-antigravity via loadCodeAssist paidTier) put a
+    // label here; the rest stay null. Deriving one from quota percentages is not possible,
+    // because they are normalized per account and a half-consumed small seat is indistinguishable
+    // from a half-consumed large one.
+    plan: a.credential.plan ?? null,
   }));
 
   // A stored credential counts as "logged in" when it exists and is not marked for

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { discoverAntigravityProject, refreshAntigravityToken } from "../../../src/oauth/google-antigravity";
+import { discoverAntigravityAccount, discoverAntigravityProject, refreshAntigravityToken } from "../../../src/oauth/google-antigravity";
+import { getLoginStatus, merged } from "../../../src/oauth/index";
 import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,6 +108,55 @@ describe("antigravity project discovery", () => {
   });
 });
 
+describe("antigravity subscription tier (loadCodeAssist paidTier)", () => {
+  test("maps paidTier with explicit tri-state semantics", async () => {
+    const cases: Array<{ paidTier?: { id: string; name?: string }; expected?: string | null }> = [
+      { paidTier: { id: "free-tier", name: "Antigravity Starter Quota" }, expected: "Free" },
+      { paidTier: { id: "g1-pro-tier", name: "Google AI Pro" }, expected: "Google AI Pro" },
+      { expected: undefined },
+      { paidTier: { id: "future-tier", name: "Unknown Product" }, expected: null },
+    ];
+
+    for (const { paidTier, expected } of cases) {
+      routeFetch((url) => {
+        if (url.includes(":loadCodeAssist")) {
+          return new Response(JSON.stringify({
+            cloudaicompanionProject: "proj",
+            ...(paidTier ? { paidTier } : {}),
+          }), { status: 200 });
+        }
+        return new Response("no", { status: 404 });
+      });
+      const discovered = await discoverAntigravityAccount("tok");
+      expect(discovered.projectId).toBe("proj");
+      if (expected === undefined) expect(discovered).not.toHaveProperty("plan");
+      else expect(discovered.plan).toBe(expected);
+    }
+  });
+
+  test("refresh preserves missing plan, clears unknown, and accepts a known tier", async () => {
+    let paidTier: { id: string; name?: string } | undefined;
+    routeFetch((url) => {
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "fresh-access", expires_in: 3600 }), { status: 200 });
+      }
+      if (url.includes(":loadCodeAssist")) {
+        return new Response(JSON.stringify({ cloudaicompanionProject: "proj-R", ...(paidTier ? { paidTier } : {}) }), { status: 200 });
+      }
+      return new Response("no", { status: 404 });
+    });
+
+    const previous = { access: "old", refresh: "r", expires: 1, plan: "Google AI Pro" };
+    expect(merged(await refreshAntigravityToken("r"), previous).plan).toBe("Google AI Pro");
+
+    paidTier = { id: "future-tier", name: "Unknown Product" };
+    expect(merged(await refreshAntigravityToken("r"), previous).plan).toBeNull();
+
+    paidTier = { id: "free-tier" };
+    expect(merged(await refreshAntigravityToken("r"), previous).plan).toBe("Free");
+  });
+});
+
 describe("antigravity refresh", () => {
   test("refreshes the access token and re-discovers project; never leaks the token in errors", async () => {
     routeFetch((url) => {
@@ -165,4 +215,21 @@ describe("antigravity credential persistence (projectId survives the store)", ()
     await saveCredential("google-antigravity", { access: "a", refresh: "r", expires: Date.now() + 3_600_000, projectId: "proj-persist" });
     expect(getCredential("google-antigravity")?.projectId).toBe("proj-persist");
   });
+
+  test("stored plan is exposed by login status", async () => {
+    tmp = join(tmpdir(), `ag-store-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(tmp, { recursive: true });
+    process.env.HOME = tmp;
+    process.env.OPENCODEX_HOME = join(tmp, "ocx");
+
+    await saveCredential("google-antigravity", {
+      access: "a",
+      refresh: "r",
+      expires: Date.now() + 3_600_000,
+      plan: "Google AI Pro",
+    });
+    expect(getCredential("google-antigravity")?.plan).toBe("Google AI Pro");
+    expect(getLoginStatus("google-antigravity", false).accounts?.find(a => a.active)?.plan).toBe("Google AI Pro");
+  });
+
 });
