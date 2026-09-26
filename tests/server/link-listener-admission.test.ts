@@ -8,6 +8,7 @@ import { emptyLinkStore, writeLinkStore } from "../../src/link/store";
 import { requestPolicyView, resolveApiAuth } from "../../src/server/auth-cors";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const ENV_KEY = "link-env-admission";
 const OTHER_KEY = "link-other-admission";
@@ -154,7 +155,7 @@ afterEach(async () => {
 
 describe("hub-link admission", () => {
   test("context revalidation refreshes the link policy after asynchronous request work", () => {
-    const source = readFileSync(new URL("../../src/server/index/serve-options.ts", import.meta.url), "utf8");
+    const source = readFileSync(repoPath("src/server/index/serve-options.ts"), "utf8");
     expect(source).toContain('() => resolveApiAuth(req, ingress === "hub-link" ? linkPolicy() : policy)');
 
     const liveConfig = config();
