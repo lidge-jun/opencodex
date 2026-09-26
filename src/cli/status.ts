@@ -18,6 +18,8 @@ import { redactSecretString, redactUserPath } from "../lib/redact";
 import { collectOrcaCodexHomeDiagnostic, type OrcaCodexHomeDiagnostic } from "../codex/home";
 import { grokFenceEndpointDrift, readGrokStatus } from "../grok/status";
 import { effectiveLoopbackListenerPort } from "../codex/loopback-target";
+import { journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl } from "../codex/journal";
+import { detectCodexRoutingDrift, type JournaledCodexRouting } from "../codex/routing-drift";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import { claudeDesktopPolicyHealth, probeClaudeDesktopPolicy, type ClaudeDesktopPolicyHealth } from "../claude/desktop-policy";
 import { collectClientConnectionStatus, type ClientConnectionStatus } from "./connect";
@@ -548,6 +550,36 @@ export function detectMissingCodexCatalogPath(): string | null {
 }
 
 /**
+ * Owned Codex routing that names a local port the live proxy does not serve.
+ *
+ * `classifyCodexRouting` calls that "opencodex-local" whatever the port, so without this line the
+ * state behind a killed second instance was invisible here. Detection is `routing-drift.ts`, the
+ * same rule the owner's healer uses; this only reports and reads the journal without side effects.
+ * A sibling's report says nothing: its routing correctly names the owner it runs beside. Whether a
+ * healer runs, or is gated or paused, is not visible from here, so the line promises only `ocx sync`.
+ */
+export function codexRoutingDriftWarning(input: {
+  content: string | null;
+  livePort: number | undefined;
+  loopbackPort: number | null;
+  /** `siblingOfPort` from this home's runtime record. */
+  siblingOfPort: number | undefined;
+  journaled: () => JournaledCodexRouting;
+}): string | null {
+  const { content, livePort, loopbackPort } = input;
+  if (content === null || livePort === undefined || input.siblingOfPort !== undefined) return null;
+  const drift = detectCodexRoutingDrift(content, {
+    ownPorts: loopbackPort === null ? [livePort] : [livePort, loopbackPort],
+    journaled: input.journaled,
+  });
+  if (drift.kind !== "foreign") return null;
+  const ports = [...new Set(drift.targets.map(target => target.port))].join(", ");
+  return `Codex routing points at port ${ports}, but the proxy is on ${livePort}; if nothing serves that port, `
+    + "new Codex threads fail with \"Connection refused\". Run 'ocx sync' to re-point it now; a running "
+    + "owner proxy may also do that on its own once the port stays dead.";
+}
+
+/**
  * The one state in this report where Codex is broken independently of the proxy (#5261).
  *
  * A `model_catalog_json` naming a file that is gone stops Codex loading its configuration at
@@ -702,6 +734,25 @@ export async function collectStatus(): Promise<CliStatusView> {
       + `${grokDrift.livePort}; grok turns will retry against a closed port. Run 'ocx ensure' to repoint it.`,
     );
   }
+  const codexDrift = (() => {
+    if (!health.ok) return null;
+    try {
+      const siblingOfPort = readRuntimePort()?.siblingOfPort;
+      return codexRoutingDriftWarning({
+        content: siblingOfPort === undefined ? readFileSync(CODEX_CONFIG_PATH, "utf8") : null,
+        livePort: listen.port,
+        loopbackPort: effectiveLoopbackListenerPort(config, listen.port),
+        siblingOfPort,
+        journaled: () => ({
+          openaiBaseUrl: journaledInjectedOpenaiBaseUrl({ readOnly: true }),
+          realtimeWsBaseUrl: journaledInjectedRealtimeWsBaseUrl({ readOnly: true }),
+        }),
+      });
+    } catch {
+      return null; // an absent or unreadable config.toml must never break `ocx status`
+    }
+  })();
+  if (codexDrift) warningParts.push(codexDrift);
   const codexRuntime = {
     path: displayCodexRuntimePath(resolvedRuntime.runtime.command),
     version: resolvedRuntime.runtime.version,
