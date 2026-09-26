@@ -1872,6 +1872,8 @@ export const ptBR: Record<string, string> = {
   "nav.openMenu": "Abrir menu",
   "nav.closeMenu": "Fechar menu",
   "nav.goHome": "Ir para o painel",
+  "nav.collapseSidebar": "Recolher barra lateral",
+  "nav.expandSidebar": "Expandir barra lateral",
   "pws.refreshAllQuotas": "Atualizar todas as cotas",
   "pws.quotaRefreshDone": "Verificação de cota concluída",
   "integrations.subtitle": "Conecte clientes ao opencodex, gerencie credenciais e restaure a configuração do cliente.",
