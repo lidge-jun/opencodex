@@ -56,6 +56,10 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+`src/web-search/run-turn-loop.ts` charges retained iteration events and generated replay history to
+the request translator budget. Each owner releases its own reservations on completion, error,
+cancellation or consumer closure; a buffer-limit failure terminates without another search.
+
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input, counts consumed blocks rather than remaining suffixes, and preserves LF/CRLF,
 partial-event, injection/drop, and EOF behavior. Output admission precedes its single UTF-8 encoding;
@@ -81,6 +85,13 @@ across deltas, while retaining snapshot/done/delta precedence and existing termi
 Serialized request and buffered-response observations use byte counts without measurement arrays.
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
+
+The buffered Chat collector in `src/chat/outbound.ts` computes a split surrogate pair's incremental
+UTF-8 cost from the runtime's measured separate and joined sizes. It does not assume how a Bun
+version prices a lone surrogate, so retained content, reasoning, and refusal fields enforce and
+release the same exact budget on every supported runtime.
+
+> Decision record: [ADR-0112](../decisions/ADR-0112-chat-collector-unicode-accounting.md)
 
 `src/lib/translator-budget.ts` admits an event batch atomically from per-event serialized byte sizes
 plus exact separators, without joining a second full JSON array. `src/lib/admission.ts` counts and

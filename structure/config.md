@@ -72,7 +72,8 @@ Replacing config and process-state writes use `src/config/atomic-write.ts`. The 
 process-wide temp sequence, symlink target resolution, no-follow directory-entry replacement for
 externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
-must not replace it with a local temp-and-rename shortcut.
+must not replace it with a local temp-and-rename shortcut. Publication failures in
+`src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch).
 
 Windows hardening there is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the
@@ -123,7 +124,7 @@ record; it does not call `loadConfig`, mutate permissions, or import the write-c
 All config publication continues through the existing required ACL-hardened writers above.
 
 `claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
-
+`claudeCode.cliFirstParty` is an optional boolean in `src/types/config.ts`. The schema passes it through; the load normalizer (`src/config/load-degrade.ts`) drops a non-boolean hand edit, every reader treats only `true` as on, and `PUT /api/claude-code` accepts only a boolean. Absence means off. It is independent of `claudeCode.desktopMode`; enabling CLI first-party pins an absent Desktop mode from a pre-write observation, before writing the shared settings env, so later Desktop inference cannot mistake a CLI-only env for Desktop intent. The flag is written only by a standalone `PUT /api/claude-code { cliFirstParty }`, including `ocx claude config set --first-party`; enabling it pins an absent `desktopMode` in the same persisted mutation. The shared settings proxy status follows the ordered classifier in `src/claude/first-party-settings.ts`: unreadable settings are `unknown`; absent or unrecognized proxy URLs are `none`; a token-bearing opencodex URL beside a foreign CA is `foreign`, while a tokenless loopback URL beside that CA is `local` with unconfirmed ownership. An attributed proxy with no bound listener is `stopped`; a usable applied pair on a bound listener is `disabled` when Claude routing is ineligible and `live` when eligible; remaining mismatches are `broken` regardless of eligibility. Inspection never mints a token. A separate `ocx ensure` may write a config-derived port while this server remains bound elsewhere; status is then `broken` until the server restarts or ensure runs after restart.
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.
 It is absent from the typed settings contract and cannot re-enable Spark quota through the
 management API. Retirement does not migrate user-selected model ids or erase usage history.
@@ -346,18 +347,21 @@ returns true.
 
 ## Desktop compatibility switches report three things, not one
 
-`codexDesktopAuthless` and `codexClientCompaction` only mean anything through the injected
-`config.toml`, so persisting them is not applying them. `PUT /api/settings` used to persist
-and then converge the catalog, and a comment there claimed the injector rewrote the form;
-`convergeCodexCatalog` rejects any scope but `catalog` and never reaches `injectCodexConfig`,
-so the injected shape stayed as it was until a separate `ocx sync`.
+`codexDesktopAuthless` and `codexClientCompaction` take effect through injected `config.toml`; persisting
+them is not applying them, and `convergeCodexCatalog` (catalog scope only) never calls `injectCodexConfig`.
 
-The route now runs the real injection after catalog convergence and after the config mutation
+`PUT /api/settings` runs the real injection after catalog convergence and after the config mutation
 lock has closed — coordinated Codex writes take the Codex write lock before the config mutation
 lock, so awaiting the injector inside that transaction would invert the order — and reports
 three separate facts per switch: the **stored** value in `config.json`, the **effective** value
 this bind and role will actually produce, and whether `config.toml` was **applied**, with the
 reason and retryability when it was not. `src/codex/desktop-switches.ts` owns that projection.
+When an external `model_provider` owns `config.toml`, injection preserves the file and reports the
+effective switch and authentication source as externally controlled; a report that attempted no rewrite
+applies the same `currentExternalCodexModelProvider` predicate via `observedCodexDesktopSwitchApply`.
+A present-but-unreadable `config.toml` reports `ownership_undetermined` with `null` effective values and
+sign-in answer, since a foreign provider may still control them; both apply gates and injector-error
+observation keep that record, and recovery advice asks for a later settings read, not sync.
 
 Effective values come from `isEffectiveCodexDesktopAuthless` and
 `isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy
@@ -422,9 +426,6 @@ Provider seed/enrichment and request routing consume the same field-level resolv
 still stores operator intent rather than the frozen result; registry-only policy is applied at
 capture/route time and explicit false or empty declarations retain their field-specific meaning.
 
-
-
-
 ## Provider validation ownership
 
 `src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
@@ -465,8 +466,8 @@ Full `ocx uninstall` config cleanup is ownership-manifest based. A fresh config 
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
-traversing their targets. Unknown files remain in place and make the command report a partial
-uninstall with their exact paths.
+traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
+remain in place and make the command report a partial uninstall with their exact paths.
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
 includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the

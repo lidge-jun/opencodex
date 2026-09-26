@@ -134,9 +134,11 @@ test("apply feedback renders as a fixed toast, not an inline notice before the w
   expect(toast!.className).toContain("notice-ok");
   expect(toast!.getAttribute("role")).toBe("status");
   expect(toast!.textContent).toContain(en["models.applied"]);
-  // No inline notice sits in the flow before the workspace anymore.
+  // No inline notice sits in the flow before the workspace anymore: the toast is a fixed
+  // sibling in the shell, and the element directly above the workspace is the settings panel.
   const workspace = container.querySelector<HTMLElement>(".models-workspace-root");
-  expect(workspace?.previousElementSibling?.classList.contains("action-toast")).toBe(true);
+  expect(toast!.parentElement).toBe(workspace!.parentElement);
+  expect(workspace?.previousElementSibling?.classList.contains("models-settings")).toBe(true);
 });
 
 test("success toast expires after 6s and a repeated action re-arms it", async () => {

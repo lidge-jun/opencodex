@@ -131,6 +131,23 @@ export function asideRootStore(input: AsideProfilesInput): IntegrationStateStore
   return guardedStore(raw, raw.root);
 }
 
+/** Enumerate persisted owners, not desired/current profiles: uninstall must retain orphaned proof. */
+export function listAsideProfileStores(rootStore: IntegrationStateStore): Array<{ profileId: number; store: IntegrationStateStore }> {
+  const directory = join(rootStore.root, "aside-profiles");
+  storeGuard(rootStore.root, directory)();
+  let names: string[];
+  try { names = readdirSync(directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    return storeUnsafe();
+  }
+  return names.sort().map(name => {
+    const profileId = Number(name);
+    if (!Number.isSafeInteger(profileId) || profileId < 0 || String(profileId) !== name) storeUnsafe();
+    return { profileId, store: guardedStore(createIntegrationStateStore(join(directory, name)), rootStore.root) };
+  });
+}
+
 export function assertAsideSnapshotEntry(entry: JournalEntry): void {
   if (!entry || entry.clientId !== "aside" || typeof entry.opId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(entry.opId) || !entry.snapshot
     || !["none", "stored", "expired"].includes(entry.snapshot.kind)

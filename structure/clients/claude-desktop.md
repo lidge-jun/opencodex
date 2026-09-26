@@ -36,20 +36,27 @@ mutually exclusive on one machine:
 
 - **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
-  writes only `HTTPS_PROXY=http://127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
+  writes only an authenticated `HTTPS_PROXY=http://opencodex:<token>@127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
   into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
+  The Desktop and standalone CLI first-party switches are independent intents. They share only the owned
+  settings env; it remains while either intent is desired. A client whose intent is off may still traverse
+  that proxy, but every path relays to real Anthropic when its intent is off. The account-risk warning applies
+  to either routed first-party client.
 - **gateway** (default for new installs): the existing third-party profile written by
   `src/claude/desktop-3p.ts`; the whole app switches to the local gateway. The dashboard,
   `--gateway`, and legacy `--static|--hybrid|--discovery-only` shape flags also select it.
 
 `resolveClaudeDesktopMode` uses observations from `observeClaudeDesktopMode` in this order:
 explicit `claudeCode.desktopMode` → selected owned gateway row → persisted
-`desktopProfile.appliedFingerprint` → owned first-party env in `~/.claude/settings.json` →
-gateway. The owned env observation preserves first-party installs applied before mode persistence;
-foreign proxy settings do not count. `resolveClaudeDesktopApplyMode` preserves the resolved mode.
+`desktopProfile.appliedFingerprint` → legacy Desktop-owned first-party env →
+gateway. This env observation preserves Desktop installs that predate mode persistence
+only while CLI first-party intent is off. An owned env observed with
+`claudeCode.cliFirstParty === true` is not Desktop-mode evidence, even when the
+intercept is disabled; foreign proxy settings do not count.
+`resolveClaudeDesktopApplyMode` preserves the resolved mode.
 An apply for a first-party install with `claudeCode.intercept.enabled: false` is refused with
 `intercept_disabled` rather than switched to gateway. New installs apply gateway.
 `src/claude/desktop-risk.ts` owns the account-suspension warning: first-party sends subscription
@@ -70,11 +77,12 @@ cleanup via `src/claude/desktop-gateway-state.ts`. Cleanup failure remains a par
 subsequent default applies and status retain the gateway choice. A separate persistence failure
 is reported explicitly; its mode/profile snapshot is not claimed to have been saved. These file operations are ordered,
 not a crash-atomic transaction across the settings file and Desktop library.
-Disabling the integration (native toggle, `ocx ensure` with the durable switch OFF) removes both the
-gateway profile and the first-party env. With the switch ON in first-party mode, `ocx ensure`
-re-applies a stale env (the proxy port follows the public port).
+Disabling Desktop integration removes its gateway profile. It removes the owned first-party env
+only when `claudeCode.cliFirstParty` is not set; otherwise the env stays for the CLI. With Desktop
+first-party ON, `ocx ensure` re-applies a stale env; the proxy port follows the public port.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
+`ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
 `GET /api/claude-desktop/status` (`mode`, `riskWarning`, `firstParty.{applied,stale,interceptEnabled,interceptRunning,proxyPort,caCertPath}`)
 in `src/server/management/agent-settings-routes.ts`; the native toggle in
@@ -83,6 +91,18 @@ Windows policy health only applies in gateway mode, because first-party never to
 configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 
 `src/claude/desktop-gateway-state.ts` adopts the exact committed Claude subtree and rebases the live hand-edit guard only after persistence succeeds. Pending disjoint live edits survive; later hand edits remain protected during unrelated whole-config saves. Gateway mode and fingerprint are recorded before cleanup and diagnostic awaits.
+
+### Intercept credential lifetime
+
+`src/claude/intercept/proxy-auth.ts` reads a bounded base64url credential through a checked
+regular-file descriptor, rejects links and foreign POSIX owners, and never replaces invalid
+existing entries. Creation hardens before no-replace publication. The authenticated listener
+reads this current authority for every CONNECT; absence or invalidity denies admission.
+An explicit first-party apply can recreate a missing token and the live listener follows it
+without restart. Rejected CONNECT requests include a Basic proxy-authentication challenge.
+Temporary cleanup failures warn without replacing a committed result or an earlier error;
+retained temporary entries keep their ACL memo until absence is confirmed. Established tunnels
+are not revoked by this new-connection check.
 
 ### First-party model bindings
 

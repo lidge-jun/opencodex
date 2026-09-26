@@ -376,7 +376,10 @@ dispatches normally.
 by default, so existing combos are unaffected. Only the exact string
 `before-last-resort` opts in.
 
-The current request never retries the same attempted target. Later requests skip a cooled target until its
+The current request never retries the same attempted target — with one exception: a single-target combo
+that sets `waitForCooldownMs` may retry its only target once that target's cooldown expires inside the
+same request, since there is no alternate to fail over to. Request-local compatibility rejections still
+return without any retry. Later requests skip a cooled target until its
 cooldown expires; request-local compatibility rejections do not cool the target. A `Retry-After` HTTP-date that is already in the past is also preserved as an
 immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later
 request to wait for the earliest eligible target cooldown, up to that cap on each selection attempt,

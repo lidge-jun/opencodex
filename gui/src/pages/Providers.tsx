@@ -288,11 +288,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setAccountsFocus(previous => ({ token: previous.token + 1, provider }));
   }, []);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
-  // The one query it keeps here, `#providers?provider=<name>`, opens that provider's settings.
+  // The one query it keeps here, `#providers?provider=<name>`, opens that provider's settings;
+  // with `&tab=accounts` (the header quota strip) it opens the provider's Accounts tab instead.
   const settingsFocus = useProviderSettingsDeepLink(
     config ? Object.keys(config.providers) : null,
     workspaceSelected,
     setWorkspaceSelected,
+    revealProviderAccounts,
   );
 
   // Warm the Add Provider catalog cache while the page is open so opening the

@@ -100,6 +100,22 @@ describe("#1942 transactional update", () => {
     expect(installArgs).not.toContain("--ignore-scripts");
   });
 
+  test("npm's strict script policy finds the stage's global root in place (#5760)", () => {
+    // With strict-allow-scripts, npm 11.19 plans the global tree before it creates the prefix
+    // layout and fails with ENOENT on <prefix>/lib when the stage is bare.
+    const stage = stagingNpm("2.0.0");
+    const result = transactionalNpmUpdate({
+      packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest",
+      runNpm: (args: string[]) => {
+        const stageRoot = args[args.indexOf("--prefix") + 1]!;
+        if (process.platform !== "win32" && !existsSync(join(stageRoot, "lib"))) return { status: 254 };
+        return stage(args);
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(liveVersion(packageDir)).toBe("2.0.0");
+  });
+
   test("stage install failure leaves live untouched (D4 row 1)", () => {
     const result = transactionalNpmUpdate({
       packageDir, pkgName: PKG, targetVersion: "2.0.0", tag: "latest",

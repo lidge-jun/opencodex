@@ -591,17 +591,30 @@ function runPackageManagerSelfUpdate(manager) {
     let stopAttempted = false;
 
     function recoverStoppedRuntimeAfterFailure(reason) {
-      const recoveryOwnership = readOwnership();
-      const recoveryLiveness = currentPackageRuntimeLiveness();
-      const recovery = planStoppedRuntimeRecovery({
-        stopAttempted,
-        ...recoveryOwnership,
-        sameOwner: ownershipIdentity(recoveryOwnership) === stoppedOwnershipIdentity,
-        liveness: recoveryLiveness,
-        serviceInstalled: serviceWasInstalled,
-        launcherUsable: postUpdateLauncherUsable,
-        hadRuntimeState: hasRuntimeState,
-      });
+      const planRecovery = () => {
+        const recoveryOwnership = readOwnership();
+        const liveness = currentPackageRuntimeLiveness();
+        return {
+          liveness,
+          plan: planStoppedRuntimeRecovery({
+            stopAttempted,
+            ...recoveryOwnership,
+            sameOwner: ownershipIdentity(recoveryOwnership) === stoppedOwnershipIdentity,
+            liveness,
+            serviceInstalled: serviceWasInstalled,
+            launcherUsable: postUpdateLauncherUsable,
+            hadRuntimeState: hasRuntimeState,
+          }),
+        };
+      };
+      let { liveness: recoveryLiveness, plan: recovery } = planRecovery();
+      if (recovery.action === "service") {
+        // The service manager starts the proxy outside this process tree, so it cannot join this
+        // lease, and holding the lease through the repair's health wait keeps that proxy from
+        // starting (#5760). Release it as the successful path does, then decide again.
+        releaseUpdateLease();
+        ({ liveness: recoveryLiveness, plan: recovery } = planRecovery());
+      }
       if (recovery.reason === "ownership-unknown") {
         console.error(`opencodex: ${reason}; runtime ownership is unknown, so automatic recovery was refused. Run 'ocx status --json' and repair the service-state record before retrying.`);
       } else if (recovery.reason === "ownership-transferred") {

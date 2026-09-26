@@ -1510,6 +1510,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.success).toBe(true);
     expect(result.message).toContain("routing NOT injected");
     expect(result.message).toContain('external model_provider "custom"');
+    expect(result.configApplied).toBe(false);
     expect(result.message).toContain("http://127.0.0.1:10100/v1");
     expect(result.message).toContain("Responses passthrough");
     expect(result.nativeSubagentDefaultsWarning).toContain("external model_provider");

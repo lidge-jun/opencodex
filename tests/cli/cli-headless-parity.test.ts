@@ -141,12 +141,74 @@ describe("ocx system settings desktop switches", () => {
     }
   });
 
+  test("reports externally owned switch and authentication state without claiming a rewrite", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexDesktopAuthless: { stored: true, effective: null },
+        codexClientCompaction: { stored: false, effective: null },
+        apply: { applied: false, reason: "external_provider", retryable: false },
+        authSource: {
+          presentsCodexAccount: null,
+          summary: "An external model provider owns Codex sign-in behavior; its account requirement was not changed.",
+        },
+      },
+    }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      const output = logSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("effective state is controlled by the external model provider");
+      expect(output).toContain("was not rewritten because an external model provider owns config.toml");
+      expect(output).toContain("Auth source: An external model provider owns Codex sign-in behavior");
+      expect(output).not.toContain("was rewritten.");
+      expect(output).not.toContain("ocx sync");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   test("keeps the legacy success line when an older server omits the switch report", async () => {
     const { deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     try {
       expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
       expect(logSpy.mock.calls.flat().join("\n")).toBe("System settings updated.");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("reports undetermined ownership without claiming external control", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexDesktopAuthless: { stored: true, effective: null },
+        codexClientCompaction: { stored: false, effective: null },
+        apply: {
+          applied: false,
+          reason: "ownership_undetermined",
+          retryable: true,
+          detail: "config.toml ownership could not be determined: EACCES",
+        },
+        authSource: {
+          presentsCodexAccount: null,
+          summary: "Whether the Codex app requires its own account sign-in is undetermined; config.toml ownership could not be read.",
+        },
+      },
+    }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      const output = logSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("effective state could not be determined");
+      expect(output).toContain("was not rewritten because config.toml ownership could not be determined");
+      expect(output).toContain("Auth source: Whether the Codex app requires its own account sign-in is undetermined");
+      expect(output).not.toContain("controlled by the external model provider");
+      // Observation can recover while integration stays disabled; sync cannot inject then.
+      expect(output).not.toContain("ocx sync");
+      expect(output).toContain("ocx system settings --json");
+      expect(output).toContain("Resolve the reported config.toml read error");
     } finally {
       logSpy.mockRestore();
     }
@@ -363,6 +425,34 @@ describe("ocx agent sidecar --list (#2188)", () => {
       expect(await handleAgentCommand(["sidecar", "web", "--enabled", "off"], deps)).toBe(0);
       const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
       expect(out).toBe("web sidecar settings updated.");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("an externally owned Codex config gets no 'ocx sync' retry advice", async () => {
+    const { deps } = fakeRuntime((req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return {
+          ok: true,
+          webSearch: { enabled: false },
+          codexWebSearch: {
+            applied: false,
+            reason: "external_provider",
+            retryable: false,
+            detail: 'config.toml selects the external model_provider "custom".',
+          },
+        };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--enabled", "off"], deps)).toBe(0);
+      const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(out).toContain("was not rewritten because an external model provider owns config.toml");
+      expect(out).not.toContain("ocx sync");
     } finally {
       logSpy.mockRestore();
     }
@@ -1384,4 +1474,25 @@ test("provider edit rejects incomplete text-only targeting before contacting the
     }
     expect(requests).toHaveLength(0);
   } finally { error.mockRestore(); }
+});
+
+describe("ownership recovery advice does not assume injection is enabled", () => {
+  for (const reason of ["ownership_undetermined", "integration_disabled"]) {
+    test(`sidecar ${reason} does not promise sync will apply settings`, async () => {
+      const { requests, deps } = fakeRuntime(() => ({
+        ok: true, codexWebSearch: { applied: false, reason, retryable: true },
+      }));
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect(await handleAgentCommand(["sidecar", "web", "--enabled", "on"], deps)).toBe(0);
+        expect(requests).toHaveLength(1);
+        const text = log.mock.calls.flat().join("\n");
+        expect(text).toContain("was not rewritten");
+        expect(text).not.toContain("ocx sync");
+        if (reason === "ownership_undetermined") expect(text).toContain("Resolve the reported config.toml read error");
+        expect(text).toContain(reason === "ownership_undetermined"
+          ? "ocx system settings --json" : "Enable Codex integration");
+      } finally { log.mockRestore(); }
+    });
+  }
 });

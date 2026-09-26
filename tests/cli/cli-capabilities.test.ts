@@ -133,6 +133,15 @@ describe("ocx capabilities output", () => {
     expect(parsed.capabilities.map(c => c.invocation)).toContain("ocx account list");
   });
 
+  test("Claude config declares both management methods", () => {
+    const claudeConfig = capabilitiesForRoute("/api/claude-code")
+      .find(cap => capabilityInvocation(cap) === "ocx claude config");
+    expect(claudeConfig?.routes).toEqual([
+      { method: "GET", path: "/api/claude-code" },
+      { method: "PUT", path: "/api/claude-code" },
+    ]);
+  });
+
   test("--route accepts the flag in any argv position", async () => {
     // Order-independence is the point: positional flag reading is why
     // `ocx restore back --json` silently ignored its flag.
@@ -214,7 +223,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "DELETE /api/providers/keys",
   "DELETE /api/routing-profiles",
   "GET /api/aliases",
-  "GET /api/claude-code",
   "GET /api/claude-desktop",
   "GET /api/claude/inbound-debug",
   "GET /api/client-integrations",
@@ -308,7 +316,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "POST /api/system/restart",
   "POST /api/update/run",
   "POST /api/windows-tray",
-  "PUT /api/claude-code",
   "PUT /api/claude-desktop",
   "PUT /api/client-integrations/{clientId}",
   "PUT /api/codex-auth/accounts/alias",

@@ -36,6 +36,7 @@ import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget"
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { NATIVE_GPT6_ASTRA_MODEL } from "./native-models";
+import { recordOwnedConfigPath } from "../../lib/config-ownership";
 
 export function legacyCatalogBackupPath(): string {
   return join(getConfigDir(), "catalog-backup.json");
@@ -969,14 +970,17 @@ export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
 }
 
 export function writePristineCatalogBackup(backupPath: string, catalogPath: string, catalog: RawCatalog): void {
+  // An existing name is not evidence of ownership; keep pre-ledger/user backups unclaimed.
   if (existsSync(backupPath)) return;
   const onDisk = readCatalog(catalogPath);
   if (onDisk && !catalogHasRoutedEntries(onDisk)) {
     copyFileSync(catalogPath, backupPath);
+    recordOwnedConfigPath(getConfigDir(), backupPath);
     return;
   }
   if (!catalogHasRoutedEntries(catalog)) {
     atomicWriteFile(backupPath, JSON.stringify(catalog, null, 2) + "\n");
+    recordOwnedConfigPath(getConfigDir(), backupPath);
   }
 }
 

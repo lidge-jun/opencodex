@@ -1,12 +1,13 @@
 /**
  * Which models the runtime actually intercepts as shadow calls.
  *
- * Codex 0.145.0+ uses gpt-5.6-luna for helper calls. Older clients through
+ * Codex 0.154.0+ sends gpt-6-luna for helper calls; 0.145.0-0.153.x sent
+ * gpt-5.6-luna, which the runtime still intercepts by default. Clients through
  * 0.144.x used gpt-5.4-mini, which operators can restore through `sourceModels`.
  * The GUI renders whatever the runtime reports rather than a baked-in label;
  * this fallback only covers a runtime too old to send `sourceModels`.
  */
-const FALLBACK_SOURCE_MODELS = ["gpt-5.6-luna"];
+const FALLBACK_SOURCE_MODELS = ["gpt-6-luna", "gpt-5.6-luna"];
 
 export function shadowSourceModelList(sourceModels?: string[]): string[] {
   const cleaned = Array.isArray(sourceModels)

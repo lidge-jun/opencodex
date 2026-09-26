@@ -627,6 +627,7 @@ function routeModelInternal(
   bypassCombos: boolean,
   policyEvidence?: PolicyRequestEvidence,
   allowCompactionNativeFallback = false,
+  preview = false,
 ): RouteResult {
   const slash = modelId.indexOf("/");
   // Policy namespace is system-reserved: an explicit `policy/<id>` or a
@@ -694,7 +695,7 @@ function routeModelInternal(
   }
 
   if (!bypassCombos && !preservesPhysicalComboProvider(config)) {
-    const combo = tryPickComboModel(config, modelId);
+    const combo = tryPickComboModel(config, modelId, preview);
     if (combo) {
       const concrete = `${combo.target.provider}/${combo.target.model}`;
       // The selected target is already a concrete provider/model reference. Resolve it without
@@ -892,6 +893,11 @@ export function routeModel(
 ): RouteResult {
   const route = routeModelInternal(config, modelId, false, policyEvidence);
   return routeWithDecisionTrace(config, modelId, route);
+}
+
+/** Resolve a route for capability inspection without creating combo selection state. */
+export function previewRouteModel(config: OcxConfig, modelId: string): RouteResult {
+  return routeWithDecisionTrace(config, modelId, routeModelInternal(config, modelId, false, undefined, false, true));
 }
 
 /**

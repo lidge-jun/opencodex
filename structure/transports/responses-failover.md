@@ -100,6 +100,13 @@ combo whose remaining eligible targets use other providers.
 
 > Decision record: [ADR-0070](../decisions/ADR-0070-same-provider-combo-quota-fallback.md)
 
+## Single-target cooldown retry ownership
+
+`src/combos/failover.ts` reports whether the current failure actually records a cooldown.
+`src/combos/resolve.ts` forwards that result for each target; `src/server/responses/core-combo.ts`
+permits its bounded same-target retry only when this failure records the failed target and its
+cooldown is live. A stale-generation refusal cannot borrow a sibling request's shared entry.
+
 ## Combo per-target reasoning controls
 
 `src/server/responses/core.ts` passes the combo's `reasoningEffortMode` and the final target's
@@ -198,6 +205,15 @@ Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.m
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
 Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates; account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority. Raw-byte readers on this path supply their own byte and deadline budgets under the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
+Translated Chat requests preserve caller reasoning intent until a combo or policy selects a
+concrete target. Empty-ladder stripping and effort mapping apply to each attempt copy, never the
+shared ingress body, so a later capable fallback still receives the caller's requested effort.
+`src/server/responses/core-normalize.ts` strips an empty ladder from both parsed adapter options
+and raw reasoning on each translated Chat attempt, preserving summary controls. Policy fallback
+captures the original body before this normalization, including for its first candidate.
+
+> Decision record: [ADR-0110](../decisions/ADR-0110-chat-reasoning-failover-intent.md)
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

@@ -215,11 +215,11 @@ export function coolComboTarget(
     code?: string | null;
     message?: string;
   },
-): void {
+): boolean {
   const now = options?.now ?? Date.now();
   const writerGeneration = options?.writerGeneration ?? captureConfigGeneration();
   const ownerKey = `${comboId}::${targetKey(target)}`;
-  if (writerGeneration < lastReconciledGeneration && !liveComboTargets.has(ownerKey)) return;
+  if (writerGeneration < lastReconciledGeneration && !liveComboTargets.has(ownerKey)) return false;
   // A server-provided Retry-After is authoritative, including an immediate `0` directive.
   // A quota reset is the next-most-specific signal (#3256); configured and default cooldowns
   // are only fallbacks when upstream supplied neither usable value.
@@ -240,6 +240,7 @@ export function coolComboTarget(
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
   });
   sweepExpiredOnWrite(now);
+  return true;
 }
 
 export function earliestComboCooldown(

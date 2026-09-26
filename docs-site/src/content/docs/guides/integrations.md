@@ -34,6 +34,13 @@ Factory Droid receives one `customModels` row per active OpenCodex model through
 other setting. See [Factory Droid integrations](/guides/factory-droid/) for the managed outbound path and
 the separate inbound bridge design.
 
+`ocx uninstall` disables recorded integrations, including all owned Aside profiles, before deleting
+OpenCodex's recovery state. Unreadable ownership, missing profile registration or a conflicting edit
+stops that deletion. Cleanup is sequential: earlier successful disables are not undone when a later
+one fails. If compensation also fails, a client file may be left in an intermediate state. Inspect
+the reported client files and retained recovery snapshots before retrying; retained state does not
+mean every client was restored or left unchanged.
+
 For Gajae built-in presets, keep the routing choice in `~/.gjc/agent/config.yml`:
 
 ```yaml

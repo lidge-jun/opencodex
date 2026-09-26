@@ -74,6 +74,56 @@ describe("Chat media stays native or fails explicitly at translation", () => {
     expect(() => chatCompletionsToResponsesBody(raw)).toThrow("Legacy function-result image translation is not implemented");
   });
 
+  test("legacy declarations, calls and textual results translate as one paired tool exchange", () => {
+    const translated = chatCompletionsToResponsesBody({
+      model: "model",
+      functions: [{ name: "lookup", description: "Look up a value", parameters: {
+        type: "object", properties: { key: { type: "string" } }, required: ["key"],
+      } }],
+      function_call: { name: "lookup" },
+      messages: [
+        { role: "user", content: "Find it." },
+        { role: "assistant", content: null, function_call: { name: "lookup", arguments: '{"key":"answer"}' } },
+        { role: "function", name: "lookup", content: "RESULT_42" },
+        { role: "assistant", content: "The result is 42." },
+      ],
+    });
+
+    expect(translated.tools).toEqual([{
+      type: "function", name: "lookup", description: "Look up a value",
+      parameters: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+    }]);
+    expect(translated.tool_choice).toEqual({ type: "function", name: "lookup" });
+    const input = translated.input as Array<Record<string, unknown>>;
+    const call = input.find(item => item.type === "function_call")!;
+    const output = input.find(item => item.type === "function_call_output")!;
+    expect(call).toMatchObject({ name: "lookup", arguments: '{"key":"answer"}' });
+    expect(output).toEqual({ type: "function_call_output", call_id: call.call_id, output: "RESULT_42" });
+    expect(input).toContainEqual({
+      type: "message", role: "assistant",
+      content: [{ type: "output_text", text: "The result is 42." }],
+    });
+  });
+
+  test("a null legacy function call preserves a textual assistant message", () => {
+    const translated = chatCompletionsToResponsesBody({
+      model: "model",
+      messages: [{ role: "assistant", content: "The result is 42.", function_call: null }],
+    });
+
+    expect(translated.input).toEqual([{
+      type: "message", role: "assistant",
+      content: [{ type: "output_text", text: "The result is 42." }],
+    }]);
+  });
+
+  test("an orphan legacy function result is rejected instead of silently discarded", () => {
+    expect(() => chatCompletionsToResponsesBody({
+      model: "model",
+      messages: [{ role: "user", content: "go" }, { role: "function", name: "lookup", content: "orphan" }],
+    })).toThrow("function result has no pending call named lookup");
+  });
+
   test("plain text mentioning an attachment is not treated as one", () => {
     const text = JSON.stringify([...media, INLINE_FILE]);
     const out = chatCompletionsToResponsesBody({ model: "model", messages: [{ role: "user", content: text }] });

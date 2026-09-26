@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -15,9 +15,13 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as filesystem from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { AtomicWriteResidualTempError } from "../../src/config";
+import { syncCatalogModels } from "../../src/codex/catalog/retained-sync";
+import { catalogBackupPathFor } from "../../src/codex/catalog/parsing";
 import type { AtomicWriteIO } from "../../src/config";
 import {
   type CatalogWritePermit,
@@ -36,6 +40,13 @@ import {
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
 } from "../../src/codex/internal/catalog-writer";
+import {
+  CONFIG_UNINSTALL_MANIFEST,
+  CONFIG_OWNER_FILE,
+  initializeConfigOwnership,
+  recordOwnedConfigPath,
+  removeOwnedConfigState,
+} from "../../src/lib/config-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 interface MutatorCase {
@@ -51,9 +62,14 @@ interface MutatorCase {
 let testRoot = "";
 let codexHome = "";
 let otherCodexHome = "";
+let openCodexHome = "";
 let targetDir = "";
 let previousCodexHome: string | undefined;
 let previousOpenCodexHome: string | undefined;
+
+function manifestPaths(dir: string): string[] {
+  return (JSON.parse(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths;
+}
 
 function atomicIo(effects: string[]): AtomicWriteIO {
   return {
@@ -166,12 +182,13 @@ beforeEach(() => {
   testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-catalog-writer-")));
   codexHome = join(testRoot, "codex-home");
   otherCodexHome = join(testRoot, "other-codex-home");
+  openCodexHome = join(testRoot, "opencodex-home");
   targetDir = join(testRoot, "external-catalog-targets");
-  for (const path of [codexHome, otherCodexHome, targetDir, join(testRoot, "opencodex-home")]) {
+  for (const path of [codexHome, otherCodexHome, targetDir, openCodexHome]) {
     mkdirSync(path, { recursive: true });
   }
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = join(testRoot, "opencodex-home");
+  process.env.OPENCODEX_HOME = openCodexHome;
 });
 
 afterEach(() => {
@@ -293,3 +310,132 @@ for (const [name, publish] of [
     expect(readdirSync(targetDir).filter(entry => entry.endsWith(".tmp"))).toEqual([]);
   });
 }
+
+test("new hashed publication is recorded and remains owned when preserved later", () => {
+  const name = "catalog-backup-0123456789abcdef.json";
+  const path = join(openCodexHome, name);
+  expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+  const result = withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+  );
+  expect(result).toBe("written");
+  const before = manifestPaths(openCodexHome);
+  expect(before).toContain(name);
+  expect(withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "later\n" })
+  )).toBe("preserved");
+  expect(manifestPaths(openCodexHome)).toEqual(before);
+  expect(readFileSync(path, "utf8")).toBe("pristine\n");
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+  expect(existsSync(path)).toBe(false);
+});
+
+for (const existing of ["user-owned\n", "pristine\n"]) {
+  test(`hashed publication does not adopt an existing regular backup: ${existing.trim()}`, () => {
+    const name = "catalog-backup-0123456789abcdef.json";
+    const path = join(openCodexHome, name);
+    expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+    writeFileSync(path, existing, { mode: 0o600 });
+    const before = manifestPaths(openCodexHome);
+    const result = withLivePermit((permit) =>
+      publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+    );
+    expect(result).toBe("preserved");
+    expect(manifestPaths(openCodexHome)).toEqual(before);
+    expect(manifestPaths(openCodexHome)).not.toContain(name);
+    const removal = removeOwnedConfigState(openCodexHome);
+    expect(removal.status).toBe("partial");
+    expect(removal.residualPaths).toEqual([path]);
+    expect(readFileSync(path, "utf8")).toBe(existing);
+  });
+}
+
+test("hashed publication does not adopt an existing backup directory", () => {
+  const name = "catalog-backup-0123456789abcdef.json";
+  const path = join(openCodexHome, name);
+  expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+  mkdirSync(path);
+  const nested = join(path, "mine.txt");
+  writeFileSync(nested, "keep me\n");
+  const before = manifestPaths(openCodexHome);
+  expect(withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+  )).toBe("preserved");
+  expect(manifestPaths(openCodexHome)).toEqual(before);
+  const removal = removeOwnedConfigState(openCodexHome);
+  expect(removal.status).toBe("partial");
+  expect(removal.residualPaths).toEqual([path]);
+  expect(readFileSync(nested, "utf8")).toBe("keep me\n");
+});
+
+test("failed hashed publication does not record an unwritten backup", () => {
+  expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+  const blocked = join(openCodexHome, "blocked-parent");
+  writeFileSync(blocked, "not a directory\n");
+  const path = join(blocked, "catalog-backup-0123456789abcdef.json");
+  const before = manifestPaths(openCodexHome);
+  expect(() => withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+  )).toThrow();
+  expect(existsSync(path)).toBe(false);
+  expect(manifestPaths(openCodexHome)).toEqual(before);
+});
+
+test("metadata-only initialization never claims a hashed backup candidate", () => {
+  const name = "catalog-backup-0123456789abcdef.json";
+  expect(initializeConfigOwnership(openCodexHome)).toBe(true);
+  expect(existsSync(join(openCodexHome, CONFIG_OWNER_FILE))).toBe(true);
+  expect(manifestPaths(openCodexHome)).not.toContain(name);
+  expect(initializeConfigOwnership(openCodexHome)).toBe(true);
+  expect(manifestPaths(openCodexHome)).not.toContain(name);
+});
+test("metadata initialization refuses a pre-existing unowned backup", () => {
+  const path = join(openCodexHome, "catalog-backup-0123456789abcdef.json");
+  writeFileSync(path, "user-owned\n");
+  expect(initializeConfigOwnership(openCodexHome)).toBe(false);
+  expect(existsSync(join(openCodexHome, CONFIG_OWNER_FILE))).toBe(false);
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("refused");
+  expect(readFileSync(path, "utf8")).toBe("user-owned\n");
+});
+test("retained catalog sync initializes an empty home before publishing its backup", async () => {
+  const path = join(codexHome, "custom-catalog.json");
+  const pristine = JSON.stringify({ models: [{ slug: "user-native", display_name: "User model" }] }) + "\n";
+  writeFileSync(path, pristine);
+  writeFileSync(join(codexHome, "config.toml"), `model_catalog_json = ${JSON.stringify(path)}\n`);
+  expect(readdirSync(openCodexHome)).toEqual([]);
+  const result = await syncCatalogModels({ port: 10100, defaultProvider: "openai", providers: {}, subagentModels: [] }, { allowWhenDesiredDisabled: true });
+  expect(result.refreshOutcome).toBe("committed");
+  const backup = catalogBackupPathFor(path);
+  expect(readFileSync(backup, "utf8")).toBe(pristine);
+  expect(manifestPaths(openCodexHome)).toContain(backup.split(/[\\/]/).pop()!);
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+  expect(existsSync(backup)).toBe(false);
+}, 15000);
+test("a published backup is recorded even when both temporary unlink attempts fail", () => {
+  expect(initializeConfigOwnership(openCodexHome)).toBe(true);
+  const name = "catalog-backup-0123456789abcdef.json";
+  const path = join(openCodexHome, name);
+  const realUnlink = filesystem.unlinkSync;
+  let attempts = 0;
+  let residual = "";
+  const mock = spyOn(filesystem, "unlinkSync").mockImplementation(candidate => {
+    if (String(candidate).startsWith(path + ".ocx.") && String(candidate).endsWith(".tmp")) {
+      attempts += 1;
+      residual = String(candidate);
+      throw Object.assign(new Error("injected sharing violation"), { code: "EACCES" });
+    }
+    return realUnlink(candidate);
+  });
+  try {
+    expect(() => withLivePermit(permit => publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })))
+      .toThrow(AtomicWriteResidualTempError);
+    expect(attempts).toBe(2);
+    expect(readFileSync(path, "utf8")).toBe("pristine\n");
+    expect(manifestPaths(openCodexHome)).toContain(name);
+    expect(existsSync(residual)).toBe(true);
+  } finally { mock.mockRestore(); }
+  // The failed cleanup is reported, not silently treated as a clean publication.
+  unlinkSync(residual);
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+  expect(existsSync(path)).toBe(false);
+});

@@ -22,11 +22,12 @@ import {
   mergeAccountCredential,
   normalizeAuthStoreBuffer,
   readOAuthRefreshIntent,
-  removeAccount,
+  rollbackCredentialWriteIfMatch,
   saveAccountCredential,
   saveCredential,
-  setActiveAccount,
+  saveCredentialWithReceipt,
   writeOAuthRefreshIntent,
+  type OAuthCredentialWriteReceipt,
   type OAuthRefreshIntent,
   type OAuthRefreshIntentCleanupPending,
 } from "./store";
@@ -1590,31 +1591,13 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
 
 interface RunLoginDeps {
   saveCredential?: typeof saveCredential;
+  saveCredentialWithReceipt?: typeof saveCredentialWithReceipt;
   saveAccountCredential?: typeof saveAccountCredential;
   loadConfig?: typeof loadConfig;
   saveConfig?: typeof saveConfig;
   settleKiroLoginTransaction?: typeof settleKiroLoginTransaction;
-  removeAccount?: typeof removeAccount;
-  setActiveAccount?: typeof setActiveAccount;
+  rollbackCredentialWrite?: typeof rollbackCredentialWriteIfMatch;
   assertCurrentOwner?: () => void;
-}
-
-/** Roll back only accounts created by this forced login, preserving concurrent refreshes of others. */
-async function rollbackForcedKiroAccountWrite(
-  provider: string,
-  previousActiveId: string | undefined,
-  previousAccountIds: ReadonlySet<string>,
-  deps: Pick<RunLoginDeps, "removeAccount" | "setActiveAccount">,
-): Promise<void> {
-  const set = getAccountSet(provider);
-  if (!set) return;
-  for (const account of [...set.accounts]) {
-    if (previousAccountIds.has(account.id)) continue;
-    await (deps.removeAccount ?? removeAccount)(provider, account.id);
-  }
-  if (previousActiveId && getAccountCredential(provider, previousActiveId)) {
-    await (deps.setActiveAccount ?? setActiveAccount)(provider, previousActiveId);
-  }
 }
 
 /** Run the login flow, persist the credential + upsert the provider entry to disk, return cred. */
@@ -1639,9 +1622,7 @@ export async function runLogin(
   // loginKiro keys its pending CLI-session transaction by object identity. Keep this exact object
   // for settlement even when source normalization below creates a derived credential object.
   const shouldRollbackKiroAccounts = provider === "kiro" && opts?.forceLogin === true;
-  const previousKiroAccounts = shouldRollbackKiroAccounts ? getAccountSet(provider) : undefined;
-  const previousKiroActiveId = previousKiroAccounts?.activeAccountId;
-  const previousKiroAccountIds = new Set(previousKiroAccounts?.accounts.map(account => account.id) ?? []);
+  let kiroCredentialWrite: OAuthCredentialWriteReceipt | null = null;
   const loginProviderConfig = preflightConfig
     ? (def.resolveProviderConfig?.(preflightConfig) ?? preflightConfig.providers[provider] ?? def.providerConfig)
     : def.providerConfig;
@@ -1674,10 +1655,19 @@ export async function runLogin(
         assertBeforePersist: deps.assertCurrentOwner,
       });
     } else {
-      await (deps.saveCredential ?? saveCredential)(provider, cred, {
+      const saveOptions = {
         preserveIdentityless: opts?.forceLogin === true,
         assertBeforePersist: deps.assertCurrentOwner,
-      });
+      };
+      if (shouldRollbackKiroAccounts && !deps.saveCredential) {
+        kiroCredentialWrite = await (deps.saveCredentialWithReceipt ?? saveCredentialWithReceipt)(
+          provider,
+          cred,
+          saveOptions,
+        );
+      } else {
+        await (deps.saveCredential ?? saveCredential)(provider, cred, saveOptions);
+      }
     }
     if (provider !== "chatgpt") {
       // Re-run against post-credential state so same-provider API-key additions, removals,
@@ -1695,9 +1685,9 @@ export async function runLogin(
     }
   } catch (error) {
     const errors: unknown[] = [error];
-    if (shouldRollbackKiroAccounts) {
+    if (kiroCredentialWrite) {
       try {
-        await rollbackForcedKiroAccountWrite(provider, previousKiroActiveId, previousKiroAccountIds, deps);
+        await (deps.rollbackCredentialWrite ?? rollbackCredentialWriteIfMatch)(kiroCredentialWrite);
       } catch (rollbackError) {
         errors.push(rollbackError);
       }

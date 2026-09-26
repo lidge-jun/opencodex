@@ -1226,7 +1226,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const committed = persistCommittedDesktopGateway(config, state.profile, result.fingerprint);
         const modeWarning = committed.ok ? undefined : `Gateway applied, but its mode/profile state was not saved (${committed.reason}).`;
         // The durable marker describes the committed gateway even if old-mode cleanup fails.
-        const firstPartyRemoved = removeDesktopFirstParty();
+        const firstPartyRemoved = removeDesktopFirstParty(loadConfig());
         if (!firstPartyRemoved.ok) {
           return { response: jsonResponse({
             error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); first-party cleanup remains incomplete after gateway apply.`,
@@ -1235,10 +1235,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
             ...(modeWarning ? { warning: modeWarning } : {}),
           }, 500) };
         }
-        return { result, committed, modeWarning, pickerOff };
+        return { result, committed, modeWarning, pickerOff, firstPartyRemoved };
       });
       if (outcome.response) return outcome.response;
-      const { result, committed, modeWarning, pickerOff } = outcome as Exclude<typeof outcome, { response: Response }>;
+      const { result, committed, modeWarning, pickerOff, firstPartyRemoved } = outcome as Exclude<typeof outcome, { response: Response }>;
       const { claudeDesktopPolicyWarning, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
       const policyState = deps.probeClaudeDesktopPolicy
         ? await deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
@@ -1247,7 +1247,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const pickerWarning = pickerOff.residual?.length
         ? `Picker mode cleanup is incomplete (${pickerOff.residual.join(", ")}); run ocx claude desktop picker off.`
         : undefined;
-      const warning = [modeWarning, policyWarning, pickerWarning].filter(Boolean).join(" ");
+      const warning = [modeWarning, policyWarning, pickerWarning,
+        firstPartyRemoved.retainedFor === "cli"
+          ? "Shared first-party settings remain for Claude Code CLI." : undefined].filter(Boolean).join(" ");
       return jsonResponse({
         ok: true,
         mode: "gateway",
@@ -1405,7 +1407,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
     const isDisabled = (provider: string, id: string) =>
@@ -1432,9 +1434,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
       aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
     }
-    const contextWindows = buildClaudeContextWindows([...visibleNativeSlugs(config)], models, nativeContextLimits(config));
-    const webSearchOverride = config.claudeCode?.webSearchSidecar;
-    const visionOverride = config.claudeCode?.visionSidecar;
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
@@ -1442,8 +1441,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { authModeIntent, resolveClaudeAuthMode } = await import("../../claude/auth-mode");
     const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config)));
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
+    const contextWindows = buildClaudeContextWindows(
+      [...visibleNativeSlugs(config)],
+      models,
+      nativeContextLimits(config),
+      nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
+    );
+    const webSearchOverride = config.claudeCode?.webSearchSidecar;
+    const visionOverride = config.claudeCode?.visionSidecar;
+    const { firstPartyDesired, readFirstPartyProxyStatus } = await import("../../claude/first-party-settings");
+    const { observeClaudeDesktopMode } = await import("../../claude/desktop-first-party");
+    const { claudeInterceptEnabled, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
+    const desired = firstPartyDesired(config, observeClaudeDesktopMode(config));
+    const bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
+    const eligible = claudeInterceptEnabled(config);
+    const sharedProxy = readFirstPartyProxyStatus(config, bound?.proxyPort ?? null);
     return jsonResponse({
       enabled: config.claudeCode?.enabled !== false,
+      cliFirstParty: config.claudeCode?.cliFirstParty === true,
+      cliFirstPartyApplied: config.claudeCode?.cliFirstParty === true && sharedProxy === "live",
+      desktopFirstParty: desired.desktop,
+      interceptEligible: eligible,
+      interceptRunning: bound !== null && eligible,
+      sharedProxy,
       // Three-state intent (devlog 260726_claude_auth_auto): an absent key is AUTO, not
       // subscription. The old coercion made every save convert an untouched auto config
       // into a sticky manual subscription with no way back.
@@ -1500,7 +1520,110 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
+      return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
+    if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
+      return jsonResponse({ error: "cliFirstParty must be sent alone", code: "cli_first_party_not_alone" }, 400);
+    if (body.cliFirstParty !== undefined) {
+      const { claudeInterceptEnabled, claudeInterceptProxyPort, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
+      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
+      const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
+      const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
+      const bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
+      if (body.cliFirstParty) {
+        if (!claudeInterceptEnabled(config)) return jsonResponse({ error: "Claude intercept is disabled", code: "intercept_disabled" }, 409);
+        if (bound === null) return jsonResponse({ error: "Claude intercept is unavailable", code: "intercept_unavailable" }, 409);
+        const targetPort = claudeInterceptProxyPort(config, config.port ?? 10100);
+        if (targetPort !== bound.proxyPort) return jsonResponse({
+          error: `Claude intercept port mismatch (configured ${targetPort}, bound ${bound.proxyPort}); restart needed`,
+          code: "intercept_unavailable",
+        }, 409);
+        let inspection: ReturnType<typeof inspectDesktopFirstParty>["settings"];
+        try { inspection = inspectDesktopFirstParty(config).settings; }
+        catch { return jsonResponse({ error: "Claude settings are unreadable", code: "unreadable" }, 500); }
+        if (inspection.kind === "foreign") return jsonResponse({ error: "Claude settings env is foreign", code: "foreign_env" }, 409);
+        if (inspection.kind === "unreadable") return jsonResponse({ error: "Claude settings are unreadable", code: "unreadable" }, 500);
+      }
+      let restoreSettings: (() => boolean) | undefined;
+      try { if (body.cliFirstParty) restoreSettings = captureDesktopFirstPartyRollback(config); }
+      catch { return jsonResponse({ error: "Claude settings are unreadable", code: "unreadable" }, 500); }
+      type FirstPartyMutation =
+        | { refusal: { error: string; code: "intercept_disabled" | "intercept_unavailable" } }
+        | { claudeCode: OcxConfig["claudeCode"]; previous: { present: boolean; value: boolean }; pinnedMode: "first-party" | "gateway" | undefined };
+      let outcome: ReturnType<typeof mutatePersistedConfig<FirstPartyMutation>>;
+      try {
+        outcome = mutatePersistedConfig<FirstPartyMutation>(persisted => {
+        if (body.cliFirstParty) {
+          if (!claudeInterceptEnabled(persisted)) return { changed: false, value: {
+            refusal: { error: "Claude intercept is disabled", code: "intercept_disabled" as const } } };
+          const persistedPort = claudeInterceptProxyPort(persisted, persisted.port ?? 10100);
+          if (bound === null || persistedPort !== bound.proxyPort) return { changed: false, value: {
+            refusal: { error: `Claude intercept port mismatch (configured ${persistedPort}, bound ${bound?.proxyPort ?? "none"}); restart needed`,
+              code: "intercept_unavailable" as const } } };
+        }
+        const before = structuredClone(persisted);
+        const previous = { present: Object.hasOwn(persisted.claudeCode ?? {}, "cliFirstParty"),
+          value: persisted.claudeCode?.cliFirstParty === true };
+        const pinnedMode = body.cliFirstParty && persisted.claudeCode?.desktopMode === undefined
+          ? resolveClaudeDesktopMode(before, observeClaudeDesktopMode(before)) : undefined;
+        const nextBlock = { ...(persisted.claudeCode ?? {}) };
+        if (body.cliFirstParty) nextBlock.cliFirstParty = true;
+        else delete nextBlock.cliFirstParty;
+        if (pinnedMode) nextBlock.desktopMode = pinnedMode;
+        commitClaudeCodeBlock(persisted, nextBlock);
+        return { changed: true, value: { claudeCode: structuredClone(persisted.claudeCode), previous, pinnedMode } };
+        });
+      } catch { return jsonResponse({ error: "Could not save Claude settings", code: "write_failed" }, 500); }
+      if (outcome.status === "unavailable") return jsonResponse({ error: "Could not save Claude settings", code: "write_failed" }, 500);
+      const committed = outcome.value;
+      if ("refusal" in committed) return jsonResponse(committed.refusal, 409);
+      adoptPersistedClaudeCode(config, committed.claudeCode);
+      const live = { ...(config.claudeCode ?? {}) };
+      if (body.cliFirstParty) live.cliFirstParty = true; else delete live.cliFirstParty;
+      if (committed.pinnedMode) live.desktopMode = committed.pinnedMode;
+      config.claudeCode = live;
+      let result: ReturnType<typeof reconcileClaudeFirstPartySettings> | undefined;
+      try { result = (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
+        firstPartyDesired(config, observeClaudeDesktopMode(config))); }
+      catch { /* An unexpected settings failure is mapped after conditional rollback. */ }
+      if (!result?.ok) {
+        let settingsRestored = true;
+        if (body.cliFirstParty) {
+          try { settingsRestored = restoreSettings?.() ?? false; } catch { settingsRestored = false; }
+          let rollback: ReturnType<typeof mutatePersistedConfig<OcxConfig["claudeCode"]>>;
+          try {
+            rollback = mutatePersistedConfig(persisted => {
+            const block = { ...(persisted.claudeCode ?? {}) };
+            if (block.cliFirstParty === true) {
+              if (committed.previous.present) block.cliFirstParty = committed.previous.value;
+              else delete block.cliFirstParty;
+            }
+            if (committed.pinnedMode && block.desktopMode === committed.pinnedMode)
+              delete block.desktopMode;
+            persisted.claudeCode = block;
+            return { changed: true, value: structuredClone(block) };
+            });
+          } catch { return jsonResponse({ error: "Claude settings rollback failed", code: "write_failed",
+            warnings: ["settings_rollback_incomplete"] }, 500); }
+          if (rollback.status === "unavailable") return jsonResponse({ error: "Claude settings rollback failed", code: "write_failed",
+            warnings: ["settings_rollback_incomplete"] }, 500);
+          adoptPersistedClaudeCode(config, rollback.value);
+        }
+        const code = result?.reason ?? "write_failed";
+        return jsonResponse({ error: "Claude first-party reconciliation failed", code,
+          ...(!body.cliFirstParty && code === "unreadable"
+            ? { cliFirstParty: false, warnings: ["settings_residual"] } : {}),
+          ...(body.cliFirstParty && !settingsRestored
+            ? { warnings: ["settings_rollback_incomplete"] } : {}) },
+          code === "intercept_disabled" || code === "foreign_env" ? 409 : 500);
+      }
+      const finalDesired = firstPartyDesired(config, observeClaudeDesktopMode(config));
+      const residual = !finalDesired.desktop && !finalDesired.cli
+        && readFirstPartyProxyStatus(config, bound?.proxyPort ?? null) !== "none";
+      return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
+        cliFirstParty: body.cliFirstParty, warnings: residual ? ["settings_residual"] : [] });
+    }
     for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
       const section = body[field];
       if (section === undefined || section === null) continue;

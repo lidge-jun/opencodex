@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import type { AttemptRecoveryKind } from "../../src/usage/log";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -664,13 +665,16 @@ describe("runWithImageBridge", () => {
         // First rotation returns a new adapter that also 429s; the exhausted budget must not
         // re-arm for it. Second call returns null to terminate the pool.
         return rotations === 1
-          ? ({
-              ...mockAdapter,
-              fetchResponse: async () => {
-                sends += 1;
-                return new Response("{}", { status: 429 });
-              },
-            } as ProviderAdapter)
+          ? {
+              adapter: {
+                ...mockAdapter,
+                fetchResponse: async () => {
+                  sends += 1;
+                  return new Response("{}", { status: 429 });
+                },
+              } as ProviderAdapter,
+              recoveryKind: "key-429" as const,
+            }
           : null;
       },
       onAttemptSend: recovery => {
@@ -927,7 +931,7 @@ describe("runWithImageBridge", () => {
         retryParsed._kiroAuthContext = { apiRegion: "ap-southeast-2", profileArn: "account-b" };
         delete retryParsed._providerContinuation;
         activeAdapter = secondAdapter;
-        return secondAdapter;
+        return { adapter: secondAdapter, recoveryKind: "key-429" };
       },
     });
     const sse = await response.text();
@@ -937,6 +941,50 @@ describe("runWithImageBridge", () => {
     expect(retryState?._kiroAuthContext).toEqual({ apiRegion: "ap-southeast-2", profileArn: "account-b" });
     expect(retryState?._providerContinuation).toBeUndefined();
     expect(sse).toContain("after rotate");
+  });
+
+  // An account rotation and a key rotation are different operator-facing events, and the
+  // rotated fetch's recovery kind is the only place the attempt row records which happened.
+  // The loop used to hardcode `key-429` for both.
+  test("429 rotation reports the rotator's recovery kind", async () => {
+    const recoveryKindsFor = async (
+      rotation: (next: ProviderAdapter) => { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind },
+    ): Promise<(AttemptRecoveryKind | undefined)[]> => {
+      let fetchCalls = 0;
+      const sends: (AttemptRecoveryKind | undefined)[] = [];
+      const makeAdapter = (label: string): ProviderAdapter => ({
+        name: label,
+        buildRequest: async () => ({ url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" }),
+        fetchResponse: async () => {
+          fetchCalls++;
+          if (fetchCalls === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
+          streamQueue = [[{ type: "text_delta", text: "after rotate" }, { type: "done" }]];
+          return new Response("{}", { status: 200 });
+        },
+        parseStream: async function* (): AsyncGenerator<AdapterEvent> {
+          const events = streamQueue.shift();
+          if (events) for (const e of events) yield e;
+        },
+      });
+      const secondAdapter = makeAdapter("after-rotate");
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: makeAdapter("before-rotate"),
+        plan,
+        onAttemptSend: recovery => { sends.push(recovery); },
+        on429: () => rotation(secondAdapter),
+      });
+      expect(await response.text()).toContain("after rotate");
+      return sends;
+    };
+
+    // A rotator that crossed accounts says so, and the rotated send carries that kind.
+    expect(await recoveryKindsFor(next => ({ adapter: next, recoveryKind: "oauth-account-429" })))
+      .toEqual([undefined, "oauth-account-429"]);
+    expect(await recoveryKindsFor(next => ({ adapter: next, recoveryKind: "anthropic-oauth-429" })))
+      .toEqual([undefined, "anthropic-oauth-429"]);
+    expect(await recoveryKindsFor(next => ({ adapter: next, recoveryKind: "key-429" })))
+      .toEqual([undefined, "key-429"]);
   });
 });
 

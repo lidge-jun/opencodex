@@ -143,8 +143,11 @@ export async function executeResponsesSidecars(
   // Web-search's loop only supports buildRequest/fetch/parseStream — NOT adapter.runTurn. Sending
   // Cursor/runTurn requests into runWithWebSearch produces empty HTTP failures. So:
   //   - non-runTurn: web-search wins over image when both eligible (documented priority)
-  //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
-  //     can proceed for web-search-only turns
+  //   - runTurn: a search plan takes priority over media bridges and is executed
+  //     by executeResponsesRunTurn; the fetch loop below remains fetch-only.
+  // LOCAL PATCH (runturn-websearch): runTurn adapters run their own web-search
+  // loop inside executeResponsesRunTurn (src/web-search/run-turn-loop.ts); the
+  // fetch-path loop below stays non-runTurn-only.
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
@@ -157,7 +160,12 @@ export async function executeResponsesSidecars(
     retryAfter: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
-  ): Promise<ProviderAdapter | null> => {
+  ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
+    // Which credential axis actually moved. The main routed path already reports these three
+    // separately (`adapter-dispatch`: key-429 / anthropic-oauth-429 / oauth-account-429); the
+    // sidecar loops used to flatten all three to `key-429`, so an account rotation read as a key
+    // rotation in the attempt row and in the Logs UI.
+    let recoveryKind: AttemptRecoveryKind = "key-429";
     const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
@@ -206,6 +214,7 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
+      recoveryKind = "oauth-account-429";
       hop.permit?.use();
     } else if (
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
@@ -249,6 +258,7 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
+      recoveryKind = "anthropic-oauth-429";
       hop.permit?.use();
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
@@ -278,9 +288,9 @@ export async function executeResponsesSidecars(
       provider: route.provider,
       adapterName: rotatedAdapter.name,
     });
-    return rotatedAdapter;
+    return { adapter: rotatedAdapter, recoveryKind };
   };
-  if ((imgPlan || vidPlan) && canRunWebSearch) {
+  if ((imgPlan || vidPlan) && wsPlan) {
     // Web search takes priority when both are active — the media bridge cannot run
     // alongside runWithWebSearch. Surface a runtime signal so the user knows their
     // configured video/image bridge was skipped for this turn, rather than silently
@@ -288,7 +298,7 @@ export async function executeResponsesSidecars(
     if (vidPlan) console.warn("[videos] video bridge skipped: web search is active for this turn");
     if (imgPlan) console.warn("[images] image bridge skipped: web search is active for this turn");
   }
-  if ((imgPlan || vidPlan) && (!wsPlan || transportState.adapter.runTurn)) {
+  if ((imgPlan || vidPlan) && !wsPlan) {
     // The image bridge detects a hosted image_generation tool and requires streaming.
     // The video bridge activates from config and injects a tool — it also needs streaming
     // (the loop returns SSE). For video-only (no imgPlan) on a non-streaming request, skip

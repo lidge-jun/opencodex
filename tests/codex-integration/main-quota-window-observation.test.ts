@@ -255,7 +255,7 @@ describe("declared short-window producer evidence", () => {
     { name: "metadata-only short window", usage: undefined, weekly: false },
   ];
   for (const sample of cases) {
-    test(`owned WHAM fetch preserves ${sample.name} as unknown short-window policy`, async () => {
+    test(`owned WHAM fetch preserves ${sample.name} as an unknown short window while weekly99 blocks`, async () => {
       resetLifecycleDrainStateForTests();
       const aclOk = { success: true, exitCode: 0, timedOut: false, stdout: "" };
       setIcaclsRunnerForTests(() => aclOk);
@@ -300,7 +300,8 @@ describe("declared short-window producer evidence", () => {
         expect(getMainPolicyQuota()).not.toHaveProperty("shortPercent");
         expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
         expect(matchesMainQuotaCredential(accessToken, "fixture-main-a")).toBe(true);
-        expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "unknown" });
+        // The unknown 5h reading cannot hide the retained weekly99: either window blocks alone.
+        expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "blocked" });
         // Unknown metadata replaces the legacy tuple but must retain trusted policy short99.
         const firstShortObservedAt = observationTime;
         await fetchMainAccountInfo(true);
@@ -320,7 +321,9 @@ describe("declared short-window producer evidence", () => {
         expect(calls).toBe(5);
         expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortResetAt: 4_000_000_000, shortObservedAt: observationTime });
         expect(getAccountQuota(MAIN)?.shortObservedAt).toBe(observationTime);
-        expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("ready");
+        // A fresh 5h 0% releases only the 5h window; the retained weekly99 still blocks.
+        expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+        expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
       } finally {
         fetchSpy.mockRestore();
         resetLifecycleDrainStateForTests();
@@ -334,7 +337,7 @@ describe("declared short-window producer evidence", () => {
       }
     });
 
-    test(`headers preserve ${sample.name} instead of falling back to weekly99`, () => {
+    test(`headers preserve ${sample.name} as an unknown short window while weekly99 blocks`, () => {
       const writer = writerFor();
       setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99 }, undefined, writer);
       expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("blocked");
@@ -349,7 +352,7 @@ describe("declared short-window producer evidence", () => {
       });
       expect(getMainPolicyQuota()).not.toHaveProperty("shortPercent");
       expect(getMainPolicyQuota()).not.toHaveProperty("shortObservedAt");
-      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "unknown" });
+      expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true })).toEqual({ enabled: true, state: "blocked" });
       const firstShortObservedAt = observationTime;
       applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({
         "x-codex-primary-used-percent": "99", "x-codex-primary-window-minutes": "300",
@@ -372,7 +375,8 @@ describe("declared short-window producer evidence", () => {
       expect(getMainPolicyQuota()).toMatchObject({ shortPercent: 0, shortWindowSeconds: 3_600,
         shortResetAt: 4_000_000_000, shortObservedAt: observationTime });
       expect(getAccountQuota(MAIN)?.shortObservedAt).toBe(observationTime);
-      expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("ready");
+      expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+      expect(getMainAccountHardLockStatus(enabled, 3_000_000_000_000 - 1).state).toBe("blocked");
     });
   }
 });

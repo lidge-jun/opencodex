@@ -15,8 +15,16 @@ import {
   SYNTHETIC_VALUE_PATH,
 } from "./constants";
 import { applySyntheticPatch, parseSyntheticPatchV1 } from "./patch";
-import { fabricProducerIsolationLimits, runIsolatedFabricProducer } from "./producer-isolate";
-import { assertNotUnderUserRepo, createSyntheticScratch, type ScratchTree } from "./scratch";
+import {
+  fabricProducerIsolationLimits,
+  isUnconfirmedProducerTermination,
+  runIsolatedFabricProducer,
+} from "./producer-isolate";
+import {
+  assertNotUnderUserRepo,
+  createSyntheticScratch,
+  type ScratchTree,
+} from "./scratch";
 import {
   buildTaskSubjectV1,
   sandboxProfileDigest,
@@ -24,6 +32,7 @@ import {
   taskSubjectId,
   verifierManifestDigest,
 } from "./subject";
+
 import type {
   FabricExecutionAuthority,
   FabricHarnessProducerKind,
@@ -183,6 +192,9 @@ async function runFabricSyntheticPatchTaskInternal(input: {
   let scratch: ScratchTree | undefined;
   let producerCompletedAt = startedAt;
   let lastActivityAt = startedAt;
+  // Rejected while the producer child might still be running: scratch must not
+  // be removed under it; absence of a termination proof requires manual review.
+  let producerTerminationUnconfirmed = false;
 
   try {
     scratch = createSyntheticScratch(input.configDir);
@@ -236,6 +248,7 @@ async function runFabricSyntheticPatchTaskInternal(input: {
       const completedAt = input.now?.() ?? Date.now();
       usage.elapsedMs = completedAt - startedAt;
       usage.inactiveMs = Math.max(0, completedAt - lastActivityAt);
+      producerTerminationUnconfirmed = isUnconfirmedProducerTermination(error);
       if (error instanceof FabricTaskError) {
         const failure = failureFromError(error);
         return {
@@ -418,7 +431,16 @@ async function runFabricSyntheticPatchTaskInternal(input: {
       }),
     };
   } finally {
-    scratch?.cleanup();
+    if (scratch) {
+      if (producerTerminationUnconfirmed) {
+        // No writes into producer-controlled scratch after uncertain termination.
+        // Age and later pipe closure cannot prove every descendant has exited.
+        // Retain the tree, including across parent exit and later task creation.
+        console.warn("[lab] Producer termination unconfirmed; scratch retained for manual review.");
+      } else {
+        scratch.cleanup();
+      }
+    }
   }
 }
 

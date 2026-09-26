@@ -220,9 +220,18 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const apply = (result as { codexWebSearch?: { applied?: boolean; reason?: string; detail?: string } } | null)?.codexWebSearch;
   if (apply && apply.reason !== "not_requested") {
     const detail = typeof apply.detail === "string" && apply.detail.length > 0 ? ` Details: ${apply.detail}` : "";
+    // `ocx sync` re-runs the same injection the external provider owns — the retry
+    // advice is meaningless on that outcome, same as the Desktop-switch report.
+    const retry = apply.reason === "external_provider"
+      ? ""
+      : apply.reason === "ownership_undetermined"
+      ? " Resolve the reported config.toml read error, then inspect 'ocx system settings --json'."
+      : apply.reason === "integration_disabled"
+      ? " Enable Codex integration before applying the stored settings."
+      : " Run 'ocx sync' to apply the stored settings.";
     lines.push(apply.applied === true
       ? "Codex config: ~/.codex/config.toml was rewritten."
-      : `Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail} Run 'ocx sync' to apply the stored settings.`);
+      : `Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail}${retry}`);
   }
   printData(result, wantsJson, lines);
 }

@@ -1659,9 +1659,10 @@ async function readUsageEntriesIncrementally(
       // would make a byte-truncated read claim rows were dropped when none were.
       entriesTruncated: entriesDropped > 0,
       entriesDropped,
-      // The digest must describe exactly the region the returned rows came from, which
-      // is the post-trim window, not the pre-trim one.
-      prefixDigest: usageRegionDigest(fd, rowsBeginAtBytes, size) ?? "",
+      // Reuse this read's verified digest only for identical bounds. Growth or trimming
+      // needs a new digest of the returned region; metadata alone never proves reuse.
+      prefixDigest: rowsBeginAtBytes === retained.rowsBeginAtBytes && size === retained.coveredThroughBytes
+        ? covered : usageRegionDigest(fd, rowsBeginAtBytes, size) ?? "",
       entryLengths: lengths,
       trailingSkippedBytes: appendedTrailingSkipped,
       rowsBeginAtBytes,

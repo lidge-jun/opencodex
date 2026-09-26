@@ -157,6 +157,7 @@
       "scope": "Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget.",
       "documents": [
         "src/adapters/",
+        "src/chat/",
         "src/lib/",
         "src/server/"
       ]
@@ -346,6 +347,7 @@
       "scope": "Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools.",
       "documents": [
         "src/adapters/",
+        "src/chat/",
         "src/responses/"
       ]
     },
@@ -414,6 +416,7 @@
       "title": "Client Integrations",
       "scope": "Third-party client config ownership, snapshots, refresh, disable, and restore.",
       "documents": [
+        "src/cli/",
         "src/clients/",
         "src/integrations/",
         "src/lib/"

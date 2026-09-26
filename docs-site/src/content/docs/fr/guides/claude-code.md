@@ -54,7 +54,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Seuil de compactage du contexte automatique (par défaut `829800`) ; injecté uniquement lorsque le contexte automatique est activé |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (facultatif) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (facultatif ; ancien `ANTHROPIC_SMALL_FAST_MODEL` également) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (facultatif) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]` natif |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
@@ -140,22 +140,24 @@ Anthropic peut y voir une violation de ses conditions et suspendre votre compte.
 le choix par défaut ; n'activez first-party que si vous acceptez ce risque.
 :::
 
-Desktop reste connecté à claude.ai : Chat, les connecteurs et le contrôle à distance continuent de
-fonctionner. OpenCodex écrit seulement `HTTPS_PROXY` et `NODE_EXTRA_CA_CERTS` dans le bloc `env` de
-`~/.claude/settings.json` (ou le répertoire `CLAUDE_CONFIG_DIR`). Le Claude Code lancé par l'onglet
-Code, ses sous-agents et la CLI `claude` passent par le proxy local ; les autres chemins de
-`api.anthropic.com` sont relayés vers Anthropic. L'AC n'est jamais installée dans le magasin de
-confiance du système ; seuls les processus Node qui lisent `NODE_EXTRA_CA_CERTS` lui font confiance.
+Le mode first-party de Desktop route son onglet Code et ses sous-agents via OpenCodex. La CLI Claude Code autonome possède un interrupteur distinct. Les deux lisent les mêmes réglages de proxy et d’autorité dans `settings.json` : si un seul mode est actif, l’autre client traverse encore le proxy local, où TLS se termine, mais ses requêtes Messages sont relayées sans modification vers Anthropic.
 
 Le mode est enregistré dans `claudeCode.desktopMode`. Une installation ayant déjà appliqué le mode
 first-party, même avant cette version, le conserve ; un profil passerelle existant reste aussi en
 passerelle. Sans mode explicite, le profil passerelle sélectionné et détenu par OpenCodex, puis son
 empreinte enregistrée, priment sur les réglages first-party détenus dans `settings.json` ; sans ces
-indices, le mode est passerelle. La synchronisation du catalogue et la mise à jour de la liste des
+indices, le mode est passerelle. Un environnement écrit uniquement pour le first-party de la CLI ne constitue pas une preuve que Desktop est en mode first-party. La synchronisation du catalogue et la mise à jour de la liste des
 modèles n'écrivent jamais un profil passerelle sur une installation first-party. Si
 `claudeCode.intercept.enabled: false`, l'application d'un mode first-party existant est refusée
 (`intercept_disabled`) ; une nouvelle installation applique la passerelle. Un proxy d'entreprise
 étranger n'est pas écrasé. Quittez complètement Desktop puis rouvrez-le après un changement.
+
+### First-party de la CLI Claude Code
+
+Activez l’interrupteur dans Claude → Code ou lancez `ocx claude config set --first-party on` ; utilisez `off` pour désactiver. L’activation est refusée si le proxy local est indisponible, si l’autorité ne peut être préparée, si les réglages sont illisibles ou si des clés appartiennent à un autre programme. La désactivation reste enregistrable. Avec le seul first-party Desktop actif, définissez `NO_PROXY='*'` dans le shell pour un terminal entièrement natif. Le risque pour le compte décrit ci-dessus s’applique aussi à la CLI.
+Désactiver le routage Claude conserve les variables de proxy gérées. Tant que le listener fonctionne, toutes les requêtes Messages sont relayées sans modification ; après son arrêt, `claude` ne peut plus se connecter avant le lancement d’OpenCodex ou la désactivation du first-party Desktop/CLI. Le lancement natif via `ocx claude` ne définit `NO_PROXY=*` que pour un environnement géré sans proxy HTTPS hérité d’un autre programme. Sinon il conserve ce proxy et avertit que l’interception définie dans les réglages reste active ; désactivez le first-party ou retirez ce réglage.
+L’interface distingue les réglages illisibles (unknown), une URL opencodex avec jeton mais une AC étrangère (foreign : corrigez HTTPS_PROXY / NODE_EXTRA_CA_CERTS à la main) et le routage Claude désactivé avec un listener encore actif qui relaie sans modification (disabled : désactivez first-party avant le redémarrage). Sans listener, l’état est stopped ; avec une AC gérée mais un port ou jeton incorrect, il est broken. Avec le first-party actif et une interception indisponible, stopped et broken affichent routingOff : le routage Claude ou l’interception est désactivé, ou cette machine est cliente d’un autre hub opencodex ; réactivez l’interception ici ou désactivez first-party pour supprimer les réglages. Si l’interception est disponible, stopped demande de lancer opencodex et broken conseille `ocx ensure` ou un redémarrage. La CLI activée sans proxy est non appliquée ; un seul client activé avec un proxy opérationnel partage le relais ; aucun client activé avec un proxy restant produit un avertissement de réglage résiduel.
+unknown signifie qu’opencodex ne peut pas déterminer si les réglages pointent encore vers son proxy. Un proxy sans jeton sur 127.0.0.1 avec une AC étrangère est local : sa propriété est incertaine ; supprimez HTTPS_PROXY de ~/.claude/settings.json si vous ne l’utilisez plus. disabled exige des réglages appliqués correspondant au listener ; un port ou jeton différent donne broken même si le routage est désactivé.
 
 ### Mode picker : modèles opencodex dans le sélecteur Code first-party
 
@@ -469,6 +471,8 @@ Les valeurs de configuration invalides définies manuellement reviennent à 829,
 `ANTHROPIC_MODEL`, les quatre variables `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` et l'ancienne variable
 `ANTHROPIC_SMALL_FAST_MODEL`. Le modèle Haiku effectif vaut `tierModels.haiku ?? smallFastModel` et alimente
 les deux variables Haiku.
+
+Quand `ocx claude` se lance en mode abonnement, la connexion propre de Claude Code envoie un identifiant Claude nu comme `claude-sonnet-5` directement à Anthropic ; ces identifiants prennent donc leur fenêtre de contexte dans le registre des fournisseurs, quoi qu'un autre fournisseur indique pour le même identifiant. Un emplacement Opus, Sonnet ou Fable non défini reçoit alors l'identifiant natif vers lequel Claude Code résout cet alias, avec le marqueur `[1m]`, car derrière une passerelle Claude Code compte un identifiant sans marqueur à 200k. Une ligne `anthropic` plafonnée sous 1M ou une entrée `claudeCode.modelMap` laisse son identifiant sans marqueur, et Haiku n'est jamais rempli ni marqué. Avec une authentification par proxy ou `nativePassthrough` désactivé, c'est le routeur qui décide, et seule la fenêtre d'une ligne routée compte. L'environnement système et le fichier du shell laissent les emplacements non définis vides, car leurs valeurs atteignent aussi les lancements qui passent par un hub.
 
 Lorsque `tierModels.haiku` et `smallFastModel` sont absents, OpenCodex laisse les deux variables auxiliaires non définies ; Claude Code choisit ensuite son modèle d'assistance natif (actuellement Sonnet), qui peut entraîner des frais de fournisseur natif.
 

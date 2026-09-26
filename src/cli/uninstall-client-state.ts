@@ -6,6 +6,7 @@ import { inspectRemoteDesktopCleanup, readDesktopDisconnectReceipt } from "../cl
 import { removeOwnedConfigState, type ConfigRemovalResult } from "../lib/config-ownership";
 import { windowsSecretAclReapPendingAtOrBelow } from "../lib/windows-secret-acl";
 import { sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
+import { cleanupOwnedIntegrationsBeforeUninstall } from "./uninstall-integrations";
 
 export interface UninstallClientStateDeps {
   readConnection: typeof readClientConnectionState;
@@ -13,6 +14,7 @@ export interface UninstallClientStateDeps {
   readReceipt: typeof readDesktopDisconnectReceipt;
   disconnect: (options?: Parameters<typeof disconnectClient>[0]) => Promise<unknown>;
   withLifecycle: typeof withClientLifecycle;
+  cleanupIntegrations: typeof cleanupOwnedIntegrationsBeforeUninstall;
   remove: () => ConfigRemovalResult;
   /** True while a timed-out icacls child still owns a path at or below the config directory. */
   aclReapPending: (rootPath: string) => boolean;
@@ -24,6 +26,7 @@ const defaults: UninstallClientStateDeps = {
   readReceipt: readDesktopDisconnectReceipt,
   disconnect: options => disconnectClient(options),
   withLifecycle: withClientLifecycle,
+  cleanupIntegrations: cleanupOwnedIntegrationsBeforeUninstall,
   remove: () => removeOwnedConfigState(getConfigDir()),
   aclReapPending: rootPath => windowsSecretAclReapPendingAtOrBelow(rootPath),
 };
@@ -85,6 +88,9 @@ export async function removeOwnedConfigAfterDesktopCleanup(
     if (deps.aclReapPending(getConfigDir())) {
       throw new Error("Client cleanup refused: ACL hardening still owns a path under the config directory.");
     }
+    // Integration records are the authority that permits removing only OpenCodex-owned fragments
+    // from third-party files. Delete them only after every recorded contribution is retired.
+    await deps.cleanupIntegrations();
     return deps.remove();
   });
 }

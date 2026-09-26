@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { applyDesktopFirstParty } from "../../src/claude/desktop-first-party";
 import { claudeDesktopIntegrationEnabled } from "../../src/codex/desired-state";
 import { pickerCaCertPath, pickerCaFingerprints, pickerStateDir } from "../../src/claude/intercept/picker-ca";
+import { readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
 import type { PickerListenerOptions } from "../../src/claude/intercept/picker-listener";
 import {
   createPickerRuntime,
@@ -277,7 +278,9 @@ function connectStatusLine(port: number, host: string, userAgent?: string): Prom
     let buffered = "";
     const socket = connect({ host: "127.0.0.1", port }, () => {
       const ua = userAgent ? `User-Agent: ${userAgent}\r\n` : "";
-      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n${ua}\r\n`);
+      const token = readClaudeInterceptProxyToken(root) ?? "";
+      const auth = `Proxy-Authorization: Basic ${Buffer.from(`opencodex:${token}`).toString("base64")}\r\n`;
+      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n${auth}${ua}\r\n`);
     });
     const done = () => { socket.destroy(); resolve(buffered.split("\r\n")[0] ?? ""); };
     socket.on("data", chunk => { buffered += chunk.toString("latin1"); if (buffered.includes("\r\n")) done(); });

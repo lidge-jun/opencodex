@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
-import { mkdtempSync, readdirSync, readFileSync} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
@@ -14,6 +14,7 @@ import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 
 // Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
 // default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
@@ -77,6 +78,9 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(r.status).toBe(200);
     const d = await r.json() as Record<string, any>;
     expect(d.enabled).toBe(true);
+    expect(d).toMatchObject({ cliFirstParty: false, cliFirstPartyApplied: false,
+      desktopFirstParty: false, interceptEligible: true, sharedProxy: "none" });
+    expect(typeof d.interceptRunning).toBe("boolean");
     expect(d.model).toBe("");
     expect(d.smallFastModel).toBe("");
     expect(d.modelMap).toEqual({});
@@ -87,6 +91,319 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
   } finally {
     await server.stop(true);
   }
+});
+
+test("CLI first-party rejects mixed bodies before saving", async () => {
+  const server = startServer(0);
+  try {
+    const before = loadConfig().claudeCode;
+    for (const body of [{ enabled: false, cliFirstParty: true },
+      { cliFirstParty: true, autoCompactWindow: -1 }]) {
+      const response = await fetch(new URL("/api/claude-code", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "cli_first_party_not_alone" });
+      expect(loadConfig().claudeCode).toEqual(before);
+    }
+  } finally { await server.stop(true); }
+});
+
+test("GET classifies settings against the injected bound listener", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  current.claudeCode = { ...current.claudeCode, cliFirstParty: true, desktopMode: "gateway" };
+  saveConfig(current);
+  const env = desktopFirstPartyTarget(current).env;
+  const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  let bound: { proxyPort: number; caCertPath: string; pickerProxyPort: null } | null = null;
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () => bound } });
+  try {
+    const get = async () => (await (await fetch(new URL("/api/claude-code", server.url))).json()) as Record<string, unknown>;
+    expect(await get()).toMatchObject({ sharedProxy: "none", cliFirstPartyApplied: false,
+      desktopFirstParty: false, interceptEligible: true, interceptRunning: false });
+    writeFileSync(settingsPath, JSON.stringify({ env }));
+    expect(await get()).toMatchObject({ sharedProxy: "stopped", cliFirstPartyApplied: false });
+    bound = { proxyPort: 10200, caCertPath: env.NODE_EXTRA_CA_CERTS, pickerProxyPort: null };
+    expect(await get()).toMatchObject({ sharedProxy: "live", cliFirstPartyApplied: true, interceptRunning: true });
+    bound = { ...bound, proxyPort: 10201 };
+    expect(await get()).toMatchObject({ sharedProxy: "broken", cliFirstPartyApplied: false });
+    writeFileSync(settingsPath, JSON.stringify({ env: { ...env, NODE_EXTRA_CA_CERTS: "/tmp/foreign-ca.pem" } }));
+    expect(await get()).toMatchObject({ sharedProxy: "foreign" });
+    writeFileSync(settingsPath, JSON.stringify({ env: {
+      HTTPS_PROXY: env.HTTPS_PROXY.replace(/^http:\/\/opencodex:[^@/]+@/, "http://"),
+      NODE_EXTRA_CA_CERTS: "/tmp/foreign-ca.pem",
+    } }));
+    expect(await get()).toMatchObject({ sharedProxy: "local" });
+    writeFileSync(settingsPath, JSON.stringify({ env: {
+      HTTPS_PROXY: "https://foreign.example.test:443", NODE_EXTRA_CA_CERTS: "/tmp/foreign-ca.pem",
+    } }));
+    expect(await get()).toMatchObject({ sharedProxy: "none" });
+    writeFileSync(settingsPath, JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: env.NODE_EXTRA_CA_CERTS } }));
+    expect(await get()).toMatchObject({ sharedProxy: "none" });
+    writeFileSync(settingsPath, "{");
+    expect(await get()).toMatchObject({ sharedProxy: "unknown", cliFirstPartyApplied: false });
+  } finally { await server.stop(true); }
+});
+
+test("GET keeps ineligible bound, stale and stopped states distinct", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  const env = desktopFirstPartyTarget(current).env;
+  current.claudeCode = { ...current.claudeCode, enabled: false, cliFirstParty: true, desktopMode: "gateway" };
+  saveConfig(current);
+  const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify({ env }));
+  let bound: { proxyPort: number; caCertPath: string; pickerProxyPort: null } | null =
+    { proxyPort: 10200, caCertPath: env.NODE_EXTRA_CA_CERTS, pickerProxyPort: null };
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () => bound } });
+  try {
+    const get = async () => (await (await fetch(new URL("/api/claude-code", server.url))).json()) as Record<string, unknown>;
+    expect(await get()).toMatchObject({ sharedProxy: "disabled", cliFirstPartyApplied: false,
+      interceptEligible: false, interceptRunning: false });
+    writeFileSync(settingsPath, JSON.stringify({ env: {
+      ...env, HTTPS_PROXY: env.HTTPS_PROXY.replace(":10200", ":10199") } }));
+    expect(await get()).toMatchObject({ sharedProxy: "broken", interceptEligible: false, interceptRunning: false });
+    bound = null;
+    expect(await get()).toMatchObject({ sharedProxy: "stopped", interceptEligible: false, interceptRunning: false });
+  } finally { await server.stop(true); }
+});
+
+test("CLI-on refuses a disabled intercept without mutation", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  current.claudeCode = { ...current.claudeCode, intercept: { enabled: false } };
+  saveConfig(current);
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () =>
+    ({ proxyPort: 10200, caCertPath: join(testDir, "claude-intercept", "ca.pem"), pickerProxyPort: null }) } });
+  try {
+    const put = async () => fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
+    });
+    const first = await put();
+    expect(first.status).toBe(409);
+    expect(await first.json()).toMatchObject({ code: "intercept_disabled" });
+    expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
+    const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+    expect(existsSync(settingsPath)).toBe(false);
+  } finally { await server.stop(true); }
+});
+
+test("CLI-on refuses foreign settings before writing config", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  saveConfig(current);
+  const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  const foreign = JSON.stringify({ env: { HTTPS_PROXY: "http://corp:3128",
+    NODE_EXTRA_CA_CERTS: "/tmp/corp-ca.pem" } });
+  writeFileSync(settingsPath, foreign);
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () =>
+    ({ proxyPort: 10200, caCertPath: join(testDir, "claude-intercept", "ca.pem"), pickerProxyPort: null }) } });
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "foreign_env" });
+    expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
+    expect(readFileSync(settingsPath, "utf8")).toBe(foreign);
+  } finally { await server.stop(true); }
+});
+
+test("CLI-on rechecks a drifted persisted port under the config lock", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  saveConfig(current);
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () =>
+    ({ proxyPort: 10200, caCertPath: join(testDir, "claude-intercept", "ca.pem"), pickerProxyPort: null }) } });
+  try {
+    const configPath = join(testDir, "config.json");
+    const onDisk = JSON.parse(readFileSync(configPath, "utf8"));
+    onDisk.claudeCode = { ...onDisk.claudeCode,
+      intercept: { ...onDisk.claudeCode?.intercept, port: 10201 } };
+    writeFileSync(configPath, JSON.stringify(onDisk));
+    const configBytes = readFileSync(configPath, "utf8");
+    const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+    const settingsBefore = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null;
+    const tokenPath = join(testDir, "claude-intercept", "proxy-token");
+    const tokenBefore = existsSync(tokenPath) ? readFileSync(tokenPath, "utf8") : null;
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "intercept_unavailable" });
+    expect(readFileSync(configPath, "utf8")).toBe(configBytes);
+    expect(existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null).toBe(settingsBefore);
+    expect(existsSync(tokenPath) ? readFileSync(tokenPath, "utf8") : null).toBe(tokenBefore);
+  } finally { await server.stop(true); }
+});
+
+test("CLI-on saves standalone intent and applies settings for a matching bound listener", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  saveConfig(current);
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () =>
+    ({ proxyPort: 10200, caCertPath: join(testDir, "claude-intercept", "ca.pem"), pickerProxyPort: null }) } });
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, cliFirstParty: true, warnings: [] });
+    expect(loadConfig().claudeCode).toMatchObject({ cliFirstParty: true, desktopMode: "gateway" });
+    const settings = JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR!, "settings.json"), "utf8"));
+    expect(settings.env.HTTPS_PROXY).toMatch(/^http:\/\/opencodex:[^@/]+@127\.0\.0\.1:10200$/);
+    expect(settings.env.NODE_EXTRA_CA_CERTS).toBe(join(testDir, "claude-intercept", "ca.pem"));
+  } finally { await server.stop(true); }
+});
+
+test("CLI-on failure rolls back only its own persisted leaves", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  current.fastMode = false;
+  saveConfig(current);
+  const server = startServer(0, { managementApi: {
+    getClaudeInterceptState: () => ({ proxyPort: 10200,
+      caCertPath: join(testDir, "claude-intercept", "ca.pem"), pickerProxyPort: null }),
+    reconcileClaudeFirstPartySettings: () => {
+      const concurrent = loadConfig();
+      concurrent.fastMode = true;
+      concurrent.claudeCode = { ...concurrent.claudeCode, model: "concurrent-model" };
+      saveConfig(concurrent);
+      return { ok: false, reason: "unreadable", path: join(testDir, "claude", "settings.json") };
+    },
+  } });
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: "unreadable" });
+    const after = loadConfig();
+    expect(after.claudeCode?.cliFirstParty).toBeUndefined();
+    expect(after.claudeCode?.desktopMode).toBeUndefined();
+    expect(after.claudeCode?.model).toBe("concurrent-model");
+    expect(after.fastMode).toBe(true);
+  } finally { await server.stop(true); }
+});
+
+test("CLI-on reports write_failed when rollback cannot persist", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  saveConfig(current);
+  const server = startServer(0, { managementApi: {
+    getClaudeInterceptState: () => ({ proxyPort: 10200,
+      caCertPath: join(testDir, "claude-intercept", "ca.pem"), pickerProxyPort: null }),
+    reconcileClaudeFirstPartySettings: () => {
+      writeFileSync(join(testDir, "config.json"), "{");
+      return { ok: false, reason: "unreadable", path: join(testDir, "claude", "settings.json") };
+    },
+  } });
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: "write_failed", warnings: ["settings_rollback_incomplete"] });
+  } finally { await server.stop(true); }
+});
+
+for (const cause of ["Claude disabled", "intercept disabled", "hub client"] as const) {
+  test(`GET reports stale settings as broken with ${cause}`, async () => {
+    const current = loadConfig();
+    current.port = 10100;
+    const env = desktopFirstPartyTarget(current).env;
+    current.claudeCode = { ...current.claudeCode, cliFirstParty: true,
+      ...(cause === "Claude disabled" ? { enabled: false } : {}),
+      ...(cause === "intercept disabled" ? { intercept: { enabled: false } } : {}) };
+    if (cause === "hub client") {
+      current.runtimeRole = "client";
+      current.client = { serverUrl: "https://hub.example.test", managementUrl: "https://manage.example.test",
+        managementTransport: "direct", selectedClients: ["claude"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+        apiKeyId: "test", tokenFingerprint: "a".repeat(64), protocolVersion: 1,
+        connectedAt: "2026-08-28T00:00:00.000Z" };
+    }
+    saveConfig(current);
+    const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+    mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ env: {
+      ...env, HTTPS_PROXY: env.HTTPS_PROXY.replace(":10200", ":10199") } }));
+    const bound = { proxyPort: 10200, caCertPath: env.NODE_EXTRA_CA_CERTS, pickerProxyPort: null };
+    const server = startServer(0, { managementApi: { getClaudeInterceptState: () => bound } });
+    try {
+      const response = await fetch(new URL("/api/claude-code", server.url));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ sharedProxy: "broken", cliFirstPartyApplied: false,
+        interceptEligible: false, interceptRunning: false });
+    } finally { await server.stop(true); }
+  });
+}
+
+test("CLI-off reports a tokenless local proxy with foreign CA as residue", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  current.claudeCode = { ...current.claudeCode, cliFirstParty: true, desktopMode: "gateway" };
+  saveConfig(current);
+  const env = desktopFirstPartyTarget(current).env;
+  const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  const bytes = JSON.stringify({ env: {
+    HTTPS_PROXY: env.HTTPS_PROXY.replace(/^http:\/\/opencodex:[^@/]+@/, "http://"),
+    NODE_EXTRA_CA_CERTS: "/tmp/foreign-ca.pem",
+  } });
+  writeFileSync(settingsPath, bytes);
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () => null } });
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: false }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ warnings: ["settings_residual"] });
+    expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
+    expect(readFileSync(settingsPath, "utf8")).toBe(bytes);
+  } finally { await server.stop(true); }
+});
+
+test("CLI-off persists intent despite unreadable settings cleanup", async () => {
+  const current = loadConfig();
+  current.claudeCode = { ...current.claudeCode, cliFirstParty: true, desktopMode: "gateway" };
+  saveConfig(current);
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  writeFileSync(join(process.env.CLAUDE_CONFIG_DIR!, "settings.json"), "{");
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: false }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: "unreadable", cliFirstParty: false,
+      warnings: ["settings_residual"] });
+    expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
+  } finally { await server.stop(true); }
+});
+
+test("CLI-off retains a shared env while Desktop first-party remains desired", async () => {
+  const current = loadConfig();
+  current.port = 10100;
+  current.claudeCode = { ...current.claudeCode, cliFirstParty: true, desktopMode: "first-party" };
+  saveConfig(current);
+  const env = desktopFirstPartyTarget(current).env;
+  const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+  mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify({ env }));
+  const server = startServer(0, { managementApi: { getClaudeInterceptState: () => null } });
+  try {
+    const response = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: false }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ cliFirstParty: false, warnings: [] });
+    expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
+    expect(JSON.parse(readFileSync(settingsPath, "utf8")).env.HTTPS_PROXY).toBe(env.HTTPS_PROXY);
+  } finally { await server.stop(true); }
 });
 
 
@@ -225,6 +542,10 @@ test("PUT round-trips three-state authMode (devlog 260720 + 260726_claude_auth_a
     get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
     expect(get.authMode).toBe("proxy");
     expect(loadConfig().claudeCode?.authMode).toBe("proxy");
+    // With no anthropic provider, a bare Claude id has nowhere to go under proxy auth (#5755).
+    const sonnetTier = (body: Record<string, unknown>) =>
+      (body.effectiveModelEnv as Record<string, string>).ANTHROPIC_DEFAULT_SONNET_MODEL;
+    expect(sonnetTier(get)).toBeUndefined();
 
     // subscription now stores the literal so an explicit choice survives auth changes.
     const back = await fetch(new URL("/api/claude-code", server.url), {
@@ -236,6 +557,8 @@ test("PUT round-trips three-state authMode (devlog 260720 + 260726_claude_auth_a
     expect(loadConfig().claudeCode?.authMode).toBe("subscription");
     get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
     expect(get.authMode).toBe("subscription");
+    // Under Claude Code's own login it passes through natively and keeps its 1M window.
+    expect(sonnetTier(get)).toBe("claude-sonnet-5[1m]");
 
     // "auto" is the return path: it deletes the key so detection drives the mode again.
     const auto = await fetch(new URL("/api/claude-code", server.url), {

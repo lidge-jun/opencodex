@@ -101,6 +101,63 @@ async function runSpawnedBranch(h: ReturnType<typeof harness>, next: OcxConfig):
   await reconcileEnsureDesiredIntegrations(10100, { kind: "spawned" }, h.deps);
 }
 
+for (const [kind, stale, shouldRefresh] of [
+  ["absent", false, true], ["stale", true, true], ["applied", false, false], ["foreign", false, false],
+] as const) {
+  test(`CLI-only ${kind} env refreshes before Desktop-off cleanup when needed`, async () => {
+    const current = config({ desktop: false });
+    current.claudeCode = { ...current.claudeCode, cliFirstParty: true, desktopMode: "gateway" };
+    const h = harness(current);
+    const calls: string[] = [];
+    h.deps.inspectDesktopFirstParty = () => ({
+      interceptEnabled: true, proxyPort: 10200, caCertPath: "/tmp/owned-ca.pem",
+      settings: kind === "absent" ? { kind: "absent" } : kind === "foreign"
+        ? { kind: "foreign", env: { HTTPS_PROXY: "http://other:8080" } }
+        : { kind, env: { HTTPS_PROXY: "http://opencodex:t@127.0.0.1:10200", NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" } },
+      applied: kind === "applied", stale,
+    });
+    h.deps.observeClaudeDesktopMode = () => ({});
+    h.deps.reconcileClaudeFirstPartySettings = (_config, desired) => {
+      expect(desired).toEqual({ desktop: false, cli: true });
+      calls.push("refresh");
+      return { ok: true, action: "applied", changed: true, path: "/tmp/settings.json" };
+    };
+    h.deps.findLiveProxyImpl = async () => null;
+    h.deps.removeDesktopPickerArtifacts = async () => ({ ok: true });
+    h.deps.removeDesktopFirstParty = () => {
+      calls.push("desktop-off");
+      return { ok: true, changed: false, path: "/tmp/settings.json", retainedFor: "cli" };
+    };
+    await runLiveBranch(h, current);
+    expect(calls).toEqual(shouldRefresh ? ["refresh", "desktop-off"] : ["desktop-off"]);
+  });
+}
+
+test("CLI intent with disabled intercept retains the env through Desktop-off cleanup", async () => {
+  const current = config({ desktop: false });
+  current.claudeCode = { ...current.claudeCode, cliFirstParty: true,
+    intercept: { enabled: false }, desktopMode: "gateway" };
+  const h = harness(current);
+  const calls: string[] = [];
+  h.deps.inspectDesktopFirstParty = () => ({ interceptEnabled: false, proxyPort: 10200,
+    caCertPath: "/tmp/owned-ca.pem", settings: { kind: "applied", env: {
+      HTTPS_PROXY: "http://opencodex:t@127.0.0.1:10200", NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" } },
+    applied: true, stale: false });
+  h.deps.observeClaudeDesktopMode = () => ({});
+  h.deps.reconcileClaudeFirstPartySettings = () => {
+    calls.push("refresh");
+    return { ok: true, action: "unchanged", changed: false, path: "/tmp/settings.json" };
+  };
+  h.deps.findLiveProxyImpl = async () => null;
+  h.deps.removeDesktopPickerArtifacts = async () => ({ ok: true });
+  h.deps.removeDesktopFirstParty = () => {
+    calls.push("retained");
+    return { ok: true, changed: false, path: "/tmp/settings.json", retainedFor: "cli" };
+  };
+  await runLiveBranch(h, current);
+  expect(calls).toEqual(["refresh", "retained"]);
+});
+
 describe("ensure desired-state races", () => {
   test("live-proxy OFF→ON uses the current ON snapshot instead of stripping", async () => {
     const staleOff = config({ grok: false, desktop: false, hostname: "stale-host", fingerprint: "fp-off" });

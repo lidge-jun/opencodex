@@ -93,14 +93,14 @@ quietly when the server predates its route:
 
 Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash query, which
 `resolveAppHashChange` keeps only on `#providers` and `#models/compatibility` (`QUERY_HASH_PATHS`)
-and drops elsewhere. Each plan candidate links to `#providers?provider=<name>`
-(`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
-the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a
-traced Logs row links to the compatibility pair it took. Links push history, the matrix replaces
+and drops elsewhere. Each plan candidate links to `#providers?provider=<name>` (`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
+the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a traced Logs row links to the compatibility pair it took. Each chip of the header quota strip
+(`gui/src/components/quota-summary-bar/QuotaSummaryBar.tsx`, one scrolling row with « / » paging) links to `#providers?provider=<name>&tab=accounts`, which opens that provider's
+Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. Links push history, the matrix replaces
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
-`gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`,
-`gui/tests/providers-deep-link.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
+`gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -343,9 +343,10 @@ is treated as an append: the scanner verifies the previous LF and its trailing 6
 folds only the suffix into a cloned accumulator and publishes it after validation. Concurrent callers
 share that work. Cold rebuilds scan the whole ledger in fixed-size chunks and yield between bounded
 batches, so memory stays bounded and unrelated management requests remain serviceable even for a
-large existing log. The first read is proportional to ledger size; steady-state refresh work is
-proportional to newly appended bytes. The Dashboard polls its 30-day usage summary independently once
-per minute, so usage work cannot delay health/provider/settings state or run every five seconds.
+large existing log. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger.
+The Dashboard polls its 30-day usage independently once per minute, separate from five-second state polls.
+An unchanged retained snapshot reuses its verified region digest only for identical bounds; appends or trimming hash the returned region, preserving same-inode rewrite detection.
+> Decision record: [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md)
 
 An oversized row is skipped inside the scanner bound without shortening identities. Accumulators keep normal rows plus `usageIncomplete` / `usageIncompleteReason: "oversized_rows"` on caches and rollups; append ORs the flag and a rebuild recalculates it. Invalid-row counts are not sticky, and absence of the flag is not completeness. GUI caches warn on Usage, Dashboard, provider and key views; CLI warns in human output only; most-used order save refuses an incomplete snapshot. Quota surfaces stay separate. Legacy truncation fields keep their meaning; read/mutation failures still fail closed.
 

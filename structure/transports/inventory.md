@@ -37,7 +37,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Cursor (beyond the sections above) | `src/adapters/cursor/live-transport.ts`, `src/adapters/cursor/http1-bidi.ts`, `src/adapters/cursor/live-models.ts`, `src/adapters/cursor/transport-retry.ts`, `src/adapters/cursor/mcp-manager.ts`, `src/adapters/cursor/thread-continuity.ts`, `src/adapters/cursor/checkpoint-store.ts` | Thread continuity is the point: a retry must not start a new Cursor thread, and a validated checkpoint must not rebuild the full root history. HTTP/2 remains the default; an explicit `http1.1`/`h1` pin maps the bidi run onto Cursor's `RunSSE` receive stream plus sequenced `BidiAppend` sends, and applies to live discovery too. |
 | Claude Messages | `src/server/claude-messages.ts` | Routed translation, a native Anthropic passthrough branch, and `count_tokens`. |
 | Chat Completions inbound | `src/server/chat-completions.ts`, `src/server/chat-native.ts`, `src/chat/`, `src/adapters/openai-chat.ts` | Inbound translation onto the same routing pipeline. The content mapper preserves image URLs and supported detail, including screenshot-bearing tool results; target adapters own image placement on their wire. Image-free tool results stay strings. The native handler owns pin/cap normalization; both adapter builders share explicit gateway-object and tool-bearing effort-omission policy, while the native builder preserves unknown or undeclared raw behavior and removes effort for explicit empty declarations or no-reasoning models. On the response side, the upstream `service_tier` echo relays on every delivery shape (`src/chat/outbound.ts` projections, `src/server/chat-native-sse.ts` chunks); an upstream without the field gets no injected key. |
-| Hosted search relay | `src/server/search.ts` | Verbatim ChatGPT relay, or an explicitly configured web-search sidecar backend when no forward provider exists; distinct from the web-search sidecar loop below. |
+| Hosted search relay | `src/server/search.ts`, `src/web-search/devin-executor.ts` | A resolved Devin route uses Cognition's bounded non-inference `GetWebSearchResults` RPC with the active account's credential and allowlisted tenant; other routes use the verbatim ChatGPT relay, or an explicitly configured web-search sidecar backend when no forward provider exists. Distinct from the web-search sidecar loop below. |
 | Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. Artifact downloads go through the pinned-IP transport with a 10 s connect deadline (`DOWNLOAD_CONNECT_TIMEOUT_MS`) that bounds TCP/TLS setup on its own, in addition to the 60 s idle timer, and `pinnedHttpsGet` accepts a per-call `connectTimeoutMs`. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
 | API-key pools | `src/providers/api-key-selection.ts`, `src/providers/key-failover.ts` | A configured `apiKeyPoolStrategy` plus a cooling committed key rotates before the first send (`selectProactiveApiKeyTransport`); a 429 still rotates after the send and records a cooldown. `provider.apiKey` keeps mirroring the active entry so routing stays single-key. The pick is inert without a strategy or while the committed key is healthy. |
@@ -98,6 +98,16 @@ promises are observed, and a cancellation that never settles cannot extend the r
 After an attached read, cleanup removes the abort listener, cancels any inactivity timer, and
 attempts to release the reader lock. `tests/server/bounded-body.test.ts` covers these paths.
 
+Both bounded readers give abort and deadline callbacks one current-read settlement slot. The slot
+is cleared after every read; completed read results and transport chunks are not retained by
+reactions on shared pending promises. An interruption is latched across the gap between reads,
+and a pending read's late rejection remains observed after cancellation. The geometric payload
+buffer remains bounded by the byte cap independently of this constant-size wait bookkeeping.
+The focused tests check live-chunk collection with `WeakRef`/`Bun.gc` while a read is stalled,
+and bound per-promise reaction attachment independently of garbage-collector timing.
+
+> Decision record: [ADR-0101](../decisions/ADR-0101-bounded-response-ownership.md)
+
 `readBoundedResponseBody` accepts `reportUtf8Validity`: the body decodes with replacement
 characters instead of rejecting, and a result that reached EOF carries `utf8Valid`. Combined with
 `fatalUtf8`, a returned body is valid by construction and reports `true`. Timeout and oversized
@@ -126,6 +136,13 @@ transport budgets, so the 64 KiB login ceiling never caps Responses inference pa
 rejected body returns no credentials, an oversized, malformed, or aborted key response ends the
 login before credential persistence or dashboard convergence, leaving only the fixed size-limit or
 invalid-JSON message described above.
+
+`src/adapters/devin/cloud-direct/chat.ts` cancels a non-2xx `GetChatMessage` response body
+before throwing its status-only `CloudChatError`. The same error object is the cancellation
+reason. Cancellation is attempted once without draining, cloning, or waiting; a synchronous
+throw, rejection, or never-settling cancellation cannot replace or delay the status error.
+A bodyless error follows the same status path. `tests/providers/devin-hardening.test.ts`
+covers these cases with a synthetic executor, without provider credentials or network traffic.
 
 ## Per-provider egress coverage
 
