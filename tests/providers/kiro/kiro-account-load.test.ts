@@ -21,6 +21,32 @@ test("a cap admits one, wakes one waiter, and never exceeds the limit", async ()
   expect(accountInFlight("kiro", "load-wake")).toBe(0);
 });
 
+test("a new arrival cannot take a slot released to a queued waiter", async () => {
+  const first = await acquireAccountLease("kiro", "load-handoff", { maxConcurrentPerAccount: 1 });
+  const waiter = acquireAccountLease("kiro", "load-handoff", { maxConcurrentPerAccount: 1, waitMs: 100 });
+  first!.release();
+  const newcomer = await acquireAccountLease("kiro", "load-handoff", { maxConcurrentPerAccount: 1 });
+  expect(newcomer).toBeNull();
+  const handed = await waiter;
+  expect(handed).not.toBeNull();
+  expect(accountInFlight("kiro", "load-handoff")).toBe(1);
+  handed!.release();
+});
+
+test("handoff waits until the queued waiter's cap has room", async () => {
+  const first = await acquireAccountLease("kiro", "load-mixed-cap");
+  const second = await acquireAccountLease("kiro", "load-mixed-cap");
+  const waiter = acquireAccountLease("kiro", "load-mixed-cap", { maxConcurrentPerAccount: 1, waitMs: 100 });
+  first!.release();
+  expect(accountInFlight("kiro", "load-mixed-cap")).toBe(1);
+  expect(await acquireAccountLease("kiro", "load-mixed-cap", { maxConcurrentPerAccount: 1 })).toBeNull();
+  second!.release();
+  const handed = await waiter;
+  expect(handed).not.toBeNull();
+  expect(accountInFlight("kiro", "load-mixed-cap")).toBe(1);
+  handed!.release();
+});
+
 test("bounded wait returns null and removes its waiter", async () => {
   const first = await acquireAccountLease("kiro", "load-deadline", { maxConcurrentPerAccount: 1 });
   expect(await acquireAccountLease("kiro", "load-deadline", { maxConcurrentPerAccount: 1, waitMs: 5 })).toBeNull();
@@ -64,6 +90,25 @@ test("a lease past its TTL is reclaimed", async () => {
     expect(accountInFlight("kiro", "load-ttl")).toBe(1);
     fresh!.release();
     expect(accountInFlight("kiro", "load-ttl")).toBe(0);
+  } finally { Date.now = before; }
+});
+
+test("reclaim hands an expired lease's slot to a live waiter", async () => {
+  const before = Date.now;
+  const start = before();
+  Date.now = () => start;
+  try {
+    const stale = await acquireAccountLease("kiro", "load-reclaim-handoff", { maxConcurrentPerAccount: 1 });
+    Date.now = () => start + KIRO_LEASE_MAX_MS - 10;
+    const waiter = acquireAccountLease("kiro", "load-reclaim-handoff", { maxConcurrentPerAccount: 1, waitMs: 100 });
+    Date.now = () => start + KIRO_LEASE_MAX_MS + 1;
+    expect(accountInFlight("kiro", "load-reclaim-handoff")).toBe(1);
+    expect(await acquireAccountLease("kiro", "load-reclaim-handoff", { maxConcurrentPerAccount: 1 })).toBeNull();
+    const handed = await waiter;
+    expect(handed).not.toBeNull();
+    stale!.release();
+    expect(accountInFlight("kiro", "load-reclaim-handoff")).toBe(1);
+    handed!.release();
   } finally { Date.now = before; }
 });
 

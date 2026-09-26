@@ -15,15 +15,34 @@ export const KIRO_LEASE_MAX_MS = 15 * 60_000;
 export const KIRO_ACCOUNT_WAIT_MS = 250;
 
 interface LeaseRecord { acquiredAt: number; released: boolean }
-interface Waiter { wake(): void }
+interface Waiter { grant(now: number): "granted" | "blocked" | "expired" }
 interface AccountState { records: Map<number, LeaseRecord>; waiters: Waiter[] }
 
 const accounts = new Map<string, AccountState>();
 let nextLeaseId = 0;
 const keyOf = (provider: string, accountId: string) => `${provider}\u0000${accountId}`;
 
-function wakeFirstLive(state: AccountState): void {
-  state.waiters.shift()?.wake();
+function handoff(state: AccountState, now: number): void {
+  while (state.waiters.length > 0) {
+    const waiter = state.waiters.shift()!;
+    const result = waiter.grant(now);
+    if (result === "granted") return;
+    if (result === "blocked") { state.waiters.unshift(waiter); return; }
+  }
+}
+
+function leaseFor(provider: string, accountId: string, key: string, state: AccountState, now: number): AccountLease {
+  const id = ++nextLeaseId;
+  const record: LeaseRecord = { acquiredAt: now, released: false };
+  state.records.set(id, record);
+  accounts.set(key, state);
+  return { provider, accountId, release() {
+    if (record.released) return;
+    record.released = true;
+    state.records.delete(id);
+    handoff(state, Date.now());
+    if (state.records.size === 0 && state.waiters.length === 0) accounts.delete(key);
+  } };
 }
 
 function reclaim(key: string, now: number): AccountState | undefined {
@@ -33,7 +52,7 @@ function reclaim(key: string, now: number): AccountState | undefined {
     if (now - record.acquiredAt < KIRO_LEASE_MAX_MS) continue;
     record.released = true;
     state.records.delete(id);
-    wakeFirstLive(state);
+    handoff(state, now);
   }
   if (state.records.size === 0 && state.waiters.length === 0) accounts.delete(key);
   return state;
@@ -49,42 +68,40 @@ export async function acquireAccountLease(
 ): Promise<AccountLease | null> {
   const key = keyOf(provider, accountId);
   const deadline = Date.now() + Math.max(0, opts.waitMs ?? 0);
-  while (!opts.signal?.aborted) {
-    const state: AccountState = reclaim(key, Date.now()) ?? { records: new Map(), waiters: [] };
-    if (opts.maxConcurrentPerAccount === undefined || state.records.size < opts.maxConcurrentPerAccount) {
-      const id = ++nextLeaseId;
-      const record: LeaseRecord = { acquiredAt: Date.now(), released: false };
-      state.records.set(id, record);
-      accounts.set(key, state);
-      return { provider, accountId, release() {
-        if (record.released) return;
-        record.released = true;
-        state.records.delete(id);
-        wakeFirstLive(state);
-        if (state.records.size === 0 && state.waiters.length === 0) accounts.delete(key);
-      } };
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return null;
-    await new Promise<void>(resolve => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        opts.signal?.removeEventListener("abort", finish);
-        const index = state.waiters.indexOf(waiter);
-        if (index >= 0) state.waiters.splice(index, 1);
-        if (state.records.size === 0 && state.waiters.length === 0) accounts.delete(key);
-        resolve();
-      };
-      const waiter: Waiter = { wake: finish };
-      state.waiters.push(waiter);
-      accounts.set(key, state);
-      const timer = setTimeout(finish, remaining);
-      opts.signal?.addEventListener("abort", finish, { once: true });
-      if (opts.signal?.aborted) finish();
-    });
+  if (opts.signal?.aborted) return null;
+  const now = Date.now();
+  const state: AccountState = reclaim(key, now) ?? { records: new Map(), waiters: [] };
+  if (state.waiters.length === 0
+    && (opts.maxConcurrentPerAccount === undefined || state.records.size < opts.maxConcurrentPerAccount)) {
+    return leaseFor(provider, accountId, key, state, now);
   }
-  return null;
+  const remaining = deadline - now;
+  if (remaining <= 0) return null;
+  return await new Promise<AccountLease | null>(resolve => {
+    let settled = false;
+    const finish = (lease: AccountLease | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", abort);
+      const index = state.waiters.indexOf(waiter);
+      if (index >= 0) state.waiters.splice(index, 1);
+      if (state.records.size === 0 && state.waiters.length === 0) accounts.delete(key);
+      resolve(lease);
+    };
+    const abort = () => finish(null);
+    const waiter: Waiter = { grant(grantNow) {
+      if (settled) return "expired";
+      if (opts.signal?.aborted || grantNow >= deadline) { finish(null); return "expired"; }
+      if (opts.maxConcurrentPerAccount !== undefined && state.records.size >= opts.maxConcurrentPerAccount)
+        return "blocked";
+      finish(leaseFor(provider, accountId, key, state, grantNow));
+      return "granted";
+    } };
+    state.waiters.push(waiter);
+    accounts.set(key, state);
+    const timer = setTimeout(() => finish(null), remaining);
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    if (opts.signal?.aborted) finish(null);
+  });
 }

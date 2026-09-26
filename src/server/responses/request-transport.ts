@@ -195,6 +195,15 @@ export async function prepareResponsesTransport(
     const candidate = unchanged ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
+    if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
+      const replayLease = await acquireAccountLease("kiro", admitted.accountId, { maxConcurrentPerAccount: kiroCap });
+      if (!replayLease || !options.accountLoad) {
+        replayLease?.release();
+        throw new Error("Kiro replay account capacity is full");
+      }
+      options.accountLoad.lease?.release();
+      options.accountLoad.lease = replayLease;
+    }
     genericFailoverAccountId = admitted.accountId;
     stampOAuthAccountLabel(logCtx, route.providerName, route.provider, admitted.accountId);
     return admitted;

@@ -224,6 +224,26 @@ test("a post-401 alternate at its cap returns the original formatted 401", async
   expect(accountInFlight("kiro", b!)).toBe(1);
 });
 
+test("a 401 replay that resolves a different account never sends without that account's lease", async () => {
+  const [a, b] = await seed(2);
+  held.push((await acquireAccountLease("kiro", b!))!);
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends++;
+    if (sends === 1) {
+      expect(accountInFlight("kiro", a!)).toBe(1);
+      await setActiveAccount("kiro", b!);
+    }
+    return new Response("expired", { status: 401 });
+  }) as typeof fetch;
+  const response = await handleResponses(request(), config(), { model: "claude-sonnet-4.5", provider: "kiro" });
+  expect(response.status).toBe(401);
+  expect(sends).toBe(1);
+  expect((await response.json() as { error: { code: string } }).error.code).toBe("invalid_api_key");
+  expect(accountInFlight("kiro", b!)).toBe(1);
+  expect(accountInFlight("kiro", a!)).toBe(0);
+});
+
 test("a selection race during rotation never sends on an account whose lease it does not hold", async () => {
   const [a, b, c] = await seed(3);
   let sends = 0;

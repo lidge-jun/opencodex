@@ -50,6 +50,10 @@ Kiro OAuth may use `least-loaded` as an opt-in proactive strategy under `pool.ke
 process: a full selected account waits up to 250 ms, then returns 503
 `account_capacity` with `Retry-After: 1`. Capacity does not select a sibling;
 reactive refusal rotation remains presence-driven and prefers a sibling with room.
+A released slot is handed to the first live waiter before it wakes, so a new arrival
+cannot take it, and every send (first send, reactive rotation, 401 replay) holds the lease of
+the account whose credentials it carries: a replay that resolves a different account takes
+that account's lease first or stops with the formatted 401.
 
 ## Kiro client parallel-tool hint
 
