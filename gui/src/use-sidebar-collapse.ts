@@ -28,11 +28,14 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Codex-style rail collapse: the sidebar shrinks to its top strip — traffic lights and
- * the toggle — and the remembered answer survives restarts. Cmd/Ctrl+B toggles too, the
- * shortcut every sibling app trained into the same hands.
+ * Codex-style collapse: the sidebar leaves the layout and only its top strip — traffic
+ * lights and the toggle — stays. The remembered answer survives restarts. Cmd/Ctrl+B
+ * toggles too, the shortcut every sibling app trained into the same hands — but only in
+ * the desktop shell, because in a plain browser it would steal the bookmark-bar shortcut.
  */
-export function useSidebarCollapse(): { collapsed: boolean; toggle: () => void } {
+export function useSidebarCollapse(
+  { shortcut = false }: { shortcut?: boolean } = {},
+): { collapsed: boolean; toggle: () => void } {
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed);
   const toggle = useCallback(() => setCollapsed((current) => !current), []);
   // Updaters may run without a commit, so the write follows the render instead.
@@ -40,6 +43,7 @@ export function useSidebarCollapse(): { collapsed: boolean; toggle: () => void }
     writeSidebarCollapsed(collapsed);
   }, [collapsed]);
   useEffect(() => {
+    if (!shortcut) return;
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
       if (event.key !== "b" && event.key !== "B") return;
@@ -49,6 +53,6 @@ export function useSidebarCollapse(): { collapsed: boolean; toggle: () => void }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggle]);
+  }, [toggle, shortcut]);
   return { collapsed, toggle };
 }

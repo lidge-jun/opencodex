@@ -1,26 +1,50 @@
 /*
-  Integrated title bar (Codex-style): the sidebar's top strip holds the window's traffic
-  lights and the collapse toggle; the main column's top strip carries the quota summary
-  on the same row. Desktop shell only moves the chrome — the strips render everywhere so
-  the collapse toggle exists in the plain browser dashboard too, where its drag wiring
-  is a no-op.
+  Integrated title bar (Codex-style): ONE shared top row spans the window — the sidebar's
+  top strip holds the traffic lights and the collapse toggle, the main column's top strip
+  carries the quota summary, and both bottom borders sit on the same horizontal line.
+  The row height is defined by the traffic lights, so both strips are exactly
+  --titlebar-h tall; content inside them is vertically centered on the lights' line.
 
-  Sizes this file owns:
-  --titlebar-h       strip height; the shell parks the traffic lights at y=16 inside it
-  --tl-inset         macOS-only gap the lights occupy: 18px lead + 52px of lights + 10px air
-  --rail-w           collapsed sidebar width
+  The strip is a DIRECT child of .app, fixed to the top-left corner — never a child of
+  .sidebar. The sidebar's backdrop-filter would make it the containing block for a fixed
+  descendant, so an in-sidebar strip gets clipped to the collapsed column's 0 width.
+
+  Collapsed is not a rail: the sidebar leaves the layout entirely and only the strip
+  survives, floating over the main strip's left edge, which indents its content by
+  --chrome-clear so the quota row starts after the toggle.
+
+  Desktop shell only moves the chrome — the strips render everywhere so the collapse
+  toggle exists in the plain browser dashboard too, where its drag wiring is a no-op.
+
+  Sizes this file owns (pinned against desktop/src-tauri/src/lib.rs
+  traffic_light_position by gui/tests/app-titlebar.test.tsx):
+  --titlebar-h      shared row height; the shell centers the lights at y=14 inside it
+  --tl-inset        macOS-only gap the lights occupy: 18px lead + 52px of lights + 10px air
+  --chrome-clear    collapsed-state indent for the main strip: floating strip width
+                    (inset + toggle + padding) plus a small gap
 */
 
-.app { --titlebar-h: 44px; --tl-inset: 80px; --rail-w: 52px; }
+.app { --titlebar-h: 40px; --tl-inset: 80px; --chrome-clear: 52px; }
+.app--macos { --chrome-clear: 124px; }
 
 .sidebar-top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* Above .sidebar (z-overlay): the sidebar's glass background covers the strip's
+     corner, so the strip — and the toggle inside it — must paint over the rail. */
+  z-index: calc(var(--z-overlay, 30) + 1);
   display: flex;
   align-items: center;
-  height: var(--titlebar-h, 44px);
-  flex: 0 0 auto;
-  /* Bleed over the sidebar's own padding so the strip is edge-to-edge draggable. */
-  margin: -18px -14px 0;
+  /* Exactly the sidebar column's width (.app grid: 232px), so its bottom border
+     continues the sidebar's edge and the strip reads as part of the rail. */
+  width: 232px;
+  height: var(--titlebar-h, 40px);
   padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--glass-rail);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -28,6 +52,10 @@
 .app--macos .sidebar-top {
   padding-left: var(--tl-inset, 80px);
 }
+
+/* The strip no longer sits inside .sidebar's flow, so the sidebar's own top padding
+   additionally reserves the strip's row (styles.css keeps its base 18px). */
+.sidebar { padding-top: calc(var(--titlebar-h, 40px) + 18px); }
 
 .sidebar-collapse {
   display: inline-flex;
@@ -54,32 +82,56 @@
   z-index: var(--z-sticky);
   display: flex;
   align-items: stretch;
-  min-height: var(--titlebar-h, 44px);
+  /* Fixed, not min-height: the row IS the title-bar row, so it must stay exactly as
+     tall as the traffic lights whether or not the quota summary has badges to show. */
+  height: var(--titlebar-h, 40px);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   user-select: none;
   -webkit-user-select: none;
 }
-/* The quota bar fills the strip; its own border rides inside the strip's. */
+/* The quota bar fills the strip; its own border rides inside the strip's. Its default
+   min-height + padding would overflow the 40px row, so inside the strip it hugs the
+   lights' center line instead. */
 .main-top > .quota-summary-bar {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   position: static;
+  padding: 0 16px;
   border-bottom: none;
 }
 
-/* Collapsed rail: only the top strip survives — lights + toggle, exactly like Codex. */
+/* Collapsed = the sidebar is gone entirely: no column, no rail, no background.
+   Only the fixed strip survives, floating over the main strip's left edge. */
 @media (min-width: 761px) {
   .app { transition: grid-template-columns 160ms ease; }
   /* Double class beats the base `.app` columns regardless of stylesheet order. */
-  .app.app--nav-collapsed { grid-template-columns: var(--rail-w) 1fr; }
-  .app--nav-collapsed .sidebar > :not(.sidebar-top) { display: none; }
-  .app--nav-collapsed .sidebar-top { padding-left: 12px; }
-  .app--macos.app--nav-collapsed { --rail-w: 122px; }
+  .app.app--nav-collapsed { grid-template-columns: 0px 1fr; }
+  .app--nav-collapsed .sidebar { display: none; }
+  /* With the sidebar display:none, auto-placement would drop .main into the 0px
+     first track — pin it to the content column. */
+  .app--nav-collapsed .main { grid-column: 2; }
+  .app--nav-collapsed .sidebar-top {
+    width: auto;
+    margin: 0;
+    padding: 0 12px;
+    border-bottom: none;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
   .app--macos.app--nav-collapsed .sidebar-top { padding-left: var(--tl-inset, 80px); }
+  /* The quota row starts after the floating lights + toggle. The bare `.quota-summary-bar`
+     selector covers the browser dashboard, where the bar sits directly in `.main`. */
+  .app--nav-collapsed .main-top { padding-left: var(--chrome-clear, 52px); }
+  .app--nav-collapsed .main > .quota-summary-bar { padding-left: var(--chrome-clear, 52px); }
 }
 
-/* The mobile drawer keeps its own chrome; the strip would duplicate the drawer head. */
+/* The mobile drawer keeps its own chrome; the strip would duplicate the drawer head.
+   The traffic lights still overlay the window on macOS at any width, so the
+   topbar's leading edge reserves the lights' row. */
 @media (max-width: 760px) {
   .sidebar-top { display: none; }
+  .app--macos .mobile-topbar { padding-left: var(--tl-inset, 80px); }
 }

@@ -92,7 +92,7 @@
         stays movable only if the page provides the grip. This strip is that grip; the
         script unhides it on macOS only — every other platform keeps native decorations.
       */
-      #titlebar { position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 1; user-select: none; -webkit-user-select: none; }
+      #titlebar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 1; user-select: none; -webkit-user-select: none; }
       #titlebar[hidden] { display: none; }
     </style>
   </head>
@@ -357,7 +357,8 @@ async function start() {
 
 // The strip exists so the overlay title bar keeps the window movable on macOS. Other
 // platforms keep native decorations, so it stays hidden there.
-if (invoke && /Mac OS X|Macintosh/.test(navigator.userAgent)) {
+const macWebview = typeof navigator === "object" && /Mac OS X|Macintosh/.test(navigator.userAgent || "");
+if (invoke && macWebview) {
   titlebar.hidden = false;
   titlebar.addEventListener("mousedown", (event) => {
     if (event.button === 0 && event.target === titlebar) {

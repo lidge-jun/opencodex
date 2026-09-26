@@ -321,7 +321,7 @@ pub fn run() {
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
                 .traffic_light_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                    18.0, 16.0,
+                    18.0, 14.0,
                 )));
             let window = builder.build()?;
             window::configure(&window);

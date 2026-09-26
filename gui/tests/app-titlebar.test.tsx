@@ -1,8 +1,10 @@
 /**
- * The integrated title bar's collapse toggle: the sidebar shrinks to a rail that keeps
- * the traffic lights and the toggle, the answer is persisted, and Cmd/Ctrl+B flips it.
+ * The integrated title bar's collapse toggle: the sidebar leaves the layout and its top
+ * strip — traffic lights and the toggle — stays; the answer is persisted, and Cmd/Ctrl+B
+ * flips it when the desktop shell opts the shortcut in.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,12 +19,14 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 
-function Probe() {
-  const { collapsed, toggle } = useSidebarCollapse();
+function Probe({ shortcut = false }: { shortcut?: boolean }) {
+  const { collapsed, toggle } = useSidebarCollapse({ shortcut });
   return (
     <div className={`app${collapsed ? " app--nav-collapsed" : ""}`}>
+      {/* Mirrors App.tsx: the strip is an .app child, not a sidebar child, so the
+         collapsed sidebar cannot clip it. */}
+      <SidebarTopStrip collapsed={collapsed} onToggle={toggle} />
       <aside id="app-sidebar" className="sidebar">
-        <SidebarTopStrip collapsed={collapsed} onToggle={toggle} />
         <nav />
       </aside>
     </div>
@@ -75,12 +79,12 @@ afterEach(async () => {
   }
 });
 
-async function mountProbe() {
+async function mountProbe(shortcut = false) {
   await act(async () => {
     root = createRoot(host);
     root.render(
       <LanguageProvider>
-        <Probe />
+        <Probe shortcut={shortcut} />
       </LanguageProvider>,
     );
   });
@@ -111,7 +115,7 @@ test("a stored collapse survives remount", async () => {
 });
 
 test("Cmd/Ctrl+B toggles the rail and skips text fields", async () => {
-  const app = await mountProbe();
+  const app = await mountProbe(true);
   const press = (init: { key: string; metaKey?: boolean; ctrlKey?: boolean }) =>
     win.dispatchEvent(new win.KeyboardEvent("keydown", { ...init, bubbles: true }));
 
@@ -130,4 +134,36 @@ test("Cmd/Ctrl+B toggles the rail and skips text fields", async () => {
     input.dispatchEvent(new win.KeyboardEvent("keydown", { key: "b", metaKey: true, bubbles: true }));
   });
   expect(app.className).not.toContain("app--nav-collapsed");
+});
+
+test("the shortcut stays off in the plain browser shell", async () => {
+  const app = await mountProbe();
+  await act(async () => {
+    win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "b", metaKey: true, bubbles: true }));
+  });
+  expect(app.className).not.toContain("app--nav-collapsed");
+});
+
+test("the traffic-light position and the CSS row stay in step", () => {
+  // desktop/src-tauri/src/lib.rs parks the lights with `traffic_light_position`; the
+  // strips' height and the lights inset live in app-titlebar.css. Drift between them
+  // puts the lights on top of the toggle — this is the check for that.
+  const lib = readFileSync(new URL("../../desktop/src-tauri/src/lib.rs", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../src/components/app-titlebar.css", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  const position = lib.match(/traffic_light_position\(\s*tauri::Position::Logical\(\s*tauri::LogicalPosition::new\(\s*([\d.]+),\s*([\d.]+)/);
+  expect(position).not.toBeNull();
+  const [lightX, lightY] = [Number(position![1]), Number(position![2])];
+  const inset = Number(css.match(/--tl-inset:\s*(\d+)px/)?.[1]);
+  const row = Number(css.match(/--titlebar-h:\s*(\d+)px/)?.[1]);
+  const clear = Number(css.match(/\.app--macos\s*\{\s*--chrome-clear:\s*(\d+)px/)?.[1]);
+  // 52px of lights + 10px of air after the lead inset; the 12px-tall cluster centered
+  // in the row; the collapsed indent clears inset + toggle (28px) + padding (16px).
+  expect(inset).toBe(lightX + 52 + 10);
+  expect(row).toBe(2 * (lightY + 6));
+  expect(clear).toBeGreaterThanOrEqual(inset + 28 + 16);
+  // The expanded strip floats over exactly the sidebar column (.app's first grid track).
+  const column = Number(styles.match(/\.app\s*\{[^}]*grid-template-columns:\s*(\d+)px/)?.[1]);
+  const stripWidth = Number(css.match(/\.sidebar-top\s*\{[^}]*width:\s*(\d+)px/)?.[1]);
+  expect(stripWidth).toBe(column);
 });

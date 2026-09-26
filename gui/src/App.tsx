@@ -206,8 +206,8 @@ export default function App() {
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
   // Codex-style rail collapse on wide screens, persisted; Cmd/Ctrl+B toggles too.
-  const { collapsed: navCollapsed, toggle: toggleNavCollapse } = useSidebarCollapse();
   const desktopShell = isDesktopShell();
+  const { collapsed: navCollapsed, toggle: toggleNavCollapse } = useSidebarCollapse({ shortcut: desktopShell });
   const desktopMac = desktopShell && hostOs() === "macos";
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -415,8 +415,10 @@ export default function App() {
         </div>
       </header>
       {navOpen && <div className="drawer-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+      {/* Fixed to the window's top-left; kept outside .sidebar so the sidebar's
+         backdrop-filter containing block can't clip it to 0 width when collapsed. */}
+      <SidebarTopStrip collapsed={navCollapsed} onToggle={toggleNavCollapse} />
       <aside id="app-sidebar" className={`sidebar${navOpen ? " open" : ""}`} ref={sidebarRef} tabIndex={-1}>
-        <SidebarTopStrip collapsed={navCollapsed} onToggle={toggleNavCollapse} />
         <div className="drawer-head">
           {brand}
           <button type="button" className="menu-toggle drawer-close" onClick={() => setNavOpen(false)}
