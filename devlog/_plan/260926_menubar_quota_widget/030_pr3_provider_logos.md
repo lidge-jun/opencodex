@@ -16,6 +16,9 @@
   100% weekly window no longer reads as healthy. The bar becomes a drawn capsule, which also
   renders faithfully in the offscreen harness (the AppKit progress indicator paints its inactive
   gray there). Thresholds live in `NativeTrayFormat` and are asserted in NativeTrayTests.
+  The capsule keeps the progress view's accessibility label and value; the value text comes from
+  `NativeTrayFormat.percentDescription` ("125 percent", "Unavailable" for no value) and a window
+  without a percentage draws an empty neutral track, so unknown never looks healthy.
 
 ## Diff
 

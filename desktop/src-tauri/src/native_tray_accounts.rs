@@ -128,8 +128,14 @@ pub fn provider(source: &Source, body: Option<&Value>, unavailable: bool) -> Val
     let parsed = body.and_then(parse_accounts);
     let malformed = body.is_some() && parsed.is_none();
     let accounts = parsed.unwrap_or_default();
-    json!({"id":source.name,"label":source.label,
-        "unavailable":unavailable || malformed,"accounts":accounts})
+    let mut row = json!({"id":source.name,"label":source.label,
+        "unavailable":unavailable || malformed,"accounts":accounts});
+    // Optional: older panels ignore unknown keys, and a provider without a mark simply has none.
+    if let Some(icon) = crate::provider_icons::icon(&source.name) {
+        row["iconSvg"] = json!(icon.svg);
+        row["iconPaint"] = json!(icon.paint);
+    }
+    row
 }
 
 fn parse_accounts(body: &Value) -> Option<Vec<Value>> {
@@ -229,5 +235,19 @@ mod tests {
         // Nothing reported means no rows; the view shows its "No quota data" line.
         assert!(labels(json!({})).is_empty());
         assert!(labels(json!({"fiveHourPercent":"n/a","weeklyPercent":-1})).is_empty());
+    }
+    #[test]
+    fn providers_carry_their_mark_when_one_exists() {
+        let source = |name: &str| Source {
+            name: name.into(),
+            label: name.into(),
+            path: None,
+        };
+        let openai = provider(&source("openai"), None, false);
+        assert!(openai["iconSvg"].as_str().unwrap().contains("<svg"));
+        assert_eq!(openai["iconPaint"], "image");
+        assert_eq!(provider(&source("xai"), None, false)["iconPaint"], "mask");
+        let custom = provider(&source("my-endpoint"), None, false);
+        assert!(custom.get("iconSvg").is_none() && custom.get("iconPaint").is_none());
     }
 }

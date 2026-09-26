@@ -22,6 +22,8 @@ public struct NativeTraySnapshot: Decodable {
 
 public enum NativeTrayDecodeError: Error { case unsupportedSchema }
 
+public enum NativeTraySeverity: Equatable { case normal, warn, critical }
+
 public struct NativeTraySettings: Decodable {
     public let showToday: Bool
     public let show30Days: Bool
@@ -90,6 +92,10 @@ public struct NativeTrayProvider: Decodable, Identifiable {
     public let label: String
     public let unavailable: Bool
     public let accounts: [Account]
+    /// The provider's mark as SVG markup, and how to paint it (`image`, `mask`, `plate`,
+    /// `dark-plate`). Both are optional: older hosts and unknown providers send neither.
+    public let iconSvg: String?
+    public let iconPaint: String?
     public struct Account: Decodable, Identifiable {
         public let id: String
         public let label: String
@@ -129,6 +135,19 @@ public enum NativeTrayFormat {
         let seconds = timestamp >= 1e12 ? timestamp / 1000 : timestamp
         guard seconds < 253_402_300_800 else { return nil }
         return Date(timeIntervalSince1970: seconds)
+    }
+    /// Same thresholds as the dashboard quota strip (`gui/src/quota-summary.ts`): warn at 70%,
+    /// critical at 90%. An unknown value is never a severity.
+    public static func severity(_ percent: Double?) -> NativeTraySeverity {
+        guard let percent = number(percent) else { return .normal }
+        if percent >= 90 { return .critical }
+        if percent >= 70 { return .warn }
+        return .normal
+    }
+    /// VoiceOver value for a quota bar.
+    public static func percentDescription(_ percent: Double?) -> String {
+        guard let percent = number(percent) else { return "Unavailable" }
+        return "\(Int(percent.rounded())) percent"
     }
     public static func reset(_ timestamp: Double?, now: Date = Date()) -> String {
         guard let date = date(timestamp), date > now else { return "—" }

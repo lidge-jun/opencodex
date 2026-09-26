@@ -72,4 +72,26 @@ let many = try decode(["providers": (0..<80).map { index in
 }])
 check(many.providers.count == 80, "Long roster must not be truncated to fit the popup")
 check(Set(many.providers.map(\.id)).count == 80, "Provider identities disambiguate equal account ids")
+
+// Provider marks: one representative file per paint mode, decoded by the view's own decoder.
+let icons = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("gui/public/provider-icons")
+for file in ["openai.svg", "grok.svg", "zai.svg", "nebius.svg"] {
+    let svg = try String(contentsOf: icons.appendingPathComponent(file), encoding: .utf8)
+    let image = NativeTrayIcon.image(svg: svg)
+    check(image != nil && image!.size.width > 0 && image!.size.height > 0, "\(file) must decode to a visible mark")
+}
+check(NativeTrayIcon.image(svg: "not an image") == nil, "Unreadable mark data is no mark")
+let marked = try decode(["providers": [["id": "openai", "label": "OpenAI", "unavailable": false, "accounts": [],
+    "iconSvg": "<svg/>", "iconPaint": "mask"]]])
+check(marked.providers[0].iconPaint == "mask" && marked.providers[0].iconSvg == "<svg/>", "Mark fields decode")
+check(quotasOnly.providers[0].iconSvg == nil, "Providers without a mark still decode")
+
+// Quota bars use the dashboard's severity thresholds and keep a spoken value.
+check(NativeTrayFormat.severity(69.9) == .normal && NativeTrayFormat.severity(70) == .warn, "Warn at 70%")
+check(NativeTrayFormat.severity(90) == .critical && NativeTrayFormat.severity(125) == .critical, "Critical at 90%")
+check(NativeTrayFormat.severity(nil) == .normal, "Unknown is not a severity")
+check(NativeTrayFormat.percentDescription(125) == "125 percent", "Over-limit value is spoken as reported")
+check(NativeTrayFormat.percentDescription(nil) == "Unavailable", "Missing value is spoken as unavailable")
 print("PASS: \(assertions) native tray contract/formatting assertions")

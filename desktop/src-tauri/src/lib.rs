@@ -25,6 +25,8 @@ mod popup;
 #[cfg(target_os = "macos")]
 #[path = "native_tray.rs"]
 mod popup;
+#[cfg(target_os = "macos")]
+mod provider_icons;
 // The macOS build selects native_tray.rs as the popup module; compile the portable popup
 // module's tests on macOS too so its navigation rules run on the maintainers' platform.
 #[cfg(all(test, target_os = "macos"))]

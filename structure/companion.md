@@ -58,6 +58,14 @@ rows (`desktop/src-tauri/src/widget.rs`, where a JSON `null` counts as absent) a
 same rule, so a weekly-only plan shows only its weekly row. An account that reports no window keeps
 the surface's "No quota data" line rather than a row of dashes.
 
+Native panel provider headers carry the dashboard's own marks. `desktop/src-tauri/src/provider_icons.rs`
+embeds the SVG files from `gui/public/provider-icons` and mirrors the alias table and paint modes of
+`gui/src/provider-icons.ts`; `gui/tests/provider-icons-native.test.ts` fails when they drift. The
+panel snapshot sends optional `iconSvg` and `iconPaint` per provider, and
+`app/Sources/NativeTray/ProviderMark.swift` decodes the SVG with `NSImage`, painting `mask` marks
+in the label color and `plate`/`dark-plate` marks on a constant plate; an unreadable mark shows
+nothing. Quota bars there use the dashboard strip's severity thresholds (warn 70%, critical 90%).
+
 The Tauri title reads `usage_today()`, matching the widget and retained Swift client. Every refresh
 applies the resulting optional title so icon-only clears an old counter. A nonblank custom template
 takes precedence over icon-only; unavailable measurements render as an em dash, not as a request
