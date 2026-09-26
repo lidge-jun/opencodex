@@ -8,7 +8,7 @@ import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
-import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { loadConfig, saveConfig } from "../../src/config";
 import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { selectImagesProvider } from "../../src/providers/openai-sidecar";
@@ -1676,6 +1676,96 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
     expect(captured).toHaveLength(1);
     expect(captured[0].headers.get("authorization")).toBe("Bearer sk-platform-key");
     expect([...captured[0].headers.values()].some(v => v.includes("local-secret"))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("proxy admission bearer with pool forward candidate routes to OpenAI using pool credentials", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret-pool";
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  saveConfig({
+    ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "openai",
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+    },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-img", email: "pool-img@example.test", isMain: false, chatgptAccountId: "acct-pool-img" },
+    ],
+    activeCodexAccountId: "pool-img",
+  } as OcxConfig);
+  saveCodexAccountCredential("pool-img", {
+    accessToken: "pool-img-access-token",
+    refreshToken: "pool-img-refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    chatgptAccountId: "acct-pool-img",
+  });
+
+  const server = startServer(0);
+  try {
+    // Standard client authenticates with the proxy admission secret in Authorization: Bearer.
+    // In pool mode, this must route to OpenAI forward and replace the bearer with the managed pool token.
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-secret-pool",
+      },
+      body: JSON.stringify({ prompt: "editorial cartoon in ink", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toBe("/images/generations");
+    expect(captured[0].headers.get("authorization")).toBe("Bearer pool-img-access-token");
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-img");
+    expect([...captured[0].headers.values()].some(v => v.includes("proxy-secret-pool"))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("proxy admission bearer with pool auth failure surfaces pool error without falling back to keyed provider", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret-pool";
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  saveConfig({
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+      "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
+    },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    // pool-a has NO stored credential, so forward-auth resolution throws CodexAuthContextError.
+    activeCodexAccountId: "pool-a",
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-secret-pool",
+      },
+      body: JSON.stringify({ prompt: "test prompt", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(401);
+    expect(captured).toHaveLength(0);
+    const json = (await response.json()) as { error: { message: string } };
+    expect(json.error.message).toContain("reauthentication");
   } finally {
     await server.stop(true);
     await upstream.stop(true);
