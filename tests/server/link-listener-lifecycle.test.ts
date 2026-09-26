@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
-import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
+import { createLinkListenerLifecycle, linkListenerOwnsTarget } from "../../src/server/index/link-listener";
 import { emptyLinkStore, type LinkStore } from "../../src/link/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -75,6 +75,12 @@ describe("hub-link listener lifecycle", () => {
     // Removing the last link after a failed bind leaves nothing to report as failed.
     await lifecycle.close();
     expect(lifecycle.status()).toEqual({ state: "off", port: null, reason: null });
+  });
+
+  test("only a successfully bound listener owns a reverse-forward target", () => {
+    expect(linkListenerOwnsTarget({ state: "failed", port: null, reason: "bind" })).toBe(false);
+    expect(linkListenerOwnsTarget({ state: "off", port: null, reason: null })).toBe(false);
+    expect(linkListenerOwnsTarget({ state: "listening", port: 45678, reason: null })).toBe(true);
   });
 
   test("closes the real link socket when listenerPort persistence fails", async () => {
