@@ -77,6 +77,7 @@ export type {
   OcxConnectedClientId,
   OcxClientConnectionConfig,
   OcxConfig,
+  CodexLowQuotaProtectionConfig,
   OcxAccountPoolRotationStrategy,
   OcxAccountPoolQuotaWindow,
   OcxComboCooldownWaitPolicy,
