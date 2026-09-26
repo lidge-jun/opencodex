@@ -217,7 +217,7 @@ export interface ProviderFetchOptions {
   /** One pacing slot was acquired immediately before this fetch wrapper was created. */
   pacingSlotAcquired?: boolean;
   pacingSlot?: ProviderRequestSlot;
-  /** A turn transport may issue interval-paced follow-up sends while its lease is held. */
+  /** A runTurn transport holds one concurrency lease across overlapping physical sends. */
   turnScopedPacing?: boolean;
   /** Captured selected-account observer, attached before the native WS send. */
   onCodexWsQuota?: CodexWsQuotaObserver;
@@ -332,7 +332,10 @@ export function providerFetch(
       if (!options.pacingSlot && requestPacingMaxConcurrentRequests(provider, options.modelId) > 0) {
         throw new Error("A pre-acquired concurrency slot must be passed to providerFetch");
       }
-      return options.pacingSlot;
+      // Cursor RunSSE and BidiAppend can overlap. The runTurn owner releases this slot when
+      // the whole turn finishes; transferring it to RunSSE's body would admit another turn
+      // while a BidiAppend from this one is still active.
+      return options.turnScopedPacing ? undefined : options.pacingSlot;
     }
     if (options.providerName) {
       return waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal,

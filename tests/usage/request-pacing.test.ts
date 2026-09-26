@@ -325,6 +325,35 @@ describe("provider request pacing queue", () => {
 });
 
 describe("provider request concurrency", () => {
+  test("Cursor counts overlapping RunSSE and BidiAppend as one held turn", async () => {
+    let sends = 0;
+    const fetchImpl = Object.assign(async () => {
+      sends += 1;
+      return new Response("ok");
+    }, { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = { ...provider({ enabled: true, maxConcurrentRequests: 1 }), fetch: fetchImpl };
+    const turnSlot = await waitForProviderRequestSlot("cursor", configured, "model-a");
+    const turnFetch = providerFetch(configured, undefined, {
+      providerName: "cursor", modelId: "model-a", pacingSlotAcquired: true,
+      pacingSlot: turnSlot, turnScopedPacing: true,
+    });
+    const otherTurnFetch = providerFetch(configured, undefined, { providerName: "cursor", modelId: "model-a" });
+    try {
+      expect(await (await turnFetch("https://example.test/RunSSE")).text()).toBe("ok");
+      expect(providerRequestPacingStatus("cursor", configured).inFlight).toBe(1);
+      expect(await (await turnFetch("https://example.test/BidiAppend")).text()).toBe("ok");
+      expect(sends).toBe(2);
+      const otherTurn = otherTurnFetch("https://example.test/other", { signal: AbortSignal.timeout(500) });
+      await Bun.sleep(0);
+      expect(providerRequestPacingStatus("cursor", configured).queued).toBe(1);
+      turnSlot.release();
+      expect(await (await otherTurn).text()).toBe("ok");
+      expect(sends).toBe(3);
+    } finally {
+      turnSlot.release();
+    }
+  });
+
   test("an active body holds capacity until cancellation", async () => {
     let sends = 0;
     const fetchImpl = Object.assign(async () => {

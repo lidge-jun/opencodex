@@ -149,12 +149,14 @@ Provider request pacing in `src/providers/request-pacing.ts` combines start inte
 `maxConcurrentRequests` limits. Provider capacity is shared across models; exact-model limits
 apply in addition to that capacity. Admission reserves both counters atomically, and eligible
 sibling models may bypass a saturated model lane. Releases are idempotent, wake queued requests,
-and retain interval deadlines. A lease follows each physical HTTP send through response-body
-completion, error, or cancellation; failed dispatch and active abort also return it. Unconsumed
-or inactive bodies are cancelled after a bounded deadline so a dropped response cannot hold
-capacity indefinitely. A capped canonical Codex WebSocket turn uses HTTP/SSE because the socket
-has no response-body lifecycle to return the lease. Capacity waits use the same bounded queue
-and retryable queue-overload errors as interval waits.
+and retain interval deadlines. Ordinary HTTP leases follow each physical send through body
+completion, error, or cancellation; failed dispatch and active abort also return them. Unconsumed
+or inactive bodies are cancelled after a bounded deadline. For `runTurn` adapters, including
+Cursor, one lease spans the whole turn: RunSSE and BidiAppend may overlap inside it, while other
+turns wait at the cap. Follow-up sends still obey start intervals. The turn owner returns its lease
+after `runTurn` settles, so RunSSE body completion cannot admit another turn early. A capped
+canonical Codex WebSocket turn uses HTTP/SSE because the socket has no response-body lifecycle.
+Capacity waits use the same bounded queue and retryable queue-overload errors as interval waits.
 
 ## TypeSafe JEV decision provider
 
