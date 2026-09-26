@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanStorage, scanStorageAsync, type StorageBucket, type StorageReport } from "../../src/storage/scanner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { sharedStorageScan } from "../../src/server/management/storage-log-guard-routes";
+import { logGuardResultMayHaveChangedStorage, sharedStorageScan } from "../../src/server/management/storage-log-guard-routes";
 import {
   noteStorageMutationCompleted,
   storageMutationEpoch,
@@ -360,6 +360,21 @@ describe("shared storage scan flights", () => {
     releases[1]!(report(40));
     expect(await afterMutation).toEqual(report(40));
     expect(await laterRead).toEqual(report(40));
+  });
+
+  test("only Log Guard results that may have changed storage invalidate scans", () => {
+    // A refused compact (e.g. unsupported_schema) exits before touching the database;
+    // invalidating on it let repeated refused requests start overlapping scans.
+    for (const error of ["unsupported_schema", "codex_running", "process_enumeration_failed", "unsafe_path", "auto_vacuum_not_incremental"] as const) {
+      expect(logGuardResultMayHaveChangedStorage({ ok: false, error })).toBe(false);
+    }
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "trigger_collision" })).toBe(false);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "integrity_check_failed", phase: "before" })).toBe(false);
+
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "integrity_check_failed", phase: "after" })).toBe(true);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "busy" })).toBe(true);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "database_error" })).toBe(true);
+    expect(logGuardResultMayHaveChangedStorage({ ok: false, error: "config_write_failed" })).toBe(true);
   });
 
   test("releasing a coordinated mutation lease advances the storage mutation epoch", () => {

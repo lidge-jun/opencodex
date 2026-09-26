@@ -135,8 +135,34 @@ export function sharedStorageScan(
   return flight.promise;
 }
 
-function afterLogGuardMutation(response: Response): Response {
-  noteStorageMutationCompleted();
+/**
+ * Log Guard results that are refused before anything under CODEX_HOME is touched. Anything
+ * else (success, a database or config write failure, `busy` which compaction can report
+ * after partial progress, a post-compaction integrity failure) may have changed storage.
+ */
+const REFUSED_BEFORE_CHANGE: ReadonlySet<string> = new Set([
+  "unsupported_schema",
+  "codex_running",
+  "process_enumeration_failed",
+  "unsafe_path",
+  "trigger_collision",
+  "auto_vacuum_not_incremental",
+]);
+
+export function logGuardResultMayHaveChangedStorage(
+  result: CodexLogGuardMutationResult | CodexLogGuardCompactionResult,
+): boolean {
+  if (result.ok) return true;
+  if (result.error === "integrity_check_failed") return result.phase === "after";
+  return !REFUSED_BEFORE_CHANGE.has(result.error);
+}
+
+/** Invalidate in-flight storage scans only when the Log Guard operation may have changed storage. */
+function afterLogGuardMutation(
+  result: CodexLogGuardMutationResult | CodexLogGuardCompactionResult,
+  response: Response,
+): Response {
+  if (logGuardResultMayHaveChangedStorage(result)) noteStorageMutationCompleted();
   return response;
 }
 
@@ -165,22 +191,26 @@ export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promi
     if (req.method !== "POST") return null;
     const mode = await readProtectMode(ctx);
     if (mode instanceof Response) return mode;
-    return afterLogGuardMutation(mutationResponse(protectCodexLogs(mode, protectionDeps), ctx));
+    const result = protectCodexLogs(mode, protectionDeps);
+    return afterLogGuardMutation(result, mutationResponse(result, ctx));
   }
 
   if (url.pathname === "/api/storage/codex-logs/unprotect") {
     if (req.method !== "POST") return null;
-    return afterLogGuardMutation(mutationResponse(unprotectCodexLogs(protectionDeps), ctx));
+    const result = unprotectCodexLogs(protectionDeps);
+    return afterLogGuardMutation(result, mutationResponse(result, ctx));
   }
 
   if (url.pathname === "/api/storage/codex-logs/repair") {
     if (req.method !== "POST") return null;
-    return afterLogGuardMutation(mutationResponse(repairCodexLogGuardProtection(protectionDeps), ctx));
+    const result = repairCodexLogGuardProtection(protectionDeps);
+    return afterLogGuardMutation(result, mutationResponse(result, ctx));
   }
 
   if (url.pathname === "/api/storage/codex-logs/compact") {
     if (req.method !== "POST") return null;
-    return afterLogGuardMutation(compactResponse(compactCodexLogs(deps.codexLogGuardMaintenanceDeps), ctx));
+    const result = compactCodexLogs(deps.codexLogGuardMaintenanceDeps);
+    return afterLogGuardMutation(result, compactResponse(result, ctx));
   }
 
   if (url.pathname !== "/api/storage" || req.method !== "GET") return null;
