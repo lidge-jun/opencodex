@@ -12,6 +12,44 @@ export const SYSTEM_RESTART_CAPABILITY_HEADER = "x-opencodex-restart-capability"
 export const MEMORY_DRAIN_RESTART_MS = 60_000;
 export const REPLACEMENT_READY_TIMEOUT_MS = 70_000;
 
+/**
+ * The env var a restarting process hands its replacement `ocx start`: the restarting (parent) pid.
+ *
+ * The replacement can probe while its parent still answers on the port it is about to take over
+ * (a deadline or listener-stop-fallback handoff spawns before the old listener is gone). Without
+ * the marker that answer reads as "a proxy is already running" and the replacement refuses, which
+ * leaves no proxy at all once the parent exits. `handleStart` consumes the marker before any probe
+ * (`src/cli/restart-handoff.ts`), so no later child of the replacement inherits it.
+ */
+export const RESTART_PARENT_PID_ENV = "OCX_RESTART_PARENT_PID";
+
+type RestartEnv = Record<string, string | undefined>;
+
+/** A copy of `env` for this process's own replacement, naming `parentPid` as its restart parent. */
+export function withRestartParentMarker<T extends RestartEnv>(env: T, parentPid: number): T {
+  const next: RestartEnv = { ...env };
+  next[RESTART_PARENT_PID_ENV] = String(parentPid);
+  return next as T;
+}
+
+/**
+ * Consume an inherited restart-parent marker. The marker is removed from `env` either way, and the
+ * pid is honored only when it is this process's actual parent: a stale or hand-set value names a
+ * process that did not spawn this start and never earns the wait.
+ */
+export function takeRestartParentMarker(
+  env: RestartEnv,
+  actualParentPid: number = process.ppid,
+  ownPid: number = process.pid,
+): number | null {
+  const raw = env[RESTART_PARENT_PID_ENV]?.trim() ?? "";
+  delete env[RESTART_PARENT_PID_ENV];
+  if (!/^[1-9]\d{0,9}$/.test(raw)) return null;
+  const pid = Number(raw);
+  if (!Number.isSafeInteger(pid) || pid === ownPid || pid !== actualParentPid) return null;
+  return pid;
+}
+
 const BASE64URL_256 = /^[A-Za-z0-9_-]{43}$/;
 
 export type ExpectedSystemRestartPid =
