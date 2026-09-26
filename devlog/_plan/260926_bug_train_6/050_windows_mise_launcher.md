@@ -15,3 +15,11 @@ block, so they still run everywhere, now with a `runningRoot` that throws if it 
 
 Check: focused test locally (14 pass) and on `mini` (4 pass, 10 skipped), tsc, exact-head CI including `windows 6/9`.
 
+
+## Outcome
+
+Merged as #5957 (`8258ef8075`). PR CI skipped the Windows shards by path filter, so a `workflow_dispatch` run on the
+branch head `404a1ee502` (run 36249508035) supplied the evidence: `windows 6/9` and every other Windows shard passed.
+The next full `dev` run (36250434617, at `8258ef8075`) passed `windows 6/9` as well. It failed only `windows 8/9`, on a
+10s timeout in `GET /api/settings reports external Codex ownership`. That job had passed at `404a1ee502` and
+`fa46080b6c`, and #5930 landed in between, so the failed job was rerun to tell a flake from a regression.
