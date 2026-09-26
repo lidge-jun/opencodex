@@ -11,7 +11,7 @@ import {
   type CodexLogGuardMutationResult,
   type CodexLogGuardStatus,
 } from "../../codex/log-guard/protection";
-import { scanStorage } from "../../storage/scanner";
+import { scanStorageAsync, type StorageReport } from "../../storage/scanner";
 import { jsonResponse } from "../auth-cors";
 import {
   managementBodyTooLargeResponse,
@@ -104,6 +104,22 @@ async function readProtectMode(ctx: ManagementContext): Promise<"compat" | "quie
   return mode;
 }
 
+/**
+ * Concurrent GET /api/storage requests for the same CODEX_HOME share one walk; nothing is
+ * cached past it, so a report requested after a cleanup always rescans.
+ */
+const storageScanFlights = new Map<string, Promise<StorageReport>>();
+
+function sharedStorageScan(codexHome: string): Promise<StorageReport> {
+  const pending = storageScanFlights.get(codexHome);
+  if (pending) return pending;
+  const flight = scanStorageAsync(codexHome).finally(() => {
+    storageScanFlights.delete(codexHome);
+  });
+  storageScanFlights.set(codexHome, flight);
+  return flight;
+}
+
 /** Codex Log Guard diagnostics plus explicit protection and maintenance mutations. */
 export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
@@ -154,7 +170,7 @@ export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promi
   // silently folded into CODEX_HOME totals.
   let storage;
   try {
-    storage = scanStorage();
+    storage = await sharedStorageScan(resolveCodexHomeDir());
   } catch {
     const fallback = {
       codexHome: resolveCodexHomeDir(),
