@@ -2653,8 +2653,8 @@ describe("provider management validation", () => {
     saveConfig(config("127.0.0.1"));
     stubModelDiscoveryFor("https://api.example.com", "http://127.0.0.1:11434");
 
-    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     const server = startServer(0);
+    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     try {
       const createRes = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
@@ -2732,8 +2732,8 @@ describe("provider management validation", () => {
     saveConfig(config("127.0.0.1"));
     stubModelDiscoveryFor("https://api.example.com");
 
-    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     const server = startServer(0);
+    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     try {
       const createRes = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
