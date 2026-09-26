@@ -60,12 +60,12 @@ export default {
 };
 `;
 
-test("a missing plugin directory loads nothing", async () => {
+test.skipIf(process.platform === "win32")("a missing plugin directory loads nothing", async () => {
   expect(await loadOcxPlugins(join(dir, "absent"))).toEqual([]);
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
-test("a valid plugin registers its upstream rewriter", async () => {
+test.skipIf(process.platform === "win32")("a valid plugin registers its upstream rewriter", async () => {
   writePlugin("redirect.ts", REDIRECT_PLUGIN);
   const results = await loadOcxPlugins(dir);
   expect(results.map(result => [result.name, result.loaded])).toEqual([["redirect", true]]);
@@ -93,7 +93,7 @@ test("Windows does not auto-load plugins without an ACL trust check", async () =
   }
 });
 
-test("plugin setup exceptions expose only a bounded category", async () => {
+test.skipIf(process.platform === "win32")("plugin setup exceptions expose only a bounded category", async () => {
   const marker = "private plugin error marker";
   writePlugin("throws.ts", `export default { setup() { throw new Error("${marker}"); } };`);
   const results = await loadOcxPlugins(dir);
@@ -110,9 +110,24 @@ test.skipIf(process.platform === "win32")("a group- or world-writable plugin is 
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
+test.skipIf(process.platform !== "darwin")("ACL trust uses macOS ls when PATH contains incompatible ls", () => {
+  const file = writePlugin("redirect.ts", REDIRECT_PLUGIN);
+  const fakeLs = join(dir, "ls");
+  writeFileSync(fakeLs, "#!/bin/sh\nexit 2\n");
+  chmodSync(fakeLs, 0o700);
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
+    expect(pluginFileTrustError(file)).toBeNull();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+});
+
 test.skipIf(process.platform !== "darwin")("a mode-0600 plugin with an everyone-write ACL is refused", async () => {
   const path = writePlugin("acl.ts", REDIRECT_PLUGIN, 0o600);
-  execFileSync("chmod", ["+a", "everyone allow write", path]);
+  execFileSync("/bin/chmod", ["+a", "everyone allow write", path]);
   expect(pluginFileTrustError(path)).toBe("has an access control list");
   const [result] = await loadOcxPlugins(dir);
   expect(result?.error).toBe("file_untrusted");
@@ -125,7 +140,7 @@ test.skipIf(process.platform !== "darwin")("an ACL on an ancestor directory bloc
   try {
     mkdirSync(nested);
     writeFileSync(join(nested, "redirect.ts"), REDIRECT_PLUGIN);
-    execFileSync("chmod", ["+a", "everyone allow write", parent]);
+    execFileSync("/bin/chmod", ["+a", "everyone allow write", parent]);
     const [result] = await loadOcxPlugins(nested);
     expect(result?.error).toBe("ancestor_untrusted");
     expect(hasUpstreamRewriters()).toBe(false);
@@ -136,7 +151,7 @@ test.skipIf(process.platform !== "darwin")("an ACL on an ancestor directory bloc
 
 test.skipIf(process.platform !== "darwin")("an ACL on the plugin directory blocks plugin loading", async () => {
   writePlugin("redirect.ts", REDIRECT_PLUGIN);
-  execFileSync("chmod", ["+a", "everyone allow write", dir]);
+  execFileSync("/bin/chmod", ["+a", "everyone allow write", dir]);
   const [result] = await loadOcxPlugins(dir);
   expect(result?.error).toBe("directory_untrusted");
   expect(hasUpstreamRewriters()).toBe(false);
@@ -240,7 +255,7 @@ test.skipIf(process.platform === "win32")("a plugin directory under a group-writ
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
-test("a wrong export shape or a throwing setup is skipped and leaves no hooks behind", async () => {
+test.skipIf(process.platform === "win32")("a wrong export shape or a throwing setup is skipped and leaves no hooks behind", async () => {
   writePlugin("a-shape.ts", "export default { name: 'shape' };");
   writePlugin("b-throws.ts", `
 export default {
@@ -261,7 +276,7 @@ export default {
   expect(rewriteUpstream("https://api.example.com/v1/x", undefined, "http").url).toBe("http://127.0.0.1:8787/v1/x");
 });
 
-test("a plugin path that cannot be read is reported, not treated as empty", async () => {
+test.skipIf(process.platform === "win32")("a plugin path that cannot be read is reported, not treated as empty", async () => {
   const notADirectory = writePlugin("file-not-dir", "x");
   const results = await loadOcxPlugins(notADirectory);
   expect(results).toHaveLength(1);
@@ -270,7 +285,7 @@ test("a plugin path that cannot be read is reported, not treated as empty", asyn
   expect(results[0]?.error).toBe("directory_read_failed");
 });
 
-test("two plugins with the same name keep separate shutdown teardowns", async () => {
+test.skipIf(process.platform === "win32")("two plugins with the same name keep separate shutdown teardowns", async () => {
   const ran: string[] = [];
   (globalThis as Record<string, unknown>)["__ocxTeardownLog"] = ran;
   const source = (tag: string) => `
@@ -293,7 +308,7 @@ export default {
   }
 });
 
-test("one plugin can register several shutdown teardowns", async () => {
+test.skipIf(process.platform === "win32")("one plugin can register several shutdown teardowns", async () => {
   const ran: string[] = [];
   (globalThis as Record<string, unknown>)["__ocxTeardownLog"] = ran;
   writePlugin("multi.ts", `
@@ -315,7 +330,7 @@ export default {
   }
 });
 
-test("a setup that resumes after its deadline cannot leave registrations behind", async () => {
+test.skipIf(process.platform === "win32")("a setup that resumes after its deadline cannot leave registrations behind", async () => {
   writePlugin("slow.ts", `
 export default {
   name: "slow",
@@ -338,7 +353,7 @@ export default {
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
-test("hidden, underscore-prefixed and declaration files are ignored", async () => {
+test.skipIf(process.platform === "win32")("hidden, underscore-prefixed and declaration files are ignored", async () => {
   writePlugin(".hidden.ts", REDIRECT_PLUGIN);
   writePlugin("_draft.ts", REDIRECT_PLUGIN);
   writePlugin("types.d.ts", "export {};");

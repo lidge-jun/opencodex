@@ -64,7 +64,9 @@ const ACL_PROBE_TIMEOUT_MS = 2_000;
 function aclTrustError(path: string): string | null {
   if (process.platform !== "darwin" && process.platform !== "linux") return null;
   const mac = process.platform === "darwin";
-  const result = spawnSync(mac ? "ls" : "getfacl", mac
+  // CI and operator PATHs may put GNU coreutils ahead of the macOS tool.
+  // GNU ls does not support -e, so pin the OS ACL inspector.
+  const result = spawnSync(mac ? "/bin/ls" : "getfacl", mac
     ? ["-lebd", "--", path]
     : ["-cp", "--", path], {
     encoding: "utf8",
