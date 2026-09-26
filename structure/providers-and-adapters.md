@@ -388,6 +388,18 @@ this field in the tree, so a value that survives file load still cannot be spent
 silently by design; config-time is where the operator is told why. The planner requires the
 provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
 
+## Meta Responses tool selection
+
+At the final request boundary for `api.meta.ai`, `src/adapters/openai-responses/passthrough.ts`
+uses `src/adapters/openai-responses/muse-tool-choice.ts` to normalize `tool_choice`. Omitted or
+`auto` selection keeps its meaning. Explicit `none` sets `tools` to an empty list, removes
+`additional_tools` items from `input`, and omits `tool_choice` and `parallel_tool_calls` from the
+outgoing body. Forced, named, and `allowed_tools` selections fail with HTTP 400 before the
+upstream send because Muse supports only `auto`. Filtering a required tool never changes the
+caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
+destination. The input body, historical tool calls and results, and non-Meta requests keep their
+existing meaning.
+
 ## Shared type declarations
 
 `src/types/` holds the declarations every layer imports: config types (`src/types/config.ts`),
