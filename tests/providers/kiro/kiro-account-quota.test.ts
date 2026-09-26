@@ -178,3 +178,60 @@ describe("Kiro per-account quota", () => {
     expect(getKiroAccountExhaustion(key)?.exhausted).toBe(false);
   });
 });
+
+describe("Kiro Builder ID usage probe", () => {
+  const BUILDER_ID_ARN = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX";
+
+  function captureProbe(): Array<{ host: string; arn: string | null; bodyArn: unknown }> {
+    const seen: Array<{ host: string; arn: string | null; bodyArn: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input instanceof Request ? input : String(input), init);
+      const url = new URL(request.url);
+      const body = await request.json() as Record<string, unknown>;
+      seen.push({ host: url.host, arn: url.searchParams.get("profileArn"), bodyArn: body.profileArn });
+      // Builder ID accounts answer with a CREDIT-only breakdown (observed live), so this also pins
+      // the parser's fallback past AGENTIC_REQUEST.
+      return new Response(JSON.stringify({
+        usageBreakdownList: [{
+          resourceType: "CREDIT",
+          currentUsageWithPrecision: 25.21,
+          usageLimitWithPrecision: 5000,
+          unit: "CREDITS",
+        }],
+        overageConfiguration: { overageStatus: "DISABLED" },
+        nextDateReset: Math.floor(Date.now() / 1000) + 3 * 24 * 3600,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    return seen;
+  }
+
+  test("a Builder ID account without a stored ARN sends the service profile and reports usage", async () => {
+    // Builder ID credentials carry the OIDC client pair and never an account-scoped ARN.
+    await saveCredential("kiro", {
+      access: "token-bid", refresh: "refresh-bid", expires: Date.now() + 60 * 60_000,
+      accountId: "kiro-bid", email: "bid@example.com",
+      kiro: { apiRegion: "us-west-2", ssoRegion: "us-west-2", clientId: "client-id", clientSecret: "client-secret" },
+    });
+    const seen = captureProbe();
+    const rows = await fetchProviderAccountQuotas("kiro");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.arn).toBe(BUILDER_ID_ARN);
+    expect(seen[0]!.bodyArn).toBe(BUILDER_ID_ARN);
+    // The fixed ARN is Amazon's us-east-1 profile; it must not pin the account's own region.
+    expect(seen[0]!.host).toBe("management.us-west-2.kiro.dev");
+    expect(rows[0]!.quota?.monthlyPercent).toBeCloseTo(0.5042, 4);
+  });
+
+  test("a non-Builder-ID account without a stored ARN still sends none", async () => {
+    await saveCredential("kiro", {
+      access: "token-desk", refresh: "refresh-desk", expires: Date.now() + 60 * 60_000,
+      accountId: "kiro-desk", email: "desk@example.com",
+      kiro: { apiRegion: "us-east-1", ssoRegion: "us-east-1" },
+    });
+    const seen = captureProbe();
+    await fetchProviderAccountQuotas("kiro");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.arn).toBeNull();
+    expect(seen[0]!.bodyArn).toBeUndefined();
+  });
+});

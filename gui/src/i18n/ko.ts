@@ -1395,6 +1395,8 @@ export const ko: Record<TKey, string> = {
   "nav.openMenu": "메뉴 열기",
   "nav.closeMenu": "메뉴 닫기",
   "nav.goHome": "대시보드로 이동",
+  "nav.collapseSidebar": "사이드바 접기",
+  "nav.expandSidebar": "사이드바 펼치기",
   "pws.refreshAllQuotas": "전체 할당량 갱신",
   "pws.quotaRefreshDone": "할당량 조회를 마쳤습니다",
   "integrations.subtitle": "클라이언트를 opencodex에 연결하고 자격 증명과 설정 복원을 관리합니다.",

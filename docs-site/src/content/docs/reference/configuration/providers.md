@@ -865,10 +865,17 @@ The Codex pool and the Anthropic pool are excluded and keep their own rotation; 
 changes neither. A provider with a single stored account is a strict no-op, and no cooldown is
 recorded for it.
 
-On a 429 the failed account is cooled using `Retry-After` when present (capped at 15 minutes)
-or a default backoff, and the request is replayed on the next eligible account, up to three
-rotations per request. An account flagged for reauthentication is never selected. Cooldowns are
-process-local, so a restart forgets them.
+Before dispatch, generic OAuth snapshots the eligible roster. On a 429 the failed account is cooled
+using `Retry-After` when present (capped at 15 minutes) or a default backoff, and the request is
+replayed on the next account selected from the live roster. The stable rotation ceiling is
+`max(3, min(eligibleCount, 6) - 1)` per request; live selection still filters cooldowns, and an account
+flagged for reauthentication is never selected. Cooldowns are process-local, so a restart forgets
+them.
+
+When at least two accounts are eligible, the ingress-owned default send allowance covers up to three
+sends per eligible account, counting at most six accounts, so one request
+makes no more than 18 sends however many accounts are enrolled. A single eligible account keeps the existing base allowance of three and
+total allowance of four. Explicit caller ceilings and combo scopes keep their existing limits.
 
 Rotation carries the alternate account's **full** credential snapshot, not just its bearer, so a
 provider that pairs routing metadata with its token — Antigravity's Cloud Code Assist project id,

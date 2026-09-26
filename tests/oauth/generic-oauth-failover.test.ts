@@ -352,7 +352,7 @@ describe("sidecar on429 wiring", () => {
     // The gate is a POSITIVE else-if, not an early return: an early bare return here made the
     // Anthropic arm below unreachable, because Anthropic never has a genericFailoverAccountId.
     expect(body).toContain("genericFailoverAccountId");
-    expect(body).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(body).toContain("genericFailovers < transportState.genericFailoverLimit");
     expect(body).toContain("isGenericOAuthFailoverEnabled(config, route.providerName)");
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
