@@ -1652,7 +1652,7 @@ describe("provider registry parity", () => {
       provider: "commandcode",
     });
     expect(model.id).toBe("z-ai/glm-5.3-flash");
-    expect(model.reasoningEfforts).toEqual(["low", "high", "max"]);
+    expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
     const entry = entries.find(e => e.slug === "commandcode/z-ai-glm-5.3-flash");
@@ -1661,7 +1661,7 @@ describe("provider registry parity", () => {
     expect(entry?.supported_reasoning_levels).not.toEqual([]);
     // Routed catalogs append the synthetic top rung, as every other routed row above does.
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
-      .toEqual(["low", "high", "max", "ultra"]);
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
   /*
    * #1043. Zen publishes no modality metadata, so the classification below is an
@@ -1856,8 +1856,8 @@ describe("renamed fixed-key destination reasoning metadata", () => {
   test("fills known model tables and unknown-model default for CommandCode", () => {
     const provider = make();
     enrichProviderFromRegistry("CommandCode", provider);
-    expect(configuredReasoningEfforts(provider, known)).toEqual(["high", "max"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
+    expect(configuredReasoningEfforts(provider, known)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual([]);
   });
   test("preserves explicit entries and clones arrays without losing other table rows", () => {
@@ -1870,7 +1870,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     enrichProviderFromRegistry("CommandCode", provider);
     expect(provider).toEqual(once);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["low"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(configuredReasoningEfforts(provider, "custom")).toEqual([]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual(["medium"]);
     provider.modelReasoningEfforts![known]!.push("high");
@@ -1882,7 +1882,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make({ modelReasoningEfforts: { [known]: [] } });
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual([]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
   test("does not infer metadata for a different adapter, OAuth, or unrelated endpoint", () => {
     for (const override of [{ adapter: "openai-responses" }, { authMode: "oauth" as const }, { baseUrl: "https://example.test/v1" }]) {

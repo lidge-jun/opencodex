@@ -71,9 +71,9 @@ describe("Command Code provider", () => {
       apiKeyValidation: "unknown",
       reasoningEfforts: [],
       modelReasoningEfforts: {
-        "deepseek/deepseek-v4-flash-vision-exp": ["high", "max"],
+        "deepseek/deepseek-v4-flash-vision-exp": ["low", "medium", "high", "xhigh", "max"],
         "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
-        "google/gemini-3.7-flash": ["low", "medium", "high"],
+        "google/gemini-3.7-flash": ["low", "medium", "high", "xhigh", "max"],
       },
       modelDiscovery: {
         path: "models",
@@ -216,7 +216,7 @@ describe("Command Code provider", () => {
     expect(deepseek.contextWindow).toBe(1_000_000);
     expect(deepseek.owned_by).toBe("command-code");
     // #1800: discovered models now surface the curated effort table (command-code-efforts.ts).
-    expect(deepseek.reasoningEfforts).toEqual(["high", "max"]);
+    expect(deepseek.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     const haiku = models.find(row => row.id === "claude-haiku-4-5-20251001")!;
     expect(haiku.contextWindow).toBe(200_000);
@@ -228,7 +228,7 @@ describe("Command Code provider", () => {
     expect(models.find(row => row.id === "deepseek/deepseek-v4-flash-vision-exp"))
       .toMatchObject({
         id: "deepseek/deepseek-v4-flash-vision-exp",
-        reasoningEfforts: ["high", "max"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
       });
     expect(models.find(row => row.id === "gpt-5.6-luna")).toMatchObject({
       id: "gpt-5.6-luna",
@@ -236,7 +236,7 @@ describe("Command Code provider", () => {
     });
     expect(models.find(row => row.id === "google/gemini-3.7-flash")).toMatchObject({
       id: "google/gemini-3.7-flash",
-      reasoningEfforts: ["low", "medium", "high"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     });
     expect(models.find(row => row.id === "Qwen/Qwen3.8-Flash")?.reasoningEfforts)
       .toEqual(["low", "medium", "high", "xhigh", "max"]);

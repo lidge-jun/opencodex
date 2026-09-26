@@ -139,6 +139,14 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+Command Code effort defaults in `src/providers/command-code-efforts.ts` combine public-profile
+facts with the live API measurements from #5096. Both presets share the exact per-model rows;
+`xhigh` is preserved when accepted, and narrow ladders such as Laguna's `medium`-only row remain
+narrow. Rows without a verified profile URL still record rejected efforts but skip profile fetching.
+An explicit `modelReasoningEffortsAuthoritative` model row overrides the shipped ladder; seeded
+rows without that flag do not. `tests/providers/command-code-efforts.test.ts` covers the measured
+rows and wire values; `tests/providers/command-code-provider.test.ts` covers operator overrides.
+
 ## TypeSafe JEV decision provider
 
 `src/providers/registry/entries-extended.ts` owns the canonical `jev` key preset at
