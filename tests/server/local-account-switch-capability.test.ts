@@ -87,10 +87,14 @@ describe("local account switch capability", () => {
     expect(hasLocalAccountSwitchCapability(origin, local)).toBe(false);
     const wrongPid = signed(path, body); wrongPid.headers.set(pidHeader, "4243");
     expect(hasLocalAccountSwitchCapability(wrongPid, local)).toBe(false);
-    const expired = signed(path, body, { expiry: Date.now() - 1 });
-    expect(hasLocalAccountSwitchCapability(expired, local)).toBe(false);
-    const future = signed(path, body, { expiry: Date.now() + 10_001 });
-    expect(hasLocalAccountSwitchCapability(future, local)).toBe(false);
+    // One pinned clock for minting and checking, so the ten-second boundary cannot drift.
+    const clock = Date.now();
+    const expired = signed(path, body, { expiry: clock - 1 });
+    expect(hasLocalAccountSwitchCapability(expired, local, clock)).toBe(false);
+    const future = signed(path, body, { expiry: clock + 10_001 });
+    expect(hasLocalAccountSwitchCapability(future, local, clock)).toBe(false);
+    const edge = signed(path, body, { expiry: clock + 10_000 });
+    expect(hasLocalAccountSwitchCapability(edge, local, clock)).toBe(true);
     expect(createLocalAccountSwitchCapability(secret, nonce, "GET", path, pid, port, expiresAt, vectors[0][2])).toBeNull();
   });
 
