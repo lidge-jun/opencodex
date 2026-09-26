@@ -11,15 +11,19 @@
   does not say whether a menu bar accessory app counts as "in the foreground" for the budget
   exemption, so this design assumes it does not. "Displaying dynamic dates in widgets" documents
   `Text(date, style: .relative)` as updating while visible without a reload.
-- Decision: the change comparison ignores `generatedAt` and `lastUpdated`. The writer writes
-  (and then reloads) when that content changed, or when the previous file is older than a
-  15-minute heartbeat so the widget can still tell a live app from a stopped one. The widget
-  shows its age with a relative date, treats a snapshot older than 30 minutes (two heartbeats)
-  as stale, and asks WidgetKit for a fallback timeline every 15 minutes instead of 5.
-- No in-memory throttle. The heartbeat reads `generatedAt` from the file already on disk, so a
-  restarted app behaves the same as a running one. Writes happen at most once per tray poll
-  (5 minutes) plus explicit refreshes, which bounds reloads during active use to about one
-  per 5 minutes, WidgetKit's documented minimum spacing, and to four per hour when idle.
+- Decision (revised after review on #5920/#5921): writing and reloading are separate.
+  - The file is written whenever anything other than `generatedAt` changed, including
+    `lastUpdated`, so the on-disk "Updated" time is always the latest poll; an otherwise unchanged
+    file is rewritten after a 15-minute heartbeat so its `generatedAt` keeps proving the app is
+    alive. Writing costs no WidgetKit budget.
+  - A reload is requested only when what the widget displays changed (ignoring both
+    timestamps), and at most once every 20 minutes (at most 72 a day). Timestamp-only writes and
+    heartbeats never reload. Dashboard visibility does not lift the limit, because Apple does not
+    define whether a menu bar accessory app counts as foreground.
+  - A change that arrives inside the 20-minute window is not lost: the file already holds it and
+    the widget's own fallback timeline (30 minutes) rereads it.
+  - The widget shows its age with a relative date and treats a snapshot older than 30 minutes (two
+    heartbeats) as stale, with a scheduled stale entry so the tint appears on time.
 
 ## Diff
 
