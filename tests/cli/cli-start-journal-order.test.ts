@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { watchdogMs } from "../helpers/ci-watchdog";
@@ -404,15 +404,18 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
       expect(sibling.runtime.siblingOfPort).toBe(ownerRuntime.port);
       expect(snapshot()).toEqual(before);
 
-      // The live owner's service, recorded as installed from the default home, for every stop leg
+      // The live owner's service, recorded as installed from the default home, for the first stop
+      // and hard-kill legs
       // below. Its ownership check fails from the sibling's home; a sibling never runs under a
       // service manager, so neither `ocx stop` nor the sibling's own /api/stop may ask one. The
       // record has to be the authority the child resolves, or these legs would prove nothing.
       const defaultHome = join(fx.env.HOME, ".opencodex");
       mkdirSync(defaultHome, { recursive: true });
-      writeFileSync(join(defaultHome, "service-state.json"), JSON.stringify({
+      const serviceStatePath = join(defaultHome, "service-state.json");
+      const serviceState = JSON.stringify({
         version: 1, codexHome: fx.codexHome, opencodexHome: defaultHome,
-      }));
+      });
+      writeFileSync(serviceStatePath, serviceState);
       const installed = selectAuthoritativeServiceState(inspectServiceStateRecords(serviceStatePathsForHomes(siblingHome, defaultHome)));
       expect(installed.kind === "state" ? installed.state.opencodexHome : installed.kind).toBe(defaultHome);
 
@@ -432,6 +435,18 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
         second.child.kill("SIGTERM");
         await second.child.exited;
         expect(snapshot()).toEqual(before);
+        // Clean shutdown removed the sibling record. The configured-port fallback now finds
+        // the owner, but a healthz identity alone does not prove it belongs to this home. With
+        // the unrelated service record absent, no earlier ownership gate masks this bug.
+        unlinkSync(serviceStatePath);
+        const cleanExitStop = await runCli({ ...fx, env: siblingEnv }, ["stop"]);
+        expect(cleanExitStop.exitCode).toBe(1);
+        expect(cleanExitStop.stderr).toContain("belongs to this home");
+        const ownerHealth = await fetch(`http://127.0.0.1:${ownerRuntime.port}/healthz`)
+          .then(response => response.json()) as { pid?: number };
+        expect(ownerHealth.pid).toBe(owner.pid);
+        expect(snapshot()).toEqual(before);
+        writeFileSync(serviceStatePath, serviceState);
       }
 
       // A hard-killed sibling leaves its records behind with a dead pid. Discovery then falls back

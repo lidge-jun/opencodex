@@ -87,6 +87,7 @@ import { dispatchCommand, decideBusyPreferredPort, decideStartExitTeardown, deci
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import {
   findLiveProxy,
+  proveLiveProxyOwnedByHome,
   probeEndpointLiveness,
   probeHostname,
   probePortOwner,
@@ -1148,8 +1149,8 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
    * silently reopening the parent-crash window on the path where the stop is a hard kill
    * and no child teardown runs at all.
    *
-   * So the caller supplies whatever endpoint it already discovered: the orphan path knows
-   * one from `findLiveProxy` even when the runtime record is gone.
+   * So the caller supplies the endpoint it discovered after the orphan listener proves
+   * possession of this home's runtime record, even when the pid file is gone.
    *
    * When nothing resolves, the graceful request cannot be made at all — `stopProxy` goes
    * straight to the kill ladder, no child teardown runs, and there is no receipt to leave
@@ -1283,17 +1284,21 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       }
     }
   } else {
-    // Snapshot the stale on-disk state BEFORE the async probe: a concurrent `ocx start`
-    // can write fresh records mid-probe, and the purge below must never delete those.
+    // Snapshot stale state before probing; purge only exact values if another start races us.
     const stalePidValue = readPidFileValue();
     const staleRuntimePid = readRuntimePort()?.pid ?? null;
     // Orphan recovery: a live proxy can outlive its pid file (crash, manual delete,
     // corrupt file). Identity-checked liveness still finds it via the runtime record.
     const live = await findLiveProxy({ acceptPackageTreeFenced: true });
     if (siblingStopFoundOwner(siblingOfPort, live)) {
-      // A hard-killed sibling's record answered nowhere and discovery reached the live owner.
       record.proxy = "not-running";
       console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
+    } else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {
+      stopFailed = true;
+      ownershipBlocked = true;
+      record.proxy = "ownership-refused";
+      console.error(`❌ A proxy answers on port ${live.port}, but it has not proved it belongs to this home; refusing to stop it.`);
+      console.error("   Skipping shared teardown (native Codex restore, Grok config) while that proxy is running.");
     } else if (live?.pid) {
       try {
         // The probe already found where it answers, and on this path the runtime record is

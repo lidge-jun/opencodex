@@ -161,8 +161,8 @@ profile and reauth routes among the others listed in
 receipt, runs no shared teardown, does not revert the system env and does not ask the service
 manager: a sibling never runs under one, so an installed service is the live owner's. When the
 recorded sibling no longer answers and discovery reaches the owner instead (`siblingStopFoundOwner`),
-the stop leaves that proxy running, clears the stale sibling records and exits 0. The sibling's own
-drain-and-restart (`src/server/management/system-restart.ts`) and standalone recycle
+the stop leaves that proxy running, clears the stale sibling records and exits 0. A clean sibling
+exit removes that record; a later `ocx stop` refuses a discovered listener unless it proves possession of this home's runtime-record secret through a fresh `/healthz` challenge, so the configured-port fallback cannot stop the owner. The sibling's own drain-and-restart (`src/server/management/system-restart.ts`) and standalone recycle
 (`src/client/runtime.ts`) hand the mark to their replacement through `OCX_SIBLING_OF_PORT`;
 `handleStart` honors and consumes it before any probe, so an owner that is down for that moment
 cannot turn the replacement into an owner, and the journal recovery in that probe stays skipped.
