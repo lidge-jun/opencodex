@@ -157,10 +157,12 @@ test("the traffic-light position and the CSS row stay in step", () => {
   const inset = Number(css.match(/--tl-inset:\s*(\d+)px/)?.[1]);
   const row = Number(css.match(/--titlebar-h:\s*(\d+)px/)?.[1]);
   const clear = Number(css.match(/\.app--macos\s*\{\s*--chrome-clear:\s*(\d+)px/)?.[1]);
-  // 52px of lights + 10px of air after the lead inset; the 12px-tall cluster centered
-  // in the row; the collapsed indent clears inset + toggle (28px) + padding (16px).
+  // 52px of lights + 10px of air after the lead inset; the collapsed indent clears
+  // inset + toggle (28px) + padding (16px).
   expect(inset).toBe(lightX + 52 + 10);
-  expect(row).toBe(2 * (lightY + 6));
+  // Measured on-device: tao treats y like a container inset, not the buttons' top
+  // edge — the light centers land ~2px BELOW y. Verified center = row/2 at y=22.
+  expect(row).toBe(2 * (lightY - 2));
   expect(clear).toBeGreaterThanOrEqual(inset + 28 + 16);
   // The expanded strip floats over exactly the sidebar column (.app's first grid track).
   const column = Number(styles.match(/\.app\s*\{[^}]*grid-template-columns:\s*(\d+)px/)?.[1]);

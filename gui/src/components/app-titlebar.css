@@ -18,7 +18,8 @@
 
   Sizes this file owns (pinned against desktop/src-tauri/src/lib.rs
   traffic_light_position by gui/tests/app-titlebar.test.tsx):
-  --titlebar-h      shared row height; the shell centers the lights at y=14 inside it
+  --titlebar-h      shared row height; lights centered in it via lib.rs y=22
+                    (the light cluster lands ~2px below the position's y)
   --tl-inset        macOS-only gap the lights occupy: 18px lead + 52px of lights + 10px air
   --chrome-clear    collapsed-state indent for the main strip: floating strip width
                     (inset + toggle + padding) plus a small gap
