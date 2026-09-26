@@ -126,6 +126,30 @@ describe("CodeBuddy live model fetch", () => {
     expect(JSON.stringify(result)).not.toContain(marker);
   });
 
+  test("a cross-origin 302 never forwards the configured key", async () => {
+    let secondHits = 0;
+    let secondKey: string | null = null;
+    const second = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      secondHits += 1;
+      secondKey = req.headers.get("x-api-key");
+      return Response.json(authenticatedEnvelope());
+    } });
+    const first = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+      return new Response(null, { status: 302,
+        headers: { location: `http://127.0.0.1:${second.port}/v3/config` } });
+    } });
+    try {
+      const profile = { ...CODEBUDDY_CN_PROFILE, canonicalBaseUrl: `http://127.0.0.1:${first.port}` };
+      const result = await fetchCodeBuddyModels(profile, "synthetic-codebuddy-key");
+      expect(secondKey).toBeNull();
+      expect(secondHits).toBe(0);
+      expect(result).toEqual({ ok: false, error: "http", status: 302 });
+    } finally {
+      await first.stop(true);
+      await second.stop(true);
+    }
+  });
+
   test("a body that is not JSON fails closed as invalid output", async () => {
     const fetchLike = (async () => new Response("<html>gateway error page</html>", { status: 200 })) as typeof fetch;
     const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });

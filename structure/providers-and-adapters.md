@@ -141,7 +141,9 @@ OAuth bearer token.
 
 CodeBuddy discovery in `src/adapters/codebuddy/live-models.ts` reads the roster scoped to the
 configured key. Its failure result carries only a category and optional HTTP status; untrusted
-gateway messages and transport exceptions do not reach catalog warnings.
+gateway messages and transport exceptions do not reach catalog warnings. The credentialed
+config fetch uses manual redirect handling; any 3xx is a failed discovery and cannot forward
+`X-API-Key` to a second origin.
 
 Provider request pacing in `src/providers/request-pacing.ts` combines start intervals with optional
 `maxConcurrentRequests` limits. Provider capacity is shared across models; exact-model limits

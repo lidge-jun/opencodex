@@ -145,6 +145,8 @@ export async function fetchCodeBuddyModels(
   try {
     response = await (deps.fetch ?? fetch)(url, {
       headers,
+      // A redirect target must never receive this key, even when Bun preserves custom headers.
+      redirect: "manual",
       signal: AbortSignal.timeout(deps.timeoutMs ?? 8_000),
     });
   } catch (error) {
