@@ -141,6 +141,39 @@ test("auth and host ownership failures do not retry, and client links stay clien
   await supervisor.stop();
 });
 
+test("the Home's -R supervisor keeps the old policy: a failed tunnel is not retried and a live one is promoted after five seconds", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+    random: () => 0.5,
+  });
+  supervisor.start();
+  current = 5_000;
+  timers[0]!();
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: 5_000 });
+  fake.children[0]!.stderr = "Error: remote port forwarding failed for listen port 19002";
+  fake.children[0]!.resolve(255);
+  await Promise.resolve();
+  await Promise.resolve();
+  const failed = supervisor.status()[0]!.state;
+  expect(failed).toEqual({ kind: "failed", since: 5_000, reason: "forward" });
+  for (let second = 0; second < 2 * 60 * 60; second += 10) {
+    current += 10_000;
+    timers[0]!();
+  }
+  expect(fake.children).toHaveLength(1);
+  expect(supervisor.status()[0]!.state).toEqual(failed);
+  await supervisor.stop();
+});
+
 test("reaps a pidfile only after an exact Linux argv match", () => {
   const fake = fakeRunner();
   const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));

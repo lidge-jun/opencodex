@@ -7,6 +7,7 @@ import { installCrashGuards } from "../lib/crash-guard";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { findAvailablePort, PortUnavailableError } from "../server/ports";
+import { createLinkKeySource } from "./link-ingress";
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath } from "./link-state";
 import { startMachineListener } from "./machine-listener";
@@ -121,16 +122,21 @@ export async function startClientRuntime(
     }
     throw error;
   }
-  // Created before the listener so its status route can read the tunnel state; it starts no
-  // process and no timer until start().
+  // One cached key source serves the relay and the supervisor's keyed probe: the token file is
+  // read once here, not per request or per probe.
+  const linkKey = linkMode ? createLinkKeySource(state.value.tokenFingerprint) : undefined;
+  // Created before the listener so its status route can read the tunnel state and relayed
+  // requests can wait on it; it starts no process and no timer until start().
   const supervisor = linkMode && existsSync(clientLinkStatePath())
     ? createClientLinkSupervisor({
       onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
+      linkKey,
     })
     : null;
   const server = startMachineListener(port, {
     state: state.value,
-    ...(linkMode ? { linkStatus: () => supervisor?.status() ?? { kind: "stopped" as const } } : {}),
+    ...(linkMode ? { linkStatus: () => supervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
+    ...(supervisor ? { linkTunnel: supervisor } : {}),
   });
   const boundPort = server.port ?? port;
   activeServer = server;
