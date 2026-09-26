@@ -1080,6 +1080,7 @@
     "kiro-retry.test.ts": "providers/kiro",
     "kiro-review-regressions.test.ts": "providers/kiro",
     "kiro-stream.test.ts": "providers/kiro",
+    "kiro-transport-parity.test.ts": "providers/kiro",
     "kiro-usage-quota.test.ts": "providers/kiro",
     "kiro-usage-restart.test.ts": "providers/kiro",
     "kiro-windows-cli-db-path.test.ts": "providers/kiro",

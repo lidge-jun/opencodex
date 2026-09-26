@@ -12,6 +12,7 @@ import {
   classifyKiroHttpError,
   classifyKiroStreamError,
   safeKiroErrorMessage,
+  safeKiroHttpErrorMessage,
   type KiroErrorClassification,
 } from "../kiro-errors";
 import { parseKiroEvent } from "../kiro-events";
@@ -1098,7 +1099,7 @@ export async function* parseKiroStream(
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
       yield {
         type: "error",
-        message: failure.message,
+        message: safeKiroHttpErrorMessage(fallback.response.status, fallback.response.headers, payload),
         status: failure.status,
         errorType: failure.errorType,
         code: failure.code,

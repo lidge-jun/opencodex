@@ -209,7 +209,7 @@ birlikte Bearer olarak Kiro OAuth erişim belirteci.
   belirteç sayılarını döndürmediği için kullanımı tahmin eder.
 - Özel olduğunda yapılandırılmış `baseUrl`'i birebir kullanır. Kurallı bir
   `runtime.{region}.kiro.dev` URL'si içe aktarılan kimlik bilgisinin API
-  bölgesini takip eder; bir uç nokta, imza, DNS veya bağlantı hatasından sonra
+  bölgesini takip eder; bir uç nokta, imza, DNS veya bağlantı hatasından ya da çıktı başlamadan alınan HTTP 502/503/504 yanıtından sonra
   `q.{region}.amazonaws.com`'a tek bir sınırlı geri dönüş için yalnızca bu
   kurallı şekil uygundur.
 - Yeniden oynatma güvenli bağlantı sıfırlama kurtarmasına, bu tek uygun uç nokta
@@ -217,7 +217,7 @@ birlikte Bearer olarak Kiro OAuth erişim belirteci.
   geçici Kiro 429'ları için sınırlı kurtarmaya sahiptir. Paylaşılan bir soğuma
   süresi ve soğuma sonrası tek bir araştırma, eşzamanlı isteklerin bağımsız
   yeniden deneme bütçelerini tüketmesini önler; sabit kota hataları ve sıradan
-  hizmet hataları yeniden oynatılmaz.
+  diğer hizmet hataları yeniden oynatılmaz. Tüm Kiro gönderimleri yapılandırılmış sağlayıcı çıkışını kullanır; başlık zaman aşımı 504 döndürür, istemci iptali isteği durdurur ve son HTTP 5xx gövdeleri sabit genel metin kullanır.
 - Akışsız ayrıştırıcısı web arama döngüsü için aynı olay akışını boşaltır.
 
 ### Tamamlama anlambilimi
@@ -340,4 +340,3 @@ Vizyon duyarlı adaptörler tarafından kullanılan paylaşılan yardımcılar:
 - `contentPartsToText(content)` — salt metin araç mesajları için içerik
   parçalarını metne düzleştirir (açıklanmayan bir görsel kısa bir `[image]`
   işaretçisi haline gelir, asla belirteç patlatan bir base64 bloğu olmaz).
-

@@ -334,12 +334,14 @@ MiMo model Command Code serves.
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
 - Uses the configured `baseUrl` verbatim when it is custom. A canonical
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
-  shape is eligible for one bounded fallback to `q.{region}.amazonaws.com` after an endpoint,
-  signature, DNS, or connection failure.
+  shape is eligible for one budgeted fallback to `q.{region}.amazonaws.com` after an endpoint,
+  signature, DNS, or connection failure, or HTTP 502/503/504 received before output.
 - Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
   refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
-  hard quota failures and ordinary service errors are not replayed.
+  hard quota failures and other service errors are not replayed. Every Kiro physical send uses
+  configured provider egress. A header deadline returns 504; caller cancellation stops the turn.
+  Final HTTP 5xx bodies use fixed public text without upstream detail.
 - Its non-streaming parser drains the same event stream for the web-search loop.
 - Reports per-account usage. `AmazonCodeWhispererService.GetUsageLimits` on
   `https://management.{region}.kiro.dev/` returns the plan allowance, which becomes the

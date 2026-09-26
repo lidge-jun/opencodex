@@ -146,6 +146,8 @@ covers these cases with a synthetic executor, without provider credentials or ne
 
 ## Per-provider egress coverage
 
+Kiro generation in `src/adapters/kiro-retry.ts` passes the routed provider executor to every physical send, including reset, throttle, canonical alternate-host, and completion-fallback attempts. A canonical HTTP 502/503/504 before output permits one alternate-host send from the same request budget; caller abort does not rotate.
+
 `src/lib/provider-egress.ts` resolves a provider route for one destination. The route is carried only
 by transports that can preserve that request-local decision:
 

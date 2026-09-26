@@ -545,3 +545,73 @@ In B, run `bun test tests/providers/kiro/kiro-transport-parity.test.ts tests/pro
 ## Round-2 audit fold
 
 - r3-R2-3 (Medium): the cross-layer contract paragraph now names the SD1' account-based identity (with `loginId`, without `authType`) and the SD2' `kiroAccountEvidence(account, now?)` signature. 020 still neither reads nor writes either.
+
+## wp3 P re-verification (2026-09-27, branch `codex/kiro-lb2-020-transport` on dev `6581b561a7`, which contains 010)
+
+Executable plan for the 020 build; **overrides** earlier sections where they conflict.
+Architect proposal recorded in the task transcript (handle `01a0dddd`).
+
+| ID | Disposition |
+|---|---|
+| D020-S1 | Accept: every Kiro source anchor re-verified exact on `6581b561a7`. |
+| D020-S2–S5, S7 | Accept: `AdapterFetchContext` `src/adapters/base.ts:166-176`; Google test under `describe("vertex retry fetch")` `tests/adapters/google/google-vertex-http.test.ts:35`; Kiro row `structure/providers-and-adapters.md:106`; insert after `structure/providers/kiro.md:68`; registry lines after `scripts/test-layout/layout.json:1082` and `tests/fixtures/test-layout-expected.json:903`. |
+| D020-S6 | Accept: the Kiro order stays *pacing, then budget reservation* (the pacing-refusal test depends on it); the doc sentence claiming `physical-send.ts` uses the same order is corrected — that file reserves first. |
+| D020-G1 | **Decision: one executor, pinned by tests.** Every Kiro physical send uses `ctx.executor`. Its `dispatchOverride` rebuilds only when the account selection changed after build, and it rebuilds for the *current* account (`src/server/responses/request-transport.ts:408-479`), so credentials cannot mix; the cost is that an alternate-host or completion-fallback leg sent after such a switch becomes a canonical send of the rebuilt request. Devin's inner ladder already accepts the same contract. New tests in the 020 sibling file: `an account switch before the alternate leg sends the rebuilt request for the new account` and `an account switch before the completion fallback never sends the old account's bearer`, both driving a stub executor with a dispatch override. |
+| D020-G2 | Accept: `structure/providers/kiro.md` states that reset, 429, alternate and fallback sends now wait for a pacing slot (only the first send is pre-paid), and that Kiro web-search turns are paced. |
+| T1 | Accept: `tests/providers/kiro/kiro-retry.test.ts:50-78` "does not replay a per-attempt TimeoutError" now expects a resolved 504 with the fixed gateway-timeout text, keeping `calls === 1` and the timeout-reason assertions. |
+| T2 | Already planned: `kiro-retry.test.ts:235-243` moves its 503 to 500. |
+| Grep | No other test asserts Kiro HTTP 5xx text; non-Kiro 500 fixtures (`adapter-inner-send-budget-wiring`, Devin) are untouched. The 010 lesson applies: C also runs the four hosted-CI shards' worth of the suite in the clean worktree at `/tmp/ocx-kiro-verify` before claiming no regression. |
+
+Verifier set for C: `bun run typecheck`; `bun test tests/providers/kiro/ tests/adapters/google/google-vertex-http.test.ts tests/adapters/adapter-inner-send-budget.test.ts tests/adapters/adapter-inner-send-budget-wiring.test.ts tests/adapters/credential-redirect-guard.test.ts` (paths confirmed at build time); layout, ratchet, lab-boundary tests; `bun run privacy:scan`; `bun run structure:check`; full `bun run test` in `/tmp/ocx-kiro-verify`.
+
+
+### wp3 reflection fold (same architect: MISALIGNED → folded)
+
+1. **G1 cost, stated in full.** After an account switch, the completion-fallback leg sends the
+   rebuilt *initial* request (URL and body) for the new account, not the fallback prompt
+   (`src/server/responses/request-transport.ts:477-479`); the alternate leg likewise becomes a
+   canonical send. `commitKeyAttemptSend` (427) and `recordKeyAttemptFailure` (438) now fire on
+   every Kiro inner send; this is accepted, because each inner send is a real physical send that
+   the key-attempt ledger should see. The two G1 tests assert the URL and body actually sent and
+   the bearer, and the fallback test asserts the client stream carries no duplicated output. The
+   earlier "Devin already accepts this" sentence is withdrawn: no evidence was found that Devin's
+   executor carries the dispatch override.
+2. **Verifier set corrected:** `tests/lib/credential-redirect-guard.test.ts` (not
+   `tests/adapters/`), plus `tests/lib/upstream-retry.test.ts`,
+   `tests/server/server-kiro-completion-e2e.test.ts`, `tests/server/server-kiro-oauth-401-replay.test.ts`.
+
+
+### wp3 A round 1 fold (reviewer 01a0de82: FAIL, 2 High → folded)
+
+1. **No gateway rotation after output.** `fetchKiroWithRetry` gains an option
+   `allowGatewayRotation` (default `true`). The completion fallback in
+   `src/adapters/kiro/stream.ts` (~1049) passes `false` whenever the first stream has already
+   emitted client-visible progress; the 502/503/504 → `q.*` branch requires the option. Connection
+   failures and the existing 400/403/404/405 signature fallback keep their current behaviour. Test:
+   `a canonical completion fallback returning 503 after visible progress is not rotated` in the 020
+   sibling file (asserts one send and the fixed 5xx text).
+2. **Alternate derived from the URL actually dispatched.** For the gateway branch, the alternate
+   is computed from `response.url` when it is a non-empty canonical runtime URL, else from the
+   planned URL; if `response.url` names a non-canonical host, no rotation happens. This follows a
+   dispatch-override rebuild into another region. Test:
+   `an account switch across regions before a 503 rotates to the new region's alternate`, using a
+   stub executor that returns a Response whose `url` is the rebuilt region's canonical host
+   (set with `Object.defineProperty`), asserting the second send targets that region's `q.*` host.
+
+
+### wp3 A round 2 fold (finding 2 re-opened → folded)
+
+The gateway-branch base URL is chosen in this order: `response.url` when non-empty; otherwise the
+adapter request's `url` **re-read after the send** (`Object.assign(wireRequest, rebuilt)` at
+`src/server/responses/request-transport.ts:471` mutates the same object Kiro received); only if
+both are unavailable, the planned URL. Rotation happens only when that base is a canonical runtime
+URL. Second test: `an account switch across regions rotates to the new region's alternate even
+when the 503 Response has an empty url` — the stub executor mutates the request object's `url` to
+the other region (as the override does) and returns `new Response(null, { status: 503 })`; the
+assertion is that the second send targets the new region's `q.*` host.
+
+## wp3 build notes
+
+- Kiro physical sends now use the supplied provider executor and wait for pacing before budget admission. The completion fallback retains the executor; gateway rotation uses the actual dispatched canonical URL and is disabled after visible progress.
+- Header deadlines return fixed HTTP 504 text, caller aborts retain their reason, and final HTTP 5xx client text and opt-in diagnostics exclude upstream message content. Shared retry and Google production code were unchanged.
+- The synthetic account-switch tests model request mutation and the server's dispatch override rebuilding an initial request for the new bearer. They do not instantiate the full OAuth selection loop; the existing Kiro server integration tests remain in the verifier set.

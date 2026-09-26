@@ -33,6 +33,21 @@ function vertexError(code: number, status: string, message: string): string {
 }
 
 describe("vertex retry fetch", () => {
+  test("Google preserves the executor TypeError after its header deadline", async () => {
+    const original = new TypeError("google executor deadline rejection");
+    let sends = 0;
+    const executor = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sends += 1;
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) reject(original);
+        else signal?.addEventListener("abort", () => reject(original), { once: true });
+      });
+    }) as typeof fetch;
+    await expect(fetchVertexWithRetry(request, { executor, timeoutMs: 1 })).rejects.toBe(original);
+    expect(sends).toBe(retry.TRANSIENT_RETRY_MAX_ATTEMPTS);
+  });
+
   for (const [name, fetchResponse] of [["Vertex", fetchVertexWithRetry], ["Antigravity", fetchAntigravityWithRetry]] as const) {
     test.each([400, 429, 503, "reset"] as const)(`${name} prepaid final send prevents another inference or backoff (%s)`, async status => {
       const parent = createRequestExecutionBudget();

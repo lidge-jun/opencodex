@@ -29,6 +29,7 @@ const ENDPOINT_ERROR_MARKERS = [
   "unsupported endpoint",
 ];
 const CONNECT_ERROR_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH"]);
+type KiroFetchContext = AdapterFetchContext & { allowGatewayRotation?: boolean };
 
 interface KiroThrottleProbe {
   token: symbol;
@@ -165,6 +166,12 @@ async function fetchWithResetRecovery(
   let lastError: unknown;
   for (let attempt = 0; attempt < RESET_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+    const executor = (ctx.executor ?? globalThis.fetch) as typeof globalThis.fetch & {
+      waitForPacing?: (signal?: AbortSignal) => Promise<void>;
+      unpacedFetch?: typeof globalThis.fetch;
+    };
+    await executor.waitForPacing?.(ctx.abortSignal);
+    if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     // Every physical send is admitted, not just the adapter entry. Kiro nests a throttle loop
     // over this ladder and can run the ladder twice per throttle round, so counting one entry
     // as one send hid up to eighteen upstream requests from the per-request cap (#4546).
@@ -184,7 +191,18 @@ async function fetchWithResetRecovery(
         headers,
         body: request.body,
         ...(recovered ? { keepalive: false } : {}),
-      }, timeoutMs, ctx.abortSignal, ctx.stream);
+      }, timeoutMs, ctx.abortSignal, ctx.stream, (async (input, init) => {
+        try {
+          return await (executor.unpacedFetch ?? executor)(input, init);
+        } catch (error) {
+          if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+          const signal = init?.signal;
+          if (signal?.aborted && signal.reason instanceof Error && signal.reason.name === "TimeoutError") {
+            throw signal.reason;
+          }
+          throw error;
+        }
+      }) as typeof globalThis.fetch);
     } catch (error) {
       if (ctx.abortSignal?.aborted || !isConnectionResetError(error) || attempt === RESET_ATTEMPTS - 1) throw error;
       lastError = error;
@@ -255,19 +273,28 @@ async function inspectKiroThrottle(
 
 async function fetchKiroAttempt(
   request: AdapterRequest,
-  ctx: AdapterFetchContext,
+  ctx: KiroFetchContext,
   timeoutMs: number,
   notePhysicalSend: (reset: boolean) => void,
 ): Promise<Response> {
-  const legacy = legacyUrl(request.url);
+  const plannedUrl = request.url;
+  const legacy = legacyUrl(plannedUrl);
   let response: Response;
   try {
-    response = await fetchWithResetRecovery(request, request.url, ctx, timeoutMs, notePhysicalSend);
+    response = await fetchWithResetRecovery(request, plannedUrl, ctx, timeoutMs, notePhysicalSend);
   } catch (error) {
     if (!legacy || !endpointConnectFailure(error)) throw error;
     return fetchWithResetRecovery(request, legacy, ctx, timeoutMs, notePhysicalSend);
   }
 
+  if (!response.ok && (response.status === 502 || response.status === 503 || response.status === 504)) {
+    const baseUrl = response.url || request.url || plannedUrl;
+    const alternate = ctx.allowGatewayRotation === false ? undefined : legacyUrl(baseUrl);
+    if (alternate) {
+      cancelResponseBodyBestEffort(response);
+      return fetchWithResetRecovery(request, alternate, ctx, timeoutMs, notePhysicalSend);
+    }
+  }
   if (legacy && !response.ok) {
     const inspected = await inspectEndpointHttpFailure(response, ctx.abortSignal);
     response = inspected.response;
@@ -284,7 +311,7 @@ async function fetchKiroAttempt(
  * throttle recovery. The shared probe starts only after a 429, so healthy parallel traffic remains
  * parallel while a throttled account cannot burn every caller's independent retry budget (#532).
  */
-export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
+export async function fetchKiroWithRetry(request: AdapterRequest, ctx: KiroFetchContext = {}): Promise<Response> {
   const timeoutMs = ctx.timeoutMs ?? 200_000;
   let probeToken: symbol | undefined;
   // One ordinal sequence for the whole call, across the throttle loop, the endpoint fallback
@@ -334,6 +361,10 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: AdapterFe
     throw new Error("Kiro throttle retry loop exhausted without a response");
   } catch (error) {
     releaseKiroThrottleProbe(probeToken);
+    if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+    if (error instanceof Error && error.name === "TimeoutError") {
+      return new Response("Kiro upstream gateway timeout", { status: 504 });
+    }
     throw error;
   }
 }

@@ -63,6 +63,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
   let requestSnapshot: OcxParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
+  let requestExecutor: typeof globalThis.fetch | undefined;
   // Captured the same way as the abort signal, because the text-fallback rebuild below runs
   // outside the fetchResponse frame and used to construct a context without either (#4546).
   let requestSendBudget: RequestExecutionBudget | undefined;
@@ -236,6 +237,8 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       const fallbackOrdinalBase = physicalSendsObserved;
       const response = await fetchKiroWithRetry(retry.request, {
         abortSignal: requestAbortSignal,
+        ...(requestExecutor ? { executor: requestExecutor } : {}),
+        allowGatewayRotation: !_sawReasoning && !assistantText.trim(),
         returnRawErrors: true,
         stream: true,
         // The text-fallback rebuild used to construct a fresh context and drop the budget,
@@ -318,6 +321,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       // Keep it for the adapter-owned bounded continuation so cancelling the client turn aborts
       // both the first Kiro request and its one allowed completion retry.
       if (ctx?.abortSignal) requestAbortSignal = ctx.abortSignal;
+      requestExecutor = ctx?.executor;
       if (ctx?.sendBudget) requestSendBudget = ctx.sendBudget;
       if (ctx?.onPhysicalSend) requestOnPhysicalSend = ctx.onPhysicalSend;
       // Reset per fetch call, because `ordinal` is defined within one call and the caller records

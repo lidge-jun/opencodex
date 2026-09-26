@@ -67,6 +67,8 @@ raw body.
 
 ## Bounded fallback HTTP errors
 
+`src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
+
 When a first Kiro stream needs a completion fallback, the fallback response's non-success
 body is read through the shared display-safe bounded reader with the attempt's abort signal.
 The adapter emits an error with the upstream status and does not emit a successful completion.
