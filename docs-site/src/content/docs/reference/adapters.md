@@ -532,12 +532,14 @@ configuration that names the old id is rewritten at startup.
   admitted turn's shared capacity. Set `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` to a positive cumulative
   allowance in milliseconds to wait for the full stated delay and replay the same request up to twice.
   The allowance has a one-hour ceiling; an absent, empty, invalid, or negative value disables waiting.
-  An opted-in wait keeps the HTTP turn and its shared active-turn slot open throughout the delay.
+  An opted-in standalone wait keeps the HTTP turn and its shared active-turn slot open throughout the delay.
   Streaming turns start SSE on a safe cooldown heartbeat, then schedule heartbeats every 500 ms or less
   during the wait so the stall watchdog stays fed. A later pre-output 429 may still rotate to another
   eligible OAuth account; without one it is reported inside the already-open stream. Buffered Grok
   turns retain an HTTP 429 and `Retry-After` on a final refusal.
-  Delays exceeding the remaining allowance surface the original 429 without an early retry. The
+  Combo children surface the pre-output 429 immediately, even when waiting is enabled, so the combo
+  can try its next target without holding an uncommitted response. Delays exceeding the remaining
+  allowance on standalone turns surface the original 429 without an early retry. The
   final 429 preserves the stated delay as a cooldown hint. A `~` in its message marks a delay recovered
   from a secondhand trailer sentence rather than an exact header value.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the

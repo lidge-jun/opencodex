@@ -74,7 +74,7 @@ function stubTransport(message: string): void {
   }) as typeof fetch;
 }
 
-async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000)): Promise<AdapterEvent[]> {
+async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000), comboAttempt = false): Promise<AdapterEvent[]> {
   const adapter = createDevinAdapter({ adapter: "devin", apiKey, baseUrl: host });
   const events: AdapterEvent[] = [];
   await adapter.runTurn!({
@@ -86,6 +86,7 @@ async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000))
     headers: new Headers(),
     translatorBudget: createTranslatorBudget(),
     abortSignal,
+    comboAttempt,
   }, event => { events.push(event); });
   return events;
 }
@@ -144,6 +145,19 @@ describe("devin adapter stated-reset wait", () => {
     expect(error).toMatchObject({ status: 429, errorType: "rate_limit_error", code: "resource_exhausted" });
     expect(error?.message).toContain("retry after ~1s");
     expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("a combo child returns the stated reset immediately despite a standalone wait allowance", async () => {
+    process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS = "3000";
+    stubTransport("Your limit will reset in 1 second");
+
+    const events = await runOneTurn(AbortSignal.timeout(500), true);
+
+    expect(events.find(event => event.type === "error")).toMatchObject({
+      type: "error", status: 429, errorType: "rate_limit_error", code: "resource_exhausted",
+    });
+    expect(events.some(event => event.type === "heartbeat" && event.preflightReady === true)).toBe(false);
+    expect(chatPosts).toBe(1);
   });
 
   test("an invalid wait allowance fails closed without replay", async () => {

@@ -251,6 +251,7 @@ export async function executeResponsesRunTurn(
           {
             headers: requestState.selectedForwardHeaders,
             abortSignal: runTurnAbort.signal,
+            comboAttempt: options.comboAttempt === true,
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             // The only way the request budget reaches a transport the adapter owns. Without it

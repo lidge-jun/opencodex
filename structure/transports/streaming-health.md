@@ -40,7 +40,7 @@ public upstreams too. A disabled budget resolves to `0`, and the watchdog kill i
 `> 0`, so a `0` never mis-arms a kill on the first beat; keep-alives keep flowing regardless, so a
 silent-but-healthy local model (CPU-bound thinking or a long time-to-first-token) stays connected.
 Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
-During an opted-in Devin stated-reset wait, `src/adapters/devin/cloud-direct/stated-reset-retry.ts`
+During an opted-in standalone Devin stated-reset wait, `src/adapters/devin/cloud-direct/stated-reset-retry.ts`
 emits a safe adapter heartbeat immediately and schedules the next ones at intervals no greater than
 500 ms, below the shortest positive
 stall budget of one second. The cooldown-ready marker opens SSE before the wait ends; a later

@@ -209,7 +209,9 @@ and prevent later rotation. Buffered Responses turns ignore the cooldown-ready h
 preflight and apply the same HTTP 429 formatter to a final refusal after OAuth failover. Other
 buffered results retain the original event list, including output preceding a late error. Combo
 children ignore cooldown readiness during their own preflight, so a final 429 without output can
-still move to the next combo target. An earlier replay-unsafe heartbeat or meaningful output keeps
+still move to the next combo target. Devin combo children bypass opted-in stated-reset waiting and
+surface the pre-output 429 immediately, because the outer response cannot forward their wait
+heartbeats while it is choosing a target. An earlier replay-unsafe heartbeat or meaningful output keeps
 the failure on the current target.
 
 ## Optional client transport hints

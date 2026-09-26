@@ -162,6 +162,63 @@ describe("combo cooldown-ready fallback", () => {
     expect(body).toContain("backup after cooldown");
     expect(body).not.toContain("stated reset still active");
   });
+
+  test("a delayed stated reset does not hold a combo child before fallback", async () => {
+    const delayedReset = Promise.withResolvers<void>();
+    const firstStarted = Promise.withResolvers<void>();
+    let firstHits = 0;
+    let backupHits = 0;
+    customRunTurn = async (_parsed, incoming, emit) => {
+      firstHits += 1;
+      if (!incoming.comboAttempt) {
+        emit({ type: "heartbeat", preflightReady: true });
+        firstStarted.resolve();
+        await delayedReset.promise;
+      } else {
+        firstStarted.resolve();
+      }
+      emit({ type: "error", status: 429, errorType: "rate_limit_error", message: "stated reset still active" });
+    };
+    const backup = serve(() => {
+      backupHits += 1;
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "backup after delayed reset" } }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    });
+    const config = comboConfig({
+      a: provider("test-run-turn", "test://run-turn", "key-a"),
+      b: provider("openai-chat", baseUrl(backup), "key-b"),
+    });
+    const pending = handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+    }), config, { model: "", provider: "" });
+    await firstStarted.promise;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    let response: Response | null;
+    try {
+      response = await Promise.race([
+        pending,
+        new Promise<null>(resolve => { guard = setTimeout(() => resolve(null), 2_500); }),
+      ]);
+    } finally {
+      if (guard !== undefined) clearTimeout(guard);
+      delayedReset.resolve();
+    }
+    if (response === null) {
+      await (await pending).body?.cancel();
+      throw new Error("combo held its response until the delayed reset arrived");
+    }
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(firstHits).toBe(1);
+    expect(backupHits).toBe(1);
+    expect(body).toContain("backup after delayed reset");
+    expect(body).not.toContain("stated reset still active");
+  });
 });
 /** Provider base URL for a fixture server, without the trailing slash. */
 function baseUrl(server: ReturnType<typeof Bun.serve>): string {
