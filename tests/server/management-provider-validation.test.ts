@@ -1048,6 +1048,7 @@ describe("provider management validation", () => {
       enabled: true,
       requestsPerMinute: 38,
       minIntervalMs: 1_600,
+      maxConcurrentRequests: 4,
       models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
     };
 
@@ -1081,6 +1082,34 @@ describe("provider management validation", () => {
     });
     expect(timerOverflow?.status).toBe(400);
     expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+
+    const concurrencyOnly = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: {
+        enabled: true,
+        maxConcurrentRequests: 2,
+        models: { "deepseek-ai/deepseek-v4-flash-0731": { maxConcurrentRequests: 1 } },
+      } }),
+    });
+    expect(concurrencyOnly?.status).toBe(200);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual({
+      enabled: true,
+      maxConcurrentRequests: 2,
+      models: { "deepseek-ai/deepseek-v4-flash-0731": { maxConcurrentRequests: 1 } },
+    });
+
+    const invalidConcurrency = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: { enabled: true, maxConcurrentRequests: 0 } }),
+    });
+    expect(invalidConcurrency?.status).toBe(400);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual({
+      enabled: true,
+      maxConcurrentRequests: 2,
+      models: { "deepseek-ai/deepseek-v4-flash-0731": { maxConcurrentRequests: 1 } },
+    });
   });
 
   test("provider discovery status is additive and omitted before an attempt", async () => {

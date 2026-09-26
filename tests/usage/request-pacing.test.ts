@@ -323,3 +323,96 @@ describe("provider request pacing queue", () => {
     expect(pacingWaited).toBe(1);
   });
 });
+
+describe("provider request concurrency", () => {
+  test("caps all models together and release is idempotent", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 2 });
+    const first = await waitForProviderRequestSlot("demo", configured, "a");
+    const second = await waitForProviderRequestSlot("demo", configured, "b");
+    const third = waitForProviderRequestSlot("demo", configured, "c");
+    const fourth = waitForProviderRequestSlot("demo", configured, "d");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    first();
+    first();
+    const releaseThird = await third;
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    second();
+    const releaseFourth = await fourth;
+    releaseThird();
+    releaseFourth();
+  });
+
+  test("model limit tightens provider cap without blocking eligible siblings", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 3,
+      models: { slow: { maxConcurrentRequests: 1 }, fast: { maxConcurrentRequests: 10 } } });
+    const slow = await waitForProviderRequestSlot("demo", configured, "slow");
+    const queuedSlow = waitForProviderRequestSlot("demo", configured, "slow");
+    const fast = await waitForProviderRequestSlot("demo", configured, "fast");
+    const anotherFast = await waitForProviderRequestSlot("demo", configured, "fast");
+    const queuedFast = waitForProviderRequestSlot("demo", configured, "fast");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    fast();
+    const lastFast = await queuedFast;
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    slow();
+    (await queuedSlow)();
+    anotherFast();
+    lastFast();
+  });
+
+  test("model-only cap leaves other models and providers independent", async () => {
+    const configured = provider({ enabled: true, models: { slow: { maxConcurrentRequests: 1 } } });
+    const first = await waitForProviderRequestSlot("demo", configured, "slow");
+    const queued = waitForProviderRequestSlot("demo", configured, "slow");
+    (await waitForProviderRequestSlot("demo", configured, "other"))();
+    (await waitForProviderRequestSlot("other-provider", configured, "slow"))();
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    first();
+    (await queued)();
+  });
+
+  test("aborting an active request frees exactly one slot", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1 });
+    const controller = new AbortController();
+    const release = await waitForProviderRequestSlot("demo", configured, "a", controller.signal);
+    const next = waitForProviderRequestSlot("demo", configured, "a");
+    controller.abort();
+    const releaseNext = await next;
+    release();
+    const last = waitForProviderRequestSlot("demo", configured, "a");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    releaseNext();
+    (await last)();
+  });
+
+  test("concurrency wait expires without spinning and preserves active capacity", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: 25, maxQueueDepth: 1 });
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1 });
+    const release = await waitForProviderRequestSlot("demo", configured);
+    const queued = waitForProviderRequestSlot("demo", configured);
+    await expect(waitForProviderRequestSlot("demo", configured)).rejects.toMatchObject({ reason: "queue_full" });
+    expect(clock.pendingTimerCount()).toBe(1);
+    clock.advanceBy(25);
+    await expect(queued).rejects.toMatchObject({ reason: "queue_expired" });
+    expect(clock.pendingTimerCount()).toBe(0);
+    const next = waitForProviderRequestSlot("demo", configured);
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    release();
+    (await next)();
+  });
+
+  test("releasing capacity still honors the start interval", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1, minIntervalMs: 100 });
+    const release = await waitForProviderRequestSlot("demo", configured);
+    const next = waitForProviderRequestSlot("demo", configured);
+    release();
+    clock.advanceBy(99);
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    clock.advanceBy(1);
+    (await next)();
+  });
+});
