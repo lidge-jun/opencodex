@@ -655,20 +655,18 @@
 .dash-shadow-controls > .custom-select { flex: 1; min-width: 0; }
 .dash-shadow-controls > .switch { order: 1; }
 
-/* Memory routing: one band, two equal shares. The pickers must not size themselves from
-   their own label — a long model id beside the short word "Medium" produced two
-   differently sized pills in the same panel, and the second row then repeated the
-   mismatch at its own widths.
+/* Memory routing: two fixed column widths, shared by both rows. The pickers must not
+   size themselves from their own label — content-sized pills turned "Low" and "Medium"
+   into two different widths, so the Consolidation row never lined up with the Extract
+   row above it, and the effort picker alone wasted 220px on a five-letter word.
 
-   A definite band with `flex: 1 1 0` children splits it in half whatever the labels are,
-   so the split is a property of the layout rather than of the selected value.
-
-   The band is sized from the WIDER of the two jobs, not from the row: a model id has to
-   stay readable (14rem holds "opencode-go/glm-5.3-flash" with room to spare, the same
-   ceiling the sidecar model pickers use), while the effort values are one short word. The
-   effort picker therefore carries empty width by design — that is the price of the two
-   pills lining up, and it is still the narrowest width at which the model stays readable.
-   A longer id ellipsizes inside its half instead of widening its own pill. */
+   Each column gets its own width and both rows use the same two, so the columns compare
+   across the rows instead of inside one row: the model column is exactly as wide as the
+   longest common id needs (measured 220px at the trigger's 13px font, trigger padding,
+   chevron gap and chevron included), the effort column fits the longest option label
+   "Codex default" (measured 136px, rounded to 140px). A longer model id ellipsizes
+   inside its column instead of widening one row's pill, so the two rows keep matching
+   columns whatever is selected. */
 .memory-models-row { align-items: center; }
 
 .memory-models-controls {
@@ -676,12 +674,17 @@
   align-items: center;
   flex-wrap: nowrap;
   gap: 8px;
-  flex: 0 0 min(100%, 28rem);
+  flex: 0 0 min(100%, 23rem);
   min-width: 0;
 }
 
-.memory-models-controls > .custom-select {
-  flex: 1 1 0;
+.memory-models-controls > .custom-select:first-child {
+  flex: 0 1 220px;
+  min-width: 0;
+}
+
+.memory-models-controls > .custom-select:last-child {
+  flex: 0 1 140px;
   min-width: 0;
 }
 
