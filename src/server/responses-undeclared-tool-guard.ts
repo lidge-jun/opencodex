@@ -636,6 +636,45 @@ export function normalizeDefaultNamespaceInJson(
   }
 }
 
+/**
+ * Optional redirection for gate declarations (see
+ * `src/adapters/opencode-free-tools.ts`): when the tripped name is a
+ * compatibility declaration the client never made, the turn is kept alive
+ * with guidance instead of failing. Names the client itself declared never
+ * reach the redirect — the undeclared check below already cleared them.
+ */
+export interface UndeclaredGateRedirect {
+  names: ReadonlySet<string>;
+  message: (name: string, alternatives: readonly string[]) => string;
+}
+
+function gateMessageItem(id: string, text: string): Record<string, unknown> {
+  return {
+    type: "message",
+    id,
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+}
+
+/** Full message-item lifecycle frames carrying guidance text. */
+function gateGuidanceBlocks(outputIndex: unknown, refId: string, text: string, newline: string): string[] {
+  const id = `gate_${refId}`;
+  const item = gateMessageItem(id, text);
+  const inProgress = { ...item, status: "in_progress", content: [] };
+  const part = { type: "output_text", text: "", annotations: [] };
+  const donePart = { type: "output_text", text, annotations: [] };
+  const frames: Array<{ type: string; [key: string]: unknown }> = [
+    { type: "response.output_item.added", output_index: outputIndex, item: inProgress },
+    { type: "response.content_part.added", item_id: id, output_index: outputIndex, content_index: 0, part },
+    { type: "response.output_text.delta", item_id: id, output_index: outputIndex, content_index: 0, delta: text },
+    { type: "response.content_part.done", item_id: id, output_index: outputIndex, content_index: 0, part: donePart },
+    { type: "response.output_item.done", output_index: outputIndex, item },
+  ];
+  return frames.map(frame => `event: ${frame.type}${newline}data: ${JSON.stringify(frame)}`);
+}
+
 function failedBlocks(name: string, newline: string): readonly string[] {
   const failure = {
     type: "upstream_error",
@@ -674,8 +713,78 @@ export function createUndeclaredToolCallGuardBlockRewrite(
   declaredNamelessClientCallTypes: ReadonlySet<string> = EMPTY_DECLARED_NAMELESS_CLIENT_CALL_TYPES,
   providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
   declaredBare?: ReadonlySet<string>,
+  redirect?: UndeclaredGateRedirect,
 ): SseBlockRewrite {
   let tripped = false;
+  // Item/call ids swallowed for a redirected gate call. Recorded at first
+  // sighting so later deltas, dones, and the completed snapshot can neither
+  // re-trip nor replay the suppressed call.
+  const suppressedItemIds = new Set<string>();
+  const suppressedCallIds = new Set<string>();
+  const newlineOf = (block: string): string => block.includes("\r\n") ? "\r\n" : "\n";
+  // Alternatives for redirection guidance: the declared catalog (the text
+  // builder names at most a few and drops the call itself).
+  const alternatives: readonly string[] = redirect === undefined ? [] : [...declared];
+
+  const frameCallIdentity = (payload: Record<string, unknown>): { itemId?: string; callId?: string; outputIndex?: unknown } | undefined => {
+    const t = payload.type;
+    if (t === "response.output_item.added" || t === "response.output_item.done") {
+      const item = payload.item;
+      if (!isPlainObject(item)) return undefined;
+      return {
+        ...(typeof item.id === "string" ? { itemId: item.id } : {}),
+        ...(typeof item.call_id === "string" ? { callId: item.call_id } : {}),
+        ...("output_index" in payload ? { outputIndex: payload.output_index } : {}),
+      };
+    }
+    if (t === "response.function_call_arguments.delta" || t === "response.function_call_arguments.done"
+      || t === "response.custom_tool_call_input.delta" || t === "response.custom_tool_call_input.done") {
+      return {
+        ...(typeof payload.item_id === "string" ? { itemId: payload.item_id } : {}),
+        ...("output_index" in payload ? { outputIndex: payload.output_index } : {}),
+      };
+    }
+    return undefined;
+  };
+
+  const isSuppressed = (identity: { itemId?: string; callId?: string } | undefined): boolean =>
+    identity !== undefined
+    && ((identity.itemId !== undefined && suppressedItemIds.has(identity.itemId))
+      || (identity.callId !== undefined && suppressedCallIds.has(identity.callId)));
+
+  // Drop follow-up frames for suppressed calls, and filter them out of the
+  // completed snapshot (which otherwise re-trips below and replays the call
+  // the guidance already replaced). Sparse gateways ship calls only in the
+  // snapshot: gate-named items found there become guidance in place.
+  const redirectGateFrame = (parsed: Record<string, unknown>, block: string): string[] | undefined => {
+    if (redirect === undefined) return undefined;
+    const newline = newlineOf(block);
+    if (parsed.type === "response.completed" || parsed.type === "response.incomplete") {
+      const response = parsed.response;
+      if (!isPlainObject(response) || !Array.isArray(response.output)) return undefined;
+      let changed = false;
+      const output = response.output.filter(item => {
+        if (!isPlainObject(item)) return true;
+        const id = typeof item.id === "string" ? item.id : undefined;
+        const callId = typeof item.call_id === "string" ? item.call_id : undefined;
+        const drop = (id !== undefined && suppressedItemIds.has(id)) || (callId !== undefined && suppressedCallIds.has(callId));
+        if (drop) changed = true;
+        return !drop;
+      }).map(item => {
+        if (!isPlainObject(item) || (item.type !== "function_call" && item.type !== "custom_tool_call")) return item;
+        if (typeof item.name !== "string" || !redirect.names.has(item.name)) return item;
+        changed = true;
+        const refId = typeof item.call_id === "string" ? item.call_id : typeof item.id === "string" ? item.id : "snapshot";
+        return gateMessageItem(`gate_${refId}`, redirect.message(item.name, alternatives));
+      });
+      if (!changed) return undefined;
+      return [replaceSseDataPayload(block, JSON.stringify({ ...parsed, response: { ...response, output } }))];
+    }
+    const identity = frameCallIdentity(parsed);
+    if (isSuppressed(identity)) return [];
+    return undefined;
+  };
+
   return (block: string) => {
     if (tripped) return [];
     const payload = sseDataPayload(block);
@@ -686,8 +795,18 @@ export function createUndeclaredToolCallGuardBlockRewrite(
     } catch {
       return [block];
     }
+    if (redirect !== undefined && isPlainObject(parsed)) {
+      const redirected = redirectGateFrame(parsed, block);
+      if (redirected !== undefined) return redirected;
+    }
     const name = undeclaredToolCallName(parsed, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare);
     if (name !== undefined) {
+      if (redirect !== undefined && redirect.names.has(name)) {
+        const identity = isPlainObject(parsed) ? frameCallIdentity(parsed) : undefined;
+        if (identity?.itemId !== undefined) suppressedItemIds.add(identity.itemId);
+        if (identity?.callId !== undefined) suppressedCallIds.add(identity.callId);
+        return gateGuidanceBlocks(identity?.outputIndex, identity?.callId ?? identity?.itemId ?? name, redirect.message(name, alternatives), newlineOf(block));
+      }
       tripped = true;
       return failedBlocks(name, block.includes("\r\n") ? "\r\n" : "\n");
     }

@@ -1,4 +1,5 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { withZenFreeTierSupport } from "../adapters/openai-chat/zen-free-tier";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -314,7 +315,17 @@ export async function runNativeChatAttempt(
   let activeProvider: OcxProviderConfig = route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
-  let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
+  // Client tool catalog for the keyless-Zen substitution below: the native
+  // lane never builds a parsed request, so the wrapper cannot snapshot it
+  // itself. The raw chat body is fixed for the attempt, so read it once.
+  const nativeClientToolNames = new Set(
+    (Array.isArray(execution.chatBody.tools) ? execution.chatBody.tools : [])
+      .map(tool => (tool as { function?: { name?: unknown } } | null)?.function?.name)
+      .filter((name): name is string => typeof name === "string"),
+  );
+  const wrapNativeAdapter = (adapter: ProviderAdapter, provider: OcxProviderConfig): ProviderAdapter =>
+    withZenFreeTierSupport(adapter, provider, nativeClientToolNames);
+  let activeAdapter: ProviderAdapter = wrapNativeAdapter(createOpenAIChatAdapter(activeProvider), activeProvider);
   let activeRequest: AdapterRequest;
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
@@ -439,7 +450,7 @@ export async function runNativeChatAttempt(
                 }
                 activeProvider = current;
                 stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-                activeAdapter = createOpenAIChatAdapter(current);
+                activeAdapter = wrapNativeAdapter(createOpenAIChatAdapter(current), current);
                 activeRequest.releaseBodyObservation?.();
                 releaseRetainedRequest();
                 activeRequest = buildActiveRequest();
@@ -549,7 +560,7 @@ export async function runNativeChatAttempt(
       try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
       activeProvider = rotated;
       stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-      activeAdapter = createOpenAIChatAdapter(activeProvider);
+      activeAdapter = wrapNativeAdapter(createOpenAIChatAdapter(activeProvider), activeProvider);
       releaseRetainedRequest();
       activeRequest = buildActiveRequest();
       retainRequest(activeRequest);

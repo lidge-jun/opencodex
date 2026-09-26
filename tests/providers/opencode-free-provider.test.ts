@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { PROVIDER_REGISTRY, providerModelWireDefault } from "../../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../../src/providers/derive";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { withZenFreeTierSupport } from "../../src/adapters/openai-chat/zen-free-tier";
 import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import {
@@ -16,7 +17,8 @@ import {
 } from "../../src/adapters/opencode-free-tools";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../../src/types/wire";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import type { IncomingMeta } from "../../src/adapters/base";
+import type { IncomingMeta, ProviderAdapter } from "../../src/adapters/base";
+import type { AdapterEvent } from "../../src/types";
 import { routedProviderConfig } from "../../src/router";
 import { buildModelsRequest } from "../../src/oauth";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -405,17 +407,19 @@ describe("opencode-free provider", () => {
       expect(missingZenFreeGateTools(["exec", "wait"])).toEqual(["shell", "read"]);
     });
 
-    function chatToolNames(provider: OcxProviderConfig, request: OcxParsedRequest): (string | undefined)[] {
-      const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(request).body as string) as {
+    async function chatToolNames(provider: OcxProviderConfig, request: OcxParsedRequest): Promise<(string | undefined)[]> {
+      const adapter = withZenFreeTierSupport(createOpenAIChatAdapter(provider), provider);
+      const built = await adapter.buildRequest(request, metaWithSession());
+      const body = JSON.parse(built.body as string) as {
         tools?: Array<{ function?: { name?: unknown } }>;
       };
       return (body.tools ?? []).map(tool => typeof tool?.function?.name === "string" ? tool.function.name : undefined);
     }
 
-    test("translated Chat appends the missing pair and never duplicates", () => {
+    test("translated Chat appends the missing pair and never duplicates", async () => {
       resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      expect(chatToolNames(provider, minimalRequest("big-pickle"))).toEqual(["shell", "read"]);
+      expect(await chatToolNames(provider, minimalRequest("big-pickle"))).toEqual(["shell", "read"]);
       const execOnly: OcxParsedRequest = {
         ...minimalRequest("big-pickle"),
         context: {
@@ -423,7 +427,7 @@ describe("opencode-free provider", () => {
           tools: [{ name: "exec", description: "run", parameters: { type: "object", properties: {} } }],
         },
       };
-      expect(chatToolNames(provider, execOnly)).toEqual(["exec", "shell", "read"]);
+      expect(await chatToolNames(provider, execOnly)).toEqual(["exec", "shell", "read"]);
       const already: OcxParsedRequest = {
         ...minimalRequest("big-pickle"),
         context: {
@@ -434,13 +438,15 @@ describe("opencode-free provider", () => {
           ],
         },
       };
-      expect(chatToolNames(provider, already)).toEqual(["shell", "read"]);
+      expect(await chatToolNames(provider, already)).toEqual(["shell", "read"]);
     });
 
-    test("appended declarations carry the never-invoke wording", () => {
+    test("appended declarations carry the never-invoke wording", async () => {
       resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
-      const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(minimalRequest("big-pickle")).body as string) as {
+      const adapter = withZenFreeTierSupport(createOpenAIChatAdapter(provider), provider);
+      const built = await adapter.buildRequest(minimalRequest("big-pickle"), metaWithSession());
+      const body = JSON.parse(built.body as string) as {
         tools?: Array<{ function?: { description?: unknown } }>;
       };
       for (const tool of body.tools ?? []) {
@@ -448,9 +454,11 @@ describe("opencode-free provider", () => {
       }
     });
 
-    test("keyed sends do not gain gate declarations", () => {
+    test("keyed sends do not gain gate declarations", async () => {
       const provider: OcxProviderConfig = { ...providerConfigSeed(entry!), apiKey: "user-secret-key" };
-      const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(minimalRequest("big-pickle")).body as string) as {
+      const adapter = withZenFreeTierSupport(createOpenAIChatAdapter(provider), provider);
+      const built = await adapter.buildRequest(minimalRequest("big-pickle"), metaWithSession());
+      const body = JSON.parse(built.body as string) as {
         tools?: unknown[];
       };
       expect(body.tools).toBeUndefined();
@@ -475,6 +483,68 @@ describe("opencode-free provider", () => {
         true,
       ).body as string) as { tools?: Array<{ function?: { name?: unknown } }> };
       expect((body.tools ?? []).map(tool => tool?.function?.name)).toEqual(["shell", "read"]);
+    });
+
+    test("a mistaken gate call becomes guidance instead of a client call", async () => {
+      resetZenFreeSessionCache();
+      const provider: OcxProviderConfig = providerConfigSeed(entry!);
+      const upstream: AdapterEvent[] = [
+        { type: "tool_call_start", id: "call_1", name: "shell" },
+        { type: "tool_call_delta", arguments: '{"command":"hi"}' },
+        { type: "tool_call_end" },
+        { type: "tool_call_start", id: "call_2", name: "exec" },
+        { type: "tool_call_delta", arguments: '{"input":"x"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ];
+      const stub: ProviderAdapter = {
+        name: "stub",
+        buildRequest: () => ({ url: "https://example.test", method: "POST", headers: {}, body: "{}" }),
+        async *parseStream() { yield* upstream; },
+      };
+      const wrapped = withZenFreeTierSupport(stub, provider);
+      // Catalog snapshot comes from the build: this turn declares no tools.
+      await wrapped.buildRequest(threadedRequest("thread-sub"), metaWithSession());
+      const seen: AdapterEvent[] = [];
+      for await (const event of wrapped.parseStream(new Response("x"), createTranslatorBudget())) {
+        seen.push(event);
+      }
+      const starts = seen.filter(e => e.type === "tool_call_start");
+      expect(starts.map(e => (e as { name: string }).name)).toEqual(["exec"]);
+      const texts = seen
+        .filter(e => e.type === "text_delta")
+        .map(e => (e as { text: string }).text);
+      expect(texts.some(text => text.includes("`shell`"))).toBe(true);
+      expect(seen.some(e => e.type === "done")).toBe(true);
+    });
+
+    test("a client-declared shell call flows untouched", async () => {
+      resetZenFreeSessionCache();
+      const provider: OcxProviderConfig = providerConfigSeed(entry!);
+      const stub: ProviderAdapter = {
+        name: "stub",
+        buildRequest: () => ({ url: "https://example.test", method: "POST", headers: {}, body: "{}" }),
+        async *parseStream() {
+          yield { type: "tool_call_start", id: "call_1", name: "shell" };
+          yield { type: "tool_call_end" };
+          yield { type: "done" };
+        },
+      };
+      const request: OcxParsedRequest = {
+        ...threadedRequest("thread-own"),
+        context: {
+          messages: [{ role: "user", content: "hi" }],
+          tools: [{ name: "shell", description: "ours", parameters: { type: "object", properties: {} } }],
+        },
+      };
+      const wrapped = withZenFreeTierSupport(stub, provider);
+      await wrapped.buildRequest(request, metaWithSession());
+      const seen: AdapterEvent[] = [];
+      for await (const event of wrapped.parseStream(new Response("x"), createTranslatorBudget())) {
+        seen.push(event);
+      }
+      expect(seen.filter(e => e.type === "tool_call_start")).toHaveLength(1);
+      expect(seen.some(e => e.type === "text_delta")).toBe(false);
     });
   });
 });
