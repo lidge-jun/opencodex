@@ -54,6 +54,13 @@ unsupported; deployments that previously relied on such embedding must open it a
 
 ## Authentication boundaries
 
+Kiro management login starts the native device flow only when `POST /api/oauth/login`
+supplies `method: "builder-id"`, `"google"`, or `"github"`. A method-less request retains
+the Kiro CLI flow used by the dashboard. Native status and cancellation require `flowId`;
+provider-keyed status and cancellation retain their previous behavior. Device-flow responses
+contain only the flow handle, method, public verification fields, state, expiry, and a
+duplicate-profile warning when applicable. The dashboard has no native device dialog.
+
 OpenCodex uses three mutually exclusive reusable admission credential classes:
 
 | Credential class | Sources | Allowed surface |

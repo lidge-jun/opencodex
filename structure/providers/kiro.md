@@ -10,6 +10,16 @@ provider capabilities below; see [Responses compatibility](../transports/respons
 
 ## Kiro CLI executable resolution
 
+Native device login is an add-only Kiro account path for Builder ID, Google, and GitHub.
+It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded process-local
+flow table. A flow ID is returned only at start; status and cancellation require that ID and
+the same management principal kind. Polling follows the server's interval, and only an exact
+approval shape reaches the protected OAuth store. Device codes and tokens never enter
+management responses. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
+refuses them before starting CLI work. Explicit reauth rotates login identity, while token
+refresh preserves it. A first-account config-publication failure compensates the new slot
+through the existing receipt ownership check.
+
 Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
 `src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The
 canonical `kiro-cli` name is tried on `PATH` and then in the platform install locations. Only

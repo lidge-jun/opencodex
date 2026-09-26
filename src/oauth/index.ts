@@ -1626,6 +1626,10 @@ export async function runLogin(
   const loginProviderConfig = preflightConfig
     ? (def.resolveProviderConfig?.(preflightConfig) ?? preflightConfig.providers[provider] ?? def.providerConfig)
     : def.providerConfig;
+  if (provider === "kiro" && opts?.reauthAccountId
+    && getAccountSet("kiro")?.accounts.some(a => a.id === opts.reauthAccountId && a.loginOrigin === "kiro-device")) {
+    throw new Error("Native Kiro device accounts cannot be reauthenticated with kiro-cli; remove and re-add the account.");
+  }
   const rawCred = await def.login(ctrl, opts, loginProviderConfig);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
   const settleKiroTransaction = deps.settleKiroLoginTransaction ?? settleKiroLoginTransaction;
@@ -1653,6 +1657,7 @@ export async function runLogin(
       }
       await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred, {
         assertBeforePersist: deps.assertCurrentOwner,
+        rotateLoginId: true,
       });
     } else {
       const saveOptions = {

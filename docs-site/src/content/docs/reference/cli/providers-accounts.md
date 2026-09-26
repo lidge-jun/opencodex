@@ -385,6 +385,12 @@ confirmed suspension refusals can rotate before output. Monthly exhaustion exclu
 that login until reset or evidence expiry; completed service clears an older verdict.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool.
+To add an account without the Kiro CLI, use `ocx account login kiro --method builder-id`,
+`--method google`, or `--method github`. Open the printed verification URL, enter the user
+code, and wait for approval. `--no-wait` prints the flow ID; cancel it with
+`ocx account cancel kiro --flow <flow-id>`. Native login only adds accounts. To reauthenticate
+one, remove it and add it again. A repeated social profile ARN creates another slot and prints
+`duplicate_profile_arn`; the slots each carry their own quota and load state.
 Kiro can opt into proactive `least-loaded` placement with `pool.kernel` and account preference enabled.
 Proactive model preference also requires that account preference be explicitly enabled globally
 or for Kiro; an unset or false setting leaves a healthy active account in place. Model lists are

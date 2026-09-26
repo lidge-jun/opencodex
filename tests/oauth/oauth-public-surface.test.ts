@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync} from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   cancelLoginFlow,
   clearLoginState,
@@ -30,7 +31,7 @@ import { armClaudeCodeBaseline, loadConfig, saveConfig, saveConfigPreservingClau
 import { isApiAuthRequired, requireApiAuth } from "../../src/server/auth-cors";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-oauth-public-surface");
+let TEST_DIR: string;
 const PUBLIC_OAUTH_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
 const previousHome = process.env.OPENCODEX_HOME;
 const canonical = {
@@ -52,8 +53,7 @@ beforeEach(() => {
   setIcaclsRunnerForTests(() => ICACLS_OK);
   setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
   clearLoginState("xai");
-  removeTreeWithRetry(TEST_DIR);
-  mkdirSync(TEST_DIR, { recursive: true });
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-oauth-public-surface-"));
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
 
