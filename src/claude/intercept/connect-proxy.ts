@@ -32,6 +32,8 @@ export interface ConnectProxyOptions {
   authToken?: string | (() => string | null);
   /** Hostnames (lowercase) whose 443 tunnels are spliced onto `interceptPort`. */
   interceptHosts?: readonly string[];
+  /** Optional exact CONNECT authorities (host:port); empty denies all, absent keeps blind relay. */
+  allowedTargets?: readonly string[];
   /** Per-connection override, consulted before interceptHosts; null keeps the default. */
   selectTunnel?: (host: string, port: number, request: ConnectRequestInfo) => TunnelDecision | null | Promise<TunnelDecision | null>;
   /** Test seam: dial the real destination for a blind tunnel. */
@@ -67,7 +69,8 @@ function connectRequestInfo(head: string): ConnectRequestInfo {
 }
 
 type ResolvedConnectProxyOptions = Required<Pick<ConnectProxyOptions, "interceptPort" | "interceptHosts" | "dialUpstream">>
-  & Pick<ConnectProxyOptions, "selectTunnel" | "authToken">;
+  & Pick<ConnectProxyOptions, "selectTunnel" | "authToken">
+  & { allowedTargets?: ReadonlySet<string> };
 
 export interface ConnectProxyHandle {
   port: number;
@@ -186,6 +189,10 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
       respond(socket, 403, "Forbidden");
       return;
     }
+    if (options.allowedTargets && !options.allowedTargets.has(`${target.host}:${target.port}`)) {
+      respond(socket, 403, "Forbidden");
+      return;
+    }
     const dialFor = (selected: TunnelDecision | null): void => {
       if (socket.destroyed) return;
       const choice = selected ?? (target.port === 443 && options.interceptHosts.includes(target.host)
@@ -258,10 +265,19 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
 
 /** Bind the CONNECT proxy on 127.0.0.1. Rejects when the port is unavailable. */
 export function startConnectProxy(port: number, options: ConnectProxyOptions): Promise<ConnectProxyHandle> {
+  // Snapshot caller-owned policy before listening. Reuse the request parser's
+  // host normalization; malformed policy must not silently disable restrictions.
+  const allowedTargets = options.allowedTargets === undefined ? undefined : new Set(options.allowedTargets.map(authority => {
+    const target = typeof authority === "string" && !/[\s\r\n]/.test(authority)
+      ? parseConnectRequestLine(`CONNECT ${authority} HTTP/1.1`) : null;
+    if (!target || /[*/\\?#@%]/.test(target.host)) throw new Error("Invalid CONNECT allowed target");
+    return `${target.host}:${target.port}`;
+  }));
   const resolved: ResolvedConnectProxyOptions = {
     interceptPort: options.interceptPort,
     authToken: options.authToken,
     interceptHosts: options.interceptHosts ?? CLAUDE_INTERCEPT_HOSTS,
+    allowedTargets,
     selectTunnel: options.selectTunnel,
     dialUpstream: options.dialUpstream ?? ((host: string, targetPort: number) => connect({ host, port: targetPort })),
   };
