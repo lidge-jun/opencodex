@@ -298,7 +298,7 @@ describe("gajae", () => {
     expect(block.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(block).not.toHaveProperty("apiKeyEnv");
     expect(Object.keys(block).sort()).toEqual(["api", "apiKey", "baseUrl", "models"]);
-    const allowed = new Set(["id", "name", "input", "contextWindow", "maxTokens"]);
+    const allowed = new Set(["id", "name", "input", "contextWindow", "maxTokens", "reasoning", "thinking", "compat"]);
     for (const model of block.models) {
       for (const key of Object.keys(model)) expect(allowed.has(key)).toBe(true);
     }
@@ -306,6 +306,52 @@ describe("gajae", () => {
 
   test("the destination is the documented models file", () => {
     expect(gajaeConfigPath({}, "/home/u")).toBe(join("/home/u", ".gjc", "agent", "models.yml"));
+  });
+
+  test("exports a declared effort ladder as GJC reasoning metadata", () => {
+    const doc = buildClientConfig("gajae", {
+      ...ctx(),
+      models: [{
+        namespaced: "deepseek/deepseek-v4.1-flash",
+        provider: "deepseek",
+        id: "deepseek-v4.1-flash",
+        inputModalities: ["text"],
+        reasoningEfforts: ["max", "low", "medium", "high", "xhigh", "none", "turbo"],
+      }],
+    }) as GajaeGeneratedConfig;
+
+    expect(doc.providers[OPENCODE_PROVIDER_ID]!.models).toEqual([{
+      id: "deepseek/deepseek-v4.1-flash",
+      name: "deepseek-v4.1-flash (deepseek)",
+      input: ["text"],
+      reasoning: true,
+      thinking: {
+        mode: "effort",
+        minLevel: "low",
+        maxLevel: "max",
+        levels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      compat: { supportsReasoningEffort: true },
+    }]);
+  });
+
+  test("exports the native Codex effort ladder even when the catalog omits it", () => {
+    const doc = buildClientConfig("gajae", {
+      ...ctx(),
+      models: [{
+        namespaced: "gpt-5.6-sol",
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        native: true,
+        inputModalities: ["text", "image"],
+      }],
+    }) as GajaeGeneratedConfig;
+
+    expect(doc.providers[OPENCODE_PROVIDER_ID]!.models[0]).toMatchObject({
+      reasoning: true,
+      thinking: { mode: "effort", levels: ["low", "medium", "high", "xhigh", "max"] },
+      compat: { supportsReasoningEffort: true },
+    });
   });
 });
 
