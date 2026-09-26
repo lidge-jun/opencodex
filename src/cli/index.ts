@@ -513,6 +513,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         const readinessGate = createReadinessGate();
         const localAttestationSecret = createLocalAttestationSecret();
         const config = loadConfig();
+        await (await import("../plugins/loader")).loadAndReportOcxPlugins();
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {

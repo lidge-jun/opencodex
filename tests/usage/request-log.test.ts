@@ -7,6 +7,7 @@ import {
   responseWithDeferredRequestLog,
   requestLogErrorCode,
   requestLogSpeedLabel,
+  queryRequestLogs,
   type RequestLogEntry,
 } from "../../src/server";
 import {
@@ -936,6 +937,42 @@ describe("request log metadata", () => {
   test("limit returns newest rows when buffer exceeds limit", () => {
     const logs = Array.from({ length: 10 }, (_, i) => log({ requestId: `r${i}`, provider: "openai", status: 200 }));
     expect(filterRequestLogs(logs, new URLSearchParams("limit=3")).map(entry => entry.requestId)).toEqual(["r7", "r8", "r9"]);
+  });
+
+  test("queryRequestLogs returns both total count and paginated logs in a single pass", () => {
+    const logs = [
+      log({ requestId: "r0", provider: "openai", model: "gpt-4", status: 200, accountLogLabel: "acc-1" }),
+      log({ requestId: "r1", provider: "openai", model: "gpt-4", status: 500, accountLogLabel: "acc-1" }),
+      log({ requestId: "r2", provider: "xai", model: "grok-1", status: 200, accountLogLabel: "acc-2" }),
+      log({ requestId: "r3", provider: "openai", model: "gpt-4", status: 200, accountLogLabel: "acc-1" }),
+      log({ requestId: "r4", provider: "openai", model: "gpt-4", status: 204, accountLogLabel: "acc-1" }),
+      log({ requestId: "r5", provider: "openai", model: "gpt-4", status: 200, accountLogLabel: "acc-1" }),
+    ];
+
+    // Filter by provider, status 2xx, with limit and offset
+    const query = new URLSearchParams("provider=openai&status=2xx&limit=2&offset=1");
+    const result = queryRequestLogs(logs, query);
+
+    // Matches r0 (200), r3 (200), r4 (204), r5 (200) -> total = 4
+    // Paginating from end: length = 4, offset = 1 -> end = 3, capped = 2 -> begin = 1 -> slice(1, 3) -> [r3, r4]
+    expect(result.total).toBe(4);
+    expect(result.logs.map(e => e.requestId)).toEqual(["r3", "r4"]);
+
+    // Tail with limit and offset
+    const tailQuery = new URLSearchParams("provider=openai&status=2xx&tail=3&limit=2");
+    const tailResult = queryRequestLogs(logs, tailQuery);
+    // Matches 4 items, tail=3 takes last 3: [r3, r4, r5] -> total = 3
+    // limit=2 from end takes last 2: [r4, r5]
+    expect(tailResult.total).toBe(3);
+    expect(tailResult.logs.map(e => e.requestId)).toEqual(["r4", "r5"]);
+
+    // Fast path: no filter
+    const noFilter = queryRequestLogs(logs, new URLSearchParams());
+    expect(noFilter.total).toBe(6);
+    expect(noFilter.logs.length).toBe(6);
+
+    // Empty array
+    expect(queryRequestLogs([], new URLSearchParams("provider=openai"))).toEqual({ total: 0, logs: [] });
   });
 
   test("deferred JSON logging preserves response service tier before final log", async () => {

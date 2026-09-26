@@ -1,5 +1,7 @@
 import type { NativeResponseControl } from "./native-response-control";
-import type { OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { RouteResult } from "../../router";
+import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
@@ -23,6 +25,8 @@ export interface ConsumedComboFailure {
   classificationText: string;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /** Complete structured provider type, retained for conservative recovery classification. */
+  upstreamType?: string;
   /** Valid numeric/date value used only for cooldown calculation. */
   retryAfter?: string;
   /** Upstream Codex quota-window reset timestamps used for combo cooldowns. */
@@ -53,6 +57,14 @@ export interface ClientEncoderOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Internal routed-compaction recovery: one logical request, one emergency target. */
+  compactionRecoveryAttempted?: boolean;
+  compactionRecoveryPermit?: SingleUseDispatchPermit;
+  compactionRecoveryKind?: "compaction-v1" | "compaction-v2";
+  onCompactionRecoveryRoute?: (route: RouteResult) => void;
+  onCompactionRecoveryAdapterEvent?: (event: AdapterEvent) => void;
+  /** Physical-send reports already delivered to the shared used setter, including booking settlement. */
+  onCompactionRecoverySendsReported?: (count: number) => void;
   /** Private holder for the Kiro serving-account lease. */
   accountLoad?: { lease: AccountLease | null };
   /** Internal Claude replay identity; consumed only by the final canonical Go transport. */

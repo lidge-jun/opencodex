@@ -14,7 +14,7 @@ import {
   recordAttemptCredentialSource,
 } from "../request-log";
 import { noteAttemptRecoveryWithheld } from "../request-log";
-import { waitForProviderRequestSlot } from "../../providers/request-pacing";
+import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
   transientRetryPolicyFor,
@@ -207,22 +207,23 @@ export function createAdapterContinuations(
       try {
         if (transportState.activeAdapter.fetchResponse) {
           transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
-          await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
-          return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
-            kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
-            abortSignal: upstream.signal,
-            timeoutMs: connectMs,
+          return await withProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal, pacingSlot =>
+            transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
+              kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
+              abortSignal: upstream.signal,
+              timeoutMs: connectMs,
               sendBudget: adapterDispatchBudget,
-            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
-            onRecoveryWithheld: noteAdapterRecoveryWithheld,
-            stream: nextParsed.stream,
-            executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              pacingSlotAcquired: true,
-              dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
-              providerName: route.providerName,
-              modelId: nextParsed.modelId,
-            }),
-          });
+              onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
+              onRecoveryWithheld: noteAdapterRecoveryWithheld,
+              stream: nextParsed.stream,
+              executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                pacingSlotAcquired: true,
+                pacingSlot,
+                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
+                providerName: route.providerName,
+                modelId: nextParsed.modelId,
+              }),
+            }));
         }
         // Same #1851 scope guard as the initial send: transient-5xx retry only for direct
         // Google AI Studio; every other adapter keeps reset-only semantics here.

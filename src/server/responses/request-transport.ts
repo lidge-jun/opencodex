@@ -10,6 +10,7 @@ import {
 } from "../../oauth/store";
 import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
+import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
 import {
@@ -421,24 +422,32 @@ export async function prepareResponsesTransport(
       if (!run) throw new Error("Selected provider no longer supports this turn transport");
       let sent = false;
       let refused = false;
+      let attemptSlot: ProviderRequestSlot | undefined;
       // Both main and image-loop callers already acquired the initial pacing slot.
       // Subsequent physical messages retain this adapter/credential and are paced normally.
-      const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-        providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
-        beforeDispatch: () => {
-          if (sent) return;
-          if (!selectionIsCurrent(binding)) {
-            refused = true;
-            throw new Error("Account selection changed before the first turn dispatch");
-          }
-          commitKeyAttemptSend();
-          sent = true;
-        },
-      });
       try {
+        attemptSlot = attempt === 0
+          ? incoming.pacingSlot ?? await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal)
+          : await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal);
+        const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+          providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
+          pacingSlot: attemptSlot,
+          turnScopedPacing: true,
+          beforeDispatch: () => {
+            if (sent) return;
+            if (!selectionIsCurrent(binding)) {
+              refused = true;
+              throw new Error("Account selection changed before the first turn dispatch");
+            }
+            commitKeyAttemptSend();
+            sent = true;
+          },
+        });
         await run(requestParsed, { ...incoming, providerFetch: fetch }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
+      } finally {
+        releaseProviderRequestSlot(attemptSlot);
       }
       if (!refused) return;
       // The adapter may map the guard's exception to an error event. Neither that

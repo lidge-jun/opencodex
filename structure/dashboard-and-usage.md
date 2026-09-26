@@ -569,7 +569,7 @@ labels collapse for reporting; configured provider names ending in `-main` remai
 
 Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
 re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and
-`src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`.
+`src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page.
 [Protocol Paths](data-planes/protocol-paths.md) owns its derivation.
 
 Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete

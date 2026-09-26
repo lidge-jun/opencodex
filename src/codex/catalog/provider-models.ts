@@ -57,6 +57,9 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
+import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "../../adapters/codebuddy/profiles";
+import { fetchCodeBuddyModels } from "../../adapters/codebuddy/live-models";
+import { resolveProfileByBaseUrl } from "../../adapters/coding-agent/profile";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -276,6 +279,53 @@ export async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (prov.adapter === "codebuddy") {
+    if (!apiKey) return observed(configured, "degraded");
+    const resolvedProfile = resolveProfileByBaseUrl(CODEBUDDY_PROFILES, prov.baseUrl);
+    if (!resolvedProfile) return observed(configured, "degraded");
+    const profile = resolvedProfile as CodeBuddyProfile;
+    // Cache reads/writes are provider/key-fingerprint-scoped: an irreversible fingerprint of
+    // the configured key means a key switch never reuses the roster cached for the previous
+    // key. The roster comes from the product configuration endpoint authenticated with that
+    // same key, so the fingerprint scope and the roster's authority are the same identity: the
+    // roster is the key's own account answer, never the CLI login's.
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (fresh) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ), "authoritative");
+    }
+    const scopedStale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && scopedStale) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      ), "degraded");
+    }
+    const live = await fetchCodeBuddyModels(profile, apiKey);
+    if (live.ok) {
+      const discovered = live.models.map(id => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+      }));
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    }
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name, undefined, authorityIdentity);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(`[opencodex] CodeBuddy model discovery failed [${live.error}]${live.status === undefined ? "" : ` status=${live.status}`}; using stale/static catalog degradation.`);
+    }
+    const stale = getStaleCached(name, authorityIdentity);
+    return observed(withConfiguredRetention(
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
+    ), "degraded");
+  }
   if (prov.adapter === "qoder") {
     if (!apiKey) return observed(configured, "degraded");
     const profile = resolveQoderProfile(prov.baseUrl);

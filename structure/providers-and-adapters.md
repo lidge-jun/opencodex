@@ -157,6 +157,25 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+CodeBuddy discovery in `src/adapters/codebuddy/live-models.ts` reads the roster scoped to the
+configured key. Its failure result carries only a category and optional HTTP status; untrusted
+gateway messages and transport exceptions do not reach catalog warnings. The credentialed
+config fetch uses manual redirect handling; any 3xx is a failed discovery and cannot forward
+`X-API-Key` to a second origin.
+
+Provider request pacing in `src/providers/request-pacing.ts` combines start intervals with optional
+`maxConcurrentRequests` limits. Provider capacity is shared across models; exact-model limits
+apply in addition to that capacity. Admission reserves both counters atomically, and eligible
+sibling models may bypass a saturated model lane. Releases are idempotent, wake queued requests,
+and retain interval deadlines. Ordinary HTTP leases follow each physical send through body
+completion, error, or cancellation; failed dispatch and active abort also return them. Unconsumed
+or inactive bodies are cancelled after a bounded deadline. For `runTurn` adapters, including
+Cursor, one lease spans the whole turn: RunSSE and BidiAppend may overlap inside it, while other
+turns wait at the cap. Follow-up sends still obey start intervals. The turn owner returns its lease
+after `runTurn` settles, so RunSSE body completion cannot admit another turn early. A capped
+canonical Codex WebSocket turn uses HTTP/SSE because the socket has no response-body lifecycle.
+Capacity waits use the same bounded queue and retryable queue-overload errors as interval waits.
+
 Command Code effort defaults in `src/providers/command-code-efforts.ts` combine public-profile
 facts with the live API measurements from #5096. Both presets share the exact per-model rows;
 `xhigh` is preserved when accepted, and narrow ladders such as Laguna's `medium`-only row remain
