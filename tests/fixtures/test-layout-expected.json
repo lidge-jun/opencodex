@@ -1,4 +1,5 @@
 {
+  "qoder-client.test.ts": "clients",
   "deepseek-artifact-tool-schema.test.ts": "providers",
   "client-config-export-output-limit.test.ts": "config",
   "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",

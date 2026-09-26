@@ -91,6 +91,7 @@ export interface ExportContext {
 }
 
 export type ExportClientId =
+  | "qoder"
   | "opencode"
   | "pi"
   | "omp"
