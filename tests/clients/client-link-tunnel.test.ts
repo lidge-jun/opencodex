@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CLIENT_LINK_MAX_HOLDS,
-  LINK_OWNER_PROOF_TTL_MS,
   clientLinkTunnelStatus,
   clientTunnelPidfilePath,
   CONNECTION_UNREADABLE,
@@ -457,7 +456,6 @@ function supervisorHarness(overrides: Partial<ClientLinkSupervisorDeps> = {}) {
     readProcessStartTime: pid => `fixture-start-${pid}`,
     linkKey: () => LINK_KEY,
     ownsLoopbackListener: async (_port, pid) => ssh.live().some(item => item.child.pid === pid),
-    ownerProofNow: () => view.clock,
     fetchImpl: (async (input, init) => {
       probes.push({ url: String(input), keyed: new Headers(init?.headers).get("x-opencodex-api-key") === LINK_KEY, cache: init?.cache });
       if (view.readyz === "refused") throw Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
@@ -843,6 +841,44 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
   }
 });
 
+test("an adopted PID with changed start identity cannot receive another probe or relay", async () => {
+  const argv = buildTunnelArgv({ alias: sidecar().alias, direction: "L", bindPort: 19002,
+    targetPort: 19001, knownHostsFile: "/tmp/ocx-known-hosts" });
+  let currentStart = "adopted-start";
+  const h = supervisorHarness({
+    platform: "darwin",
+    isAlive: pid => pid === 42 || pid === process.pid,
+    readProcessInfo: pid => pid === 42
+      ? { ppid: process.pid, args: argv.join(" "), startTime: currentStart } : null,
+    ownsLoopbackListener: async (_port, pid) => pid === 42,
+  });
+  mkdirSync(join(h.configDir, "link"), { recursive: true });
+  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
+    linkId: sidecar().linkId, pid: 42, argv, ownerPid: process.pid, startTime: "adopted-start" }));
+  let forwarded = 0;
+  try {
+    await h.start();
+    await h.step();
+    expect(await h.supervisor.connected()).toBe(true);
+    expect(h.probes).toHaveLength(1);
+    currentStart = "reused-start";
+    h.view.clock += 1_500;
+    const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
+      method: "POST", body: '{"input":"private"}',
+    }), { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
+      tunnel: h.supervisor, holdMs: 10,
+      fetchImpl: (async () => { forwarded += 1; return Response.json({ relayed: true }); }) as typeof fetch,
+    });
+    expect(response.status).toBe(503);
+    expect(forwarded).toBe(0);
+    expect(h.supervisor.status()).toMatchObject({ state: { kind: "failed" } });
+    await h.step(30_000);
+    expect(h.probes).toHaveLength(1);
+  } finally {
+    await h.close();
+  }
+});
+
 test("a connected tunnel stops relaying when another PID takes its port", async () => {
   let owners: number[] = [];
   const h = supervisorHarness({ ownsLoopbackListener: async (_port, pid) => owners.includes(pid) });
@@ -853,8 +889,6 @@ test("a connected tunnel stops relaying when another PID takes its port", async 
     await h.step();
     expect(await h.supervisor.connected()).toBe(true);
     owners = [process.pid];
-    h.view.clock += LINK_OWNER_PROOF_TTL_MS + 1;
-    expect(await h.supervisor.connected()).toBe(false);
     const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
       method: "POST", body: '{"input":"private"}',
     }), { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
@@ -863,12 +897,13 @@ test("a connected tunnel stops relaying when another PID takes its port", async 
     });
     expect(response.status).toBe(503);
     expect(forwarded).toBe(0);
+    expect(await h.supervisor.connected()).toBe(false);
   } finally {
     await h.close();
   }
 });
 
-test("relay admissions reuse an asynchronous owner proof instead of scanning synchronously", async () => {
+test("each relayed request obtains a fresh asynchronous owner proof", async () => {
   let lookups = 0;
   const h = supervisorHarness({
     ownsLoopbackListener: async () => { lookups += 1; await Bun.sleep(1); return true; },
@@ -885,10 +920,9 @@ test("relay admissions reuse an asynchronous owner proof instead of scanning syn
     const afterProbe = lookups;
     const responses = await Promise.all([relay(), relay(), relay()]);
     expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
-    expect(lookups).toBe(afterProbe);
-    h.view.clock += 1_500;
+    expect(lookups).toBe(afterProbe + 3);
     expect((await relay()).status).toBe(200);
-    expect(lookups).toBe(afterProbe + 1);
+    expect(lookups).toBe(afterProbe + 4);
   } finally {
     await h.close();
   }
@@ -896,8 +930,7 @@ test("relay admissions reuse an asynchronous owner proof instead of scanning syn
 
 test("a replacement SSH child needs a new ownership proof before its first keyed probe", async () => {
   let lookups = 0;
-  const h = supervisorHarness({ ownerProofNow: () => 0,
-    ownsLoopbackListener: async () => { lookups += 1; return true; } });
+  const h = supervisorHarness({ ownsLoopbackListener: async () => { lookups += 1; return true; } });
   try {
     await h.start();
     await h.step();

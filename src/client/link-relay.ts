@@ -24,8 +24,8 @@ export interface LinkRelayClock {
 
 /**
  * The Child's tunnel as the relay sees it (the client link supervisor implements it). A request
- * waits on it only while the tunnel is being (re)established. A connected tunnel uses a brief
- * positive ownership proof; expiry triggers a bounded asynchronous lookup before another fetch.
+ * waits on it only while the tunnel is being (re)established. Every relayed fetch waits for a
+ * fresh bounded asynchronous ownership proof, including after a reconnect or refused retry.
  */
 export interface LinkTunnelGate {
   /** True only while a keyed probe has established this live tunnel. */

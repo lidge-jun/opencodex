@@ -1,5 +1,8 @@
 import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { getConfigPath } from "../config/paths";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
@@ -132,7 +135,6 @@ export interface ClientLinkSupervisorDeps extends ClientLinkTunnelDeps, OrphanRe
   linkKey?: () => string | null;
   /** Async local IPv4 LISTEN ownership; an unknown or foreign owner never receives the link key. */
   ownsLoopbackListener?: (port: number, pid: number) => Promise<boolean>;
-  ownerProofNow?: () => number;
   fetchImpl?: typeof fetch;
   now?: () => number;
   random?: () => number;
@@ -171,8 +173,8 @@ const PROBE_BACKOFF_MAX_MS = 5_000;
 const PROBE_BODY_MAX_BYTES = 4_096;
 /** Requests that may wait on a reconnecting tunnel at once; more are answered 503 at once. */
 export const CLIENT_LINK_MAX_HOLDS = 64;
-/** Reuse a positive socket-owner proof briefly; tunnel generation and process start bind the key. */
-export const LINK_OWNER_PROOF_TTL_MS = 1_000;
+const PROCESS_IDENTITY_TIMEOUT_MS = 2_000;
+const execFileAsync = promisify(execFile);
 
 function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -243,26 +245,38 @@ function defaultIsAlive(pid: number): boolean {
 
 function linuxProcessArgv(pid: number): readonly string[] | null {
   try {
-    const values = readFileSync(`/proc/${pid}/cmdline`).toString().split("\0");
-    if (values.at(-1) === "") values.pop();
-    return values.length > 0 ? values : null;
+    return parseLinuxArgv(readFileSync(`/proc/${pid}/cmdline`).toString());
   } catch (error) {
     if (isMissingPathError(error)) return null;
     return null;
   }
 }
 
+function parseLinuxArgv(content: string): readonly string[] | null {
+  const values = content.split("\0");
+  if (values.at(-1) === "") values.pop();
+  return values.length > 0 ? values : null;
+}
+
+function parseLinuxStartTime(stat: string): string | null {
+  const afterCommand = stat.lastIndexOf(") ");
+  if (afterCommand < 0) return null;
+  const startTime = stat.slice(afterCommand + 2).trim().split(/\s+/)[19];
+  return startTime && /^\d+$/.test(startTime) ? startTime : null;
+}
+
 /** Field 22 of /proc/<pid>/stat: kernel start ticks survive argv and parent changes. */
 function linuxProcessStartTime(pid: number): string | null {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const afterCommand = stat.lastIndexOf(") ");
-    if (afterCommand < 0) return null;
-    const startTime = stat.slice(afterCommand + 2).trim().split(/\s+/)[19];
-    return startTime && /^\d+$/.test(startTime) ? startTime : null;
+    return parseLinuxStartTime(readFileSync(`/proc/${pid}/stat`, "utf8"));
   } catch {
     return null;
   }
+}
+
+function parseDarwinProcessInfo(output: string): DarwinProcessInfo | null {
+  const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/.exec(output.replace(/\r?\n$/, ""));
+  return match ? { ppid: Number(match[1]), startTime: match[2]!, args: match[3]! } : null;
 }
 
 /** One `ps` snapshot carries parent, second-resolution start time and the full argv. */
@@ -274,11 +288,45 @@ function darwinProcessInfo(pid: number): DarwinProcessInfo | null {
       stderr: "ignore",
     });
     if (result.exitCode !== 0) return null;
-    const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/.exec(result.stdout.toString().replace(/\r?\n$/, ""));
-    return match ? { ppid: Number(match[1]), startTime: match[2]!, args: match[3]! } : null;
+    return parseDarwinProcessInfo(result.stdout.toString());
   } catch {
     return null;
   }
+}
+
+/** Re-read a watched tunnel's current process identity on every key-bearing admission. */
+async function adoptedIdentityMatches(record: ClientTunnelPidfile, deps: OrphanReapDeps): Promise<boolean> {
+  if (!record.startTime) return false;
+  const platform = deps.platform ?? process.platform;
+  const check = async (): Promise<boolean> => {
+    if (platform === "linux") {
+      const [argv, startTime] = await Promise.all([
+        deps.readProcessArgv
+          ? Promise.resolve().then(() => deps.readProcessArgv!(record.pid))
+          : readFileAsync(`/proc/${record.pid}/cmdline`, "utf8").then(parseLinuxArgv),
+        deps.readProcessStartTime
+          ? Promise.resolve().then(() => deps.readProcessStartTime!(record.pid, platform))
+          : readFileAsync(`/proc/${record.pid}/stat`, "utf8").then(parseLinuxStartTime),
+      ]);
+      return argv !== null && sameArgv(argv, record.argv) && startTime === record.startTime;
+    }
+    if (platform === "darwin") {
+      const info = deps.readProcessInfo
+        ? await Promise.resolve().then(() => deps.readProcessInfo!(record.pid))
+        : await execFileAsync("/bin/ps", ["-ww", "-o", "ppid=", "-o", "lstart=", "-o", "args=", "-p", String(record.pid)], {
+          encoding: "utf8", timeout: PROCESS_IDENTITY_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true,
+        }).then(result => parseDarwinProcessInfo(result.stdout));
+      return info !== null && info.args === record.argv.join(" ") && info.startTime === record.startTime;
+    }
+    return false;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), PROCESS_IDENTITY_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try { return await Promise.race([check().catch(() => false), deadline]); }
+  finally { if (timer) clearTimeout(timer); }
 }
 
 function processStartTime(pid: number, platform: NodeJS.Platform, deps: OrphanReapDeps): string | null {
@@ -522,7 +570,6 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   const isAlive = deps.isAlive ?? defaultIsAlive;
   const linkKey = deps.linkKey ?? (() => null);
   const ownerLookup = deps.ownsLoopbackListener ?? ownsIpv4LoopbackListener;
-  const proofNow = deps.ownerProofNow ?? (() => performance.now());
   const fetchImpl = deps.fetchImpl ?? fetch;
   const setSupervisorTimer = deps.setTimer ?? ((callback: () => void, ms: number) => {
     const interval = setInterval(callback, ms);
@@ -540,11 +587,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let child: ClientLinkTunnelHandle | undefined;
   /** A leftover tunnel this supervisor may not signal: watched, and replaced once it dies. */
   let adopted: number | null = null;
-  let adoptedStartTime: string | null = null;
+  let adoptedRecord: ClientTunnelPidfile | null = null;
   let tunnelPort: number | null = null;
   let ownerGeneration = 0;
-  let ownerProof: { key: string; expiresAt: number } | null = null;
-  let ownerFlight: { key: string; promise: Promise<boolean> } | null = null;
   let state: TunnelState = IDLE;
   let linkId: string | null = null;
   let failure: ClientLinkSupervisorStatus | undefined;
@@ -564,32 +609,30 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     && ((started && !initialized) || state.kind === "connecting" || state.kind === "reconnecting");
   const invalidateOwnerProof = (): void => {
     ownerGeneration += 1;
-    ownerProof = null;
-    ownerFlight = null;
   };
-  const ownerCandidate = (port: number): { pid: number; startTime: string | null; key: string } | null => {
+  const ownerCandidate = (port: number): { pid: number; generation: number } | null => {
     if (port !== tunnelPort) return null;
     const pid = child?.pid ?? adopted;
-    if (pid === null || pid === undefined || (adopted !== null && !adoptedStartTime)) return null;
-    const startTime = child?.startTime ?? adoptedStartTime;
-    return { pid, startTime, key: JSON.stringify([port, pid, startTime, ownerGeneration]) };
+    if (pid === null || pid === undefined || (adopted !== null && !adoptedRecord)) return null;
+    return { pid, generation: ownerGeneration };
   };
   const listenerOwnedByTunnel = async (port: number): Promise<boolean> => {
     const candidate = ownerCandidate(port);
     if (!candidate) return false;
-    if (candidate.startTime !== null && ownerProof?.key === candidate.key
-      && proofNow() < ownerProof.expiresAt) return true;
-    if (ownerFlight?.key === candidate.key) return await ownerFlight.promise;
-    const promise = Promise.resolve().then(() => ownerLookup(port, candidate.pid)).catch(() => false)
-      .then(owned => {
-        if (stopping || ownerCandidate(port)?.key !== candidate.key) return false;
-        ownerProof = owned && candidate.startTime !== null
-          ? { key: candidate.key, expiresAt: proofNow() + LINK_OWNER_PROOF_TTL_MS }
-          : null;
-        return owned;
-      }).finally(() => { if (ownerFlight?.promise === promise) ownerFlight = null; });
-    ownerFlight = { key: candidate.key, promise };
-    return await promise;
+    if (adopted !== null) {
+      const record = adoptedRecord;
+      if (!record || !await adoptedIdentityMatches(record, deps)) {
+        if (adopted === candidate.pid && ownerGeneration === candidate.generation) {
+          adoptedRecord = null;
+          invalidateOwnerProof();
+          setState(failedTunnel("forward", now(), policy, now()));
+        }
+        return false;
+      }
+    }
+    const owned = await Promise.resolve().then(() => ownerLookup(port, candidate.pid)).catch(() => false);
+    return owned && !stopping && ownerGeneration === candidate.generation
+      && ownerCandidate(port)?.pid === candidate.pid;
   };
   const connected = async (): Promise<boolean> => started && !stopping && failure === undefined
     && state.kind === "connected" && linkId !== null && tunnelPort !== null
@@ -647,7 +690,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   const stopTunnel = async (): Promise<void> => {
     invalidateOwnerProof();
     adopted = null;
-    adoptedStartTime = null;
+    adoptedRecord = null;
     tunnelPort = null;
     setState(reduceTunnel(state, { type: "stop" }));
     await killChild();
@@ -778,7 +821,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       const record = readPidfile(clientTunnelPidfilePath(deps.configDir));
       const identity = record?.pid === adopted && record.linkId === afterReap.sidecar.linkId
         ? tunnelIdentity(record, deps.platform ?? process.platform, deps, isAlive) : null;
-      adoptedStartTime = identity?.kind === "ours" ? identity.startTime : null;
+      adoptedRecord = identity?.kind === "ours" ? record : null;
       invalidateOwnerProof();
       linkId = afterReap.sidecar.linkId;
       tunnelPort = afterReap.sidecar.tunnelPort;
@@ -825,7 +868,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       // The leftover tunnel is gone: start our own on this tick.
       invalidateOwnerProof();
       adopted = null;
-      adoptedStartTime = null;
+      adoptedRecord = null;
       tunnelPort = null;
       probe = null;
       setState(IDLE);
