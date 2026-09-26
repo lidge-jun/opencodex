@@ -582,6 +582,7 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
   }
 }
 
+/** Normalize a row for Codex's catalog parser, stripping native eligibility from routed rows unless explicitly preserved. */
 export function ensureStrictCatalogFields(
   entry: RawEntry,
   options: { preserveExactInputModalities?: boolean; isRouted?: boolean; preserveNativeAccessPrograms?: boolean } = {},

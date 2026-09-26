@@ -267,6 +267,7 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+/** Merge retained rows, project confirmed account metadata, and publish only changed catalog bytes. */
 function writeRetainedCatalogSync({
   config,
   goModels,

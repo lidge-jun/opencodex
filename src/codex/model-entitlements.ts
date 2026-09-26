@@ -637,6 +637,7 @@ async function accountCredentialSnapshot(
   }
 }
 
+/** Keep valid roster slugs while dropping malformed program metadata; preserve explicit null separately from absence. */
 function parseAccountModels(text: string): { models: ReadonlySet<string>; accessProgramsByModel: ReadonlyMap<string, CodexAvailableAccessPrograms> } | null {
   try {
     const payload = JSON.parse(text) as { models?: unknown };
@@ -683,6 +684,7 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === "TimeoutError";
 }
 
+/** Fetch one bounded, version-scoped roster; failures and empty results remain unconfirmed for a short retry. */
 async function fetchAccountModels(
   credential: CodexModelEntitlementCredentialSnapshot,
   fetcher: typeof fetch,
