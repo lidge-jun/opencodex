@@ -64,9 +64,10 @@ function DetectionRow({ labelKey, installed, path, version }: { labelKey: TKey; 
  * cursor-local update channel advertises when it could be resolved, and say so honestly
  * when it could not. Rendering only; the URL is never fetched by the GUI itself.
  */
-function CursorInstallerHint({ hint }: { hint: { available: boolean; url: string | null; version: string | null; reason: string | null } }) {
+function CursorInstallerHint({ hint }: { hint: { available: boolean; url: string | null; version: string | null; reason: string | null } | undefined }) {
   const t = useT();
-  if (!hint.available || hint.url === null) {
+  // An older hub answers without `localInstaller`; that is the unavailable case, not an error.
+  if (!hint || !hint.available || hint.url === null) {
     return <span data-cursor-installer-unavailable>{t("integrations.cursor.installerUnavailable")}</span>;
   }
   return (

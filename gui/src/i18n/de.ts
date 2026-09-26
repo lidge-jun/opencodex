@@ -3183,7 +3183,7 @@ export const de: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor (regulär)",
   "integrations.cursor.detected": "Erkannt",
   "integrations.cursor.notFound": "Nicht gefunden",
-  "integrations.cursor.installerIntro": "Cursor Private Inference ist ein separater Local-Mode-Build. Cursor {version} bietet das Installationsprogramm über den Update-Kanal an; installieren Sie es und fügen Sie dann die unten stehende Base-URL und den API-Schlüssel unter Settings > Models > Gateway ein.",
+  "integrations.cursor.installerIntro": "Cursor Private Inference ist ein separater Local-Mode-Build. Der Update-Kanal von Cursor bietet dessen Installationsprogramm in Version {version} an; installieren Sie es und fügen Sie dann die unten stehende Base-URL und den API-Schlüssel unter Settings > Models > Gateway ein.",
   "integrations.cursor.installerOpen": "Installationsprogramm herunterladen",
   "integrations.cursor.installerUnavailable": "Das normale Cursor leitet benutzerdefinierte Endpunkte über die Cursor-Server, daher erreicht es diesen Proxy nicht; dafür ist der separate Build Cursor Private Inference nötig. Sein Installationsprogramm ließ sich für diesen Computer nicht über den Update-Kanal von Cursor ermitteln. Die Gateway-Werte unten gelten, sobald er installiert ist.",
   "integrations.cursor.nothingFound": "An den üblichen Speicherorten wurde keine Cursor-Installation gefunden. Falls Cursor an einem anderen Ort installiert ist, gelten die unten stehenden Werte trotzdem.",

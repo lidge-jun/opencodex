@@ -1985,7 +1985,7 @@ export const en = {
   "integrations.cursor.regular": "Cursor (regular)",
   "integrations.cursor.detected": "Detected",
   "integrations.cursor.notFound": "Not found",
-  "integrations.cursor.installerIntro": "Cursor Private Inference is a separate local-mode build. Cursor {version} advertises its installer through the update channel; install it, then paste the Base URL and API key below into Settings > Models > Gateway.",
+  "integrations.cursor.installerIntro": "Cursor Private Inference is a separate local-mode build. Cursor's update channel advertises its installer, version {version}; install it, then paste the Base URL and API key below into Settings > Models > Gateway.",
   "integrations.cursor.installerOpen": "Download the installer",
   "integrations.cursor.installerUnavailable": "Regular Cursor routes custom endpoints through Cursor's servers, so it cannot reach this proxy; that needs the separate Cursor Private Inference build. Its installer could not be resolved from Cursor's update channel for this computer. The gateway values below apply once it is installed.",
   "integrations.cursor.nothingFound": "No Cursor install was found in the usual locations. If it is installed elsewhere, the values below still apply.",

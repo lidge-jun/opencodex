@@ -1940,7 +1940,7 @@ export const vi: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor (bản thường)",
   "integrations.cursor.detected": "Đã phát hiện",
   "integrations.cursor.notFound": "Không tìm thấy",
-  "integrations.cursor.installerIntro": "Cursor Private Inference là một bản dựng local-mode riêng biệt. Cursor {version} cung cấp trình cài đặt qua kênh cập nhật; hãy cài đặt nó, sau đó dán Base URL và API key bên dưới vào Settings > Models > Gateway.",
+  "integrations.cursor.installerIntro": "Cursor Private Inference là một bản dựng local-mode riêng biệt. Kênh cập nhật của Cursor cung cấp trình cài đặt của bản dựng này, phiên bản {version}; hãy cài đặt nó, sau đó dán Base URL và API key bên dưới vào Settings > Models > Gateway.",
   "integrations.cursor.installerOpen": "Tải trình cài đặt",
   "integrations.cursor.installerUnavailable": "Cursor thông thường định tuyến endpoint tùy chỉnh qua máy chủ của Cursor nên không thể kết nối tới proxy này; cần bản dựng riêng Cursor Private Inference. Không thể xác định trình cài đặt cho máy tính này từ kênh cập nhật của Cursor. Các giá trị gateway bên dưới sẽ dùng được sau khi cài đặt.",
   "integrations.cursor.nothingFound": "Không tìm thấy bản cài đặt Cursor nào ở các vị trí thông thường. Nếu nó được cài đặt ở nơi khác, các giá trị bên dưới vẫn được áp dụng.",

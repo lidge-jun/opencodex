@@ -60,7 +60,8 @@ resolves to `available: false` with reason `unreachable` or `unusable-response`,
 requested when Private Inference is already installed or no regular install exists. The module never
 downloads or launches the installer: `buildCursorIntegrationStatus`
 (`src/server/management/cursor-integration-routes.ts`) returns it as `localInstaller`, and the
-dashboard only renders the link. `tests/providers/cursor/cursor-local-installer.test.ts` covers the
+dashboard only renders the link. The GUI treats a status body without `localInstaller` (a hub
+that predates the lookup) as the unavailable case. `tests/providers/cursor/cursor-local-installer.test.ts` covers the
 manifest shapes, failures, skip conditions, the OS/architecture mapping, blank versions, the cache
 windows and request sharing. Answers are cached per update host and platform (30 minutes after a
 success, 5 after a failure) and concurrent lookups share one request, because the Cursor tab polls

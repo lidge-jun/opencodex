@@ -26,7 +26,8 @@ export interface CursorIntegrationStatus {
   effortTable: { source: "bundle" | "static"; version: string | null; families: number | null };
   models: CursorModelExpectation[];
   /** Resolved only when regular Cursor exists and Private Inference does not (#5679). */
-  localInstaller: { available: boolean; url: string | null; version: string | null; reason: string | null };
+  /** Absent from hubs that predate the installer lookup; the page treats that as unavailable. */
+  localInstaller?: { available: boolean; url: string | null; version: string | null; reason: string | null };
   guideUrl: string;
 }
 

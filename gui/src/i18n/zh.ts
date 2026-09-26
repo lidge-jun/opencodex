@@ -3204,7 +3204,7 @@ export const zh: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor（普通版）",
   "integrations.cursor.detected": "已检测到",
   "integrations.cursor.notFound": "未找到",
-  "integrations.cursor.installerIntro": "Cursor Private Inference 是一个独立的本地模式版本。Cursor {version} 会通过更新频道提供其安装程序；请安装该版本，然后将下方的 Base URL 和 API Key 粘贴到 Settings > Models > Gateway 中。",
+  "integrations.cursor.installerIntro": "Cursor Private Inference 是一个独立的本地模式版本。Cursor 的更新频道提供其安装程序，版本为 {version}；请安装该版本，然后将下方的 Base URL 和 API Key 粘贴到 Settings > Models > Gateway 中。",
   "integrations.cursor.installerOpen": "下载安装程序",
   "integrations.cursor.installerUnavailable": "普通 Cursor 通过 Cursor 的服务器路由自定义端点，因此无法访问此代理；需要单独的 Cursor Private Inference 版本。无法从 Cursor 的更新频道为这台电脑确定其安装程序。安装后即可使用下方的网关值。",
   "integrations.cursor.nothingFound": "在常用位置未找到 Cursor 安装。如果安装在其他位置，以下值仍然适用。",

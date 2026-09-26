@@ -3172,7 +3172,7 @@ export const fr: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor (version standard)",
   "integrations.cursor.detected": "Détecté",
   "integrations.cursor.notFound": "Introuvable",
-  "integrations.cursor.installerIntro": "Cursor Private Inference est une version local-mode distincte. Cursor {version} propose son programme d’installation via le canal de mise à jour ; installez-le, puis collez l’URL de base et la clé API ci-dessous dans Settings > Models > Gateway.",
+  "integrations.cursor.installerIntro": "Cursor Private Inference est une version local-mode distincte. Le canal de mise à jour de Cursor propose son programme d’installation, version {version} ; installez-le, puis collez l’URL de base et la clé API ci-dessous dans Settings > Models > Gateway.",
   "integrations.cursor.installerOpen": "Télécharger le programme d’installation",
   "integrations.cursor.installerUnavailable": "Cursor classique fait passer les points de terminaison personnalisés par les serveurs Cursor et ne peut donc pas joindre ce proxy ; il faut pour cela la version distincte Cursor Private Inference. Son programme d’installation n’a pas pu être déterminé pour cet ordinateur depuis le canal de mise à jour de Cursor. Les valeurs de passerelle ci-dessous s’appliquent une fois celle-ci installée.",
   "integrations.cursor.nothingFound": "Aucune installation de Cursor n’a été trouvée aux emplacements habituels. Si Cursor est installé ailleurs, les valeurs ci-dessous restent valables.",

@@ -146,7 +146,7 @@ test("regular Cursor alone surfaces the local-mode installer when the channel ad
   await mount();
   const text = textOf();
   expect(text).toContain("separate local-mode build");
-  expect(text).toContain("Cursor 3.21.18");
+  expect(text).toContain("version 3.21.18");
   expect(container.querySelectorAll("[data-installed='false']").length).toBe(1);
   const installer = container.querySelector("a[data-cursor-installer-url]");
   expect(installer?.getAttribute("href")).toContain("downloads.cursor.com/local-mode/");
@@ -167,6 +167,16 @@ test("regular Cursor alone without a resolvable installer says so instead of pro
   expect(text).toContain("cannot reach this proxy");
   expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
   expect(container.querySelector("a[data-cursor-guide='notice']")).not.toBeNull();
+});
+
+test("a hub that predates the installer lookup renders the unavailable notice", async () => {
+  const legacy = payload({ privateInference: { installed: false, path: null, version: null } });
+  delete (legacy as { localInstaller?: unknown }).localInstaller;
+  statusResponse = () => json(legacy);
+  await mount();
+  const text = textOf();
+  expect(text).toContain("could not be resolved");
+  expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
 });
 
 test("no Cursor at all still hands over the gateway values", async () => {

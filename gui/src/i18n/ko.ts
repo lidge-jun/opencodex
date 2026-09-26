@@ -3205,7 +3205,7 @@ export const ko: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor (일반)",
   "integrations.cursor.detected": "감지됨",
   "integrations.cursor.notFound": "없음",
-  "integrations.cursor.installerIntro": "Cursor Private Inference는 별도의 로컬 모드 빌드입니다. Cursor {version}은(는) 업데이트 채널을 통해 설치 프로그램을 안내합니다. 설치한 뒤 아래의 Base URL과 API 키를 Settings > Models > Gateway에 붙여넣으세요.",
+  "integrations.cursor.installerIntro": "Cursor Private Inference는 별도의 로컬 모드 빌드입니다. Cursor 업데이트 채널이 이 빌드의 설치 프로그램(버전 {version})을 안내합니다. 설치한 뒤 아래의 Base URL과 API 키를 Settings > Models > Gateway에 붙여넣으세요.",
   "integrations.cursor.installerOpen": "설치 프로그램 다운로드",
   "integrations.cursor.installerUnavailable": "일반 Cursor는 사용자 지정 엔드포인트를 Cursor 서버를 통해 호출하므로 이 프록시에 연결할 수 없습니다. 별도 빌드인 Cursor Private Inference가 필요합니다. 이 컴퓨터용 설치 프로그램을 Cursor 업데이트 채널에서 확인할 수 없었습니다. 설치한 뒤에는 아래 게이트웨이 값을 사용하면 됩니다.",
   "integrations.cursor.nothingFound": "일반적인 위치에서 Cursor를 찾지 못했습니다. 다른 곳에 설치했다면 아래 값은 그대로 유효합니다.",

@@ -3206,7 +3206,7 @@ export const ru: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor (обычная версия)",
   "integrations.cursor.detected": "Обнаружено",
   "integrations.cursor.notFound": "Не найдено",
-  "integrations.cursor.installerIntro": "Cursor Private Inference — отдельная сборка локального режима. Cursor {version} предлагает установщик через канал обновлений; установите её, затем вставьте базовый URL и API-ключ ниже в Settings > Models > Gateway.",
+  "integrations.cursor.installerIntro": "Cursor Private Inference — отдельная сборка локального режима. Канал обновлений Cursor предлагает её установщик версии {version}; установите её, затем вставьте базовый URL и API-ключ ниже в Settings > Models > Gateway.",
   "integrations.cursor.installerOpen": "Скачать установщик",
   "integrations.cursor.installerUnavailable": "Обычный Cursor отправляет запросы к пользовательским эндпоинтам через серверы Cursor, поэтому не может достучаться до этого прокси; для этого нужна отдельная сборка Cursor Private Inference. Её установщик для этого компьютера не удалось получить из канала обновлений Cursor. Значения шлюза ниже подойдут после её установки.",
   "integrations.cursor.nothingFound": "Установка Cursor в обычных расположениях не обнаружена. Если Cursor установлен в другом месте, приведённые ниже значения всё равно подходят.",

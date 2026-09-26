@@ -3205,7 +3205,7 @@ export const ja: Record<TKey, string> = {
   "integrations.cursor.regular": "Cursor（通常版）",
   "integrations.cursor.detected": "検出済み",
   "integrations.cursor.notFound": "見つかりません",
-  "integrations.cursor.installerIntro": "Cursor Private Inference は別のローカルモード ビルドです。Cursor {version} はアップデートチャネル経由でインストーラーを案内しています。インストール後、下のベース URL と API キーを Settings > Models > Gateway に貼り付けてください。",
+  "integrations.cursor.installerIntro": "Cursor Private Inference は別のローカルモード ビルドです。Cursor のアップデートチャネルが、そのインストーラー（バージョン {version}）を案内しています。インストール後、下のベース URL と API キーを Settings > Models > Gateway に貼り付けてください。",
   "integrations.cursor.installerOpen": "インストーラーをダウンロード",
   "integrations.cursor.installerUnavailable": "通常版の Cursor はカスタムエンドポイントを Cursor のサーバー経由で呼び出すため、このプロキシには届きません。別ビルドの Cursor Private Inference が必要です。このコンピューター向けのインストーラーを Cursor のアップデートチャネルから特定できませんでした。インストール後は下のゲートウェイ値を使えます。",
   "integrations.cursor.nothingFound": "通常の場所に Cursor のインストールが見つかりませんでした。別の場所にインストールされている場合でも、以下の値を使用できます。",
