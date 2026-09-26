@@ -16,6 +16,7 @@ import { resetProviderRequestPacingForTest } from "../../src/providers/request-p
 import { estimateTokens } from "../../src/lib/token-estimate";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import * as stateStores from "../../src/lib/state-store-registrations";
+import { translatorAggregateCurrentBytesForTests } from "../../src/lib/translator-budget";
 
 let previousHome: string | undefined;
 let testDir = "";
@@ -187,6 +188,8 @@ async function mockResettingChatUpstream(
   opts: {
     onSend?: (sendIndex: number, headers: string) => void;
     replacementFrames?: string;
+    /** Replacement streams its first frame, then waits on this before finishing the body. */
+    holdReplacement?: { firstFrame: string; rest: string; release: Promise<void> };
   } = {},
 ): Promise<{ baseUrl: string; sends: () => number }> {
   let sends = 0;
@@ -207,6 +210,14 @@ async function mockResettingChatUpstream(
         // genuine and the body never carried a byte, which is the stage under test.
         socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
         socket.destroy();
+        return;
+      }
+      const hold = opts.holdReplacement;
+      if (hold) {
+        const chunk = (text: string) => `${Buffer.byteLength(text).toString(16)}\r\n${text}\r\n`;
+        socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+        socket.write(chunk(hold.firstFrame));
+        void hold.release.then(() => socket.end(`${chunk(hold.rest)}0\r\n\r\n`));
         return;
       }
       const body = opts.replacementFrames ?? recoveredChatFrames();
@@ -358,6 +369,73 @@ test("native Chat releases retained request bytes after key reselection on repla
     expect(upstream.sends()).toBe(2);
     expect(seenAuth).toEqual(["Bearer k", "Bearer k-rotated"]);
   } finally {
+    liveSpy.mockRestore();
+    await stopFixtureServers();
+  }
+});
+
+test("the replacement send's request copy is released before the replacement stream is relayed", async () => {
+  // Rotating the key between the sends makes the replacement rebuild and re-charge the request
+  // copy. The upstream then holds the replacement body after its first frame, so the live
+  // translator charge is read while the stream is being relayed, not after the turn disposed it.
+  let liveConfig: OcxConfig | null = null;
+  const realSetLive = stateStores.setLiveStateStoreConfig;
+  const liveSpy = spyOn(stateStores, "setLiveStateStoreConfig").mockImplementation(cfg => {
+    liveConfig = cfg;
+    return realSetLive(cfg);
+  });
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const upstream = await mockResettingChatUpstream({
+    onSend: sendIndex => {
+      if (sendIndex === 1 && liveConfig?.providers.mock) liveConfig.providers.mock.apiKey = "k-rotated";
+    },
+    holdReplacement: {
+      firstFrame: `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "HeldFrame" } }] })}\n\n`,
+      rest: [
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 1 } })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""),
+      release: released,
+    },
+  });
+  saveConfig(mockConfig(upstream.baseUrl, { retryOnReset: {} }));
+  const server = startServer(0);
+  activeServer = server;
+  const requestBytes = 1024 * 1024;
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        messages: [{ role: "user", content: "x".repeat(requestBytes) }],
+        stream: true,
+      }),
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (!text.includes("HeldFrame")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    expect(text).toContain("HeldFrame");
+    expect(upstream.sends()).toBe(2);
+    // The accepted inbound body stays observed for the whole turn (~1x requestBytes). Without the
+    // release, the rebuilt request copy is charged on top of it for the whole relay (~2x).
+    expect(translatorAggregateCurrentBytesForTests()).toBeLessThan(requestBytes * 1.5);
+    release();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    expect(text).toContain("[DONE]");
+  } finally {
+    release();
     liveSpy.mockRestore();
     await stopFixtureServers();
   }
