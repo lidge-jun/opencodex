@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -330,10 +331,9 @@ async function chooseListenPort(
         ocxService: process.env.OCX_SERVICE,
       });
       if (decision === "service-stay-out") {
-        // Same contract as the pre-bind owner check: the wrapper's retry loop terminates
-        // on a zero exit, and the port it was asked to serve is already served.
+        // Signal intentional stay-out to wrappers that support the exit protocol.
         console.log(`Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}); service wrapper staying out of the way.`);
-        throw new StartCommandExit(0);
+        throw new StartCommandExit(serviceStayOutExitCode());
       }
       if (decision === "refuse-live-proxy") {
         console.error(`⚠️  Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}). Use 'ocx stop' first.`);
@@ -444,13 +444,9 @@ async function handleStart(options: { block?: boolean } = {}) {
       ocxService: process.env.OCX_SERVICE,
     });
     if (decision === "service-stay-out") {
-      // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
-      // ANY source means the requested port is already served. Exit 0 so the wrapper's
-      // `if %ERRORLEVEL% NEQ 0` retry loop terminates instead of respawning every 5s
-      // against a listener it can never claim (observed as an endless
-      // "Proxy already running" service.log loop).
+      // A live owner is an intentional stay-out, not an unexpected child exit.
       console.log(`Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}); service wrapper staying out of the way.`);
-      process.exit(0);
+      process.exit(serviceStayOutExitCode());
     }
     if (decision === "refuse") {
       console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
@@ -513,7 +509,7 @@ async function handleStart(options: { block?: boolean } = {}) {
           });
           if (decision === "service-stay-out") {
             console.log(`Proxy already running (PID ${fencedLive.pid ?? "unknown"}, port ${fencedLive.port}); service wrapper staying out of the way.`);
-            throw new StartCommandExit(0);
+            throw new StartCommandExit(serviceStayOutExitCode());
           }
           if (decision === "refuse") {
             console.error(`⚠️  Proxy appeared before bind (PID ${fencedLive.pid ?? "unknown"}, port ${fencedLive.port}). Use 'ocx stop' first.`);

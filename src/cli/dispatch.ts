@@ -1059,7 +1059,7 @@ export type BusyPreferredPortDecision =
  *
  * Service-wrapper context keeps the semantics `decideStartWithLiveOwner` gives it: a
  * healthy proxy on the port means the port is served, and the wrapper's
- * `if %ERRORLEVEL% NEQ 0` loop must see a zero exit rather than respawn every 5 seconds.
+ * retry loop must receive the intentional stay-out signal rather than respawn every 5 seconds.
  */
 export function decideBusyPreferredPort(input: {
   preferredPort: number;
