@@ -1,6 +1,5 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
-import { withZenFreeTierSupport } from "../adapters/openai-chat/zen-free-tier";
-import { isZenFreeEndpoint } from "../adapters/opencode-free-session";
+import { transformProviderRequest } from "../adapters/provider-compatibility";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -316,21 +315,7 @@ export async function runNativeChatAttempt(
   let activeProvider: OcxProviderConfig = route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
-  // Client tool catalog for the keyless-Zen substitution below: the native
-  // lane never builds a parsed request, so the wrapper cannot snapshot it
-  // itself. The raw chat body is fixed for the attempt, so read it once.
-  const nativeClientToolNames = new Set(
-    (Array.isArray(execution.chatBody.tools) ? execution.chatBody.tools : [])
-      .map(tool => (tool as { function?: { name?: unknown } } | null)?.function?.name)
-      .filter((name): name is string => typeof name === "string"),
-  );
-  const wrapNativeAdapter = (adapter: ProviderAdapter, provider: OcxProviderConfig): ProviderAdapter =>
-    // Same conditional as the registry: the native lane serves every
-    // provider, and only the Zen gateway takes the wrapper.
-    isZenFreeEndpoint(provider.baseUrl)
-      ? withZenFreeTierSupport(adapter, provider, nativeClientToolNames)
-      : adapter;
-  let activeAdapter: ProviderAdapter = wrapNativeAdapter(createOpenAIChatAdapter(activeProvider), activeProvider);
+  let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
@@ -345,16 +330,17 @@ export async function runNativeChatAttempt(
   };
   const buildActiveRequest = () => {
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
-    return buildOpenAIChatPassthroughRequest(
+    const request = buildOpenAIChatPassthroughRequest(
       activeProvider,
       execution.chatBody,
       route.modelId,
       requestedStream,
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
       config.fastMode,
-      // The native lane never builds a parsed request, so there is no thread
-      // to stabilize on: the process fallback session applies. Caller headers
-      // still ride along so an explicit session wins.
+    );
+    return transformProviderRequest(
+      activeProvider,
+      request,
       { incomingHeaders: req.headers },
     );
   };
@@ -455,7 +441,7 @@ export async function runNativeChatAttempt(
                 }
                 activeProvider = current;
                 stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-                activeAdapter = wrapNativeAdapter(createOpenAIChatAdapter(current), current);
+                activeAdapter = createOpenAIChatAdapter(current);
                 activeRequest.releaseBodyObservation?.();
                 releaseRetainedRequest();
                 activeRequest = buildActiveRequest();
@@ -565,7 +551,7 @@ export async function runNativeChatAttempt(
       try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
       activeProvider = rotated;
       stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-      activeAdapter = wrapNativeAdapter(createOpenAIChatAdapter(activeProvider), activeProvider);
+      activeAdapter = createOpenAIChatAdapter(activeProvider);
       releaseRetainedRequest();
       activeRequest = buildActiveRequest();
       retainRequest(activeRequest);

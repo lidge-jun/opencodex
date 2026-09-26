@@ -13,13 +13,12 @@ import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
 import { createOpenAIChatAdapter } from "./openai-chat";
-import { withZenFreeTierSupport } from "./openai-chat/zen-free-tier";
-import { isZenFreeEndpoint } from "./opencode-free-session";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
+import { withProviderRequestCompatibility } from "./provider-compatibility";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
 
@@ -86,14 +85,8 @@ export const ADAPTER_REGISTRY = {
   "openai-chat": {
     wire: "openai-chat",
     mutation: "codex-owned",
-    // The Zen keyless-tier wrapper applies only to its own gateway: every
-    // other openai-chat provider gets the bare adapter, byte-identical to
-    // before. The endpoint check re-runs here (rather than inside the
-    // wrapper) so non-Zen construction never enters Zen code at all.
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => {
-      const base = withUniqueToolCallIds(withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider)));
-      return isZenFreeEndpoint(provider.baseUrl) ? withZenFreeTierSupport(base, provider) : base;
-    },
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) =>
+      withUniqueToolCallIds(withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider))),
   },
   "ollama-native": {
     wire: "ollama-native",
@@ -197,11 +190,12 @@ export function createRegisteredAdapter(
 ): ProviderAdapter {
   const definition = getAdapterDefinition(provider.adapter);
   if (!definition) throw new Error(`Unknown adapter: ${provider.adapter}`);
-  const adapter = definition.create(provider, context);
+  let adapter = definition.create(provider, context);
   const wire = effectiveAdapterContract(provider.adapter).wire;
   if (wire !== "openai-responses") {
     withInputMediaGuard(adapter, wire);
   }
+  adapter = withProviderRequestCompatibility(adapter, provider);
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {
     const attachTierMetadata = (request: Awaited<ReturnType<ProviderAdapter["buildRequest"]>>) => {

@@ -29,8 +29,7 @@
  * to the catalog it already has.
  */
 
-import type { OcxProviderConfig } from "../types";
-import { isZenFreeEndpoint, zenFreeHasApiKey } from "./opencode-free-session";
+import type { CompatibilityFunctionTool } from "./provider-compatibility";
 
 export type ZenFreeGateToolName = "shell" | "read";
 
@@ -38,83 +37,20 @@ export type ZenFreeGateToolName = "shell" | "read";
 export const ZEN_FREE_GATE_DECLARATION =
   "Do not call this tool. It exists only for API compatibility and must never be invoked.";
 
-/** Gate names as a set for route-level checks. */
-export const ZEN_FREE_GATE_NAMES: ReadonlySet<string> = new Set(["shell", "read"]);
-
-/**
- * Guidance text when the model calls a gate declaration anyway. Returns
- * undefined when the call is legitimate: any other name, or a gate name the
- * client actually declared (exact match — then it is the client's own tool,
- * not the compatibility twin, and dispatch is their problem, not ours).
- */
-export function zenFreeGateCallGuidance(
-  callName: string,
-  clientToolNames: Iterable<string> | undefined,
-): string | undefined {
-  if (!ZEN_FREE_GATE_NAMES.has(callName)) return undefined;
-  const catalog = [...(clientToolNames ?? [])];
-  for (const declared of catalog) {
-    if (declared === callName) return undefined;
-  }
-  return zenFreeGateGuidanceText(callName, catalog);
-}
-
-/**
- * Append the missing gate declarations to an already-built tool list.
- * Returns the amended list, or undefined when nothing applies: another
- * endpoint, keyed use, or the pair already present. Each wire keeps its own
- * shape through `nameOf`/`declareAs`, so the three builders share this one
- * policy without sharing a wire format.
- */
-export function withZenFreeGateDeclarations<T>(
-  provider: Pick<OcxProviderConfig, "baseUrl" | "apiKey" | "authMode">,
-  current: readonly T[] | undefined,
-  nameOf: (tool: T) => string | undefined,
-  declareAs: (name: ZenFreeGateToolName) => T,
-): T[] | undefined {
-  // Forward mode hands the caller's credential to canonical ChatGPT, never
-  // to this gateway, so gate declarations must not leak onto that lane.
-  if (provider.authMode === "forward") return undefined;
-  if (!isZenFreeEndpoint(provider.baseUrl) || zenFreeHasApiKey(provider)) return undefined;
-  const names = (current ?? [])
-    .map(nameOf)
-    .filter((name): name is string => typeof name === "string");
-  const missing = missingZenFreeGateTools(names);
-  if (missing.length === 0) return undefined;
-  return [...(current ?? []), ...missing.map(declareAs)];
-}
-
-/** Static redirection text for a gate-named call. The turn stays alive. */
-export function zenFreeGateGuidanceText(callName: string, alternatives: readonly string[] = []): string {
-  const owned = alternatives.filter(name => name !== callName).slice(0, 4);
-  const instead = owned.length === 0
-    ? "Use one of this turn's other declared tools instead."
-    : owned.length === 1
-      ? `Use \`${owned[0]}\` instead.`
-      : `Use one of ${owned.map(name => `\`${name}\``).join(", ")} instead.`;
-  return (
-    `The \`${callName}\` tool is declared but cannot be executed in this session. ` + instead
-  );
-}
-
-interface ZenFreeGateRedirect {
-  names: ReadonlySet<string>;
-  message: (name: string, alternatives: readonly string[]) => string;
-}
-
-/**
- * Redirect config for the passthrough undeclared-tool guard: guidance
- * instead of failure for gate names the client never declared. Undefined
- * for every other destination (and for keyed use), which keeps the
- * fail-closed behavior there byte-identical. Shaped to satisfy the guard's
- * own redirect contract structurally, so neither module names the other.
- */
-export function zenFreeGateRedirectFor(
-  provider: Pick<OcxProviderConfig, "baseUrl" | "apiKey">,
-): ZenFreeGateRedirect | undefined {
-  if (!isZenFreeEndpoint(provider.baseUrl) || zenFreeHasApiKey(provider)) return undefined;
-  return { names: ZEN_FREE_GATE_NAMES, message: zenFreeGateGuidanceText };
-}
+/** Declarations required by Zen; the shared profile layer supplies each wire shape. */
+export const ZEN_FREE_GATE_TOOLS: readonly CompatibilityFunctionTool[] = [
+  {
+    name: "shell",
+    satisfiedBy: ["shell", "bash"],
+    description: ZEN_FREE_GATE_DECLARATION,
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "read",
+    description: ZEN_FREE_GATE_DECLARATION,
+    parameters: { type: "object", properties: {} },
+  },
+];
 
 /**
  * Which gate names are still missing from declared tool names. Matching is
@@ -124,34 +60,7 @@ export function zenFreeGateRedirectFor(
  */
 export function missingZenFreeGateTools(names: Iterable<string> | undefined): ZenFreeGateToolName[] {
   const declared = new Set(names ?? []);
-  const missing: ZenFreeGateToolName[] = [];
-  if (!declared.has("shell") && !declared.has("bash")) missing.push("shell");
-  if (!declared.has("read")) missing.push("read");
-  return missing;
-}
-
-/** Chat Completions wire shape for one gate declaration. */
-export function zenFreeGateChatTool(name: ZenFreeGateToolName): {
-  type: "function";
-  function: { name: string; description: string; parameters: { type: string; properties: Record<string, never> } };
-} {
-  return {
-    type: "function",
-    function: { name, description: ZEN_FREE_GATE_DECLARATION, parameters: { type: "object", properties: {} } },
-  };
-}
-
-/** Responses wire shape for one gate declaration. */
-export function zenFreeGateResponsesTool(name: ZenFreeGateToolName): {
-  type: "function";
-  name: string;
-  description: string;
-  parameters: { type: string; properties: Record<string, never> };
-} {
-  return {
-    type: "function",
-    name,
-    description: ZEN_FREE_GATE_DECLARATION,
-    parameters: { type: "object", properties: {} },
-  };
+  return ZEN_FREE_GATE_TOOLS
+    .filter(tool => !(tool.satisfiedBy ?? [tool.name]).some(name => declared.has(name)))
+    .map(tool => tool.name as ZenFreeGateToolName);
 }

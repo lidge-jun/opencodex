@@ -101,7 +101,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
-      const { url, headers, hasCredential } = openAIChatTransport(provider, { parsed, incomingHeaders: incoming?.headers });
+      const { url, headers, hasCredential } = openAIChatTransport(provider);
       const messages = toolNames.messages(parsed, provider.baseUrl, messagesToChatFormat(parsed, provider));
       freeformTools = freeformToolsByWireName(parsed.context.tools, tool => toolNames.registry().alias(tool));
       const finish = (): AdapterRequest => {
