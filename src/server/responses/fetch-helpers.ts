@@ -286,14 +286,14 @@ export function providerFetch(
     return httpFetch(input, init);
   };
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
-  const waitForPacing = (signal?: AbortSignal) => {
+  const waitForPacing = async (signal?: AbortSignal): Promise<void> => {
     if (pacingSlotAcquired) {
       pacingSlotAcquired = false;
-      return Promise.resolve();
+      return;
     }
-    return options.providerName
-      ? waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal)
-      : Promise.resolve();
+    if (options.providerName) {
+      await waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal);
+    }
   };
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     await waitForPacing(init?.signal ?? undefined);
