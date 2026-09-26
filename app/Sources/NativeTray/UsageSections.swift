@@ -34,7 +34,7 @@ struct NativeTrayProviderView: View {
                     ForEach(account.windows) { window in
                         HStack(spacing: 8) {
                             Text(window.label).lineLimit(1).frame(width: 96, alignment: .leading)
-                            Text(window.value.map { $0.formatted(.number.precision(.fractionLength(0))) + "%" } ?? "—")
+                            Text(NativeTrayFormat.percentText(window.value))
                                 .monospacedDigit().frame(width: 36, alignment: .trailing)
                             NativeTrayQuotaBar(window: window)
                             Text(NativeTrayFormat.reset(window.resetAt)).monospacedDigit()
