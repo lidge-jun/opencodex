@@ -12,6 +12,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { applyNativeAccessPrograms } from "./access-programs";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
@@ -526,6 +527,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering

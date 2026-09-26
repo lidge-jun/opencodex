@@ -584,7 +584,7 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
 
 export function ensureStrictCatalogFields(
   entry: RawEntry,
-  options: { preserveExactInputModalities?: boolean; isRouted?: boolean } = {},
+  options: { preserveExactInputModalities?: boolean; isRouted?: boolean; preserveNativeAccessPrograms?: boolean } = {},
 ): RawEntry {
   if (entry.shell_type === "default" || entry.shell_type === "local" || entry.shell_type === "shell_command") {
     entry.shell_type = "unified_exec";
@@ -634,7 +634,7 @@ export function ensureStrictCatalogFields(
   if (typeof entry.effective_context_window_percent !== "number") entry.effective_context_window_percent = 95;
   if (typeof entry.comp_hash !== "string") entry.comp_hash = "opencodex";
   // Routed rows must not carry NATIVE eligibility metadata. `deriveEntry` deep-clones a
-  // native template and deletes a fixed denylist, so these five survive onto rows backed
+  // native template and deletes a fixed denylist, so these eligibility fields survive onto rows backed
   // by unrelated provider credentials — advertising ChatGPT plan eligibility for a model
   // that never touches a ChatGPT account (#2813).
   //
@@ -644,6 +644,9 @@ export function ensureStrictCatalogFields(
   // leave already-contaminated rows contaminated forever.
   if (options.isRouted === true) {
     entry.supported_in_api = true;
+    // Exact Codex-forward aliases still use a ChatGPT credential and may retain their native
+    // source metadata. Other routed rows cannot claim that account's access programs.
+    if (!options.preserveNativeAccessPrograms) delete entry.available_access_programs;
     delete entry.available_in_plans;
     delete entry.minimal_client_version;
     delete entry.availability_nux;

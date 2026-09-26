@@ -407,16 +407,20 @@ interface CachedAccountModels {
   readonly clientVersion: string;
   readonly expiresAt: number;
   readonly models: ReadonlySet<string>;
+  readonly accessProgramsByModel?: ReadonlyMap<string, CodexAvailableAccessPrograms>;
   readonly confirmed: boolean;
   readonly provenance?: CodexModelEntitlementProvenance;
 }
 
 export interface CodexModelEntitlementSnapshot {
   readonly modelsByAccount: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly accessProgramsByAccount?: ReadonlyMap<string, ReadonlyMap<string, CodexAvailableAccessPrograms>>;
   readonly clientVersionByAccount: ReadonlyMap<string, string>;
   readonly confirmedAccountIds: ReadonlySet<string>;
   readonly credentialIdentities: ReadonlyMap<string, string>;
 }
+
+export type CodexAvailableAccessPrograms = Readonly<Record<string, readonly string[]>> | null;
 
 export type CodexModelEntitlementState = "granted" | "denied" | "unknown";
 
@@ -633,17 +637,24 @@ async function accountCredentialSnapshot(
   }
 }
 
-function parseAccountModels(text: string): ReadonlySet<string> | null {
+function parseAccountModels(text: string): { models: ReadonlySet<string>; accessProgramsByModel: ReadonlyMap<string, CodexAvailableAccessPrograms> } | null {
   try {
     const payload = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(payload.models)) return null;
+    const accessProgramsByModel = new Map<string, CodexAvailableAccessPrograms>();
     const models = payload.models.flatMap(entry => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
-      const row = entry as { slug?: unknown; supported_in_api?: unknown; visibility?: unknown };
+      const row = entry as { slug?: unknown; supported_in_api?: unknown; visibility?: unknown; available_access_programs?: unknown };
       if (typeof row.slug !== "string" || row.supported_in_api !== true || row.visibility === "hide") return [];
+      const programs = row.available_access_programs;
+      if (programs === null) accessProgramsByModel.set(row.slug, null);
+      else if (programs && typeof programs === "object" && !Array.isArray(programs)
+        && Object.values(programs).every(value => Array.isArray(value) && value.every(item => typeof item === "string"))) {
+        accessProgramsByModel.set(row.slug, programs as Record<string, string[]>);
+      }
       return [row.slug];
     });
-    return new Set(models);
+    return { models: new Set(models), accessProgramsByModel };
   } catch {
     return null;
   }
@@ -702,8 +713,8 @@ async function fetchAccountModels(
     if (!body.displaySafe || body.truncated) {
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "unparseable" });
     }
-    const models = parseAccountModels(body.text);
-    if (models === null) {
+    const parsed = parseAccountModels(body.text);
+    if (parsed === null) {
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "unparseable" });
     }
     // A roster is a confirmation only when it lists something usable. `models` is a Set, and an
@@ -713,6 +724,7 @@ async function fetchAccountModels(
     // account asked under too old a client version answers with no gated rows, and treating
     // that as authoritative is exactly how 2.36.0 denied sol/terra/luna to accounts that own
     // them (#3022). No usable rows means unconfirmed, on the 15s failure TTL, asked again.
+    const { models, accessProgramsByModel } = parsed;
     const usable = models.size > 0;
     if (!usable) {
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "parsed-empty" });
@@ -735,6 +747,7 @@ async function fetchAccountModels(
         ? MODEL_ROSTER_TTL_MS
         : MODEL_ROSTER_FAILURE_TTL_MS),
       models,
+      accessProgramsByModel,
       confirmed: true,
     };
   } catch (error) {
@@ -1173,6 +1186,10 @@ export async function resolveCodexModelEntitlements(
   })));
   return {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
+    accessProgramsByAccount: new Map(results.flatMap(({ credential, result }) => (
+      result.confirmed && result.accessProgramsByModel
+        ? [[credential.accountId, result.accessProgramsByModel] as const] : []
+    ))),
     clientVersionByAccount: new Map(results.map(({ credential, result }) => (
       [credential.accountId, result.clientVersion]
     ))),
