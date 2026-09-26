@@ -50,11 +50,11 @@ function contextFor(
 }
 
 function stubService(overrides: Partial<{
-  readState: () => CodexAppServerStateResponse;
+  readState: () => Promise<CodexAppServerStateResponse>;
   performRestart: () => Promise<CodexRestartResponse>;
 }> = {}) {
   return {
-    readState: overrides.readState ?? (() => STALE_STATE),
+    readState: overrides.readState ?? (async () => STALE_STATE),
     performRestart: overrides.performRestart ?? (async () => STOPPED),
   } as NonNullable<ManagementContext["deps"]["codexRestartService"]>;
 }
