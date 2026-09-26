@@ -159,12 +159,16 @@ mod macos {
                 continue;
             };
             let mut push = |percent: Option<&Value>, window_label: &str, reset: Option<&Value>| {
+                // JSON null (or any non-number) is an absent window, not a row of dashes: a
+                // weekly-only plan reports `fiveHourPercent: null` and must show weekly only.
+                let percent = number(percent).filter(|value| value.is_finite() && *value >= 0.0);
+                let reset = reset_at(reset).filter(|value| *value > 0.0);
                 if percent.is_some() || reset.is_some() {
                     rows.push(Quota {
                         provider_label: provider_label.clone(),
                         window_label: window_label.to_owned(),
-                        percent: number(percent),
-                        reset_at: reset_at(reset),
+                        percent,
+                        reset_at: reset,
                     });
                 }
             };
@@ -479,6 +483,26 @@ mod macos {
             changed.generated_at = 2.0;
             assert!(!write_if_changed(&path, Some(&snapshot), &changed).unwrap());
             let _ = fs::remove_file(path);
+        }
+
+        #[test]
+        fn quota_rows_skip_windows_the_plan_does_not_report() {
+            let reports = json!({ "reports": [
+                { "provider": "openai", "label": "OpenAI", "quota": {
+                    "fiveHourPercent": null, "fiveHourResetAt": null,
+                    "weeklyPercent": 49.0, "weeklyResetAt": 1_900_000_000 } },
+                { "provider": "kimi", "label": "Kimi", "quota": {
+                    "fiveHourPercent": 0, "weeklyPercent": 35 } }
+            ] });
+            let rows = quotas(&reports, &json!({ "settings": {} }));
+            let windows: Vec<_> = rows
+                .iter()
+                .map(|row| (row.provider_label.as_str(), row.window_label.as_str()))
+                .collect();
+            assert_eq!(
+                windows,
+                [("OpenAI", "week"), ("Kimi", "5h"), ("Kimi", "week")]
+            );
         }
 
         #[test]

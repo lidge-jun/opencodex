@@ -75,7 +75,10 @@ export function quotaWindows(quota: AccountQuota | null) {
     // keeps that unique, including against the fixed keys above.
     ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, percent: w.percent, reset: w.resetAt })) : []),
   ];
-  const kept = windows.filter((w, index) => index === 0 && quota.monthlyPercent === undefined || finite(w.percent) || resetTimestamp(w.reset) !== null);
+  // A window is listed only when it reports a percentage (zero included) or a reset time. Plans
+  // differ in which windows they have: a weekly-only account has no 5-hour window, and showing a
+  // dash row for it reads as "unknown usage" rather than "not part of this plan".
+  const kept = windows.filter(w => finite(w.percent) || resetTimestamp(w.reset) !== null);
   // A provider is free to report two custom windows under one label. The row identity has to
   // stay unique anyway, or React reconciles two different windows onto the same row.
   const seen = new Map<string, number>();

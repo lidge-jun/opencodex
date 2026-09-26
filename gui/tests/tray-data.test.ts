@@ -23,8 +23,13 @@ describe('tray data', () => {
     expect(account.label).toBe('p•••@e•••.com');
     expect(account.active).toBe(true);
     expect(account.plan).toBe('plus');
-    expect(quotaWindows(account.quota)).toHaveLength(2);
-    expect(quotaWindows(account.quota)[0].percent).toBeUndefined();
+    // Weekly-only plan: no placeholder 5-hour row.
+    expect(quotaWindows(account.quota).map(w => w.id)).toEqual(['quota.weeklyLimit']);
+    expect(quotaWindows({ fiveHourPercent: null, weeklyPercent: 0 } as never).map(w => w.id)).toEqual(['quota.weeklyLimit']);
+    // Zero and reset-only windows still count as reported.
+    expect(quotaWindows({ fiveHourPercent: 0, weeklyPercent: 1 } as never).map(w => w.id)).toEqual(['quota.fiveHourLimit', 'quota.weeklyLimit']);
+    expect(quotaWindows({ shortResetAt: now + 60_000 } as never).map(w => w.id)).toEqual(['quota.fiveHourLimit']);
+    expect(quotaWindows({} as never)).toEqual([]);
     expect(parseAccounts({ keys: [{ id: 'k', label: 'Work', quotaUnavailable: true, quota: { weeklyPercent: 0 } }] })[0].quota).toBeNull();
     expect(parseAccounts({ keys: [{ id: 'k', quotaUnavailable: true }] })[0].unavailable).toBe(true);
     expect(parseAccounts({ keys: [{ id: 'k', quotaMode: 'unsupported' }] })[0].unavailable).toBe(false);

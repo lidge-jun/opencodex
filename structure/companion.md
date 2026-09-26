@@ -51,6 +51,13 @@ selection is distinct from a read failure. With no filters, the original summary
 Whole-count conversion accepts only finite, nonnegative, integral values in range; costs remain
 fractional. Hidden quota reports are excluded before minimum selection or visible-row truncation.
 
+A quota window is listed only when it reports a finite percentage (zero included) or a valid reset
+time. The native panel projection (`desktop/src-tauri/src/native_tray_accounts.rs`), the widget
+rows (`desktop/src-tauri/src/widget.rs`, where a JSON `null` counts as absent) and the web tray
+(`gui/src/pages/tray-data.ts` `quotaWindows`, also consumed by the quota summary strip) apply the
+same rule, so a weekly-only plan shows only its weekly row. An account that reports no window keeps
+the surface's "No quota data" line rather than a row of dashes.
+
 The Tauri title reads `usage_today()`, matching the widget and retained Swift client. Every refresh
 applies the resulting optional title so icon-only clears an old counter. A nonblank custom template
 takes precedence over icon-only; unavailable measurements render as an em dash, not as a request

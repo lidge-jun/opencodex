@@ -78,10 +78,14 @@ fn reset(value: &Value) -> Option<f64> {
 fn windows(quota: &Value, plan: &str) -> Vec<Value> {
     let monthly_only = matches!(plan.trim().to_lowercase().as_str(), "go" | "free");
     let mut rows = Vec::new();
-    let mut push = |id: &str, label: &str, percent: &Value, at: &Value, keep_unknown: bool| {
+    // A window is listed only when it reports something: a finite percentage (zero included) or
+    // a valid reset time. Plans differ in which windows they have, so an absent 5-hour window is
+    // not a 5-hour window with unknown usage; an account that reports nothing keeps the panel's
+    // "No quota data" line instead of a row of dashes.
+    let mut push = |id: &str, label: &str, percent: &Value, at: &Value| {
         let percent = number(percent);
         let at = reset(at);
-        if keep_unknown || percent.is_some() || at.is_some() {
+        if percent.is_some() || at.is_some() {
             rows.push(json!({"id":format!("{id}:{}",rows.len()),"label":label,"percent":percent,"resetAt":at}));
         }
     };
@@ -94,19 +98,12 @@ fn windows(quota: &Value, plan: &str) -> Vec<Value> {
             .get("fiveHourResetAt")
             .filter(|v| !v.is_null())
             .unwrap_or(&quota["shortResetAt"]);
-        push(
-            "short",
-            "5-hour limit",
-            short,
-            short_reset,
-            quota.get("monthlyPercent").is_none(),
-        );
+        push("short", "5-hour limit", short, short_reset);
         push(
             "weekly",
             "Weekly limit",
             &quota["weeklyPercent"],
             &quota["weeklyResetAt"],
-            false,
         );
     }
     push(
@@ -114,13 +111,12 @@ fn windows(quota: &Value, plan: &str) -> Vec<Value> {
         "30-day limit",
         &quota["monthlyPercent"],
         &quota["monthlyResetAt"],
-        false,
     );
     if !monthly_only {
         if let Some(custom) = quota["customWindows"].as_array() {
             for window in custom {
                 if let Some(label) = window["label"].as_str() {
-                    push(label, label, &window["percent"], &window["resetAt"], false);
+                    push(label, label, &window["percent"], &window["resetAt"]);
                 }
             }
         }
@@ -203,5 +199,35 @@ mod tests {
         assert_eq!(rows[0]["windows"][0]["percent"], 0.0);
         assert!(rows[1]["windows"].as_array().unwrap().is_empty());
         assert!(parse_accounts(&json!({"accounts":[{"quota":{}}]})).is_none());
+    }
+    #[test]
+    fn only_windows_that_report_data_are_listed() {
+        let labels = |quota: Value| -> Vec<String> {
+            windows(&quota, "pro")
+                .iter()
+                .map(|w| w["label"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        // Weekly-only plan: no 5-hour row at all, with or without an explicit null.
+        assert_eq!(
+            labels(json!({"weeklyPercent":49,"weeklyResetAt":1900000000})),
+            ["Weekly limit"]
+        );
+        assert_eq!(
+            labels(json!({"fiveHourPercent":null,"fiveHourResetAt":null,"weeklyPercent":1})),
+            ["Weekly limit"]
+        );
+        // Zero is a measurement and a reset time alone still identifies a live window.
+        assert_eq!(
+            labels(json!({"fiveHourPercent":0,"weeklyPercent":0})),
+            ["5-hour limit", "Weekly limit"]
+        );
+        assert_eq!(
+            labels(json!({"shortResetAt":1900000000,"weeklyPercent":3})),
+            ["5-hour limit", "Weekly limit"]
+        );
+        // Nothing reported means no rows; the view shows its "No quota data" line.
+        assert!(labels(json!({})).is_empty());
+        assert!(labels(json!({"fiveHourPercent":"n/a","weeklyPercent":-1})).is_empty());
     }
 }
