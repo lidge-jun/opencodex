@@ -413,14 +413,9 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
   }
   const requestedPort = startOpts.port;
-  // Always probe the configured port, even when both state files are absent. A
-  // fallback-port sibling overwrites the pid/runtime records when it starts and
-  // removes them on its own shutdown, so their absence proves nothing about the
-  // configured port. Without the probe, `start` shadowed a healthy proxy with an
-  // ephemeral-port copy and re-pointed client config at the copy; the next sibling
-  // shutdown then left no runtime record for discovery at all. `handleEnsure`
-  // already passes this; `handleStart` is the path that did not. A sibling's own replacement is
-  // marked before it (`honorSiblingMarker`): an owner down for that moment must not make it one.
+  // Probe the configured port even without state files: a fallback sibling can remove them,
+  // and an unprobed start could shadow the owner and reroute Codex to a short-lived port.
+  // Consume a sibling replacement's handoff before probing, even if its owner is momentarily down.
   let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;
   // A restart replacement waits out its draining parent instead of refusing it, and bounds its handoff log (restart-handoff.ts).
   const restartParent = { restartParentPid: takeRestartHandoffMarkers(process.env), requestedPort, ocxService: process.env.OCX_SERVICE };
