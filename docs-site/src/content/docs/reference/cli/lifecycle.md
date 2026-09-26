@@ -400,6 +400,12 @@ previous catalog from memory.
 
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
+On Windows Task Scheduler, the service wrapper restarts the proxy after five seconds
+even when an external tool terminates it with exit code 0. If another opencodex proxy
+already owns the port, the wrapper exits deliberately. Use `ocx stop` or
+`ocx service stop` to stop the service and its restart loop. After upgrading an
+existing installation, run `ocx service repair` to refresh the generated wrapper.
+
 Run opencodex as a login-managed background service (macOS **launchd**, Linux **systemd user unit**,
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
 `OCX_SERVICE=1` so a restart does not churn the Codex config.
