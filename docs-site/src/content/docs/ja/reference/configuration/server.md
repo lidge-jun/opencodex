@@ -14,7 +14,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `proxy?` | `string` | — |送信 HTTP(S) または SOCKS5 プロキシ URL（`socks5://host:port`）または `${ENV_VAR}`。HTTP URL は未設定時のみ `HTTP_PROXY` / `HTTPS_PROXY` に適用されます。SOCKS5 URL は組み込みの SOCKS5 トンネルを使用し、`ALL_PROXY` にも適用されます（`ocx start --socks5`）。このプロセスで継承した `HTTP(S)_PROXY` はクリアされます。ループバックは `NO_PROXY` に残ります。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | テキストもツール呼び出しもない Responses ターンを、ターミナルイベント前にストリームが終了した場合も含め、同一リクエストで 1 回再試行するよう明示的に有効化します。再試行は課金対象になる場合があります。`OCX_EMPTY_COMPLETION_RETRY=0` で設定を変更せず無効化できます。combo と routed-compaction turn は対象外です。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Codex Responses パススルーから Codex の safety-buffering ヒントを除去します。対象は `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 応答ヘッダー、`safety_buffering` 型の `response.metadata` SSE イベント、およびその他の SSE イベントにある `safety_buffering` フィールドです。Codex TUI はこれらを、既定の操作でセッションをより弱いモデルに切り替える「より高速なモデルで再試行」プロンプトとして表示します。その他の `x-codex-*` ヘッダーと SSE イベントの内容は、そのフィールドの除去を除いて変更せずに転送されます。既定ではオフです。 |
-| `stallTimeoutSec?` | `number` | `300` | Responses とネイティブ Chat の有効な上流進捗がない秒数。最小 1 秒。 |
+| `stallTimeoutSec?` | `number` | `300`（public）/ 無効（local） | ストリームが遮断されるまでの、有効な上流進捗がない秒数（Responses とネイティブ Chat）。未設定では**ローカル**上流（loopback・プライベート・`.local`/`.lan` 名）は無効が既定、public 上流は 300 秒。正の値は両方に適用（最小 1 秒）、`0` で watchdog を全面無効化。`/v1/responses/compact` の保留ボディ読み取りもこの予算を共有するが、ローカル上流でも既定は 300 秒。明示値（`0` を含む）が優先される。 |
 | `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
 | `websockets?` | `boolean` | `false` | クライアント向け Responses WebSocket パスを広告して許可します。false の場合クライアントは HTTP/SSE を使いますが、対象となる canonical ChatGPT upstream WS 最適化は無効にしません。 |
