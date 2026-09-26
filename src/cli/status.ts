@@ -29,6 +29,8 @@ import { tokenCollidesWithAdmin } from "../lib/admin-secrets";
 export { proxyHealthFailureReason, isConnectionRefused, isUncleanExitEvidence, probeUncleanExitState } from "./status-probes";
 export type { ListenTarget } from "./status-probes";
 import { checkProxyHealth, probeUncleanExitState, type ListenTarget } from "./status-probes";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -231,6 +233,34 @@ function statusDashboardUrl(config: StatusListenConfig, hostname: string | undef
     ? "localhost"
     : reachableHostname;
   return `http://${dashboardHostname}:${port}/`;
+}
+
+const STARTUP_HEALTH_BOOLEAN_FIELDS = [
+  "routingInjected", "localRoutingDependency", "autostartEnabled", "rebootSafe",
+  "serviceInstalled", "serviceViable", "serviceEnabled", "serviceRunning",
+  "serviceStale", "serviceConflict", "shimInstalled", "shimHealthy",
+  "serviceSupported", "diagnosticStale",
+] as const;
+
+export async function fetchLiveStartupHealth(
+  live: NonNullable<Awaited<ReturnType<typeof findLiveProxy>>>,
+  deps: Parameters<typeof fetchBoundLocalManagementRead>[2] = {},
+): Promise<StartupHealth | null> {
+  const result = await fetchBoundLocalManagementRead(
+    live, LOCAL_MANAGEMENT_READ_PATHS.startupHealth, { timeoutMs: 1_500, ...deps },
+  );
+  if (result.kind !== "response" || !result.response.ok) return null;
+  let payload: unknown;
+  try { payload = await result.response.json(); } catch { return null; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const row = payload as Record<string, unknown>;
+  if (row.status !== "native" && row.status !== "protected" && row.status !== "at-risk") return null;
+  if (row.protection !== "service" && row.protection !== "shim" && row.protection !== "none") return null;
+  if (row.routingKind !== "native" && row.routingKind !== "opencodex-local"
+    && row.routingKind !== "custom-local" && row.routingKind !== "custom-remote" && row.routingKind !== "unknown") return null;
+  if (row.shimCoverage !== "full" && row.shimCoverage !== "cli-only" && row.shimCoverage !== "none") return null;
+  for (const key of STARTUP_HEALTH_BOOLEAN_FIELDS) if (typeof row[key] !== "boolean") return null;
+  return payload as StartupHealth;
 }
 
 /**
@@ -634,16 +664,19 @@ export async function collectStatus(): Promise<CliStatusView> {
     hostname: config.hostname,
   });
   const bunRuntime = durableBunRuntime();
+  const liveStartup = live ? await fetchLiveStartupHealth(live) : null;
   const service = diagnoseService();
   // A service can be registered and still not serve: the manager reports the job
-  // either way. `live` was already identity-probed a few lines above, so cross-check
-  // rather than print registration as if it were service.
-  const serviceSummary = service.installed && !live
-    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
-    : service.summary;
+  // either way. When the identity-probed live proxy provides an attested startup verdict,
+  // prefer it over a shell-local service-manager probe that lacks the service environment.
+  const serviceSummary = liveStartup?.protection === "service" && liveStartup.serviceViable
+    ? `running under the live managed service (logs: ${serviceLogPath()})`
+    : service.installed && !live
+      ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
+      : service.summary;
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;
-  const startup = collectStartupHealth(config, {
+  const startup = liveStartup ?? collectStartupHealth(config, {
     service,
     shim: codexShim,
     routingKind: getCodexRoutingKind(),
