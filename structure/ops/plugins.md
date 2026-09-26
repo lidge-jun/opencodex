@@ -22,8 +22,10 @@ or signs them.
   permissions, or add/remove path entries on the file, plugin directory, or any ancestor. Denials,
   grants only to the path owner, the running user, or root, read-only grants, and inheritance-only
   entries on the inspected path are safe; inherited grants effective on a descendant are checked
-  at that descendant. A timed-out macOS inspection gets one bounded retry; unknown grants or an
-  inspection error still refuse loading. Linux uses `getfacl` when installed and refuses extended
+  at that descendant. A timed-out macOS inspection retries once only if its output is empty:
+  observed unsafe grants refuse immediately, and any other partial output is incomplete and also
+  refuses loading. Unknown grants or other inspection errors also refuse loading.
+  Linux uses `getfacl` when installed and refuses extended
   ACL entries or probe failures; without that utility, only owner/mode checks apply. Windows
   auto-loading is disabled until an ACL trust check can enforce the same boundary.
 - A missing plugin directory means no plugins. Any other read failure (`EACCES`, `ENOTDIR`) is

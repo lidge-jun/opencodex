@@ -74,11 +74,11 @@ const MAC_ACL_BENIGN_TOKENS = new Set([
 export function macAclListingTrustError(listing: string, currentUser = userInfo().username): string | null {
   const [header, ...lines] = listing.split("\n");
   const owner = /^\S+\s+\d+\s+(\S+)\s+/.exec(header ?? "")?.[1];
-  if (!owner) return "access control list inspection failed";
+  let unparseable = !owner;
   for (const line of lines) {
     if (!/^\s*\d+:/.test(line)) continue;
     const entry = /^\s*\d+:\s+(.+?)\s+(?:inherited\s+)?(allow|deny)\s+([a-z_,]+)\s*$/.exec(line);
-    if (!entry) return "access control list inspection failed";
+    if (!entry) { unparseable = true; continue; }
     if (entry[2] === "deny") continue;
     const principal = entry[1]!;
     // The file owner, this process's user, and root already control the path without an ACE.
@@ -89,7 +89,7 @@ export function macAclListingTrustError(listing: string, currentUser = userInfo(
     if (rights.includes("only_inherit")) continue;
     if (rights.some(right => !MAC_ACL_BENIGN_TOKENS.has(right))) return "has an access control list";
   }
-  return null;
+  return unparseable ? "access control list inspection failed" : null;
 }
 
 interface MacAclProbeResult {
@@ -102,10 +102,16 @@ interface MacAclProbeResult {
 export function macAclProbeTrustError(probe: () => MacAclProbeResult): string | null {
   try {
     const first = probe();
-    // A loaded CI host can miss the two-second process deadline once. Retry only that bounded
-    // failure; an unavailable tool or a second timeout remains a trust refusal.
-    const result = (first.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT"
-      ? probe() : first;
+    // A timeout may carry partial stdout. Its unsafe ACEs are authoritative even if a retry
+    // would be clean; any other partial listing is incomplete and therefore also refused.
+    // Retry only when the first probe produced no ACL evidence at all.
+    let result = first;
+    if ((first.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      if (first.stdout.trim()) {
+        return macAclListingTrustError(first.stdout) ?? "access control list inspection failed";
+      }
+      result = probe();
+    }
     if (result.error || result.status !== 0) return "access control list inspection failed";
     return macAclListingTrustError(result.stdout);
   } catch {

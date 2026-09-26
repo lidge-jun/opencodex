@@ -157,6 +157,27 @@ test("a transient macOS ACL inspection timeout retries once and still fails clos
   expect(calls).toBe(2);
 });
 
+test("a timed-out macOS ACL probe cannot discard an observed unsafe grant", () => {
+  const timedOut = { status: null, stdout: "drwx------@ 2 runner staff 64 Sep 27 07:50 /plugins\n"
+    + " 0: group:everyone allow add_file\n", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) };
+  const safe = { status: 0, stdout: "drwx------ 2 runner staff 64 Sep 27 07:50 /plugins\n" };
+  let calls = 0;
+  expect(macAclProbeTrustError(() => ++calls === 1 ? timedOut : safe)).toBe("has an access control list");
+  expect(calls).toBe(1);
+  calls = 0;
+  const malformed = { ...timedOut, stdout: "partial listing\n 0: group:everyone allow add_file\n" };
+  expect(macAclProbeTrustError(() => ++calls === 1 ? malformed : safe)).toBe("has an access control list");
+  expect(calls).toBe(1);
+  calls = 0;
+  const safeButIncomplete = { ...timedOut, stdout: "drwxr-xr-x+ 23 root wheel 736 Sep 27 07:50 /\n 0: group:everyone deny delete\n" };
+  expect(macAclProbeTrustError(() => ++calls === 1 ? safeButIncomplete : safe)).toBe("access control list inspection failed");
+  expect(calls).toBe(1);
+  calls = 0;
+  const unparseable = { ...timedOut, stdout: "partial listing\n" };
+  expect(macAclProbeTrustError(() => ++calls === 1 ? unparseable : safe)).toBe("access control list inspection failed");
+  expect(calls).toBe(1);
+});
+
 test.skipIf(process.platform !== "darwin")("ACL trust uses macOS ls when PATH contains incompatible ls", () => {
   const file = writePlugin("redirect.ts", REDIRECT_PLUGIN);
   const fakeLs = join(dir, "ls");
