@@ -162,7 +162,10 @@ mod macos {
                 // JSON null (or any non-number) is an absent window, not a row of dashes: a
                 // weekly-only plan reports `fiveHourPercent: null` and must show weekly only.
                 let percent = number(percent).filter(|value| value.is_finite() && *value >= 0.0);
-                let reset = reset_at(reset).filter(|value| *value > 0.0);
+                // Same bounds as the native panel's `reset`: after the millisecond conversion,
+                // a time past year 9999 is not a reset the widget can show.
+                let reset =
+                    reset_at(reset).filter(|value| *value > 0.0 && *value < 253_402_300_800.0);
                 if percent.is_some() || reset.is_some() {
                     rows.push(Quota {
                         provider_label: provider_label.clone(),
@@ -492,7 +495,9 @@ mod macos {
                     "fiveHourPercent": null, "fiveHourResetAt": null,
                     "weeklyPercent": 49.0, "weeklyResetAt": 1_900_000_000 } },
                 { "provider": "kimi", "label": "Kimi", "quota": {
-                    "fiveHourPercent": 0, "weeklyPercent": 35 } }
+                    "fiveHourPercent": 0, "weeklyPercent": 35 } },
+                // A reset-only window whose time is out of range is not a window either.
+                { "provider": "far", "label": "Far", "quota": { "weeklyResetAt": 1e20 } }
             ] });
             let rows = quotas(&reports, &json!({ "settings": {} }));
             let windows: Vec<_> = rows
