@@ -113,7 +113,8 @@ export type WhamUsageResponse = {
   rate_limit_upsell?: { banner_type?: unknown } | null;
   rate_limit?: {
     allowed?: unknown;
-    // WHAM sends explicit nulls for absent windows.
+    limit_reached?: unknown;
+    // WHAM can omit optional tertiary; an absent secondary is explicitly null.
     primary_window?: WhamUsageWindow | null;
     secondary_window?: WhamUsageWindow | null;
     tertiary_window?: WhamUsageWindow | null;

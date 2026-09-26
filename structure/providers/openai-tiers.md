@@ -330,7 +330,9 @@ short-window tuple when secondary and tertiary windows are explicitly null or al
 Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
 qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
 it does not require repeated observations or independently confirm upstream window completeness.
-Omitted secondary/tertiary fields, a long auxiliary window without a usage reading, an unknown primary duration, partial headers, or invalid usage cannot prove that the
+An omitted tertiary is also accepted for the two-window WHAM shape only when secondary is explicitly null,
+`rate_limit.allowed` is exactly true, and `rate_limit.limit_reached` is exactly false; the measured long primary is still required.
+Other omissions, a long auxiliary window without a usage reading, an unknown primary duration, partial headers, or invalid usage cannot prove that the
 short window disappeared. Replacement proof belongs only to that observation and is never persisted;
 the resulting weekly/monthly window still blocks at 98%. This prevents old short-window exhaustion
 from surviving indefinitely on a now weekly/monthly account. Coverage lives in
@@ -344,6 +346,16 @@ invalidates old evidence. Request-owned bearers are matched only against a crede
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
+`src/codex/auth-api/main-account-probe.ts` rechecks the captured credential generation and bearer
+after body/retry awaits, before publishing main usage, credits, plan, reauth or Reserve state,
+including terminal 401/403 mutations. A missing identity writer cannot bypass this check.
+An observed same-account credential replacement, including A→B→A, prevents publication even
+when a newer read fails without publishing; an unchanged credential still permits an older success.
+Successful same-identity responses may still return parsed ordinary info to their caller, without
+shared-state updates, fresh quota or recovery proof. Conflicting identities and stale errors return
+cached info. The request/body races are covered by
+`tests/codex-integration/main-account-hard-lock-recovery.test.ts`; the ordinary return and Reserve
+revocation contract remains covered by `tests/codex-integration/reserve-passive-revocation.test.ts`.
 
 Owned startup rebuilds this binding from its pinned auth path under the native owner and exclusive
 claim, after journal recovery and stage cleanup, before publishing ready. That work now runs for

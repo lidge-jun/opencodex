@@ -239,6 +239,53 @@ describe("main policy window replacement", () => {
     expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   });
 
+  test.each([64, 97.99, 98, 100])("allowed two-window WHAM retires stale short evidence at %s percent", percent => {
+    retainedShort();
+    // Sanitized shape observed on an updated Windows install: tertiary is absent, not null.
+    const data: WhamUsageResponse = { plan_type: "prolite", rate_limit: {
+      allowed: true, limit_reached: false,
+      primary_window: { used_percent: percent, limit_window_seconds: weeklySeconds }, secondary_window: null,
+    } };
+    expect(parseMainPolicyUsageQuota(data)?.shortWindowAbsent).toBe(true);
+    publish(data);
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(percent);
+    expect(getMainPolicyQuota()).not.toHaveProperty("shortWindowAbsent");
+    expect(getMainAccountHardLockStatus(cfg).state).toBe(percent < 98 ? "ready" : "blocked");
+  });
+
+  test.each([
+    { allowed: undefined }, { allowed: false }, { allowed: "true" },
+    { limit_reached: undefined }, { limit_reached: true }, { limit_reached: "false" },
+    { secondary_window: undefined }, { secondary_window: {} },
+    { tertiary_window: undefined }, { tertiary_window: {} },
+    { tertiary_window: { used_percent: 0, limit_window_seconds: 18_000 } },
+    { primary_window: { used_percent: 64 } },
+    { primary_window: { used_percent: 101, limit_window_seconds: weeklySeconds } },
+  ])("incomplete or contradictory two-window evidence retains the block: %j", patch => {
+    retainedShort();
+    const data = { rate_limit: {
+      allowed: true, limit_reached: false,
+      primary_window: { used_percent: 64, limit_window_seconds: weeklySeconds },
+      secondary_window: null, ...patch,
+    } } as WhamUsageResponse;
+    expect(parseMainPolicyUsageQuota(data)?.shortWindowAbsent).toBeUndefined();
+    publish(data);
+    expect(getMainPolicyQuota()?.shortPercent).toBe(100);
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test("two-window evidence from a superseded writer cannot retire the block", () => {
+    const staleWriter = writerFor("fixture-main-b");
+    retainedShort();
+    const data: WhamUsageResponse = { rate_limit: {
+      allowed: true, limit_reached: false,
+      primary_window: { used_percent: 64, limit_window_seconds: weeklySeconds }, secondary_window: null,
+    } };
+    setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, staleWriter, parseMainPolicyUsageQuota(data));
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
   test("an explicit null secondary and long tertiary permit replacement", () => {
     retainedShort();
     publish({ rate_limit: {
