@@ -12,15 +12,17 @@
  * attachment-pricing behavior lives with the endpoint suite.
  */
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { estimateClaudeRequestTokens } from "../../src/server/claude-messages";
+import { estimateClaudeRequestTokens, handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { estimateTokens } from "../../src/lib/token-estimate";
-import { projectClaudeRequest } from "../../src/lib/claude-request-projection";
-import type { OcxConfig } from "../../src/types";
+import { CLAUDE_NATIVE_THINKING, projectClaudeRequest } from "../../src/lib/claude-request-projection";
+import { openAIChatSerializesThinking } from "../../src/adapters/openai-chat/messages";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -117,6 +119,51 @@ test("estimateClaudeRequestTokens drops replayed thinking the settled Chat wire 
   expect(dropped).toBeLessThan(native / 3);
 });
 
+test("a redacted_thinking blob is priced where the wire carries it and dropped where it cannot", () => {
+  // `redacted_thinking` rides in the same content array as `thinking` but is its own axis: the
+  // Anthropic-native lane replays the opaque blob verbatim, and the Chat wire has no
+  // representation for it at all. Folding it into the text/signature axes would either lose the
+  // blob's real bytes on the native lane or keep pricing it on a wire that never sends it, which
+  // is the same 40x over-count this file exists to prevent.
+  const data = "R".repeat(90_000);
+  const redactedOnly = { messages: [{ role: "assistant", content: [{ type: "redacted_thinking", data }] }] };
+  const kept = estimateClaudeRequestTokens(redactedOnly, "m", { text: true, signature: true, redacted: true });
+  const dropped = estimateClaudeRequestTokens(redactedOnly, "m", { text: true, signature: true, redacted: false });
+  // The all-true projection is the identity fast path, so the native default must agree exactly.
+  expect(kept).toBe(estimateClaudeRequestTokens(redactedOnly, "m"));
+  expect(kept).toBeGreaterThan(10_000);
+  // What is left is the JSON envelope around an emptied block, not 90k characters of blob.
+  expect(dropped).toBeLessThan(kept / 20);
+  // A signature-less thinking block beside it still answers to the axes that own it.
+  const both = {
+    messages: [{
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "T".repeat(4_000), signature: "S".repeat(4_000) }, { type: "redacted_thinking", data }],
+    }],
+  };
+  expect(estimateClaudeRequestTokens(both, "m", { text: true, signature: true, redacted: true }))
+    .toBe(estimateClaudeRequestTokens(both, "m"));
+  expect(estimateClaudeRequestTokens(both, "m", { text: false, signature: false, redacted: true }))
+    .toBeGreaterThan(estimateClaudeRequestTokens(both, "m", { text: false, signature: false, redacted: false }) * 20);
+});
+
+test("a preserve-listed Chat model still serializes no redacted_thinking", () => {
+  // The preserve list buys `reasoning_content`, nothing more: the assistant branch builds that
+  // string from `type: "thinking"` parts alone. The shared helper therefore reports the blob's
+  // axis false for every Chat provider, listed or not, and the estimate follows it.
+  const listed: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "k",
+    preserveReasoningContentModels: ["m"],
+    allowPrivateNetwork: true,
+  };
+  expect(openAIChatSerializesThinking(listed, "m")).toEqual({ text: true, signature: false, redacted: false });
+  const raw = { messages: [{ role: "assistant", content: [{ type: "redacted_thinking", data: "R".repeat(90_000) }] }] };
+  const onChat = estimateClaudeRequestTokens(raw, "m", openAIChatSerializesThinking(listed, "m"));
+  expect(onChat).toBeLessThan(estimateClaudeRequestTokens(raw, "m") / 20);
+});
+
 test("projectClaudeRequest is pure, idempotent, and keeps emptied messages", () => {
   const thinking = { type: "thinking", thinking: "replayed", signature: "sig" };
   const raw = { messages: [{ role: "assistant", content: [thinking] }] };
@@ -141,6 +188,56 @@ test("estimateClaudeRequestTokens counts a body with no thinking identically und
   const native = estimateClaudeRequestTokens(raw, "m");
   expect(estimateClaudeRequestTokens(raw, "m", { text: false, signature: false })).toBe(native);
   expect(estimateClaudeRequestTokens(raw, "m", { text: true, signature: false })).toBe(native);
+});
+
+test("count_tokens prices the wire the modelAdapters override selects, in both directions", async () => {
+  // A count is a promise about the prompt a real turn would forward, so it has to settle the
+  // wire the same way that turn does. Routing fills in the provider's registry adapter, and a
+  // per-model override lands afterwards — pricing the provider-wide adapter instead gets the
+  // answer backwards whenever the two disagree, which is precisely the case overrides exist for.
+  const body = {
+    model: "mock/test-model",
+    messages: [
+      { role: "user", content: "u" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "T".repeat(4_000), signature: "S".repeat(4_000) },
+          { type: "text", text: "a" },
+        ],
+      },
+    ],
+  };
+  const chatWire = estimateClaudeRequestTokens(body, "mock/test-model", { text: false, signature: false, redacted: false });
+  const nativeWire = estimateClaudeRequestTokens(body, "mock/test-model", CLAUDE_NATIVE_THINKING);
+  const countFor = async (providerAdapter: string, override: string): Promise<number> => {
+    const config = {
+      port: 0,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: providerAdapter,
+          baseUrl: "http://127.0.0.1:1/v1",
+          apiKey: "k",
+          allowPrivateNetwork: true,
+          modelAdapters: { "test-model": override },
+        },
+      },
+    } as unknown as OcxConfig;
+    const response = await handleClaudeCountTokens(new Request("http://localhost/v1/messages/count_tokens", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }), config);
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { input_tokens: number }).input_tokens;
+  };
+  // Provider says Responses, the model says Chat: the Chat body is the one that gets sent.
+  expect(await countFor("openai-responses", "openai-chat")).toBe(chatWire);
+  // And the reverse: a Chat provider whose model speaks Responses forwards the thinking verbatim.
+  expect(await countFor("openai-chat", "openai-responses")).toBe(nativeWire);
+  // The two directions must stay distinguishable, or the assertions above are vacuous.
+  expect(chatWire).toBeLessThan(nativeWire / 20);
 });
 
 test("message_start floor describes the prompt the Chat wire actually sent, not the replayed thinking", async () => {
@@ -197,5 +294,160 @@ test("message_start floor describes the prompt the Chat wire actually sent, not 
     upstream.server.stop(true);
     restoreIsolatedHome();
   }
+}, { timeout: SERVER_BUDGET_MS });
+
+/** Frames an Anthropic-wire upstream answers with, including the usage frame a client reads. */
+const ANTHROPIC_SSE_FRAMES = [
+  'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_b","type":"message","role":"assistant","model":"m2","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":7,"output_tokens":0}}}\n\n',
+  'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"sunny"}}\n\n',
+  'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
+  'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+].join("");
+
+/** Chat-wire frames for the upstream that answers the combo's second target in the Chat case. */
+const CHAT_SSE_FRAMES = [
+  `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "sunny" } }] })}\n\n`,
+  `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 3 } })}\n\n`,
+  "data: [DONE]\n\n",
+].join("");
+
+const COMBO_THINKING = {
+  type: "thinking",
+  thinking: "replayed reasoning ".repeat(400),
+  signature: "S".repeat(20_000),
+};
+const COMBO_MESSAGES = [
+  { role: "user", content: "first" },
+  { role: "assistant", content: [COMBO_THINKING, { type: "text", text: "answer" }] },
+  { role: "user", content: "second" },
+];
+
+/**
+ * One `combo/pair` turn whose first target refuses so the combo hops to `second`.
+ *
+ * The floor is read from the translated stream's own `message_start` frame, which is where a
+ * Claude client — and Paseo's context meter — reads it.
+ */
+async function comboFailoverFloor(second: {
+  provider: string;
+  model: string;
+  adapter: string;
+  frames: string;
+}): Promise<{ published: number; secondBodies: Array<Record<string, unknown>> }> {
+  setUpIsolatedHome();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
+  const firstBodies: Array<Record<string, unknown>> = [];
+  const first = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      firstBodies.push(await req.json() as Record<string, unknown>);
+      return Response.json({ error: { message: "fixture outage" } }, { status: 503 });
+    },
+  });
+  const secondBodies: Array<Record<string, unknown>> = [];
+  const secondServer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      secondBodies.push(await req.json() as Record<string, unknown>);
+      return new Response(second.frames, { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const loopback = (url: URL): string => url.toString().replace(/\/$/, "");
+  const config = {
+    port: 0,
+    defaultProvider: "first",
+    providers: {
+      first: { adapter: "openai-chat", baseUrl: `${loopback(first.url)}/v1`, apiKey: "k", allowPrivateNetwork: true },
+      [second.provider]: {
+        adapter: second.adapter,
+        baseUrl: second.adapter === "anthropic" ? loopback(secondServer.url) : `${loopback(secondServer.url)}/v1`,
+        apiKey: "k",
+        allowPrivateNetwork: true,
+      },
+    },
+    combos: {
+      pair: {
+        strategy: "failover",
+        targets: [{ provider: "first", model: "m1" }, { provider: second.provider, model: second.model }],
+      },
+    },
+  } as unknown as OcxConfig;
+  try {
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/pair", max_tokens: 128, stream: true, messages: COMBO_MESSAGES }),
+    }), config, { model: "", provider: "" }, { requestId: `combo-floor-${crypto.randomUUID()}`, start: Date.now() });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const startFrame = text.slice(text.indexOf("event: message_start"));
+    const published = (JSON.parse(startFrame.slice(startFrame.indexOf("data: ") + 6, startFrame.indexOf("\n\n")))
+      .message.usage.input_tokens) as number;
+    // The hop really happened: the first target refused once, the second served once.
+    expect(firstBodies).toHaveLength(1);
+    expect(secondBodies).toHaveLength(1);
+    return { published, secondBodies };
+  } finally {
+    first.stop(true);
+    secondServer.stop(true);
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    restoreIsolatedHome();
+  }
+}
+
+test("a combo failover publishes the floor of the target that answered, not the ingress pick", async () => {
+  // The ingress route names the combo's first target; the physical send names whichever target
+  // answered. Those are different bodies when the targets sit on different wires, and a memo read
+  // from the ingress pick prices the wrong one: here target A is a Chat wire that would drop the
+  // replayed thinking entirely, while target B is an Anthropic wire that forwards it verbatim.
+  // A floor left at the ingress pick therefore understates a prompt B really received — the
+  // mirror image of the over-count this file pins, and just as wrong for a context meter.
+  const { published, secondBodies } = await comboFailoverFloor({
+    provider: "b", model: "m2", adapter: "anthropic", frames: ANTHROPIC_SSE_FRAMES,
+  });
+  // B's body is the caller's, replayed thinking and signature included.
+  const forwarded = JSON.stringify(secondBodies[0]!.messages);
+  expect(forwarded).toContain("replayed reasoning");
+  expect(forwarded).toContain("S".repeat(64));
+
+  const nativeWire = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", CLAUDE_NATIVE_THINKING);
+  const chatWire = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: false, signature: false, redacted: false });
+  // The ablation: the ingress pick is the Chat target, whose projection prices this body at a
+  // rounding error next to what B received. Holding the floor above it is what a memo keyed on
+  // the settled wire buys.
+  expect(chatWire).toBeLessThan(nativeWire / 100);
+  expect(published).toBeGreaterThan(chatWire * 20);
+  expect(published).toBeLessThan(nativeWire * 1.5);
+  expect(published).toBeGreaterThan(nativeWire * 0.5);
+}, { timeout: SERVER_BUDGET_MS });
+
+test("a combo failover to a registry provider prices its merged preserve list", async () => {
+  // `preserveReasoningContentModels` is not a config-row field on most providers: it is merged
+  // in from the registry by `routedProviderConfig`. A dispatch that reads the raw row therefore
+  // prices a preserve-listed model as if its reasoning were dropped, which is the under-count
+  // this pair of cases exists to prevent. `moonshot` is a real registry entry whose endpoint a
+  // user may override, so a loopback row reaches the same merge path production does.
+  const { published, secondBodies } = await comboFailoverFloor({
+    provider: "moonshot", model: "kimi-k3", adapter: "openai-chat", frames: CHAT_SSE_FRAMES,
+  });
+  // The merged list is what made the adapter serialize the replayed text at all.
+  const forwarded = JSON.stringify(secondBodies[0]!.messages);
+  expect(forwarded).toContain("reasoning_content");
+  expect(forwarded).toContain("replayed reasoning");
+  // The signature has no Chat representation, so it is the one field the list does not buy.
+  expect(forwarded).not.toContain("S".repeat(64));
+
+  const textKept = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: true, signature: false, redacted: false });
+  const textDropped = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: false, signature: false, redacted: false });
+  expect(textKept).toBeGreaterThan(textDropped * 20);
+  expect(published).toBeGreaterThan(textDropped * 20);
+  expect(published).toBeLessThan(textKept * 1.5);
+  expect(published).toBeGreaterThan(textKept * 0.5);
 }, { timeout: SERVER_BUDGET_MS });
 

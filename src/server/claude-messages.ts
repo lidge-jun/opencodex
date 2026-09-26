@@ -51,7 +51,7 @@ import {
   projectClaudeRequest,
   type ClaudeThinkingProjection,
 } from "../lib/claude-request-projection";
-import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, previewRouteModel, UnknownRoutingPolicyError, routeModel, type RouteResult } from "../router";
+import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, previewRouteModel, routedProviderConfig, UnknownRoutingPolicyError, routeModel, type RouteResult } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
@@ -910,7 +910,7 @@ async function handleClaudeMessagesWithBudget(
   if (!requestedModel) requestedModel = (anthropicBody as Rec).model as string;
   const stream = internalBody.stream === true;
   /**
-   * This proxy's count of the prompt it is about to forward, computed at most once.
+   * This proxy's count of the prompt it is about to forward, computed at most once per wire.
    *
    * Two readers want it and they want it under different rules. The usage log takes it as a
    * floor only for estimated-usage adapters, because its merge is `max(reported, estimate)` and
@@ -919,6 +919,17 @@ async function handleClaudeMessagesWithBudget(
    * `message_delta` still corrects it (#4857).
    */
   let requestTokenFloor: number | undefined;
+  /**
+   * The `text|signature|redacted` triple `requestTokenFloor` was measured under.
+   *
+   * The count is not a constant for the request: a combo re-picks its child at dispatch and a
+   * retry can rotate the wire, so the pre-dispatch callers and the post-dispatch translator can
+   * legitimately want different projections. Keying the memo re-measures when they disagree
+   * instead of handing the translator the pre-dispatch measurement, and the estimator still runs
+   * at most twice for one request. At most, because a request has one settled wire per phase and
+   * the key collapses every repeat of the same answer.
+   */
+  let requestTokenFloorKey: string | undefined;
   // Routed adapters only support streamed turns; always stream internally and fold
   // the translated Anthropic SSE into a message JSON for non-streaming clients.
   internalBody.stream = true;
@@ -929,16 +940,20 @@ async function handleClaudeMessagesWithBudget(
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   let settledRoute: RouteResult | undefined;
   /**
-   * Which replayed thinking fields the settled route will actually serialize.
+   * Which replayed thinking fields the send that actually happened will serialize.
    *
-   * Read lazily: the floor is memoized and the call sites run after routing, so this sees the
-   * final wire. An unknown route keeps the full body — the estimator's long-standing behavior and
-   * the correct one for the Anthropic-native wire, whose forwarder drops nothing.
+   * Read lazily: routing settles the ingress wire, core may then re-pick it (a combo child, a
+   * rotated retry), and this is called both before and after that happens. It therefore reads the
+   * physical attempt when one exists and the ingress route only until then.
    */
-  const claudeThinkingProjection = (): ClaudeThinkingProjection => thinkingProjectionForRoute(settledRoute);
+  const claudeThinkingProjection = (): ClaudeThinkingProjection =>
+    thinkingProjectionForDispatch(config, settledRoute, logCtx);
   const claudeRequestTokenFloor = (): number => {
-    if (requestTokenFloor === undefined) {
-      requestTokenFloor = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel, claudeThinkingProjection());
+    const thinking = claudeThinkingProjection();
+    const key = `${thinking.text}|${thinking.signature}|${thinking.redacted}`;
+    if (requestTokenFloor === undefined || requestTokenFloorKey !== key) {
+      requestTokenFloor = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel, thinking);
+      requestTokenFloorKey = key;
     }
     return requestTokenFloor;
   };
@@ -1412,15 +1427,68 @@ function thinkingProjectionForRoute(route: RouteResult | undefined): ClaudeThink
 }
 
 /**
+ * The projection for the wire that will physically carry the request.
+ *
+ * The ingress route is not the last word on that wire. A combo re-picks its child at dispatch,
+ * and a retry can rotate the adapter mid-turn, so the ingress pick can name a different provider
+ * — and therefore a different body — than the one that is sent. `logCtx.activeAttempt` is the
+ * send that actually happened (`sealRequestAttemptIdentity` keeps its adapter current), so it
+ * wins once it exists; before the first send the ingress route is the only authority there is.
+ *
+ * A Chat identity is re-derived through `routedProviderConfig`, not read off the raw config row:
+ * `preserveReasoningContentModels` is registry-merged, so a row that omits it would otherwise
+ * price a preserve-listed model as if the wire dropped its reasoning.
+ */
+function thinkingProjectionForDispatch(
+  config: OcxConfig,
+  route: RouteResult | undefined,
+  logCtx: Pick<RequestLogContext, "providerAdapter" | "activeAttempt">,
+): ClaudeThinkingProjection {
+  const attempt = logCtx.activeAttempt;
+  const adapter = attempt?.adapter ?? logCtx.providerAdapter;
+  // No send to describe yet: the ingress route is the best available answer, and for the
+  // Anthropic-native wire (which drops nothing) it is already the right one.
+  if (adapter === undefined) return thinkingProjectionForRoute(route);
+  if (adapter !== "openai-chat") return CLAUDE_NATIVE_THINKING;
+  const providerName = attempt?.provider;
+  const modelId = attempt?.model ?? route?.modelId;
+  const provider = providerName !== undefined && Object.hasOwn(config.providers, providerName)
+    ? config.providers[providerName]
+    : undefined;
+  // A Chat wire whose destination cannot be named keeps the route's own answer: over-counting on
+  // a path that publishes nothing is harmless, under-counting a real prompt is not.
+  if (providerName === undefined || modelId === undefined || provider === undefined) {
+    return thinkingProjectionForRoute(route);
+  }
+  try {
+    return openAIChatSerializesThinking(routedProviderConfig(providerName, provider), modelId);
+  } catch {
+    return thinkingProjectionForRoute(route);
+  }
+}
+
+/**
  * The projection for a route resolved only to MEASURE a body this handler never sends.
  *
  * `previewRouteModel` is the read-only resolver: it advances no combo round-robin state, so a
  * count request cannot steer where the next real turn goes. An unresolvable model keeps the
  * full body, matching the old behavior for models routing cannot place.
+ *
+ * The wire is settled exactly as the turn path settles it. Routing fills in the provider's
+ * registry adapter, and a per-model `modelAdapters` override or a pinned wire is applied later by
+ * `resolveWireProtocolOverride` — so skipping it here would price the count against a body the
+ * routed adapter never sends.
  */
 function thinkingProjectionForPreview(config: OcxConfig, modelId: string): ClaudeThinkingProjection {
   try {
-    return thinkingProjectionForRoute(previewRouteModel(config, modelId));
+    const route = previewRouteModel(config, modelId);
+    route.staticPolicy = captureRouteStaticPolicy(
+      route.providerName, route.modelId, route.provider, route.staticPolicy.effectiveAlias, "anthropic",
+    );
+    route.provider = resolveWireProtocolOverride(
+      route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy,
+    );
+    return thinkingProjectionForRoute(route);
   } catch {
     return CLAUDE_NATIVE_THINKING;
   }

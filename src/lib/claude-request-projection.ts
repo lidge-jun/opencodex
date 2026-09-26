@@ -19,7 +19,7 @@
  * rewritten; this is a measurement that describes the route, not a transformation of the request.
  */
 
-/** Which replayed `thinking` fields a wire serializes. */
+/** Which replayed reasoning blocks and fields a wire serializes. */
 export interface ClaudeThinkingProjection {
   /** Serialize `thinking.thinking`, the model's own replayed text. */
   text: boolean;
@@ -28,13 +28,19 @@ export interface ClaudeThinkingProjection {
    * wires that carry it; pure overhead for wires that do not.
    */
   signature: boolean;
+  /**
+   * Serialize a `redacted_thinking` block, whose `data` is an opaque provider blob. It rides
+   * alongside `thinking` rather than inside it: a wire can reconstruct the model's reasoning
+   * without carrying the encrypted form, and the Chat wire does exactly that.
+   */
+  redacted: boolean;
 }
 
 /**
  * The Anthropic-native wire forwards a replayed thinking block verbatim, signature included, so
  * nothing is projected away. This is the default: an unknown route keeps the measured body.
  */
-export const CLAUDE_NATIVE_THINKING: ClaudeThinkingProjection = { text: true, signature: true };
+export const CLAUDE_NATIVE_THINKING: ClaudeThinkingProjection = { text: true, signature: true, redacted: true };
 
 interface ProjectableBody {
   system?: unknown;
@@ -42,9 +48,18 @@ interface ProjectableBody {
   tools?: unknown;
 }
 
+/**
+ * One content block as the given wire would carry it.
+ *
+ * `undefined` means the wire sends nothing for it, and the caller drops the entry. A `thinking`
+ * block that keeps its text but not its signature is returned as a copy rather than edited: the
+ * block object is shared with the outbound request builder, which must stay untouched.
+ */
 function projectBlock(block: unknown, thinking: ClaudeThinkingProjection): unknown {
   if (!block || typeof block !== "object") return block;
-  if (!("type" in block) || block.type !== "thinking") return block;
+  if (!("type" in block)) return block;
+  if (block.type === "redacted_thinking") return thinking.redacted ? block : undefined;
+  if (block.type !== "thinking") return block;
   if (!thinking.text) return undefined;
   if (thinking.signature || !("signature" in block)) return block;
   // Copy without the signature: the caller's block object is shared with the outbound request
@@ -66,7 +81,7 @@ export function projectClaudeRequest(
   raw: ProjectableBody,
   thinking: ClaudeThinkingProjection,
 ): ProjectableBody {
-  if (thinking.text && thinking.signature) return raw;
+  if (thinking.text && thinking.signature && thinking.redacted) return raw;
   if (!Array.isArray(raw.messages)) return raw;
   const messages = raw.messages as unknown[];
   return {

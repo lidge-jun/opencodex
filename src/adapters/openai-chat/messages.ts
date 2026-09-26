@@ -7,6 +7,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { identifyRoutedModel } from "../identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "../tool-catalog-nudge";
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
+import type { ClaudeThinkingProjection } from "../../lib/claude-request-projection";
 import { inlineDocumentDataUrl } from "../../responses/inline-document";
 import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
 import { modelInList, namespacedToolName } from "../../types";
@@ -72,9 +73,16 @@ export function toolResultImageChatParts(content: string | OcxContentPart[]): un
 export function openAIChatSerializesThinking(
   provider: OcxProviderConfig,
   modelId: string,
-): { text: boolean; signature: boolean } {
-  // The wire has no `signature` field — base64 replay tokens are Anthropic-wire-only.
-  return { text: modelInList(provider.preserveReasoningContentModels, modelId), signature: false };
+): ClaudeThinkingProjection {
+  return {
+    text: modelInList(provider.preserveReasoningContentModels, modelId),
+    // The wire has no `signature` field — base64 replay tokens are Anthropic-wire-only.
+    signature: false,
+    // A `redacted_thinking` block is opaque provider data with no Chat representation: the
+    // assistant branch below reads only `type: "thinking"` parts, so the encrypted form is
+    // dropped whatever the preserve list says.
+    redacted: false,
+  };
 }
 
 export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] {
