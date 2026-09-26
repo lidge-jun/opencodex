@@ -105,8 +105,7 @@ import {
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
 } from "../responses-undeclared-tool-guard";
-import { isZenFreeEndpoint, zenFreeHasApiKey } from "../../adapters/opencode-free-session";
-import { ZEN_FREE_GATE_NAMES, zenFreeGateGuidanceText } from "../../adapters/opencode-free-tools";
+import { zenFreeGateRedirectFor } from "../../adapters/opencode-free-tools";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 
 /**
@@ -729,20 +728,16 @@ export async function deliverPassthroughResponse(
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
         // Keyless Zen tier: a gate declaration the model calls anyway gets
-        // guidance instead of a failed turn. Every other route passes
-        // undefined and keeps the fail-closed behavior below.
+        // guidance instead of a failed turn (redirect config owned by the
+        // provider family module). Every other route passes undefined and
+        // keeps the fail-closed behavior below.
         nativeExchange.undeclaredToolGuardActive
           ? createUndeclaredToolCallGuardBlockRewrite(
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
             providerExecutedCallTypes,
             declaredBareWireToolNames,
-            isZenFreeEndpoint(route.provider.baseUrl) && !zenFreeHasApiKey(route.provider)
-              ? {
-                names: ZEN_FREE_GATE_NAMES,
-                message: (name: string, alternatives: readonly string[]) => zenFreeGateGuidanceText(name, alternatives),
-              }
-              : undefined,
+            zenFreeGateRedirectFor(route.provider),
           )
           : undefined,
         grokUpstreamEchoEnabled

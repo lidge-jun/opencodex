@@ -1,7 +1,6 @@
 import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { ZenFreeIdentity } from "../opencode-free-session";
-import { isZenFreeEndpoint, zenFreeHasApiKey } from "../opencode-free-session";
-import { missingZenFreeGateTools, zenFreeGateChatTool } from "../opencode-free-tools";
+import { withZenFreeGateDeclarations, zenFreeGateChatTool } from "../opencode-free-tools";
 import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
 import { applyExplicitChatDeveloperRole } from "./developer-role";
@@ -155,19 +154,20 @@ export function buildOpenAIChatPassthroughRequest(
     body.stream_options = rawBody.stream_options;
   }
 
-  // Keyless Zen tier: same gate declarations as the translated lane. Runs
-  // after capability policy above so those gates keep seeing only the
-  // caller's real tools. Keyless only.
-  if (isZenFreeEndpoint(provider.baseUrl) && !zenFreeHasApiKey(provider)) {
-    const current = Array.isArray(body.tools) ? body.tools : undefined;
-    const names = (current ?? []).map(item => {
+  // Keyless Zen tier gate declarations; policy lives in the shared
+  // helper, this wire only supplies its tool shape. Runs after capability
+  // policy above so those gates keep seeing only the caller's real tools.
+  const gated = withZenFreeGateDeclarations(
+    provider,
+    Array.isArray(body.tools) ? body.tools : undefined,
+    item => {
       const fn = (item as { function?: { name?: unknown }; name?: unknown } | null)?.function;
       const name = typeof fn === "object" && fn !== null ? fn.name : (item as { name?: unknown } | null)?.name;
       return typeof name === "string" ? name : undefined;
-    }).filter((name): name is string => typeof name === "string");
-    const missing = missingZenFreeGateTools(names);
-    if (missing.length > 0) body.tools = [...(current ?? []), ...missing.map(zenFreeGateChatTool)];
-  }
+    },
+    zenFreeGateChatTool,
+  );
+  if (gated !== undefined) body.tools = gated;
 
   const bodyJson = JSON.stringify(body);
 

@@ -1,5 +1,6 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
 import { withZenFreeTierSupport } from "../adapters/openai-chat/zen-free-tier";
+import { isZenFreeEndpoint } from "../adapters/opencode-free-session";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -324,7 +325,11 @@ export async function runNativeChatAttempt(
       .filter((name): name is string => typeof name === "string"),
   );
   const wrapNativeAdapter = (adapter: ProviderAdapter, provider: OcxProviderConfig): ProviderAdapter =>
-    withZenFreeTierSupport(adapter, provider, nativeClientToolNames);
+    // Same conditional as the registry: the native lane serves every
+    // provider, and only the Zen gateway takes the wrapper.
+    isZenFreeEndpoint(provider.baseUrl)
+      ? withZenFreeTierSupport(adapter, provider, nativeClientToolNames)
+      : adapter;
   let activeAdapter: ProviderAdapter = wrapNativeAdapter(createOpenAIChatAdapter(activeProvider), activeProvider);
   let activeRequest: AdapterRequest;
   let retainedRequestBytes = 0;
