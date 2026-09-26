@@ -93,6 +93,28 @@ describe("Codex roster access program metadata", () => {
     expect(rows[0]?.available_access_programs).toBeNull();
     expect(rows[1]).not.toHaveProperty("available_access_programs");
   });
+  test("keeps a valid cyber grant when another program value is malformed", async () => {
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential(MAIN_CODEX_ACCOUNT_ID)],
+      fetcher: (async () => Response.json({ models: [{
+        slug: SOL, supported_in_api: true, visibility: "list",
+        available_access_programs: {
+          cyber: ["standard", "daybreak_blue"], early_access: ["preview"], beta: true,
+        },
+      }] })) as typeof fetch,
+      now: 1_000,
+      clientVersion: TEST_CLIENT_VERSION,
+    });
+
+    expect(snapshot.accessProgramsByAccount?.get(MAIN_CODEX_ACCOUNT_ID)?.get(SOL)).toEqual({
+      cyber: ["standard", "daybreak_blue"], early_access: ["preview"],
+    });
+    const row: RawEntry = { slug: SOL };
+    applyNativeAccessPrograms([row], snapshot, new Map());
+    expect(row.available_access_programs).toEqual({
+      cyber: ["standard", "daybreak_blue"], early_access: ["preview"],
+    });
+  });
   test("keeps model slugs but drops malformed access programs without a cyber array", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential(MAIN_CODEX_ACCOUNT_ID)],

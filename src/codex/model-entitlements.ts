@@ -651,9 +651,10 @@ function parseAccountModels(text: string): { models: ReadonlySet<string>; access
       if (programs === null) accessProgramsByModel.set(row.slug, null);
       else if (programs && typeof programs === "object" && !Array.isArray(programs)) {
         const record = programs as Record<string, unknown>;
-        if (Array.isArray(record.cyber) && record.cyber.every(item => typeof item === "string")
-          && Object.values(record).every(value => Array.isArray(value) && value.every(item => typeof item === "string"))) {
-          accessProgramsByModel.set(row.slug, record as Record<string, string[]>);
+        if (Array.isArray(record.cyber) && record.cyber.every(item => typeof item === "string")) {
+          const validPrograms = Object.fromEntries(Object.entries(record).filter(([, value]) =>
+            Array.isArray(value) && value.every(item => typeof item === "string"))) as Record<string, string[]>;
+          accessProgramsByModel.set(row.slug, validPrograms);
         }
       }
       return [row.slug];
