@@ -336,10 +336,11 @@ Without a provider, lists the Codex pool, OAuth accounts, and configured API-key
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
 Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chosen Codex row is marked
 `selected`. `PRIORITY` is the signed Codex selection order (`0` when unset) and shows `-` for rows
-where ordering does not apply, such as OAuth accounts and API keys. By default, with two or more eligible stored Kiro accounts, a 429 rotates automatically to
-another account and prefers the one with the most known remaining allowance; rotation is
-presence-driven and cannot be turned off — `oauthAccountFailover.enabled: false` declines the
-pre-dispatch account preference, not 429 recovery; `ocx account login kiro`
+where ordering does not apply, such as OAuth accounts and API keys. With two stored Kiro accounts,
+rate, confirmed monthly-quota, and suspension refusals can rotate to an eligible account
+before output; selection prefers known remaining allowance. Reactive rotation is
+presence-driven — `oauthAccountFailover.enabled: false` declines pre-dispatch account
+preference, while a provider override takes precedence; `ocx account login kiro`
 adds accounts to the pool one at a time. An empty result is still success. `--json`
 returns:
 
@@ -378,8 +379,10 @@ kiro      oauth  3f0a91c2  a***r@examp***.com  -        active  mo 15%
 kiro      oauth  8b24de70  k***1@examp***.net  -                mo 88%
 ```
 
-With two or more Kiro accounts logged in, a 429 rotates to another account automatically and
-prefers the one with the most remaining allowance. Accounts are added one at a time —
+With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota, and
+confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
+that login until reset or evidence expiry; completed service clears an older verdict.
+Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool.
 
 ### `ocx account current <provider> [--json]`

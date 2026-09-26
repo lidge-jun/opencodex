@@ -478,7 +478,15 @@ Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: a
 cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
 complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
 account. Single-account installs do not rotate; a missing alternate credential preserves the original
-error while transient recovery remains available. Organization or project exhaustion
+error while transient recovery remains available.
+
+Kiro adapter additionally classifies bounded HTTP 400/403/429 refusals before output.
+Confirmed monthly exhaustion is persisted for the sent login, suspension is quarantined
+in process, and an eligible alternate is admitted under the shared rotation and physical
+send budget. The original response remains readable if alternate admission fails. A
+terminal OAuth refresh rejection can use an eligible alternate only after the original
+generation is marked for reauthentication. Final Kiro 5xx errors have fixed public text.
+Organization or project exhaustion
 allows an initial alternate attempt because the response does not identify the refusing scope. After
 resolving an alternate, organization-level retry is withheld only when both credentials have the same
 known workspace account id. Stored Pool/main-pool alternates supply that id directly; a request-owned

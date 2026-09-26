@@ -941,3 +941,68 @@ Rollback: revert the 030 commit/PR; the 010 disk format remains readable, and it
 - `r2-R2-1 High — Smithy event producer` → classify bounded `exception`/`error` payloads and structured reason events with the same exact-reason `classifyKiroRefusal` path; retain the sanitized public failure and discard oversized/unknown evidence (lines 621, 638-680). Rebase-verify at this layer's P after 010/020 land.
 - `r2-R2-1 High — sanitized 502 gate` → the Kiro-only run-turn branch uses `kiroRefusalKind` before the status-only fallback, so exact monthly/suspension 502 events reach the refusal rotator; unknown and post-output errors do not replay (lines 623, 694-754, 865). Named structured, Smithy, negative, and non-Kiro regression cases are at lines 754 and 882. Rebase-verify at this layer's P.
 - `r2-R2-1 High — provider isolation` → adapter-dispatch keeps its original non-Kiro 429 loop byte-for-byte in the `else`, while run-turn's original non-Kiro predicate/count/error block follows an early Kiro branch unchanged (lines 284-362, 693-706). The adapter test asserts early count and cancellation before failed snapshot resolution; the run-turn test asserts original error and early count (lines 754, 882). Rebase-verify at this layer's P.
+
+## wp4 P re-verification (2026-09-27, branch `codex/kiro-lb2-030-refusal-failover` on dev `a846dea201`, which contains 010 and 020)
+
+Executable plan for the 030 build; **overrides** earlier sections where they conflict.
+
+| ID | Disposition |
+|---|---|
+| D030-S1–S10 | Accept all anchor corrections: `KiroPersistedVerdict` is `{exhausted, resetAt?, observedAt, identity}` (drop `overageEnabled` from `noteKiroMonthlyRefusal`); `kiro-usage.ts` needs only `credentialGeneration` added, insert after 290; `generic-account-failover.ts` `AccountHealth` 78-81, `healthKey` 94-95, `eligibleIdsIn` 193-203, rotator 348-418 (`exhaustedCooldownMs` takes the account row, ranking takes a Map), `preferredInitialAccount` 446-518; `preferAccountFailover` goes on 020's `KiroFetchContext` (`kiro-retry.ts:32`), not a third argument, `fetchKiroWithRetry` 314-369; `kiro/adapter.ts` `fetchResponse` 319-336; `stream.ts` 386, 579-585, 713-715, 1097-1109; continuation cancel 443 / increment 450; `refreshGenericAccountWithLock` from `src/oauth/index.ts:1010`; `store.ts` 1067, 1100, 1196-1202; `kiroManagementHost` is not a 010 export (050 owns it). |
+| Run-turn | **Dropped.** The Kiro adapter has no `runTurn` (`src/adapters/kiro/adapter.ts:319`), and `core.ts:135` enters run-turn only for adapters that do; `_kiroAuthContext` in `run-turn-execution.ts:57` is a generic state-key list. The run-turn Kiro branch, `kiroRefusalKind` on `AdapterEvent`, the three `stream.ts` classifier hunks, and the six run-turn tests leave this layer. The 000 residual "run-turn capacity loop" resolves as not applicable. Evidence gap recorded: whether Kiro ever sends a refusal as a stream event after HTTP 200 needs a live capture. |
+| Public error text | Accept: export `normalizeFinalKiroHttpError` and apply it to every non-ok final Kiro response at all three public paths — `adapter-dispatch.ts:1062` (generic formatter), the combo path via `consumeComboFailure` (1050-1058), and `adapter-continuation.ts:510`. 5xx text reuses 020's strings ("Kiro upstream service unavailable", "Kiro upstream gateway timeout"); the doc's third string "Kiro upstream service error" is dropped. 4xx/429 keep today's classified message. |
+| **SD4'' (replaces SD4')** | The codebase already separates the two: reactive rotation after an upstream refusal follows presence-is-consent and ignores `enabled` (`src/oauth/generic-account-failover.ts:140-164`, pinned by `tests/oauth/generic-oauth-failover.test.ts:134`); pre-dispatch steering is refusable with narrow-over-broad precedence (`isProactivePreferenceEnabled`, 166-186). 030 follows that split: Kiro refusal rotation (rate, monthly quota, suspension, terminal refresh) is reactive and uses `isGenericOAuthFailoverEnabled`; refusal-aware first admission (skipping an active account already known suspended or monthly-exhausted) is proactive and uses `isProactivePreferenceEnabled`. With proactive preference off, a known-dead active account receives one send and the reactive rotation moves the request. `isKiroAccountMoveEnabled` and its either-scope veto are removed. 040's capacity move is likewise proactive (carried to 040's P). |
+| Tests | `tests/providers/kiro/kiro-retry.test.ts:97-101` stays (flag off by default); add a sibling adapter-path case with JSON `reason: "MONTHLY_REQUEST_COUNT"`. Rerun `tests/providers/kiro/kiro-auth-context-continuation.test.ts:150-186` and assert the rotated account serves after the first 429 returns. Explicit-off tests become: reactive rotation still happens with `enabled: false` (matching xAI at `generic-oauth-failover.test.ts:134`); refusal-aware first admission does not. |
+| Registry | New files: `tests/providers/kiro/kiro-refusal.test.ts` and `tests/providers/kiro/kiro-refusal-failover.test.ts` (both in `providers/kiro`, so the `^kiro-` seed agrees), between `kiro-reasoning-roundtrip` and `kiro-remote-image` (`scripts/test-layout/layout.json:1078`, `tests/fixtures/test-layout-expected.json:899`); `tests/server/server-kiro-refusal-e2e.test.ts` after `layout.json:1650` / `test-layout-expected.json:1476`. |
+| Docs | `structure/transports/responses-failover.md` and the providers-accounts reference describe the Kiro refusal classes and the reactive/proactive split. |
+
+Verifier set for C: `bun run typecheck`; `bun test tests/providers/kiro/ tests/oauth/generic-oauth-failover.test.ts tests/oauth/oauth-store-multi.test.ts tests/server/server-kiro-refusal-e2e.test.ts tests/server/server-kiro-completion-e2e.test.ts tests/server/server-kiro-oauth-401-replay.test.ts tests/adapters/adapter-inner-send-budget-wiring.test.ts tests/lib/credential-redirect-guard.test.ts` plus the continuation suite named by path at build time; layout, ratchet, lab-boundary; privacy; structure. Full-suite evidence: hosted CI (no concurrent local full run).
+
+
+### wp4 reflection fold (same architect: MISALIGNED → folded)
+
+1. **Replacement for every removed `isKiroAccountMoveEnabled` call:** the `kiroPreferAccountFailover`
+   flag at the dispatch and continuation `fetchResponse` calls, the adapter-dispatch and continuation
+   loop break conditions, the sidecar `retryOn429Policy` and eligibility gates, and
+   `tryKiroAlternateAfterTerminalRefresh` all use `isGenericOAuthFailoverEnabled(config, "kiro")`
+   (reactive). The `preferredInitialAccount` guard in `request-transport.ts` reverts to the original.
+   `refusalAwareInitialKiroAccount` lives in `src/oauth/generic-account-failover.ts` beside the
+   module-private `isProactivePreferenceEnabled` and uses it.
+2. **Error text in tests:** a failed rotation delivers the original status with the normalized Kiro
+   message, not the raw body. Test names that said "preserves original refusal body" become
+   "...returns the original status with the normalized Kiro message" and assert status + message.
+3. **Registry order:** `kiro-refusal-failover.test.ts` then `kiro-refusal.test.ts` (`-` sorts
+   before `.`), both after `scripts/test-layout/layout.json:1078` and
+   `tests/fixtures/test-layout-expected.json:899`.
+4. **Docs and verifiers:** docs also update `docs-site/src/content/docs/reference/adapters.md` (Kiro
+   429 sentence) and its fr/tr locales. Verifier set adds `tests/web-search/web-search-sidecar-429.test.ts`,
+   `tests/images/loop.test.ts`, and names the continuation coverage as
+   `tests/providers/kiro/kiro-auth-context-continuation.test.ts`.
+
+
+### wp4 A round 1 fold (reviewer 01a0dea1: FAIL, 3 High → 2 folded, 1 rebutted)
+
+1. **Folded — hydrate before the success write.** `noteKiroServedSuccess` calls
+   `hydrateKiroAccountState()` before reading `usageState`, so a persisted verdict loaded after a
+   restart is compared and cleared by the first served success even when no routing read ran first.
+   Test: `a restart followed by a successful turn clears the persisted exhaustion verdict` in
+   `tests/providers/kiro/kiro-refusal-failover.test.ts` (proactive preference off).
+2. **Folded — sidecar completions record success.** The web-search and image completion callbacks
+   in `src/server/responses/sidecar-execution.ts` (390-400, 471-474) call the same fenced
+   `noteKiroServedSuccess` with the account that actually served after any rotation. Tests: one
+   web-search and one image completion after a rotated refusal, each asserting the serving account's
+   stale verdict is cleared and the refused account's is not.
+3. **Rebutted — terminal-refresh allowlist already exists.** `kiroTokenRefreshError` sets
+   `oauthError` only when the body's `error` is in `KIRO_TERMINAL_REFRESH_ERRORS`
+   (`src/oauth/kiro.ts:38-46,533-543`); `terminal()` at `src/oauth/index.ts:676` requires that
+   field, so an arbitrary error string on 400/401 is not terminal. 030 relies on that existing
+   allowlist and adds one regression: `an unlisted refresh error on 400 does not mark reauth or
+   rotate`.
+
+
+## wp4 build notes
+
+- Implemented the later-fold scope: no run-turn/stream-event changes; Kiro HTTP refusal recovery uses a separate adapter and continuation branch, with the original non-Kiro blocks retained byte-for-byte. Reactive rotation uses the existing presence gate even when proactive preference is off; first-admission exclusion uses the narrow-over-broad proactive setting. A terminal refresh that marks A for reauthentication still permits B because Kiro's cached presence count represents stored logins while the candidate read filters `needsReauth`.
+- The Kiro retry helper returns a pooled 429 to the account owner and keeps one-account same-credential retry. Final Kiro errors reuse the existing 5xx formatter. Monthly verdicts hydrate before refusal/success mutation and persist under the 010 login identity; suspension health is also bound to that login identity.
+- Added classifier, persistence/eligibility, and local Responses server tests, including bearer/profile/region pairing, pre-send and post-401 terminal refresh, failed alternate retention, explicit proactive off with reactive rotation, and both sidecar completion callbacks. The existing continuation fixture was extended to exercise 400 monthly and 403 suspension rotation with paired bearer/profile/region. A native empty Kiro stream instead produces the adapter's `empty_kiro_stream` incomplete result before the shared continuation guard; the continuation coverage therefore uses that fixture's Kiro provider with a guard-capable adapter. The broader test-name inventory in the original plan was narrowed to executable cases for this build; specialized cancellation and spent-budget cases remain outside the local assertions.
+- The requested all-in-one Bun command without file isolation had 85 failures from shared global test state and two older Kiro cooldown expectations. The two expectations were updated to the new 10-second rate rule. The same 33-file set passed with `bun test --parallel=1` (808 pass, 0 fail); isolated and grouped runs also passed. Typecheck, layout/ratchet/Lab boundary, privacy scan, structure check, and the 521-page docs build passed. No full suite or `test:changed` run was made, per task scope.

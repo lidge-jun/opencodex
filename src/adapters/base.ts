@@ -164,6 +164,8 @@ export interface AdapterRequest {
 }
 
 export interface AdapterFetchContext {
+  /** Kiro may hand a pooled refusal to the outer account rotator before same-account retry. */
+  kiroPreferAccountFailover?: boolean;
   /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
   /** Deadline for receiving response headers on each attempt, not for consuming the response body. */

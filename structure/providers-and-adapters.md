@@ -65,6 +65,12 @@ probe keeps the same-login last-good display bar. The protected OAuth store rota
 `ProviderAccount.loginId` on every explicit login, preserves it across credential refresh,
 and uses `addedAt` for legacy rows without one.
 
+For Kiro, `src/oauth/generic-account-failover.ts` filters confirmed monthly exhaustion
+and process-local suspension by the live account identity before picking a replacement.
+The account actually sent supplies the generation fence; a rotated bearer always travels
+with its own profile ARN and region. Reactive rotation follows the stored two-account
+quorum, while refusal-aware first admission follows the proactive preference setting.
+
 The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
 and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`
 rather than a model id, because Codex stores a session's instruction block once and replays it

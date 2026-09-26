@@ -36,6 +36,16 @@ are bound independently by observation time, reset, and login identity, never by
 or raw account label; removal, identity change, expiry, or malformed disk degrades routing
 evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
 
+`src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
+confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account
+verdict. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
+credential generation and login identity, independently of quota observation time. A
+completed response from that same live credential clears an older verdict after disk
+hydration. Suspension is a process-local quarantine; rate refusals use a short cooldown.
+Reactive account rotation is presence-driven even when a proactive preference switch is
+off. Pre-dispatch exclusion of an already refused account requires effective proactive
+preference with the provider override taking precedence over the global setting.
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends

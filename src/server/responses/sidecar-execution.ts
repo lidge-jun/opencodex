@@ -22,8 +22,14 @@ import { rotateProviderTransportOn429, rateLimitRetryPolicyFor } from "../../pro
 import {
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
+  rotateGenericOAuthAccountOnRefusal,
+  quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
+import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
+import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
+import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
+import { readDisplaySafeErrorText } from "./core-errors";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   rotateAnthropicAccountOn429,
@@ -59,6 +65,7 @@ export async function executeResponsesSidecars(
     | "genericFailoverAccountId"
     | "genericFailovers"
     | "genericFailoverLimit"
+    | "replayOAuthCredentialSnapshot"
     | "applyFailoverSnapshot"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -160,18 +167,32 @@ export async function executeResponsesSidecars(
     retryAfter: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
+    originalResponse?: Response,
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
+    if (route.providerName !== "kiro" && originalResponse && originalResponse.status !== 429) return null;
+    const refusal = route.providerName === "kiro" && originalResponse
+      ? classifyKiroRefusal(originalResponse.status,
+        await readDisplaySafeErrorText(originalResponse.clone(), options.abortSignal ?? new AbortController().signal, "")).kind
+      : "rate";
+    if (refusal === "other") return null;
+    const sent = transportState.replayOAuthCredentialSnapshot;
+    const monthlyCooldownMs = route.providerName === "kiro" && refusal === "monthly_quota" && sent
+      ? noteKiroMonthlyRefusal(sent.accountId, sent.generation, Date.now()) : undefined;
+    if (monthlyCooldownMs !== undefined) persistKiroAccountState();
+    if (route.providerName === "kiro" && refusal === "suspended" && transportState.genericFailoverAccountId)
+      quarantineKiroSuspendedAccount(transportState.genericFailoverAccountId, sent?.generation);
     // Which credential axis actually moved. The main routed path already reports these three
     // separately (`adapter-dispatch`: key-429 / anthropic-oauth-429 / oauth-account-429); the
     // sidecar loops used to flatten all three to `key-429`, so an account rotation read as a key
     // rotation in the attempt row and in the Logs UI.
     let recoveryKind: AttemptRecoveryKind = "key-429";
-    const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+    const rotated = route.providerName !== "kiro" || originalResponse?.status === 429
+      ? rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
       attemptedKey: route.provider.apiKey,
       promptCacheKey: parsed.options.promptCacheKey,
-    });
+      }) : null;
     if (rotated) {
       route.provider = rotated;
     } else if (
@@ -191,7 +212,10 @@ export async function executeResponsesSidecars(
         `${route.providerName}|${route.modelId}|sidecar-oauth-429`,
       );
       if (!hop.allowed) return null;
-      const nextAccountId = rotateGenericOAuthAccountOn429(
+      const nextAccountId = route.providerName === "kiro" ? rotateGenericOAuthAccountOnRefusal(
+        config, route.providerName, transportState.genericFailoverAccountId,
+        refusal, retryAfter, Date.now(), route.modelId, monthlyCooldownMs,
+      ) : rotateGenericOAuthAccountOn429(
         config,
         route.providerName,
         transportState.genericFailoverAccountId,
@@ -205,11 +229,12 @@ export async function executeResponsesSidecars(
       }
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
-        transportState.genericFailovers += 1;
+        if (route.providerName !== "kiro") transportState.genericFailovers += 1;
         if (!await applyFailoverSnapshot(snapshot, retryParsed)) {
           hop.permit?.release();
           return null;
         }
+        if (route.providerName === "kiro") transportState.genericFailovers += 1;
       } catch {
         hop.permit?.release();
         return null;
@@ -384,10 +409,14 @@ export async function executeResponsesSidecars(
         transportState.bindKeyUsageFromBridge(usage);
       },
       on429: rotateSidecarProviderOn429,
-      retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
+      retryOn429Policy: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro")
+        ? null : rateLimitRetryPolicyFor(route.provider),
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
       onCompletedResponse: (response, providerState) => {
+        const served = transportState.replayOAuthCredentialSnapshot;
+        if (route.providerName === "kiro" && response.status === "completed" && served
+          && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
         commitReasoningReplayServingRoute();
         rememberKiroDeliveredFinalAnswer(transportState.adapter.name, response);
         rememberResponseState(
@@ -467,8 +496,12 @@ export async function executeResponsesSidecars(
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
-      retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
+      retryOn429Policy: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro")
+        ? null : rateLimitRetryPolicyFor(route.provider),
       onCompletedResponse: response => {
+        const served = transportState.replayOAuthCredentialSnapshot;
+        if (route.providerName === "kiro" && response.status === "completed" && served
+          && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
         commitReasoningReplayServingRoute();
         notifyResponseComplete(response);
       },

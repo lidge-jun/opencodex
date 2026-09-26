@@ -178,10 +178,13 @@ Bir sağlayıcı ile yalnızca bu kimlik bilgisi ailesini listeler. İnsan çık
 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` kullanır; manuel olarak seçilen
 bir Codex satırı `selected` olarak işaretlenir. `PRIORITY`, imzalı Codex seçim
 sırasıdır (ayarlanmadığında `0`) ve OAuth hesapları ve API anahtarları gibi
-sıralamanın geçerli olmadığı satırlar için `-` gösterir. İki veya daha fazla uygun Kiro hesabı
+sıralamanın geçerli olmadığı satırlar için `-` gösterir. İki veya daha fazla kayıtlı Kiro hesabı
 saklandığında, varsayılan olarak 429 yanıtı otomatik olarak başka bir hesaba geçer ve bilinen kalan
-kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkinleşir ve kapatılamaz — `oauthAccountFailover.enabled: false` gönderim öncesi hesap tercihini reddeder, 429 kurtarmasını değil; `ocx account login kiro` hesapları havuza teker teker ekler. Boş bir sonuç
-yine de başarıdır. `--json` şunu döndürür:
+kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkinleşir ve kapatılamaz — `oauthAccountFailover.enabled: false` gönderim öncesi hesap tercihini reddeder, 429 kurtarmasını değil; `ocx account login kiro` hesapları havuza teker teker ekler. Boş bir sonuç yine de başarıdır.
+
+Kiro için hız sınırı, doğrulanmış aylık kota ve doğrulanmış askıya alma retleri çıktıdan önce uygun başka bir hesaba geçebilir. Aylık kota yalnızca o hesabı sıfırlamaya veya kanıtın süresinin dolmasına kadar dışlar; aynı hesaptaki tamamlanmış yanıt eski kararı temizler. Proaktif tercih için sağlayıcı ayarı genel ayardan önceliklidir; reaktif hesap değişimi açık kalır.
+
+`--json` şunu döndürür:
 
 ```text
 { accounts: AccountRow[], notes: string[] }

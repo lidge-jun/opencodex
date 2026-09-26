@@ -339,7 +339,7 @@ MiMo model Command Code serves.
 - Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
   refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
-  hard quota failures and other service errors are not replayed. Every Kiro physical send uses
+  hard quota failures are not retried on that same account, and other service errors are not replayed. Every Kiro physical send uses
   configured provider egress. A header deadline returns 504; caller cancellation stops the turn.
   Final HTTP 5xx bodies use fixed public text without upstream detail.
 - Its non-streaming parser drains the same event stream for the web-search loop.
@@ -356,11 +356,14 @@ MiMo model Command Code serves.
   unavailable while an earlier same-login quota bar remains visible. Known quota and
   exhaustion evidence survive restart only for the same login, each until its own reset
   or ten-minute lifetime. Missing, old, or malformed evidence becomes unknown.
-- Participates in multi-account rotation. Two or more logged-in Kiro accounts enable
-  automatic failover on a 429, and rotation prefers the account with the most known
-  headroom; an account whose allowance is provably spent is cooled until its window resets
-  (bounded between five minutes and a day) instead of being retried every minute. Each
-  rotated bearer carries its own profile ARN and region.
+- Participates in multi-account rotation. With two stored accounts, a request-rate refusal
+  cools the refused account briefly; an exact monthly-quota refusal on HTTP 400 or 429
+  excludes it until the observed reset or evidence expiry. A confirmed HTTP 403 suspension
+  quarantines that account in process, while an ordinary 403 does not rotate. Reactive
+  rotation remains available when `oauthAccountFailover.enabled` is false. Refusal-aware
+  selection before the first send requires proactive preference, with the provider setting
+  taking precedence over the global setting. A completed turn from the same login clears an
+  older exhaustion verdict. Each rotated bearer carries its own profile ARN and region.
 
 ### Completion semantics
 

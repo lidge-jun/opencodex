@@ -331,8 +331,8 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       // Routed through the same forwarder as the fallback so both legs share one ordinal
       // sequence; a context without an observer is passed through untouched.
       return fetchKiroWithRetry(request, requestOnPhysicalSend
-        ? { ...ctx, onPhysicalSend: (send: KiroPhysicalSend) => forwardPhysicalSend(send, 0) }
-        : ctx);
+        ? { ...ctx, returnRawErrors: true, onPhysicalSend: (send: KiroPhysicalSend) => forwardPhysicalSend(send, 0) }
+        : { ...ctx, returnRawErrors: true });
     },
 
     formatErrorBody(status: number, headers: Headers, payloadText: string): string {
