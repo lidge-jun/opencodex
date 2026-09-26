@@ -188,7 +188,8 @@ on a final probe, and every gate open (no sibling mark, no recycle or drain, the
 names this process, Codex ON and not hub-gated, no admission-token routing, a write target this
 process serves, no client connection and no client-owned journal). The heal is
 `injectCodexConfig` with no catalog path, a 1 s lock timeout and a synchronous `beforeClientWrite`
-guard that re-reads `config.toml` under the lock and aborts when the routing moved. A coordinated
+guard that re-reads `config.toml` under the lock and aborts if any admitted bytes or destination
+endpoint changed. A coordinated
 home re-reads its admission under the lock before that guard runs, so a rewrite between plan and
 lock comes back as a stale-admission refusal instead: any refused or failed write whose
 `config.toml` bytes moved since the proof is the same abort, with no wait and no warning, and the

@@ -350,6 +350,25 @@ describe("codex routing healer", () => {
     expect(h.handle.lastHeal()).toBeNull();
   });
 
+  test("the under-lock guard aborts an IPv4 to live IPv6 change on the same port", async () => {
+    const moved = routedAtHost("[::1]", DEAD_PORT);
+    const h = harness({
+      probeTarget: target => target.hostname === "::1" ? "live" : "dead",
+      inject: (_port, _config, options) => {
+        h.setContent(moved); // another writer changes the destination after the dead IPv4 probe
+        options.beforeClientWrite!();
+        return { success: true, message: "Injected" };
+      },
+    });
+    await h.ticks(3);
+    expect(h.injects).toHaveLength(1);
+    expect(h.content).toBe(moved);
+    expect(h.handle.lastHeal()).toBeNull();
+    await h.tick();
+    expect(h.endpoints).toContainEqual({ hostname: "::1", port: DEAD_PORT });
+    expect(h.injects).toHaveLength(1);
+  });
+
   test("stop() while the final probe is out never writes", async () => {
     let release: (answer: EndpointLiveness) => void = () => {};
     let calls = 0;

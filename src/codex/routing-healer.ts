@@ -303,11 +303,12 @@ export function startCodexRoutingHealer(options: {
       return;
     }
     attempts.push(clock());
-    const deadPorts = new Set(targets.map(target => target.port));
+    const deadEndpoints = new Set(targets.map(endpointKey));
     const guard = () => {
       const current = readConfig();
       const drift = current === null ? null : detect(current);
-      if (drift?.kind !== "foreign" || drift.targets.some(target => !deadPorts.has(target.port))) {
+      if (current !== content || drift?.kind !== "foreign"
+        || drift.targets.some(target => !deadEndpoints.has(endpointKey(target)))) {
         throw new RoutingHealAborted();
       }
     };
@@ -321,7 +322,7 @@ export function startCodexRoutingHealer(options: {
       const current = readConfig();
       if (current !== content) return true;
       const drift = detect(current);
-      return drift.kind !== "foreign" || drift.targets.some(target => !deadPorts.has(target.port));
+      return drift.kind !== "foreign" || drift.targets.some(target => !deadEndpoints.has(endpointKey(target)));
     };
     let result: CodexInjectResult;
     try {
