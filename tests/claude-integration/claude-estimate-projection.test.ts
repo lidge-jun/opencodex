@@ -335,6 +335,10 @@ async function comboFailoverFloor(second: {
   model: string;
   adapter: string;
   frames: string;
+  /** Native ids the destination advertises, for a target the caller names by alias. */
+  models?: string[];
+  modelAliases?: Record<string, string>;
+  preserveReasoningContentModels?: string[];
 }): Promise<{ published: number; secondBodies: Array<Record<string, unknown>> }> {
   setUpIsolatedHome();
   clearComboSelectionState();
@@ -368,6 +372,11 @@ async function comboFailoverFloor(second: {
         baseUrl: second.adapter === "anthropic" ? loopback(secondServer.url) : `${loopback(secondServer.url)}/v1`,
         apiKey: "k",
         allowPrivateNetwork: true,
+        ...(second.models ? { models: second.models } : {}),
+        ...(second.modelAliases ? { modelAliases: second.modelAliases } : {}),
+        ...(second.preserveReasoningContentModels
+          ? { preserveReasoningContentModels: second.preserveReasoningContentModels }
+          : {}),
       },
     },
     combos: {
@@ -446,6 +455,37 @@ test("a combo failover to a registry provider prices its merged preserve list", 
   const textKept = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: true, signature: false, redacted: false });
   const textDropped = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: false, signature: false, redacted: false });
   expect(textKept).toBeGreaterThan(textDropped * 20);
+  expect(published).toBeGreaterThan(textDropped * 20);
+  expect(published).toBeLessThan(textKept * 1.5);
+  expect(published).toBeGreaterThan(textKept * 0.5);
+}, { timeout: SERVER_BUDGET_MS });
+
+test("a combo target named by alias prices the preserve list under its resolved id", async () => {
+  // A combo target may name a model by alias (`am`), and the Chat adapter resolves that to the
+  // provider's native id before it decides whether the wire serializes replayed thinking — its
+  // preserve list holds native ids, and matching is exact. An attempt that records the alias
+  // therefore reads the preserve list under a name that is not in it, prices the replayed text as
+  // dropped, and understates a prompt the upstream really received. The attempt row has to carry
+  // the id the adapter will actually send, which is what the routing result already holds.
+  const { published, secondBodies } = await comboFailoverFloor({
+    provider: "aliased",
+    model: "am",
+    adapter: "openai-chat",
+    frames: CHAT_SSE_FRAMES,
+    models: ["aliased-model"],
+    modelAliases: { "aliased-model": "am" },
+    preserveReasoningContentModels: ["aliased-model"],
+  });
+  // The wire received the resolved id, and with it the replayed text the preserve list buys.
+  expect(secondBodies[0]!.model).toBe("aliased-model");
+  const forwarded = JSON.stringify(secondBodies[0]!.messages);
+  expect(forwarded).toContain("reasoning_content");
+  expect(forwarded).toContain("replayed reasoning");
+
+  const textKept = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: true, signature: false, redacted: false });
+  const textDropped = estimateClaudeRequestTokens({ messages: COMBO_MESSAGES }, "combo/pair", { text: false, signature: false, redacted: false });
+  expect(textKept).toBeGreaterThan(textDropped * 20);
+  // The alias must not cost the projection the preserve list's verdict.
   expect(published).toBeGreaterThan(textDropped * 20);
   expect(published).toBeLessThan(textKept * 1.5);
   expect(published).toBeGreaterThan(textKept * 0.5);
