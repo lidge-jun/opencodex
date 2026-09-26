@@ -253,6 +253,8 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 ## Account quota failure diagnostics
 
+`src/providers/quota/antigravity.ts` retries a quota-summary 403 once with `User-Agent: antigravity/1.0`, releasing the first response body and preserving the bearer, project and pinned accounting endpoint. A 401 is not retried; redirects remain blocked, and a repeated 403 remains unavailable with `access_denied`. Other retry failures retain the models fallback, whose User-Agent remains the IDE fingerprint, as do discovery and inference.
+
 Antigravity account quota probes expose only a closed `quotaFailure` category when the read is unavailable. Typed transport failures, rejected destinations, redirects, denied access, rate limits and unusable bodies are distinguished; successful fallback clears the earlier failure. The last attempted endpoint determines the diagnosis. A 401/403 category does not change account health, entitlement or routing eligibility.
 
 `src/providers/quota.ts` binds diagnoses to the probed credential/project and rechecks before cache reads and API projection. Reauthentication invalidates an old diagnosis independently of last-good quota bars. Private digests, callbacks and upstream error values are not serialized. The CLI and current/all-account dashboard views consume the same closed code; unknown codes and local management-read failures retain generic unavailable text. Codes are transient, never persisted quota evidence. Authenticated TUN field acceptance remains separate from deterministic transport coverage.
