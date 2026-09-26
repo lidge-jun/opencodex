@@ -334,6 +334,7 @@ export interface ImageBridgeDeps {
     retryAfterHeader: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
+    originalResponse?: Response,
   ) =>
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
     | null
@@ -671,8 +672,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         prepared = await fetchOnce(adapter, "rate-limit-429");
       }
       // 429 key-failover parity with web-search / normal routed path.
-      while (prepared.response.status === 429 && deps.on429) {
-        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers, iterParsed);
+      while ((prepared.response.status === 429
+        || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
+        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
+          iterParsed, prepared.response);
         if (!rotated) break;
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated.adapter;

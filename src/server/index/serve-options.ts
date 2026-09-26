@@ -1398,7 +1398,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleContextHistory(req, config, logCtx, contextEndpoint(url.pathname)!,
-            turnAdmissionLease, admission, () => resolveApiAuth(req, policy));
+            turnAdmissionLease, admission, () => resolveApiAuth(req, ingress === "hub-link" ? linkPolicy() : policy));
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);

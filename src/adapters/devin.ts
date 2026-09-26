@@ -9,7 +9,7 @@
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxToolCall, OcxToolResultMessage, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import { streamChatEventsWithResetRetry, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
+import { streamChatEventsWithResetRetry, devinStatedResetWaitMs, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import type { ContentPart } from "./devin/cloud-direct/chat";
 import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog";
 import { collapseDevinModelUid } from "./devin/live-models";
@@ -642,11 +642,12 @@ export function createDevinAdapter(
         const maxOutputTokens = resolveDevinMaxOutputTokens(
           provider, modelUid, parsed.options.maxOutputTokens,
         );
+        // A combo child has not committed an outer response yet. Holding its preflight through
+        // a reset wait would also hold the next-target fallback with no client keepalive.
+        const resetWaitMs = incoming.comboAttempt ? 0 : devinStatedResetWaitMs();
         // An admitted HTTP turn owns globally shared capacity until this call
-        // emits. Never retain that capacity while waiting out a provider 429:
-        // preserve the typed reset delay in generated diagnostic wording,
-        // never the raw trailer text that may reflect a credential. The
-        // refusal returns immediately so the caller can release its slot.
+        // emits. Without an explicit wait allowance, preserve the typed reset
+        // delay in generated diagnostic wording and return immediately.
         for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
@@ -665,7 +666,9 @@ export function createDevinAdapter(
           },
           signal: incoming.abortSignal,
         }, {
-          maxWaitMs: 0,
+          maxWaitMs: resetWaitMs,
+          onWaitHeartbeat: resetWaitMs > 0 && parsed.stream
+            ? () => emit({ type: "heartbeat", preflightReady: true }) : undefined,
           execution: {
             executor: incoming.providerFetch,
             sendBudget: incoming.sendBudget,

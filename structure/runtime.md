@@ -232,7 +232,7 @@ GUI, session bootstrap/exchange, and `/api/*`.
 The `hub-link` socket is HTTP-only and default-denies all but the fixed data routes, catalog, hub-state,
 usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
 `/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
-key ids recorded by `links.json`, never the environment token. `ensureStarted()` is single-flight,
+key ids recorded by `links.json`, never the environment token. Context relays rebuild that policy for their post-body admission check, so key revocation stops an in-flight request before dispatch. `ensureStarted()` is single-flight,
 final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 

@@ -129,15 +129,17 @@ describe("headroom ranking", () => {
 });
 
 describe("exhaustion cooldown", () => {
-  test("a distant reset is clamped to a day", () => {
-    seedExhausted("a", Date.now() + 3 * 24 * 60 * 60_000);
+  test("a distant reset is clamped to a day", async () => {
+    // A busy multi-file test process can cross a millisecond before the verdict is written.
+    await Bun.sleep(2);
+    const resetAt = Date.now() + 3 * 24 * 60 * 60_000;
+    seedExhausted("a", resetAt);
+    // The read clock must follow the observation; a future-dated verdict is invalid.
     const now = Date.now();
     expect(exhaustedCooldownMs("kiro", "a", now, account("a"))).toBe(24 * 60 * 60_000);
   });
 
   test("an imminent reset is floored at five minutes", () => {
-    // Seeding stamps observedAt with Date.now(); read at or after that instant. Capturing now
-    // first can cross a millisecond boundary and correctly reject the future evidence as stale.
     seedExhausted("a", Date.now() + 30_000);
     const now = Date.now();
     expect(exhaustedCooldownMs("kiro", "a", now, account("a"))).toBe(5 * 60_000);
@@ -263,7 +265,7 @@ describe("pre-dispatch account preference", () => {
     }
   });
 
-  test("an exhausted account without Retry-After stays cooled through its reset window", async () => {
+  test("a Kiro rate refusal without Retry-After uses a short cooldown despite older quota evidence", async () => {
     home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
     process.env.OPENCODEX_HOME = home;
     clearGenericFailoverHealth();
@@ -278,7 +280,7 @@ describe("pre-dispatch account preference", () => {
       } as unknown as OcxConfig;
 
       expect(rotateGenericOAuthAccountOn429(kiroConfig, "kiro", ids[0]!, null, dispatchAt)).toBe(ids[1]);
-      expect(genericFailoverRetryAfterSeconds("kiro", dispatchAt)).toBe(60 * 60);
+      expect(genericFailoverRetryAfterSeconds("kiro", dispatchAt)).toBe(10);
     } finally {
       clearGenericFailoverHealth();
       clearAccountQuotaCache();
@@ -288,7 +290,7 @@ describe("pre-dispatch account preference", () => {
     }
   });
 
-  test("an unparseable Retry-After uses an exhausted account reset", async () => {
+  test("an unparseable Kiro rate Retry-After uses the short default", async () => {
     home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
     process.env.OPENCODEX_HOME = home;
     clearGenericFailoverHealth();
@@ -305,7 +307,7 @@ describe("pre-dispatch account preference", () => {
       expect(
         rotateGenericOAuthAccountOn429(kiroConfig, "kiro", ids[0]!, "not-a-duration", dispatchAt),
       ).toBe(ids[1]);
-      expect(genericFailoverRetryAfterSeconds("kiro", dispatchAt)).toBe(60 * 60);
+      expect(genericFailoverRetryAfterSeconds("kiro", dispatchAt)).toBe(10);
     } finally {
       clearGenericFailoverHealth();
       clearAccountQuotaCache();

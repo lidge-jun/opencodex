@@ -667,7 +667,11 @@ export async function executeComboResponses(
     const attempt = beginRequestAttempt(
       (logCtx.attempts?.length ?? 0) + 1,
       pick.target.provider,
-      pick.target.model,
+      // The id the child wire will actually send, not the selector the combo named. A target may
+      // be an alias, and `routeConcreteModel` above is where it becomes the provider's native id;
+      // recording the alias here would describe a request that never left (the adapter resolves
+      // the id before it reads any per-model list).
+      targetRoute.modelId,
       config.providers[pick.target.provider]!.adapter,
     );
     childLog.activeAttempt = attempt;

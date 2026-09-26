@@ -200,11 +200,19 @@ streaming Response. A first-event 429 without a replay-unsafe heartbeat becomes 
 error through the shared error formatter and client Retry-After resolver. The buffered first event
 is replayed for every other outcome. The preflight is bounded by the configured stall timeout,
 including any earlier OAuth failover preflight on this path. On expiry, its pending iterator read is
-handed to SSE replay exactly once; timeout therefore starts a 200 SSE response, and any later 429
-is an SSE failure. Text, reasoning, and tool output commit the stream. This boundary neither retries
-the turn nor changes combo failover policy. Buffered Responses turns apply the same refusal
-formatter to their collected first event after OAuth failover. Other buffered results retain
-the original event list, including output preceding a late error.
+handed to SSE replay exactly once; timeout therefore starts a 200 SSE response. An opted-in Devin
+cooldown heartbeat also starts SSE before its wait ends. Once SSE begins, the stream forwards safe
+heartbeats and checks the first meaningful event: a pre-output 429 may rotate to an eligible OAuth
+account and replay the unchanged request. Without an eligible account it remains an in-stream
+failure, since HTTP status is already committed. Text, reasoning, and tool output commit the stream
+and prevent later rotation. Buffered Responses turns ignore the cooldown-ready heartbeat during
+preflight and apply the same HTTP 429 formatter to a final refusal after OAuth failover. Other
+buffered results retain the original event list, including output preceding a late error. Combo
+children ignore cooldown readiness during their own preflight, so a final 429 without output can
+still move to the next combo target. Devin combo children bypass opted-in stated-reset waiting and
+surface the pre-output 429 immediately, because the outer response cannot forward their wait
+heartbeats while it is choosing a target. An earlier replay-unsafe heartbeat or meaningful output keeps
+the failure on the current target.
 
 ## Optional client transport hints
 
@@ -478,7 +486,15 @@ Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: a
 cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
 complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
 account. Single-account installs do not rotate; a missing alternate credential preserves the original
-error while transient recovery remains available. Organization or project exhaustion
+error while transient recovery remains available.
+
+Kiro adapter additionally classifies bounded HTTP 400/403/429 refusals before output.
+Confirmed monthly exhaustion is persisted for the sent login, suspension is quarantined
+in process, and an eligible alternate is admitted under the shared rotation and physical
+send budget. The original response remains readable if alternate admission fails. A
+terminal OAuth refresh rejection can use an eligible alternate only after the original
+generation is marked for reauthentication. Final Kiro 5xx errors have fixed public text.
+Organization or project exhaustion
 allows an initial alternate attempt because the response does not identify the refusing scope. After
 resolving an alternate, organization-level retry is withheld only when both credentials have the same
 known workspace account id. Stored Pool/main-pool alternates supply that id directly; a request-owned

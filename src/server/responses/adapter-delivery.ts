@@ -21,6 +21,8 @@ import {
 } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
+import { noteKiroServedSuccess } from "../../providers/kiro-usage";
+import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -33,7 +35,7 @@ export async function deliverAdapterResponse(
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
-  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge">,
+  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge" | "sentOAuthSnapshot">,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
     ResponsesEffects,
@@ -118,6 +120,9 @@ export async function deliverAdapterResponse(
     // One completion owner for both deliveries: the bridge calls it from its terminal, the
     // direct client encoder from the fold of the same events.
     const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
+      const served = transportState.sentOAuthSnapshot;
+      if (transportState.activeAdapter.name === "kiro" && response.status === "completed" && served
+        && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
       commitReasoningReplayServingRoute();
       rememberKiroDeliveredFinalAnswer(transportState.activeAdapter.name, response);
       // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
@@ -258,6 +263,9 @@ export async function deliverAdapterResponse(
     // #1926 gap 2: same buffered-path durability bound as the primary branch.
     await awaitThoughtSignatureDurability();
     if (adapterResponseReachedServingTerminal(events, json)) {
+      const served = transportState.sentOAuthSnapshot;
+      if (transportState.activeAdapter.name === "kiro" && json.status === "completed" && served
+        && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
       commitReasoningReplayServingRoute();
     }
     notifyResponseComplete(json);

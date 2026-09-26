@@ -17,21 +17,26 @@ export const STATED_RESET_MAX_WAIT_MS = 1_800_000;
 /** Absolute maximum cumulative allowance, including explicit overrides. */
 export const STATED_RESET_WAIT_CEILING_MS = 3_600_000;
 
-function statedResetMaxWaitMs(): number {
+function statedResetMaxWaitMs(defaultMs = STATED_RESET_MAX_WAIT_MS): number {
   const raw = process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS?.trim();
-  if (!raw) return STATED_RESET_MAX_WAIT_MS;
+  if (!raw) return defaultMs;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) return STATED_RESET_MAX_WAIT_MS;
+  if (!Number.isFinite(parsed) || parsed < 0) return defaultMs;
   // Zero explicitly disables local waiting. Values above one hour are capped.
   return Math.min(Math.floor(parsed), STATED_RESET_WAIT_CEILING_MS);
 }
 export const statedResetMaxWaitMsForTests = statedResetMaxWaitMs;
+
+export function devinStatedResetWaitMs(): number {
+  return statedResetMaxWaitMs(0);
+}
 
 export interface StatedResetRetryOptions {
   /** Test seam: defaults to the real cloud stream. */
   stream?: (req: CloudChatRequest) => AsyncGenerator<CloudChatEvent>;
   /** Test seam: must either honour the whole delay or reject on cancellation. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  onWaitHeartbeat?: () => void;
   maxReplays?: number;
   /** CUMULATIVE wait allowance, not a fresh allowance on every failure. */
   maxWaitMs?: number;
@@ -136,7 +141,16 @@ export async function* streamChatEventsWithResetRetry(
       // scheduling: waking a few milliseconds late must not reject an already
       // approved one-hour retry. No later wait can spend this allowance again.
       waitedMs += waitMs;
-      await sleep(waitMs, req.signal);
+      const heartbeat = options?.onWaitHeartbeat;
+      if (waitMs > 0) heartbeat?.();
+      const beat = heartbeat && waitMs > 0
+        ? setInterval(heartbeat, Math.min(500, Math.max(100, Math.floor(waitMs / 2))))
+        : undefined;
+      try {
+        await sleep(waitMs, req.signal);
+      } finally {
+        if (beat !== undefined) clearInterval(beat);
+      }
       if (req.signal?.aborted) throw abortError(req.signal);
     }
   }

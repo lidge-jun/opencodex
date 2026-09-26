@@ -24,6 +24,7 @@ import {
   getValidAccessSnapshotForAccount,
   forceRefreshOAuthAccessSnapshot,
   getValidAccessTokenSnapshot,
+  OAuthLoginRequiredError,
   publicOAuthAuthenticationErrorMessage,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
@@ -34,8 +35,10 @@ import {
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
   preferredInitialAccount,
+  refusalAwareInitialKiroAccount,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
+import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
@@ -517,9 +520,12 @@ export async function prepareResponsesTransport(
         // only reacts to a 429, so a turn could open on an account a previous probe already
         // measured as spent. A null answer means "use the active account", so every provider
         // without quota evidence keeps the resolution it has today.
-        const preferredAccountId = isGenericFailoverProvider(route.providerName, route.provider)
+        const refusalAwareId = route.providerName === "kiro" && oauthSelection?.accountId
+          ? refusalAwareInitialKiroAccount(config, oauthSelection.accountId, Date.now(), route.modelId) : null;
+        const preferredAccountId = refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
-          : null;
+          : null);
+        let safetyAlternateId: string | null = refusalAwareId;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
         // applyFailoverSnapshot's pairing rules. This is initial resolution — the code below
@@ -546,10 +552,22 @@ export async function prepareResponsesTransport(
             // Drop the stale roster so the next request re-reads it, and carry on.
             forgetGenericFailoverRoster(route.providerName);
             usedPreferredAccount = false;
+            safetyAlternateId = null;
             resolved = await getValidAccessTokenSnapshot(route.providerName);
           }
         } else {
-          resolved = await getValidAccessTokenSnapshot(route.providerName);
+          const failedId = route.providerName === "kiro" ? oauthSelection?.accountId : undefined;
+          const failedRow = failedId ? getAccountCredentialWithStatus("kiro", failedId) : null;
+          const failedGeneration = failedRow ? credentialGeneration(failedRow.credential) : undefined;
+          try { resolved = await getValidAccessTokenSnapshot(route.providerName); }
+          catch (error) {
+            if (route.providerName !== "kiro" || !(error instanceof OAuthLoginRequiredError)
+              || !failedId || !failedGeneration) throw error;
+            const alternate = await tryKiroAlternateAfterTerminalRefresh(config, failedId, failedGeneration);
+            if (!alternate) throw error;
+            resolved = alternate;
+            safetyAlternateId = alternate.accountId;
+          }
         }
         // A Cloud Code Assist account needs its own project. Antigravity's refresh path
         // tolerates project discovery failing, so a stored account can legitimately have
@@ -560,8 +578,10 @@ export async function prepareResponsesTransport(
           resolved = await getValidAccessTokenSnapshot(route.providerName);
           usedPreferredAccount = false;
         }
-        const admitted = await commitResolvedOAuthSelection(resolved, true);
+        const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
+          return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (admitted.accountId !== resolved.accountId) usedPreferredAccount = true;
         resolved = admitted;
         replayOAuthCredentialSnapshot = {
