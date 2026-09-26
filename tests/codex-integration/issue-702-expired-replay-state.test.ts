@@ -787,7 +787,7 @@ describe("Issue #702 expired forward replay state", () => {
     expect(serialized).toContain(HISTORICAL_USER_SENTINEL);
     expect(serialized).toContain(HISTORICAL_ASSISTANT_SENTINEL);
     expect(serialized).toContain(CURRENT_USER_SENTINEL);
-  });
+  }, SERVER_BUDGET_MS);
 
   test("a task-scope mismatch refuses the delta before ordinary HTTP upstream I/O", async () => {
     const scenario = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });

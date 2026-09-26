@@ -28,11 +28,16 @@ import {
   UnsupportedOAuthProviderError,
 } from "../../oauth";
 import {
+  GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST,
+  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
   preferredInitialAccount,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
+import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
+import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
@@ -721,7 +726,19 @@ export async function prepareResponsesTransport(
     );
   }
 
+  // Freeze the request ceiling before any 429 writes cooldowns. Selection still reads
+  // live eligibility on every hop; cooled accounts cannot shorten this request's allowance.
+  // The snapshot is clamped: a larger roster must not raise one request's hops or sends.
+  const genericRosterSize = genericFailoverAccountId ? new Set([
+    genericFailoverAccountId,
+    ...eligibleFailoverAccounts(route.providerName, Date.now(), classifyModelFamilyForQuota(route.providerName, route.modelId)),
+  ]).size : 0;
+  const fundedAccounts = Math.min(genericRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
+  const genericFailoverLimit = Math.max(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
+  if (genericFailoverAccountId) expandInferenceOAuthSendBudget(options.sendBudget, fundedAccounts);
+
   return {
+    genericFailoverLimit,
     isOAuth401ReplayProvider,
     get sentOAuthSnapshot(): OAuthAccessSnapshot | undefined {
       return sentOAuthSnapshot;
