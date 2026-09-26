@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { PROVIDER_REGISTRY, providerModelWireDefault } from "../../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../../src/providers/derive";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { createRegisteredAdapter } from "../../src/adapters/registry";
 import { withZenFreeTierSupport } from "../../src/adapters/openai-chat/zen-free-tier";
 import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
@@ -226,6 +227,23 @@ describe("opencode-free provider", () => {
     expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     expect(headers["Authorization"]).toBe("Bearer public");
     expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
+  });
+
+  test("non-Zen providers never enter Zen code paths", async () => {
+    // The registry composes the wrapper conditionally: any other endpoint
+    // gets the bare adapter, so neither declarations nor identity appear.
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.test/v1",
+      authMode: "key",
+      keyOptional: true,
+    };
+    const built = await createRegisteredAdapter(provider).buildRequest(minimalRequest("some-model"), metaWithSession());
+    const headers = built.headers as Record<string, string>;
+    const body = JSON.parse(built.body as string) as { tools?: unknown };
+    expect(headers["x-opencode-session"]).toBeUndefined();
+    expect(headers["Authorization"]).toBeUndefined();
+    expect(body.tools).toBeUndefined();
   });
 
   test("Muse Spark contributor-free ids default to the Responses wire on every inbound", () => {    const base = { baseUrl: "https://opencode.ai/zen/v1", adapter: "openai-chat" };

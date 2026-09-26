@@ -14,6 +14,7 @@ import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { withZenFreeTierSupport } from "./openai-chat/zen-free-tier";
+import { isZenFreeEndpoint } from "./opencode-free-session";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
@@ -85,8 +86,14 @@ export const ADAPTER_REGISTRY = {
   "openai-chat": {
     wire: "openai-chat",
     mutation: "codex-owned",
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) =>
-      withZenFreeTierSupport(withUniqueToolCallIds(withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider))), provider),
+    // The Zen keyless-tier wrapper applies only to its own gateway: every
+    // other openai-chat provider gets the bare adapter, byte-identical to
+    // before. The endpoint check re-runs here (rather than inside the
+    // wrapper) so non-Zen construction never enters Zen code at all.
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => {
+      const base = withUniqueToolCallIds(withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider)));
+      return isZenFreeEndpoint(provider.baseUrl) ? withZenFreeTierSupport(base, provider) : base;
+    },
   },
   "ollama-native": {
     wire: "ollama-native",

@@ -29,6 +29,9 @@
  * to the catalog it already has.
  */
 
+import type { OcxProviderConfig } from "../types";
+import { isZenFreeEndpoint, zenFreeHasApiKey } from "./opencode-free-session";
+
 export type ZenFreeGateToolName = "shell" | "read";
 
 /** OpenCode's compatibility-only wording, reused verbatim. */
@@ -56,6 +59,31 @@ export function zenFreeGateCallGuidance(
   return zenFreeGateGuidanceText(callName, catalog);
 }
 
+/**
+ * Append the missing gate declarations to an already-built tool list.
+ * Returns the amended list, or undefined when nothing applies: another
+ * endpoint, keyed use, or the pair already present. Each wire keeps its own
+ * shape through `nameOf`/`declareAs`, so the three builders share this one
+ * policy without sharing a wire format.
+ */
+export function withZenFreeGateDeclarations<T>(
+  provider: Pick<OcxProviderConfig, "baseUrl" | "apiKey" | "authMode">,
+  current: readonly T[] | undefined,
+  nameOf: (tool: T) => string | undefined,
+  declareAs: (name: ZenFreeGateToolName) => T,
+): T[] | undefined {
+  // Forward mode hands the caller's credential to canonical ChatGPT, never
+  // to this gateway, so gate declarations must not leak onto that lane.
+  if (provider.authMode === "forward") return undefined;
+  if (!isZenFreeEndpoint(provider.baseUrl) || zenFreeHasApiKey(provider)) return undefined;
+  const names = (current ?? [])
+    .map(nameOf)
+    .filter((name): name is string => typeof name === "string");
+  const missing = missingZenFreeGateTools(names);
+  if (missing.length === 0) return undefined;
+  return [...(current ?? []), ...missing.map(declareAs)];
+}
+
 /** Static redirection text for a gate-named call. The turn stays alive. */
 export function zenFreeGateGuidanceText(callName: string, alternatives: readonly string[] = []): string {
   const owned = alternatives.filter(name => name !== callName).slice(0, 4);
@@ -67,6 +95,25 @@ export function zenFreeGateGuidanceText(callName: string, alternatives: readonly
   return (
     `The \`${callName}\` tool is declared but cannot be executed in this session. ` + instead
   );
+}
+
+interface ZenFreeGateRedirect {
+  names: ReadonlySet<string>;
+  message: (name: string, alternatives: readonly string[]) => string;
+}
+
+/**
+ * Redirect config for the passthrough undeclared-tool guard: guidance
+ * instead of failure for gate names the client never declared. Undefined
+ * for every other destination (and for keyed use), which keeps the
+ * fail-closed behavior there byte-identical. Shaped to satisfy the guard's
+ * own redirect contract structurally, so neither module names the other.
+ */
+export function zenFreeGateRedirectFor(
+  provider: Pick<OcxProviderConfig, "baseUrl" | "apiKey">,
+): ZenFreeGateRedirect | undefined {
+  if (!isZenFreeEndpoint(provider.baseUrl) || zenFreeHasApiKey(provider)) return undefined;
+  return { names: ZEN_FREE_GATE_NAMES, message: zenFreeGateGuidanceText };
 }
 
 /**

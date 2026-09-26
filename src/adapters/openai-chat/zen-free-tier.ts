@@ -4,7 +4,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterTierMetadata } from "../../providers/fastwire";
 import { isZenFreeEndpoint, zenFreeHasApiKey } from "../opencode-free-session";
 import {
-  missingZenFreeGateTools,
+  withZenFreeGateDeclarations,
   zenFreeGateCallGuidance,
   zenFreeGateChatTool,
 } from "../opencode-free-tools";
@@ -13,17 +13,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function chatToolName(tool: unknown): string | undefined {
+  const name = isRecord(tool) && isRecord(tool.function) ? tool.function.name : undefined;
+  return typeof name === "string" ? name : undefined;
+}
+
 /**
  * Append the keyless-tier gate declarations to an already-serialized Chat
- * body. Returns the request untouched when the endpoint is not the canonical
- * Zen one, when a key is configured, or when the pair is already present —
- * every other destination keeps byte-identical bodies.
+ * body. Returns the amended JSON, or undefined when the shared helper finds
+ * nothing to do (other endpoint, keyed use, or pair already present).
  */
 function amendZenFreeGateDeclarations(
   request: { body: unknown },
   provider: Pick<OcxProviderConfig, "baseUrl" | "apiKey">,
 ): string | undefined {
-  if (!isZenFreeEndpoint(provider.baseUrl) || zenFreeHasApiKey(provider)) return undefined;
   if (typeof request.body !== "string") return undefined;
   let parsed: unknown;
   try {
@@ -32,15 +35,14 @@ function amendZenFreeGateDeclarations(
     return undefined;
   }
   if (!isRecord(parsed)) return undefined;
-  const tools = Array.isArray(parsed.tools) ? parsed.tools : undefined;
-  const names = (tools ?? []).map(tool =>
-    isRecord(tool) && isRecord(tool.function) && typeof tool.function.name === "string"
-      ? tool.function.name
-      : undefined,
-  ).filter((name): name is string => typeof name === "string");
-  const missing = missingZenFreeGateTools(names);
-  if (missing.length === 0) return undefined;
-  return JSON.stringify({ ...parsed, tools: [...(tools ?? []), ...missing.map(zenFreeGateChatTool)] });
+  const gated = withZenFreeGateDeclarations(
+    provider,
+    Array.isArray(parsed.tools) ? parsed.tools : undefined,
+    chatToolName,
+    zenFreeGateChatTool,
+  );
+  if (gated === undefined) return undefined;
+  return JSON.stringify({ ...parsed, tools: gated });
 }
 
 /**
