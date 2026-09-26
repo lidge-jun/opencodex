@@ -36,6 +36,8 @@ On the computer that should use the Home's providers:
 
 Connecting restarts OpenCodex on this computer. Codex turns that are already running finish first, and new requests can fail for up to a minute while it restarts. The dashboard then reloads by itself and shows the Child link. Codex keeps using `http://127.0.0.1:<port>/v1` on this computer, with no token and no environment variable to set: the local OpenCodex relays each request to the Home, which serves it with its own providers and accounts.
 
+The Child waits for its configured port while the old process releases it. If a CLI-managed restart still fails, run `ocx start` on the Child and check `~/.opencodex/restart-handoff.log`. In the desktop app, the app starts and supervises the replacement automatically.
+
 The **Child** role is available only while OpenCodex runs on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
 
 ## Link status

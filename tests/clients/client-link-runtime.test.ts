@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { bindClientListener, startClientRuntime } from "../../src/client/runtime";
+import type { MachineListenerDeps } from "../../src/client/machine-listener";
 import type { OcxClientConnectionConfig } from "../../src/types";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
 import { fixturePath } from "../helpers/repo-root";
@@ -162,6 +163,33 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
 }, watchdogMs(60_000));
 
 describe("link runtime waits for its configured port like a hard-pinned start", () => {
+  test("the bind helper forwards link status, cached key, and tunnel gate", async () => {
+    const port = freePort();
+    const linkStatus = () => ({ kind: "stopped" as const });
+    const linkKeySource = () => "link-key";
+    const linkTunnel = { pending: () => true, waitForConnected: async () => true };
+    const request = {
+      state: linkClientState(), linkMode: true, preferred: port,
+      explicitPort: true, configuredPort: port,
+      linkStatus, linkKeySource, linkTunnel,
+    };
+    let received: MachineListenerDeps | undefined;
+    let bound: Server<unknown> | undefined;
+    try {
+      await bindClientListener(request, {
+        startListener: (listenPort, deps) => {
+          received = deps;
+          return (bound = servePlain(listenPort!));
+        },
+      });
+      expect(received?.linkStatus).toBe(linkStatus);
+      expect(received?.linkKeySource).toBe(linkKeySource);
+      expect(received?.linkTunnel).toBe(linkTunnel);
+    } finally {
+      bound?.stop(true);
+    }
+  });
+
   test("a port its restarting parent releases after the short prefer-retry still binds", async () => {
     const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("parent") });
     const port = holder.port!;

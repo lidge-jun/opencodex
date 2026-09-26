@@ -241,7 +241,7 @@ export function replacementStartEnvironment(
   parentPid: number = process.pid,
 ): NodeJS.ProcessEnv {
   // A sibling's replacement stays a sibling even if the owner is down while it probes.
-  const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env);
+  const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env, issueSiblingHandoff);
   delete sourceEnv.OCX_SERVICE;
   // A detached replacement is not the desktop app's child; it must never exit to an app that is not waiting on it.
   delete sourceEnv[DESKTOP_SUPERVISED_ENV];

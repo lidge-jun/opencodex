@@ -19,7 +19,7 @@ import type { OcxClientConnectionConfig } from "../types";
 import { createLinkKeySource } from "./link-ingress";
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath } from "./link-state";
-import { startMachineListener } from "./machine-listener";
+import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
 
 let activeServer: Server<unknown> | null = null;
@@ -211,7 +211,7 @@ export async function bindClientListener(
     preferred: number;
     explicitPort: boolean;
     configuredPort: number;
-  },
+  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel">,
   io: ClientRuntimeIo = {},
 ): Promise<{ server: Server<unknown>; port: number }> {
   const { linkMode } = request;
@@ -245,7 +245,12 @@ export async function bindClientListener(
   const startListener = io.startListener ?? startMachineListener;
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const server = startListener(port, { state: request.state });
+      const server = startListener(port, {
+        state: request.state,
+        ...(request.linkStatus ? { linkStatus: request.linkStatus } : {}),
+        ...(request.linkKeySource ? { linkKeySource: request.linkKeySource } : {}),
+        ...(request.linkTunnel ? { linkTunnel: request.linkTunnel } : {}),
+      });
       return { server, port: server.port ?? port };
     } catch (error) {
       // Check-then-bind: the port can be taken between the probe and Bun.serve.
@@ -285,6 +290,8 @@ export async function startClientRuntime(
     preferred,
     explicitPort: options.port !== undefined,
     configuredPort: config.port,
+    ...(linkMode ? { linkStatus: () => supervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
+    ...(supervisor ? { linkTunnel: supervisor } : {}),
   }, io);
   activeServer = server;
   activePort = boundPort;

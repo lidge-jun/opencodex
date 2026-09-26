@@ -2,6 +2,12 @@
  * #563 — memory-card drain-and-restart acceptance + respawn policy.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { consumeSiblingHandoff } from "../../src/codex/sibling-handoff";
+import { honorSiblingMarker, markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
+import { removeRuntimePort, writeRuntimePort } from "../../src/config/process-state";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { resetLifecycleDrainStateForTests, setDraining } from "../../src/server/lifecycle";
 import {
@@ -34,6 +40,30 @@ function config(): OcxConfig {
 afterEach(() => {
   setSystemRestartIoForTests();
   resetLifecycleDrainStateForTests();
+});
+
+test("a sibling replacement environment carries a one-use handoff before restart", () => {
+  const previousHome = process.env.OPENCODEX_HOME;
+  const home = mkdtempSync(join(tmpdir(), "ocx-restart-sibling-"));
+  try {
+    process.env.OPENCODEX_HOME = home;
+    writeRuntimePort({ pid: process.pid, port: 10199, siblingOfPort: 10100 });
+    markSiblingStart(10100);
+    const env = replacementStartEnvironment(true, 4242);
+    expect(env.OCX_SIBLING_OF_PORT).toBe("10100");
+    expect(env.OCX_SIBLING_HANDOFF_NONCE).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    resetSiblingStartForTests();
+    expect(honorSiblingMarker({ ...env }, consumeSiblingHandoff)).toBe(10100);
+    resetSiblingStartForTests();
+    expect(honorSiblingMarker({ ...env }, consumeSiblingHandoff)).toBeNull();
+  } finally {
+    resetSiblingStartForTests();
+    process.env.OPENCODEX_HOME = home;
+    removeRuntimePort(process.pid);
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 describe("acceptSystemRestart", () => {
