@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ambiguousResendAllowanceFor,
+  selfContainedChatBody,
   selfContainedResponsesBody,
 } from "../../src/server/responses/reset-replay";
 import { authorizeResendForRecovery } from "../../src/lib/request-resend-gate";
@@ -75,6 +76,48 @@ describe("selfContainedResponsesBody", () => {
       ...clientTurn,
       input: [{ type: "image_generation_call", id: "ig1" }],
     })).toBe(false);
+  });
+});
+
+describe("selfContainedChatBody", () => {
+  const chatTurn = {
+    model: "mock/test-model",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [{ type: "function", function: { name: "read" } }],
+  };
+
+  test("accepts a Chat turn whose second send can only repeat the inference", () => {
+    expect(selfContainedChatBody(chatTurn)).toBe(true);
+    expect(selfContainedChatBody({ model: "m", messages: [] })).toBe(true);
+  });
+
+  test("refuses anything that leaves state behind or continues someone else's turn", () => {
+    for (const override of [
+      { store: true },
+      { previous_response_id: "resp_1" },
+      { messages: undefined },
+      { messages: "not a list" },
+    ]) {
+      expect(selfContainedChatBody({ ...chatTurn, ...override })).toBe(false);
+    }
+    expect(selfContainedChatBody(null)).toBe(false);
+    expect(selfContainedChatBody([chatTurn])).toBe(false);
+  });
+
+  test("refuses hosted execution requested outside the tool catalog", () => {
+    expect(selfContainedChatBody({ ...chatTurn, web_search_options: {} })).toBe(false);
+    expect(selfContainedChatBody({ ...chatTurn, web_search_options: undefined })).toBe(true);
+  });
+
+  test("refuses a catalog carrying a tool the origin would execute", () => {
+    for (const tools of [
+      [{ type: "web_search" }],
+      [{ type: "function", function: { name: "read" } }, { type: "code_interpreter" }],
+      [{ function: { name: "read" } }],
+      "not a list",
+    ]) {
+      expect(selfContainedChatBody({ ...chatTurn, tools })).toBe(false);
+    }
   });
 });
 

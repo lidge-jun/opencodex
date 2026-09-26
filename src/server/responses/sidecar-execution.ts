@@ -20,7 +20,6 @@ import type { ProviderAdapter } from "../../adapters/base";
 import type { OcxParsedRequest } from "../../types";
 import { rotateProviderTransportOn429, rateLimitRetryPolicyFor } from "../../providers/key-failover";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
@@ -59,6 +58,7 @@ export async function executeResponsesSidecars(
     | "adapter"
     | "genericFailoverAccountId"
     | "genericFailovers"
+    | "genericFailoverLimit"
     | "applyFailoverSnapshot"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
@@ -180,7 +180,7 @@ export async function executeResponsesSidecars(
       // excludes it), so its sidecar 429s died on this guard before the Anthropic arm below
       // could ever be considered.
       transportState.genericFailoverAccountId
-      && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && transportState.genericFailovers < transportState.genericFailoverLimit
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
       // Intersection with the request's shared budget. The sidecar replay is dispatched by the
