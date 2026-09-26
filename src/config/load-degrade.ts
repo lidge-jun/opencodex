@@ -122,6 +122,18 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
+  warnDegradedMemoryModels(rawParsed, validated);
+}
+
+/**
+ * A malformed `memoryModels` entry disables that phase rather than failing the whole schema, so
+ * say so once: silently keeping the native model is the outcome a typo must not produce quietly.
+ */
+export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).memoryModels;
+  if (raw === undefined || validated.memoryModels !== undefined) return;
+  console.warn("\u26a0\ufe0f  config.json memoryModels is invalid (expected { extract?: { model, reasoningEffort? }, consolidation?: { model, reasoningEffort? } } with a nonblank model and a declared effort per phase) \u2014 Codex keeps its own model for the memory pipeline");
 }
 
 /**
