@@ -4,6 +4,9 @@ import {
   CODEX_RESPONSES_LITE_METADATA_KEY,
 } from "../../codex/forward-transport-headers";
 
+/** Per-turn headers the WebSocket carries in `client_metadata` of each frame, not in the upgrade. */
+export const CODEX_WS_FRAME_HEADERS = ["x-codex-turn-state", "x-codex-turn-metadata"] as const;
+
 export const CODEX_RESPONSES_HTTP_URL = "https://chatgpt.com/backend-api/codex/responses";
 export const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 export const WS_BETA = "responses_websockets=2026-02-06";
@@ -32,7 +35,7 @@ function applyLiteMetadata(body: Record<string, unknown>, headers: Headers): boo
     body.client_metadata = { ...(metadata as Record<string, string> | undefined),
       [CODEX_RESPONSES_LITE_METADATA_KEY]: lite };
   }
-  for (const name of ["x-codex-turn-state", "x-codex-turn-metadata"]) {
+  for (const name of CODEX_WS_FRAME_HEADERS) {
     const value = headers.get(name);
     const current = body.client_metadata as Record<string, string> | undefined;
     if (value !== null && !Object.hasOwn(current ?? {}, name)) {

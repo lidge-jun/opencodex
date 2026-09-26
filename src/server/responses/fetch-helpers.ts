@@ -12,6 +12,7 @@ import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
+import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
 import {
   describeProviderEgressForLog,
   markEgressTransparentExecutor,
@@ -34,6 +35,7 @@ const EGRESS_DOWNGRADE_NOTICE_LIMIT = 64;
  * `dispatchOverride` performs, and an unknown symbol on a `RequestInit` is inert at the wire.
  */
 const EGRESS_DECIDED = Symbol.for("opencodex.provider-egress.decided");
+const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
 
 /**
  * Announce once, per provider, that an explicit egress route moved this provider off the
@@ -143,11 +145,28 @@ export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
  */
 export function sendWithConnectionPolicy(
   physicalFetch: typeof globalThis.fetch,
-  input: Parameters<typeof globalThis.fetch>[0],
+  rawInput: Parameters<typeof globalThis.fetch>[0],
   init?: RequestInit,
   egress?: ProviderEgressBinding,
 ): Promise<Response> {
-  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  let input = rawInput;
+  let headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  // Plugin rewrites (src/plugins/upstream-hooks.ts) run here, after the caller chose between
+  // the Codex WebSocket and HTTP, and before the connection and egress decisions below so
+  // those follow the rewritten destination. Nested passes rewrite once, like the egress mark.
+  // A rewrite onto this machine's loopback dials directly: a proxy chosen for the provider
+  // (per-provider or HTTP_PROXY) cannot reach a local sidecar. The WebSocket dial does the same.
+  const rewriteDone = (init as Record<symbol, unknown> | undefined)?.[UPSTREAM_REWRITTEN] === true;
+  let redirectedToLoopback = false;
+  if (!rewriteDone) {
+    const original = input instanceof Request ? input.url : String(input);
+    const target = rewriteUpstream(original, headers, "http");
+    headers = target.headers as Headers;
+    if (target.url !== original) {
+      redirectedToLoopback = isLoopbackUrl(target.url);
+      input = input instanceof Request ? new Request(target.url, input) : target.url;
+    }
+  }
   const fresh = wantsFreshConnection(input);
   if (fresh) {
     headers.set("Connection", "close");
@@ -161,15 +180,18 @@ export function sendWithConnectionPolicy(
   // the reselected provider and the rebuilt destination, so it decides and marks the init; the
   // inner pass honours that mark rather than recomputing from a stale closure.
   const alreadyDecided = (init as Record<symbol, unknown> | undefined)?.[EGRESS_DECIDED] === true;
-  const decide = egress !== undefined && !alreadyDecided;
-  const egressInit = decide ? providerEgressSendInit(egress, physicalFetch, input) : {};
+  const decide = egress !== undefined && !alreadyDecided && !redirectedToLoopback;
+  const egressInit = redirectedToLoopback
+    ? { proxy: false as const }
+    : decide ? providerEgressSendInit(egress, physicalFetch, input) : {};
   return physicalFetch(input, {
     ...init,
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
     ...egressInit,
-    ...(decide ? { [EGRESS_DECIDED]: true } : {}),
+    ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
+    ...{ [UPSTREAM_REWRITTEN]: true },
   });
 }
 
