@@ -8,6 +8,7 @@ import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createAdvisorRuntimePlan } from "../../advisor/runtime";
 import { buildAdvisorTool } from "../../advisor/synthetic-tool";
+import { ADVISOR_TOOL_NAME } from "./advisor-slot";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -152,7 +153,9 @@ export async function executeResponsesSidecars(
       workerModelId: route.modelId,
       abortSignal: options.abortSignal,
     });
-  if (advisorPlan) {
+  // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
+  // and injecting advice into it would pollute the summary Codex replaces its history with.
+  if (advisorPlan && !routedCompaction) {
     await advisorPlan.preflightInject(parsed);
   }
 
@@ -513,7 +516,12 @@ export async function executeResponsesSidecars(
   // run-turn adapters execute their own loop; both would leak the synthetic tool call they
   // cannot intercept. Preflight (above) still applies to those paths — only the tool does not.
   if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
-    parsed.context.tools = [...(parsed.context.tools ?? []).filter(t => !t.advisor), buildAdvisorTool()];
+    // A client-declared tool named "advisor" would collide with the synthetic injection (one
+    // wire name, two schemas); the synthetic runtime owns the name for this turn.
+    parsed.context.tools = [
+      ...(parsed.context.tools ?? []).filter(t => !t.advisor && t.name !== ADVISOR_TOOL_NAME),
+      buildAdvisorTool(),
+    ];
     // The advisor tool joined AFTER prepare computed the bridge maps; recompute so the tool is
     // declared (undeclared-tool guard, tool_choice mapping, schema repair) on this turn.
     requestState.toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
