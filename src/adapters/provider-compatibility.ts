@@ -5,6 +5,8 @@ import { openCodeFreeCompatibility } from "./opencode-free-compatibility";
 export interface ProviderRequestContext {
   parsed?: OcxParsedRequest;
   incomingHeaders?: Headers;
+  /** Stable lane for request paths that do not build an `OcxParsedRequest`. */
+  requestSessionLane?: string;
 }
 
 export interface CompatibilityFunctionTool {
