@@ -648,6 +648,29 @@ describe("claude-agent-sdk serves the client's catalog through a capture-only MC
     expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "tool_call_required", retryable: false });
   });
 
+  test("a parallel batch that reuses one block index arrives as two complete calls", async () => {
+    // The shared parser buffers tool blocks now (#5945): CodeBuddy reuses one content-block index
+    // for a parallel batch, intermediate blocks never receive a stop, and only the last one does.
+    // The completeness invariants above read that state, so this pins the pairing they depend on.
+    const catalog = await buildClaudeAgentSdkToolBridge(withTools(["alpha", "beta"]));
+    const [first, second] = [...catalog!.emittedNameMap.keys()];
+    const sdk = fakeSdk([
+      initFrame([bridgeConnected]),
+      { type: "stream_event", event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: first } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"a\":1}" } } },
+      { type: "stream_event", event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_b", name: second } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"b\":2}" } } },
+      { type: "stream_event", event: { type: "content_block_stop", index: 2 } },
+      messageStop,
+    ], { park: true });
+    const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => sdk.module, reapTimeoutMs: 50 });
+    const events = await run(adapter, withTools(["alpha", "beta"]));
+    expect(events.filter(event => event.type === "tool_call_start").map(event => event.name)).toEqual(["alpha", "beta"]);
+    expect(events.filter(event => event.type === "tool_call_delta").map(event => event.arguments)).toEqual(["{\"a\":1}", "{\"b\":2}"]);
+    expect(events.filter(event => event.type === "tool_call_end")).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
+  });
+
   test("a result that arrives while a captured call is still open fails closed", async () => {
     const catalog = await buildClaudeAgentSdkToolBridge(withTools(["alpha"]));
     const emitted = [...catalog!.emittedNameMap.keys()][0]!;

@@ -290,7 +290,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     sawPartialText: false,
     sawPartialThinking: false,
     sawTerminalResult: false,
-    openToolCallId: undefined,
+    openToolBlocks: new Map(),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -437,8 +437,8 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
           toolBridge
           && !terminalEmitted
           && event.type === "done"
-          && toolCallStarts > 0
-          && (state.completedToolCalls ?? 0) !== toolCallStarts
+          && (state.toolBlockStarts ?? 0) > 0
+          && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
         ) {
           emitOnce({
             type: "error",
@@ -455,8 +455,8 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
           toolBridge
           && !terminalEmitted
           && event.type === "done"
-          && toolCallStarts > 0
-          && (state.completedToolCalls ?? 0) === toolCallStarts
+          && (state.toolBlockStarts ?? 0) > 0
+          && (state.completedToolCalls ?? 0) === (state.toolBlockStarts ?? 0)
         ) {
           deferredResultDone = event;
           continue;
@@ -470,8 +470,8 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         toolBridge
         && !terminalEmitted
         && state.sawMessageStop
-        && toolCallStarts > 0
-        && (state.completedToolCalls ?? 0) !== toolCallStarts
+        && (state.toolBlockStarts ?? 0) > 0
+        && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
       ) {
         emitOnce({
           type: "error",
