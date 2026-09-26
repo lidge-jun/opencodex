@@ -1136,7 +1136,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             tabIndex={tab === item ? 0 : -1}
             className={`page-tab${tab === item ? " page-tab--active" : ""}`}
             onClick={() => selectUsageTab(item)} onKeyDown={usageTabKeyDown}>
-            {t(item === "report" ? "usage.section.overview" : "usage.section.companion")}
+            {t(item === "report" ? "usage.workspace.report" : "usage.section.companion")}
           </button>
         ))}
       </div>
