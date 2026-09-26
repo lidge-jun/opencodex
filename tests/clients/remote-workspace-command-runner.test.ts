@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -32,9 +32,19 @@ function fixture() {
 }
 
 function privateBubblewrapFixture(): string {
-  // The production guard checks every ancestor, so tmpdir's shared /tmp parent
-  // is deliberately ineligible. Own a disposable sibling under the trusted
-  // interpreter directory without chmod'ing the interpreter or shared parents.
+  // These argv tests never execute bubblewrap. On Unix, use a system executable
+  // whose ancestors are trusted even when the test's Bun binary lives under /tmp.
+  // Minimal images may hard-link env, so choose a single-link executable.
+  if (process.platform !== "win32") {
+    for (const candidate of ["/usr/bin/env", "/bin/true", "/usr/bin/true", "/bin/cat", "/bin/ls"]) {
+      try {
+        const canonical = realpathSync(candidate);
+        const file = statSync(canonical);
+        if (file.isFile() && file.nlink === 1) return canonical;
+      } catch { /* Candidate is absent on this image. */ }
+    }
+    throw new Error("no single-link system executable for the bubblewrap argv fixture");
+  }
   const root = mkdtempSync(join(dirname(realpathSync(process.execPath)), "ocx-bwrap-fixture-"));
   roots.push(root);
   const path = join(root, "bwrap");
