@@ -1438,6 +1438,8 @@ export async function handleClaudeCountTokens(
     if (wantsNativePassthrough(req, config, requestPolicy, model, cc)) {
       return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
     }
+    // A thread delta would undercount; refuse it exactly as the translated Messages path does.
+    if (carriesMessageThread(raw)) return messageThreadUnsupportedResponse();
     // PF-08: an eligible managed-key route counts the body the native lane would send.
     const nativeCountBody = resolveProtocolSettings(config).rollout.managedMessagesNative
       ? (await import("./messages-native")).nativeMessagesCountBody(config, cc, raw, { fastRow: countFastRow !== null })

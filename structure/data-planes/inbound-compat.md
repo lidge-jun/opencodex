@@ -319,7 +319,8 @@ to the thread Anthropic stores. `src/server/claude-messages.ts` forwards the req
 native passthrough. On the translated path, before compatibility analysis or inference, it
 answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
 `error.details.error_code` is `thread_unsupported_request` and whose request-log error code is
-`claude_thread_unsupported`. Claude Code then resends the turn with the full conversation and keeps
+`claude_thread_unsupported`. A translated `count_tokens` request with a `thread` object gets the
+same 400, because counting the delta would undercount the conversation. Claude Code then resends the turn with the full conversation and keeps
 that model stateless for the session. Translating the delta instead would drop the task,
 instructions and earlier turns without an error.
 

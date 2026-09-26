@@ -108,6 +108,15 @@ test("a translated route refuses message threads with Claude Code's unsupported 
     }
     expect(upstream.captured).toHaveLength(0);
 
+    // A thread delta would undercount, so count_tokens refuses it the same way.
+    const counted = await fetch(new URL("/v1/messages/count_tokens?beta=true", server.url), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(continueTurn),
+    });
+    expect(counted.status).toBe(400);
+    expect(await counted.json()).toMatchObject({ error: { details: { error_code: "thread_unsupported_request" } } });
+
     const resent = await fetch(new URL("/v1/messages?beta=true", server.url), {
       method: "POST",
       headers,
