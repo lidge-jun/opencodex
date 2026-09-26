@@ -598,15 +598,7 @@ headers. That is separate from the keyless desktop quota OpenCode advertises
 synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
 wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
 
-**The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
-any request that arrives without an `x-opencode-session` header, answering with error type
-`MissingSessionID` and the message "OpenCode's free tier can only be used in OpenCode". Presence
-of the header is the entire gate, so a proxy could pass it by inventing a value — opencodex does
-not. Minting a session identifier and a versioned `opencode/<version>` User-Agent is a claim to
-*be* the OpenCode client, and OpenCode publishes no third-party integration contract for this
-keyless tier; an HTTP 200 obtained that way is a bypassed admission check rather than
-permission. opencodex therefore reports the restriction instead of working around it: a request
-to `opencode-free` returns an error explaining the upstream gate and pointing here.
+**The keyless `opencode-free` tier presents the anonymous client identity OpenCode's own CLI sends.** When the non-forward identity profile applies, requests carry a conversation-derived `x-opencode-session` (or a request-scoped one when no conversation identity is available), a versioned `opencode/<version>` User-Agent, and the `x-opencode-client` marker. The profile adds `Authorization: Bearer public` only when no Authorization header is already present; Zen maps it to its anonymous pool. Requests with `authMode: "forward"` skip this profile. Provenance: OpenCode's `packages/opencode/src/session/llm/request.ts` (headers) and `packages/console/app/src/routes/zen/util/handler.ts` (gateway admission). A configured `x-opencode-session` or API key always wins; with a key the request bills that account. Muse Spark contributor-free models route to Zen's `/v1/responses` endpoint per the Zen endpoint table. This admission is tolerated, not contracted: OpenCode may change or restrict it at any time, in which case these routes fail with the upstream error.
 
 The supported route to the same models is the keyed **`opencode-zen`** provider with an OpenCode
 Zen API key from [opencode.ai/auth](https://opencode.ai/auth). If OpenCode later publishes a

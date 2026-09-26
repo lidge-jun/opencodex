@@ -1146,7 +1146,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     keyOptional: true,
     featured: true,
     liveModels: true,
-    note: "No key needed, but OpenCode now gates this tier to its own client: Zen refuses any request that arrives without an x-opencode-session header (error type MissingSessionID, \"OpenCode's free tier can only be used in OpenCode\"). opencodex does not mint that header or claim an OpenCode client identity, because no upstream contract authorizes a third-party agent to present itself as OpenCode. Until OpenCode publishes a third-party integration path for the keyless tier, use the keyed opencode-zen provider instead (https://opencode.ai/auth). Quota figures for when the tier admitted a request: OpenCode advertises about 200 Big Pickle/free-model requests per 5 hours, and the same Zen gateway can short-window rate-limit free models at roughly 15-20 requests/minute, and may return generic 429s without Retry-After (opencodex synthesizes backoff only when that header is omitted). Free models are discovered live from Zen. Data use: per OpenCode's Zen docs (https://opencode.ai/docs/zen/), prompts sent to free models may be retained and used for training/improvement — do not send confidential material through this provider.",
+    note: "No key needed: keyless OpenCode Zen gateway with models discovered live from Zen. Keyless requests carry the anonymous client identity OpenCode's own CLI sends (x-opencode-session, versioned opencode User-Agent, Bearer public) — provenance: OpenCode packages/opencode/src/session/llm/request.ts and packages/console/app/src/routes/zen/util/handler.ts — plus never-invoked shell/read tool declarations the tier's admission check requires, so the keyless tier admits them instead of answering MissingSessionID/FreeTierError. A caller- or operator-supplied x-opencode-session and any configured API key always win; with a key the request bills that account. Upstream may change or restrict this admission path at any time (an HTTP 200 today is a tolerated fingerprint, not a contract); the supported route to the same models is the keyed opencode-zen provider (https://opencode.ai/auth). Quota figures: OpenCode advertises about 200 Big Pickle/free-model requests per 5 hours, and the same Zen gateway can short-window rate-limit free models at roughly 15-20 requests/minute, and may return generic 429s without Retry-After (opencodex synthesizes backoff only when that header is omitted). Free models are discovered live from Zen. Data use: per OpenCode's Zen docs (https://opencode.ai/docs/zen/), prompts sent to free models may be retained and used for training/improvement — do not send confidential material through this provider.",
     dashboardUrl: "https://opencode.ai",
     staticHeaders: {
       // Zen answers a bare runtime User-Agent (Bun/x.y.z) more aggressively than a client
@@ -1160,6 +1160,22 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       // through the provider headers API; user headers win case-insensitively at route time.
       "User-Agent": "opencode",
       "x-opencode-client": "desktop",
+    },
+    // Muse Spark contributor-free ids are deployed on Zen's Responses wire only
+    // (opencode.ai/docs/zen endpoint table; /chat/completions answers 500 for
+    // them, verified live 2026-09-26). Every inbound uses Responses — the Chat
+    // and Anthropic surfaces already replay through handleResponses, so the
+    // scoped default must fire for callers that never spoke Responses natively.
+    modelWireDefaults: {
+      "muse-spark-1.2-contributor-free": { wire: "openai-responses", inbound: ["responses", "chat", "anthropic"] },
+      "muse-spark-1.3-contributor-free": { wire: "openai-responses", inbound: ["responses", "chat", "anthropic"] },
+    },
+    // Same silent-reasoning exposure as the keyed tier's Muse Spark rows: the
+    // model can sit quiet through prolonged reasoning and close without a
+    // protocol terminal on this gateway too.
+    modelResponsesTerminalRepair: {
+      "muse-spark-1.2-contributor-free": { graceMs: 5_000 },
+      "muse-spark-1.3-contributor-free": { graceMs: 5_000 },
     },
     modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),

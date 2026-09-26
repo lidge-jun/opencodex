@@ -11,7 +11,7 @@
  * The same module also owns the keyless free-tier admission explanation (#4121):
  * Zen rejects a request that carries no `x-opencode-session` header with
  * `MissingSessionID` / "OpenCode's free tier can only be used in OpenCode".
- * opencodex does not synthesize that header — see {@link enrichOpenCodeZenFreeTierMessage}.
+ * opencodex mints that identity automatically for this destination — see {@link enrichOpenCodeZenFreeTierMessage}.
  */
 import { validateClientRetryAfterHeader } from "../lib/retry-after";
 import { registryEntryForProviderDestination } from "./registry";
@@ -107,26 +107,25 @@ export function enrichOpenCodeZenRateLimitMessage(
 }
 
 /**
- * Zen's keyless free tier admits only OpenCode's own client. A request without an
- * `x-opencode-session` header is refused with error type `MissingSessionID` and the
- * message "OpenCode's free tier can only be used in OpenCode" (#4121).
+ * Zen's keyless free tier admits only requests carrying OpenCode's anonymous
+ * client identity. A refusal arrives with error type `MissingSessionID` /
+ * `FreeTierError` and the message "OpenCode's free tier can only be used in
+ * OpenCode" (#4121).
  *
- * Presence of the header is the whole gate — any value clears it — so opencodex could
- * pass by minting one. It does not. Fabricating a session identifier and a versioned
- * `opencode/<version>` User-Agent is a claim to *be* the OpenCode client, and no upstream
- * contract authorizes a third-party agent to make it; an HTTP 200 obtained that way is a
- * bypassed admission check, not permission. Until OpenCode publishes a third-party
- * integration path for this exact keyless tier, the supported route is the keyed
- * `opencode-zen` provider.
+ * opencodex mints that identity automatically for this destination
+ * (`src/adapters/opencode-free-session.ts`, with provenance from OpenCode's
+ * own client and gateway code). A refusal can still surface if the gateway
+ * rejects caller-supplied header values or tightens upstream admission, and
+ * the guidance below says that instead of leaking the raw envelope through.
  *
  * Two markers are matched because the two request surfaces expose different parts of the
  * upstream envelope: the Responses path forwards the bounded raw body (which carries the
  * `MissingSessionID` type), while the native Chat path forwards only the parsed message.
  */
-const OPENCODE_ZEN_FREE_TIER_LOCK_IN = /MissingSessionID|free tier can only be used in OpenCode/i;
+const OPENCODE_ZEN_FREE_TIER_LOCK_IN = /MissingSessionID|FreeTierError|free tier can only be used in OpenCode/i;
 
 /** Idempotence marker — the appended guidance must not stack across enrichment layers. */
-const FREE_TIER_ENRICHMENT_MARKER = "does not send a fabricated OpenCode session header";
+const FREE_TIER_ENRICHMENT_MARKER = "mints that identity automatically";
 
 /** True when an upstream error body is Zen's keyless free-tier admission refusal. */
 export function isOpenCodeZenFreeTierLockIn(message: string, upstreamErrorType?: string | null): boolean {
@@ -135,9 +134,9 @@ export function isOpenCodeZenFreeTierLockIn(message: string, upstreamErrorType?:
 }
 
 /**
- * Replace a raw `MissingSessionID` passthrough with an explanation of the upstream
- * restriction and the supported alternative. No-op for every other provider and every
- * other error, and idempotent so layered enrichment cannot append it twice.
+ * Replace a raw keyless-tier refusal passthrough with an explanation and the
+ * supported alternative. No-op for every other provider and every other
+ * error, and idempotent so layered enrichment cannot append it twice.
  */
 export function enrichOpenCodeZenFreeTierMessage(
   message: string,
@@ -154,10 +153,10 @@ export function enrichOpenCodeZenFreeTierMessage(
   if (!isOpenCodeZenRateLimitProvider(opts)) return message;
   return (
     `${message}`
-    + " OpenCode Zen's keyless free tier admits only OpenCode's own client: it refuses any"
-    + " request that arrives without an x-opencode-session header."
-    + ` opencodex ${FREE_TIER_ENRICHMENT_MARKER}, because presenting itself as the OpenCode`
-    + " client is a claim no upstream contract supports."
+    + " OpenCode Zen's keyless free tier admits only requests carrying OpenCode's anonymous"
+    + " client identity (x-opencode-session and a versioned opencode User-Agent)."
+    + ` opencodex ${FREE_TIER_ENRICHMENT_MARKER} for this destination. A refusal can still occur`
+    + " if the gateway rejects caller-supplied header values or tightens its admission rules."
     + " Use the keyed opencode-zen provider with an OpenCode Zen API key"
     + " (https://opencode.ai/auth), or route this model through another provider."
     + " Upstream terms: https://opencode.ai/docs/zen/."

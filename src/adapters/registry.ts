@@ -18,6 +18,7 @@ import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
+import { withProviderRequestCompatibility } from "./provider-compatibility";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
 
@@ -189,11 +190,12 @@ export function createRegisteredAdapter(
 ): ProviderAdapter {
   const definition = getAdapterDefinition(provider.adapter);
   if (!definition) throw new Error(`Unknown adapter: ${provider.adapter}`);
-  const adapter = definition.create(provider, context);
+  let adapter = definition.create(provider, context);
   const wire = effectiveAdapterContract(provider.adapter).wire;
   if (wire !== "openai-responses") {
     withInputMediaGuard(adapter, wire);
   }
+  adapter = withProviderRequestCompatibility(adapter, provider);
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {
     const attachTierMetadata = (request: Awaited<ReturnType<ProviderAdapter["buildRequest"]>>) => {

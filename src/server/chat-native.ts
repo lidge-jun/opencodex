@@ -1,4 +1,5 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { transformProviderRequest } from "../adapters/provider-compatibility";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -75,6 +76,7 @@ import {
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";
+import { getOrAllocateRequestSessionLane } from "./request-log-conversation";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
@@ -329,13 +331,21 @@ export async function runNativeChatAttempt(
   };
   const buildActiveRequest = () => {
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
-    return buildOpenAIChatPassthroughRequest(
+    const request = buildOpenAIChatPassthroughRequest(
       activeProvider,
       execution.chatBody,
       route.modelId,
       requestedStream,
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
       config.fastMode,
+    );
+    return transformProviderRequest(
+      activeProvider,
+      request,
+      {
+        incomingHeaders: req.headers,
+        requestSessionLane: getOrAllocateRequestSessionLane(req),
+      },
     );
   };
   try {
