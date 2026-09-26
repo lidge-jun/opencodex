@@ -564,7 +564,10 @@ export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessT
 /** The provider's Messages endpoint, refusing a base URL with an unresolved `{placeholder}`. */
 export function resolveAnthropicMessagesUrl(provider: Pick<OcxProviderConfig, "baseUrl">): string {
   const url = anthropicMessagesUrl(provider.baseUrl);
-  const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
+  // indexOf instead of a regex: \{[^}]*\} is quadratic on brace-only input (CodeQL js/polynomial-redos).
+  const openBrace = url.indexOf("{");
+  const closeBrace = openBrace === -1 ? -1 : url.indexOf("}", openBrace);
+  const unresolvedPlaceholder = closeBrace === -1 ? undefined : url.slice(openBrace, closeBrace + 1);
   if (unresolvedPlaceholder) {
     throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
   }
