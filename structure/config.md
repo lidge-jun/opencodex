@@ -363,18 +363,18 @@ A present-but-unreadable `config.toml` reports `ownership_undetermined` with `nu
 sign-in answer, since a foreign provider may still control them; both apply gates and injector-error
 observation keep that record, and recovery advice asks for a later settings read, not sync.
 
-Effective values come from `isEffectiveCodexDesktopAuthless` and
-`isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy
-of the predicate, because the reporting answer and the injection answer diverging is the defect
-being fixed: a non-loopback bind without the unauthenticated loopback listener drops the
-authless flag while the API read back the configured `true`.
+Effective values come from `isEffectiveCodexDesktopAuthless`/`isEffectiveCodexClientCompaction`
+in `src/codex/loopback-target.ts`, not a second copy of the predicate: reporting and injection
+answers diverging is the defect being fixed.
 
 The report also states the auth-source consequence. The flag decides `requires_openai_auth` in
 the injected provider table, which is what Codex reads to decide whether to ask the user to
-sign in at all, so flipping it changes whose identity is in use and the user is told at the
-moment they change it. The pre-existing top-level `codexDesktopAuthless` and
+sign in at all. The pre-existing top-level `codexDesktopAuthless` and
 `codexClientCompaction` booleans keep reporting the configured value for compatibility; the
-report is additive.
+report is additive. `codexDesktopAuthlessAuto` (default off) flips `codexDesktopAuthless` on
+the shared minute sweep (`src/codex/desktop-authless-auto.ts`): engaged while main quota is
+exhausted, released on confirmed recovery; each transition persists, re-injects, and restarts
+clients.
 
 ## Profile and fast tier
 

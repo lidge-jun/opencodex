@@ -697,6 +697,7 @@
     "codex-provider-table-retention.test.ts": "codex-integration",
     "codex-quota-auto-refresh-main-admission.test.ts": "codex-integration",
     "codex-quota-auto-refresh.test.ts": "codex-integration",
+    "codex-desktop-authless-auto.test.ts": "codex-integration",
     "codex-quota-capacity.test.ts": "codex-integration",
     "codex-quota-history.test.ts": "codex-integration",
     "codex-quota-parser-parity.test.ts": "codex-integration",

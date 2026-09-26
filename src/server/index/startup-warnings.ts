@@ -166,6 +166,8 @@ export interface StartServerDeps {
   packageTreeRetargetOptions?: PackageTreeRetargetOptions;
   /** Test-only seam for observing quota-worker registration ownership. */
   registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
+  /** Test-only seam for observing authless-failover worker registration ownership. */
+  registerDesktopAuthlessAutoWorker?: typeof import("../../codex/desktop-authless-auto").registerDesktopAuthlessAutoWorker;
 }
 
 export function inspectStartupOwnership(

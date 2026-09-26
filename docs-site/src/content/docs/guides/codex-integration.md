@@ -528,6 +528,28 @@ This only changes the Desktop login gate. Non-loopback binds keep `requires_open
 the `env_key` admission credential regardless of the switch; it never exposes an OpenCodex listener
 without authentication.
 
+### Automatic failover on quota exhaustion
+
+Recent Codex Desktop releases disable the composer account-wide while the ChatGPT 5h quota
+reports exhausted — including for independently credentialed routed models that consume none
+of that quota, since every catalog model reaches Desktop through the same provider. When that
+happens, no request leaves the client, so proxy-side routing cannot help; only the provider
+form matters.
+
+`codexDesktopAuthlessAuto` watches the main-account quota on the shared minute sweep and flips
+the switch above by itself:
+
+```bash
+ocx system settings --desktop-authless-auto on
+```
+
+While the 5h window is exhausted, authless routing is engaged and routed models stay
+submittable. Recovery is confirmed against a forced upstream quota read (never a stale cache)
+before authenticated routing is restored. Each transition rewrites `~/.codex/config.toml` and
+restarts Codex clients to adopt it, and only transitions act — a sweep that finds the desired
+state already stored is a no-op. Manual `codexDesktopAuthless` edits are respected until the
+next sweep re-evaluates them.
+
 ## Thread identity and history
 
 The default loopback form keeps new threads tagged with Codex's native `openai` provider, so normal

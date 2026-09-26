@@ -44,7 +44,7 @@ import {
   registerCodexCooldownRecoveryProbeWorker,
 } from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
-import { registerCodexQuotaAutoRefreshWorker } from "../codex/quota-auto-refresh";
+import { registerCodexSweepWorkers } from "./index/codex-sweep-workers";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -635,7 +635,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   }
   const linkPolicy = (): RequestPolicyView => requestPolicyView(config, LINK_INGRESS_HOSTNAME, { allowedKeyIds: optionalListeners.linkAdmissionKeyIds() });
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
-  let unregisterQuotaAutoRefresh: (() => void) | null = null;
+  let unregisterCodexSweepWorkers: (() => void) | null = null;
   let remoteWorkspaceStopping = false;
   let remoteWorkspaceShutdown: (() => Promise<void>) | undefined;
   const managementApiDeps: ManagementApiDeps = {
@@ -656,8 +656,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   };
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
-    unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
-      ?? registerCodexQuotaAutoRefreshWorker)(config);
+    unregisterCodexSweepWorkers = registerCodexSweepWorkers(config, deps);
     // External `ocx config set` / direct config.json edits run in other
     // processes; poll the file so Logs/Usage display prices follow them live.
     // Started inside the guarded startup transaction so the catch below can
@@ -737,7 +736,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort,
       maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
   } catch (error) {
-    unregisterQuotaAutoRefresh?.();
+    unregisterCodexSweepWorkers?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
@@ -779,7 +778,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
             try {
               userCostOverlayReconciler?.stop();
             } finally {
-              unregisterQuotaAutoRefresh?.();
+              unregisterCodexSweepWorkers?.();
             }
           },
         ],

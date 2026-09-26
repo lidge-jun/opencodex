@@ -15,7 +15,7 @@ import {
 const USAGE = `Usage:
   ocx system [status] [--json]
   ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>]
-      [--desktop-authless <on|off>] [--client-compaction <on|off>] [--json]
+      [--desktop-authless <on|off>] [--desktop-authless-auto <on|off>] [--client-compaction <on|off>] [--json]
   ocx system startup <health|install-service|install-shim> [--json]
   ocx system diagnostics [--json]
   ocx system sync [--json]
@@ -60,9 +60,11 @@ function desktopSwitchInertReason(reason: unknown): string {
 
 function settingsUpdateLines(
   result: unknown,
-  changed: { desktopAuthless: boolean; clientCompaction: boolean },
+  changed: { desktopAuthless: boolean; desktopAuthlessAuto: boolean; clientCompaction: boolean },
 ): string[] {
-  if (!changed.desktopAuthless && !changed.clientCompaction) return ["System settings updated."];
+  if (!changed.desktopAuthless && !changed.desktopAuthlessAuto && !changed.clientCompaction) {
+    return ["System settings updated."];
+  }
   const switches = recordValue(recordValue(result)?.codexDesktopSwitches);
   if (!switches) return ["System settings updated."];
 
@@ -98,6 +100,12 @@ function settingsUpdateLines(
   if (changed.clientCompaction && !appendSwitch("codexClientCompaction", "Codex client compaction")) {
     return ["System settings updated."];
   }
+  if (changed.desktopAuthlessAuto) {
+    // No effective-state report exists for the auto switch (it only arms the quota worker),
+    // so the stored value is stated on its own rather than through the switch reporter.
+    const stored = recordValue(result)?.codexDesktopAuthlessAuto;
+    lines.push(`Codex desktop authless auto: stored ${stored === true ? "on" : "off"}.`);
+  }
 
   const apply = recordValue(switches.apply);
   const authSource = recordValue(switches.authSource);
@@ -127,10 +135,11 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const autoStart = takeBooleanOption(args, "--auto-start");
   const streamMode = takeOption(args, "--stream-mode");
   const desktopAuthless = takeBooleanOption(args, "--desktop-authless");
+  const desktopAuthlessAuto = takeBooleanOption(args, "--desktop-authless-auto");
   const clientCompaction = takeBooleanOption(args, "--client-compaction");
   rejectArgs(args, USAGE);
   if (autoStart === undefined && streamMode === undefined
-    && desktopAuthless === undefined && clientCompaction === undefined) {
+    && desktopAuthless === undefined && desktopAuthlessAuto === undefined && clientCompaction === undefined) {
     const result = await runtimeRequest("/api/settings", {}, deps);
     printData(result, wantsJson, summaryLines(result));
     return;
@@ -139,11 +148,13 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     ...(autoStart !== undefined ? { codexAutoStart: autoStart } : {}),
     ...(streamMode !== undefined ? { streamMode } : {}),
     ...(desktopAuthless !== undefined ? { codexDesktopAuthless: desktopAuthless } : {}),
+    ...(desktopAuthlessAuto !== undefined ? { codexDesktopAuthlessAuto: desktopAuthlessAuto } : {}),
     ...(clientCompaction !== undefined ? { codexClientCompaction: clientCompaction } : {}),
   };
   const result = await runtimeRequest("/api/settings", { method: "PUT", body: JSON.stringify(body) }, deps);
   printData(result, wantsJson, settingsUpdateLines(result, {
     desktopAuthless: desktopAuthless !== undefined,
+    desktopAuthlessAuto: desktopAuthlessAuto !== undefined,
     clientCompaction: clientCompaction !== undefined,
   }));
 }

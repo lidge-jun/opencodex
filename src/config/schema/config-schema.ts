@@ -220,6 +220,7 @@ export const configSchema = z.object({
   ).optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
+  codexDesktopAuthlessAuto: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   // Presentation-only label for the injected provider. A malformed value degrades to undefined
   // and the default label is emitted, rather than failing the parse or writing a config Codex

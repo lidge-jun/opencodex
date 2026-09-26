@@ -1057,7 +1057,7 @@ describe("activation window stays synchronous", () => {
    * function is the hole this list exists to keep visible.
    */
   const UNRESOLVED_CALLEES: Record<string, string> = {
-    unregisterQuotaAutoRefresh: "let-binding holding the return of registerCodexQuotaAutoRefreshWorker, optional-called on the bind-failure path. There is no `function unregisterQuotaAutoRefresh` to inspect; following the assignment would be depth 2.",
+    unregisterCodexSweepWorkers: "let-binding holding the combined cleanup of registerCodexSweepWorkers (quota-window activation plus desktop-authless failover), optional-called on the bind-failure path. There is no `function unregisterCodexSweepWorkers` to inspect; following the assignment would be depth 2.",
   };
 
 
