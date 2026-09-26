@@ -27,6 +27,7 @@ function bcp47(locale: Locale): string {
     case "ja": return "ja-JP";
     case "tr": return "tr-TR";
     case "vi": return "vi-VN";
+    case "pt-BR": return "pt-BR";
     default: {
       const _exhaustive: never = locale;
       return _exhaustive;
