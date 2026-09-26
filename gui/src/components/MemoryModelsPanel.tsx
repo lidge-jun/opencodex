@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT, type TKey } from "../i18n/shared";
-import { IconAlert } from "../icons";
-import { Select, Tooltip } from "../ui";
+import { IconAlert, IconInfo, IconX } from "../icons";
+import { Select } from "../ui";
 import { createBoundedFetch } from "../bounded-fetch";
-import { requireJson, type ModelInfo } from "../pages/dashboard-shared";
+import { requireJson, useModalDialog, type ModelInfo } from "../pages/dashboard-shared";
 import { formatNamespacedModelId } from "../provider-icons";
 
 type Phase = "extract" | "consolidation";
@@ -41,6 +41,7 @@ export default function MemoryModelsPanel(props: { apiBase: string; models: Mode
 function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: ModelInfo[] }) {
   const t = useT();
   const [saved, setSaved] = useState<Settings | undefined>(undefined);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [extractModel, setExtractModel] = useState("");
   const [extractEffort, setExtractEffort] = useState("");
   const [consolidationModel, setConsolidationModel] = useState("");
@@ -50,6 +51,8 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
   const [feedback, setFeedback] = useState<"saved" | "failed" | null>(null);
   const active = useRef(false);
   const pending = useRef<ReturnType<typeof createBoundedFetch> | null>(null);
+  const infoTriggerRef = useRef<HTMLButtonElement>(null);
+  const infoDialogRef = useModalDialog(infoOpen, infoTriggerRef);
 
   const accept = useCallback((value: Settings) => {
     setSaved(value);
@@ -163,11 +166,19 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
     <section className="panel" aria-labelledby="memory-models-title" aria-busy={busy || (saved === undefined && !loadError)}>
       <div className="font-semibold" id="memory-models-title">
         {t("memoryModels.title")}{" "}
-        <span className="memory-models-info">
-          <Tooltip content={info} side="top" maxWidth={360}>
-            <span className="memory-models-info-glyph" aria-label={t("memoryModels.infoLabel")} role="img">ⓘ</span>
-          </Tooltip>
-        </span>
+        <button
+          ref={infoTriggerRef}
+          type="button"
+          className="btn btn-ghost btn-sm"
+          style={{ width: 22, height: 22, minWidth: 22, padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
+          onClick={() => setInfoOpen(open => !open)}
+          aria-label={t("memoryModels.infoLabel")}
+          aria-expanded={infoOpen}
+          aria-haspopup="dialog"
+          aria-controls="memory-models-help-dialog"
+        >
+          <IconInfo width={13} height={13} aria-hidden="true" />
+        </button>
       </div>
       <div className="muted setting-hint">{t("memoryModels.description")}</div>
       {row("extract", extractModel, extractEffort, setExtractModel, setExtractEffort)}
@@ -184,6 +195,28 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
       {loadError && <div className="notice notice-err" role="alert" style={{ marginTop: 12, marginBottom: 0 }}>{t("memoryModels.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
       {feedback === "failed" && <div className="notice notice-err" role="alert" style={{ marginTop: 12, marginBottom: 0 }}>{t("memoryModels.saveFailed")}</div>}
       {feedback === "saved" && <div className="muted setting-hint" role="status">{t("memoryModels.saved")}</div>}
+      <dialog
+        ref={infoDialogRef}
+        id="memory-models-help-dialog"
+        className="modal-overlay"
+        style={{ display: infoOpen ? "flex" : "none", border: "none", margin: 0, maxWidth: "none", maxHeight: "none", width: "100%", height: "100%" }}
+        aria-labelledby="memory-models-help-title"
+        onCancel={event => { event.preventDefault(); setInfoOpen(false); }}
+      >
+        <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={() => setInfoOpen(false)} />
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-head">
+            <h3 id="memory-models-help-title">{t("memoryModels.title")}</h3>
+            <button type="button" className="btn btn-ghost btn-icon" onClick={() => setInfoOpen(false)} aria-label={t("common.close")}><IconX /></button>
+          </div>
+          <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
+            {info}
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-primary" onClick={() => setInfoOpen(false)}>{t("common.ok")}</button>
+          </div>
+        </div>
+      </dialog>
     </section>
   );
 }
