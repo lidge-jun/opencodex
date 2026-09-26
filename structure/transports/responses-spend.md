@@ -12,10 +12,12 @@ budget before it knows whether a rotation is even possible, because the reservat
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
 
 Generic OAuth snapshots the eligible roster at request ingress before dispatch. Its rotation ceiling
-is `max(3, eligibleCount - 1)`; live selection still removes accounts in cooldown, so the snapshot
+is `max(3, min(eligibleCount, 6) - 1)`; live selection still removes accounts in cooldown, so the snapshot
 sets the number of possible moves without making a cooled account selectable. Only the ingress-owned
 default execution budget expands when at least two accounts are eligible: its base and total ceilings
-cover up to `TRANSIENT_RETRY_MAX_ATTEMPTS` sends per eligible account (currently three). A single
+cover up to `TRANSIENT_RETRY_MAX_ATTEMPTS` sends per eligible account (currently three), for at most
+`GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST` (six) accounts, so the default ingress ceiling is 18 sends
+whatever the roster size. A single
 eligible account keeps the existing base ceiling of three and total ceiling of four. Explicit caller
 ceilings and combo-derived scopes keep their existing limits.
 

@@ -868,12 +868,13 @@ recorded for it.
 Before dispatch, generic OAuth snapshots the eligible roster. On a 429 the failed account is cooled
 using `Retry-After` when present (capped at 15 minutes) or a default backoff, and the request is
 replayed on the next account selected from the live roster. The stable rotation ceiling is
-`max(3, eligibleCount - 1)` per request; live selection still filters cooldowns, and an account
+`max(3, min(eligibleCount, 6) - 1)` per request; live selection still filters cooldowns, and an account
 flagged for reauthentication is never selected. Cooldowns are process-local, so a restart forgets
 them.
 
 When at least two accounts are eligible, the ingress-owned default send allowance covers up to three
-sends per eligible account. A single eligible account keeps the existing base allowance of three and
+sends per eligible account, counting at most six accounts, so one request
+makes no more than 18 sends however many accounts are enrolled. A single eligible account keeps the existing base allowance of three and
 total allowance of four. Explicit caller ceilings and combo scopes keep their existing limits.
 
 Rotation carries the alternate account's **full** credential snapshot, not just its bearer, so a

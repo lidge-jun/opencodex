@@ -203,6 +203,35 @@ describe("Google Antigravity OAuth 429 retry and multi-account budget (#5880)", 
     }
   });
 
+  test("a roster larger than the per-request account cap funds only the cap", async () => {
+    // Eight enrolled accounts must not turn one request into 24 sends: the default ingress
+    // ceiling is GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST (6) accounts x 3 transient sends.
+    const accounts = await seedAntigravityAccounts(8);
+    const cfg = antigravityConfig();
+    saveConfig(cfg);
+
+    const observedSends: Array<{ auth: string; project: string }> = [];
+    installAntigravityFetchMock(({ auth, project }) => {
+      observedSends.push({ auth, project });
+      return new Response(JSON.stringify(transient429ErrorBody()), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const res = await handleResponses(
+      createResponsesRequest(),
+      cfg,
+      { model: "gemini-3.8-flash", provider: "google-antigravity" },
+    );
+
+    expect(res.status).toBe(429);
+    expect(observedSends).toHaveLength(18);
+    const usedAuth = new Set(observedSends.map(send => send.auth));
+    expect(usedAuth.size).toBe(6);
+    for (const account of accounts.slice(6)) expect(usedAuth.has(account.auth)).toBe(false);
+  });
+
   test.each([2, 3])("single account succeeds attempt %i on transient 429", async successAttempt => {
     const accounts = await seedAntigravityAccounts(1);
     const cfg = antigravityConfig();

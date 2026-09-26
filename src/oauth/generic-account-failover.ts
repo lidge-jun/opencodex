@@ -40,6 +40,14 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 /** Cap same-request rotations so a short Retry-After cannot spin. Mirrors the Anthropic bound. */
 export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 3;
 
+/**
+ * Most accounts one request may fund and rotate through, whatever the roster size. Each funded
+ * account gets the normal transient ladder, so this fixes the default ingress ceiling at
+ * 6 × TRANSIENT_RETRY_MAX_ATTEMPTS physical sends: enrolling more accounts cannot turn one request
+ * into a pool-wide 429 storm.
+ */
+export const GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST = 6;
+
 const DEFAULT_COOLDOWN_MS = 60_000;
 
 /**

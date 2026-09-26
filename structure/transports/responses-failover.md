@@ -495,7 +495,7 @@ check confirms from the live roster that at least two accounts exist and an alte
 cooled. That check applies no cooldown and advances no rotation.
 
 Generic OAuth snapshots its eligible roster before dispatch. Its request rotation ceiling is
-`max(3, eligibleCount - 1)`; the live picker still filters cooldowns, so the snapshot supplies the
+`max(3, min(eligibleCount, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) - 1)` (the cap is six); the live picker still filters cooldowns, so the snapshot supplies the
 stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
 physical target, rather than a diagnostic key, and a real send is charged once even when recovery
 rebuilds the request.

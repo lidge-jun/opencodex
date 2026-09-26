@@ -28,6 +28,7 @@ import {
   UnsupportedOAuthProviderError,
 } from "../../oauth";
 import {
+  GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
@@ -727,12 +728,14 @@ export async function prepareResponsesTransport(
 
   // Freeze the request ceiling before any 429 writes cooldowns. Selection still reads
   // live eligibility on every hop; cooled accounts cannot shorten this request's allowance.
+  // The snapshot is clamped: a larger roster must not raise one request's hops or sends.
   const genericRosterSize = genericFailoverAccountId ? new Set([
     genericFailoverAccountId,
     ...eligibleFailoverAccounts(route.providerName, Date.now(), classifyModelFamilyForQuota(route.providerName, route.modelId)),
   ]).size : 0;
-  const genericFailoverLimit = Math.max(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST, genericRosterSize - 1);
-  if (genericFailoverAccountId) expandInferenceOAuthSendBudget(options.sendBudget, genericRosterSize);
+  const fundedAccounts = Math.min(genericRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
+  const genericFailoverLimit = Math.max(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
+  if (genericFailoverAccountId) expandInferenceOAuthSendBudget(options.sendBudget, fundedAccounts);
 
   return {
     genericFailoverLimit,
