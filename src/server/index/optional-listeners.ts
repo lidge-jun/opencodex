@@ -6,6 +6,7 @@ import {
 } from "./claude-intercept-lifecycle";
 import {
   createLinkListenerLifecycle,
+  linkListenerOwnsTarget,
   linkRouteAllowed,
   type LinkListenerDeps,
   type LinkListenerLifecycle,
@@ -82,7 +83,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       activeConfig = ctx.config;
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize });
       unregisterSupervisorAdmission ??= linkListener.onAuthenticatedCatalog(apiKeyId => supervisor.notifyAuthenticatedRequest?.(apiKeyId));
-      supervisor.start();
+      if (linkListenerOwnsTarget(linkListener.status())) {
+        supervisor.start();
+      }
       supervisorStop = () => supervisor.stop();
       claudeIntercept.start({
         config: ctx.config,

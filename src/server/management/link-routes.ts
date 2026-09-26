@@ -362,6 +362,7 @@ async function issue(ctx: ManagementContext): Promise<Response> {
       failureCode = "listener_unavailable";
       throw new Error("link listener unavailable");
     }
+    await state.supervisor.ensureStarted();
     const boundStore = readStoreFor(ctx);
     if (!port(boundStore.listenerPort)) throw new Error("link listener did not bind");
     return Response.json({ linkId: id, apiKeyId: issued.id, key: issued.key, listenerPort: boundStore.listenerPort });
