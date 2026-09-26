@@ -102,3 +102,13 @@ candidate evidence.
   `QuotaSummaryChips`, root and GUI `tsc` plus GUI lint exit 0, pushed as `90a556debf`. Merge
   after its exact-head PR CI passes and a kimi review finds no blocker; the candidate then moves to
   the new `dev` tip with a new lane=all run.
+
+- #5875 exact-head PR CI at `90a556debf`: every check pass (skips by path); kimi review RELEASE-OK (defaults-only
+  shadow-intercept users gain `gpt-6-luna`; a hand-written `sourceModels` list replaces defaults — release note).
+  Merged as `dac1d25f48`. Run `36209738124` on `03aa39340b` was cancelled as superseded after `windows 7/9`
+  failed five `cli-connect-readiness` cases on a 15 s spawnSync kill (`status: null`, cold-spawn warmup 17 s),
+  the stall signature; that shard passed on `08fd8a6284`. The new candidate run is its one retry.
+
+## Final candidate
+
+`CAND=dac1d25f48fad18420aa856631ff9ee9c1775b0f`, lane=all run `36210914271`.
