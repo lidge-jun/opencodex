@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { getDefaultConfig } from "../../src/config";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
+import { runWithCompactionRecovery } from "../../src/server/responses/compaction-recovery";
 import { decodeCompactionSummary } from "../../src/responses/compaction";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -14,7 +15,7 @@ const originalFetch = globalThis.fetch;
 const sourceError: AdapterEvent = { type: "error", status: 400, code: "invalid_argument", message: "Source rejected compact fixture" };
 let sourceEvents: AdapterEvent[];
 let fallbackEvents: AdapterEvent[];
-let calls: Array<{ model: string; parsed: OcxParsedRequest }>;
+let calls: Array<{ model: string; parsed: OcxParsedRequest; headers: Headers }>;
 let releaseSpend: (() => void) | undefined;
 let restoreFactory: (() => void) | undefined;
 let restoreChatFactory: (() => void) | undefined;
@@ -45,7 +46,10 @@ function body(stream = false, compact = true): Record<string, unknown> {
 
 function request(payload = body(), path = "responses", signal?: AbortSignal): Request {
   return new Request(`http://localhost/v1/${path}`, {
-    method: "POST", headers: { "content-type": "application/json", session_id: "recovery-fixture" },
+    method: "POST", headers: {
+      "content-type": "application/json", session_id: "recovery-fixture",
+      authorization: "Bearer inbound-fixture", "chatgpt-account-id": "inbound-account-fixture",
+    },
     body: JSON.stringify(payload), signal,
   });
 }
@@ -73,7 +77,7 @@ beforeEach(() => {
         return;
       }
       incoming.onPhysicalSend?.({ ordinal: 1 });
-      calls.push({ model: parsed.modelId, parsed: structuredClone(parsed) });
+      calls.push({ model: parsed.modelId, parsed: structuredClone(parsed), headers: new Headers(incoming.headers) });
       const isSource = context.providerId === "source";
       for (const event of isSource ? sourceEvents : fallbackEvents) emit(event);
       if (isSource) abortOnSource?.abort();
@@ -124,6 +128,8 @@ describe("routed compaction emergency integration", () => {
     expect(summary).toContain("ALPHA-729");
     expect(summary).toContain("Latest goal: finish the report");
     expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+    expect(calls[1]!.headers.has("authorization")).toBe(false);
+    expect(calls[1]!.headers.has("chatgpt-account-id")).toBe(false);
     expect(calls[1]!.parsed.options.maxOutputTokens).toBe(512);
     expect(calls[1]!.parsed.context.tools).toBeUndefined();
     expect(completed).toEqual(["source/swe-2"]);
@@ -142,6 +148,24 @@ describe("routed compaction emergency integration", () => {
     expect(output).not.toContain("Retained original user messages");
     expect(output.split("ALPHA-729").length - 1).toBe(1);
     expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+  });
+
+  test("the actual fallback Request strips inbound auth and account headers", async () => {
+    const original = request();
+    let fallbackHeaders: Headers | undefined;
+    const response = await runWithCompactionRecovery(
+      original, settings(), { model: "", provider: "" },
+      { translatorBudget: createTranslatorBudget(), sendBudget: createRequestExecutionBudget() },
+      async (sent, config, log, options) => {
+        if (sent !== original) fallbackHeaders = new Headers(sent.headers);
+        return handleResponses(sent, config, log, { ...options, compactionRecoveryAttempted: true });
+      },
+    );
+    expect((await response.json()).status).toBe("completed");
+    expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+    expect(fallbackHeaders).toBeDefined();
+    expect(fallbackHeaders!.has("authorization")).toBe(false);
+    expect(fallbackHeaders!.has("chatgpt-account-id")).toBe(false);
   });
 
   test("a failed fallback returns and logs the original failure", async () => {
