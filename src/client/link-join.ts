@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
-import { findAvailablePort } from "../server/ports";
-import { isLinkPort } from "../link/ports";
+import { isPortAvailable } from "../server/ports";
+import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../link/ports";
 import { buildExecArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../link/ssh-argv";
 import { sshFailureHint, sshRunnerErrorHint, type SshRunner, type SshRunResult } from "../link/ssh-runner";
 import { connectClient, type ClientConnectDeps } from "./connect";
@@ -24,6 +24,7 @@ const JOIN_TUNNEL_READY_TIMEOUT_MS = 15_000;
 const JOIN_TUNNEL_POLL_MS = 100;
 const JOIN_REVOKE_TIMEOUT_MS = 30_000;
 const JOIN_CONFIRM_TTL_MS = 5 * 60_000;
+const JOIN_PORT_ATTEMPTS = 32;
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
 const DATA_KEY = /^ocx_data_[0-9a-f]{40}$/;
@@ -118,6 +119,24 @@ function parseIssuedLink(stdout: string): IssuedLink | null {
     key: parsed.key,
     listenerPort: parsed.listenerPort,
   };
+}
+
+/**
+ * A free loopback port in the join range (`JOIN_TUNNEL_PORT_MIN`-`JOIN_TUNNEL_PORT_MAX`), tried at
+ * random so a fixed-port service on this computer is not hit every time.
+ */
+export async function chooseJoinTunnelPort(deps: {
+  isAvailable?: (port: number) => Promise<boolean>;
+  random?: () => number;
+} = {}): Promise<number> {
+  const isAvailable = deps.isAvailable ?? (port => isPortAvailable(port, "127.0.0.1"));
+  const random = deps.random ?? Math.random;
+  const span = JOIN_TUNNEL_PORT_MAX - JOIN_TUNNEL_PORT_MIN + 1;
+  for (let attempt = 0; attempt < JOIN_PORT_ATTEMPTS; attempt += 1) {
+    const port = JOIN_TUNNEL_PORT_MIN + Math.min(span - 1, Math.floor(random() * span));
+    if (await isAvailable(port)) return port;
+  }
+  throw new Error("no free port in the join tunnel range");
 }
 
 function localAlias(deps: ClientLinkJoinDeps): string {
@@ -242,7 +261,7 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   await compensateStaleSidecar(deps);
   let tunnelPort: number;
   try {
-    tunnelPort = await (deps.choosePort ?? (() => findAvailablePort(0, "127.0.0.1")))();
+    tunnelPort = await (deps.choosePort ?? (() => chooseJoinTunnelPort()))();
     if (!isLinkPort(tunnelPort)) throw new Error("invalid link port");
   } catch (error) {
     void error;

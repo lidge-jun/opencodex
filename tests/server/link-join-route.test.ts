@@ -1,5 +1,6 @@
 import { describe, expect, test, spyOn } from "bun:test";
-import { ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { chooseJoinTunnelPort, ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../../src/link/ports";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { SshRunner } from "../../src/link/ssh-runner";
@@ -286,6 +287,35 @@ describe("client initiated link join", () => {
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
     expect(revokeCalls(calls)).toHaveLength(1);
     expect(cleared).toBe(true);
+  });
+
+  test("picks the join tunnel port from 20000-29999, outside the OS ephemeral ranges", async () => {
+    const calls: string[][] = [];
+    let sidecarPort = 0;
+    await joinHome(joinDeps({
+      runner: runnerFor(calls),
+      choosePort: undefined,
+      writeState: state => { sidecarPort = state.tunnelPort; },
+      spawnTunnel: () => tunnelFor([]),
+      fetchImpl: async () => new Response(null, { status: 200 }),
+      connect: (async () => {}) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => {},
+    }), { alias: "home" });
+    const issue = calls.find(isWrappedIssue)?.at(-1) ?? "";
+    const port = Number(/'--tunnel-port' '(\d+)'/.exec(issue)?.[1]);
+    expect(port).toBe(sidecarPort);
+    expect(port).toBeGreaterThanOrEqual(JOIN_TUNNEL_PORT_MIN);
+    expect(port).toBeLessThanOrEqual(JOIN_TUNNEL_PORT_MAX);
+    expect(isLinkPort(port)).toBe(true);
+
+    const tried: number[] = [];
+    const picked = await chooseJoinTunnelPort({
+      isAvailable: async candidate => { tried.push(candidate); return tried.length === 3; },
+      random: () => 0.999_999_9,
+    });
+    expect(picked).toBe(JOIN_TUNNEL_PORT_MAX);
+    expect(tried).toHaveLength(3);
+    await expect(chooseJoinTunnelPort({ isAvailable: async () => false })).rejects.toThrow("join tunnel range");
   });
 
   test("rolls back on readiness timeout and admission rejection", async () => {
