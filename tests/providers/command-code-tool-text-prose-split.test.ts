@@ -84,39 +84,37 @@ function twoToolFilter() {
   ])) };
 }
 
-describe("Command Code markup echoed after prose in one text block", () => {
+describe("Command Code markup after prose in one text block", () => {
   const PROSE = "Running it now.\n";
   const proseMarkup = PROSE + MARKUP;
 
-  test("drops the markup and keeps the prose when the native call carries the same input", async () => {
+  test("preserves the markup when the native call carries the same input", async () => {
     const events = await adapterEvents([
       { type: "tool-input-start", id: "call_c1", toolName: "exec" },
       ...textBlock(proseMarkup),
       { type: "tool-call", toolCallId: "call_c1", toolName: "exec", input: JS, dynamic: true, invalid: true },
       { type: "finish", rawFinishReason: "tool_calls" },
     ]);
-    expect(texts(events)).toBe(PROSE);
+    expect(texts(events)).toBe(proseMarkup);
     expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
     expect(done(events)?.stopReason).toBe("tool_calls");
   });
 
-  test("restores the trailing markup as a call on a clean finish", async () => {
-    const events = await adapterEvents([...textBlock(proseMarkup), { type: "finish", rawFinishReason: "stop" }]);
-    expect(texts(events)).toBe(PROSE);
-    const [call] = calls(events);
-    expect(call).toMatchObject({ name: "exec", args: JSON.stringify({ input: JS }) });
-    expect(call!.id).toMatch(/^call_ocx_[0-9a-f]{32}$/);
-    expect(done(events)?.stopReason).toBe("tool_calls");
+  test("preserves a quoted trailing envelope on a clean finish", async () => {
+    const quoted = "Do not execute; this is only an example: > " + MARKUP;
+    const events = await adapterEvents([...textBlock(quoted), { type: "finish", rawFinishReason: "stop" }]);
+    expect(texts(events)).toBe(quoted);
+    expect(calls(events)).toEqual([]);
+    expect(done(events)?.stopReason).toBe("stop");
   });
 
-  test("holds a marker that opens a fresh block after streamed prose", () => {
+  test("streams a marker that follows already streamed prose", () => {
     const { budget, filter } = execFilter();
     expect(filter.textDelta("t", "Running it now.")).toEqual([{ type: "text_delta", text: "Running it now." }]);
-    // The streamed block used to pass the marker straight through instead of holding it.
-    expect(filter.textDelta("t", MARKUP)).toEqual([]);
+    expect(filter.textDelta("t", MARKUP)).toEqual([{ type: "text_delta", text: MARKUP }]);
     const finished = filter.finish();
-    expect(finished.salvaged).toBe(true);
-    expect(finished.events.map(event => event.type)).toEqual(["tool_call_start", "tool_call_delta", "tool_call_end"]);
+    expect(finished.salvaged).toBe(false);
+    expect(finished.events).toEqual([]);
     expect(texts(finished.events)).toBe("");
     expect(budget.snapshot().currentBytes).toBe(0);
   });

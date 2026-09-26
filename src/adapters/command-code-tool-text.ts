@@ -22,9 +22,9 @@ import { validatesRestoredValue } from "./command-code-restored-schema";
  * A text block that opens with `<tool_call>` is therefore held instead of streamed. It is dropped
  * when a native call proves it is a duplicate, or restored on an eligible clean MiMo finish when
  * it names a declared tool with arguments that fit its schema. Other markup is released unchanged.
- * MiMo can also append the markup after ordinary prose inside one text block; the stream filter
- * splits such a delta at the marker and holds the markup part the same way (#5698; a marker split
- * across deltas after prose is still released as text).
+ * MiMo can also append the markup after ordinary prose inside one text block; once prose has
+ * started, later markers stay presentation text rather than opening a held call, so a quoted
+ * example can never reach the wire as an executable tool call.
  * A malformed envelope that still opens and closes around a declared function name, but that the
  * strict parser rejects, is dropped instead of released when the native call for that same function
  * arrives, and on the clean-finish path, so the echo never reaches the client.
@@ -341,44 +341,10 @@ export class CommandCodeToolTextFilter {
       block = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
       this.blocks.set(key, block);
     }
-    // MiMo can append tool-call markup after ordinary prose inside one text block. The probe below
-    // only recognizes a block that opens with the marker, so a marker arriving after prose would
-    // reach the client (captured 2026-09-23 from xiaomi/mimo-v2.6-pro: prose, then
-    // "<tool_call><function=exec>..." echoed by the gateway as one text delta). Split the delta at
-    // the marker: prose keeps its queued or streamed path, the markup starts a fresh probe block
-    // and follows the normal hold-and-restore route. A probing block that has consumed nothing but
-    // whitespace keeps its probe instead, because that probe already holds the marker.
-    if (block.state !== "held") {
-      const markerIndex = text.indexOf(TOOL_CALL_MARKER);
-      const whitespaceLead = markerIndex > 0 && block.state === "probing" && block.probe === ""
-        && text.slice(0, markerIndex).trim() === "";
-      // markerIndex === 0 on a probing block is the ordinary hold path; on any other state the
-      // block is ordinary text and the marker must still start a fresh probe block.
-      if (!whitespaceLead && (markerIndex > 0 || (markerIndex === 0 && block.state !== "probing"))) {
-        const prose = markerIndex > 0 ? text.slice(0, markerIndex) : "";
-        const marked = markerIndex > 0 ? text.slice(markerIndex) : text;
-        let proseEvents: AdapterEvent[] = [];
-        if (prose) {
-          if (block.state === "streaming" && this.head === this.pending.length) {
-            proseEvents = [{ type: "text_delta", text: prose }];
-          } else {
-            if (block.state === "dropped" || block.state === "streaming") {
-              block = { id: key, markupParts: [], probe: "", bytes: 0, state: "queued", ended: false, interrupted: true, candidates: new Set() };
-              this.blocks.set(key, block);
-            }
-            proseEvents = this.queueProseDelta(block, prose);
-            this.probeBlockText(block, prose);
-          }
-        }
-        if (block.state === "queued") block.state = "streaming";
-        this.activeProbes.delete(key);
-        const probeBlock: TextBlock = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
-        this.blocks.set(key, probeBlock);
-        return [...boundaryEvents, ...proseEvents, ...this.textDelta(id, marked)];
-      }
-      if (markerIndex === -1 && block.state === "streaming" && this.head === this.pending.length) {
-        return [...boundaryEvents, { type: "text_delta", text }];
-      }
+    // Only a bare text block can be protocol markup. Once prose has started, preserve every later
+    // marker as presentation text rather than turning a quoted example into an executable call.
+    if (block.state === "streaming" && this.head === this.pending.length) {
+      return [...boundaryEvents, { type: "text_delta", text }];
     }
     // Once a duplicate is dropped, later text is a new chunk at its own wire position.
     if (block.state === "dropped" || block.state === "streaming") {
@@ -591,24 +557,6 @@ export class CommandCodeToolTextFilter {
         break;
       }
     }
-  }
-
-  /** Route ordinary prose through the queued wire path (shared by the mid-stream marker split). */
-  private queueProseDelta(block: TextBlock, prose: string): AdapterEvent[] {
-    const preceding = this.makeRoom(encoder.encode(prose).byteLength);
-    this.retain(block, prose);
-    const bytes = encoder.encode(prose).byteLength;
-    const tail = this.pending.at(-1);
-    if (tail?.kind === "chunk" && tail.block === block && this.head < this.pending.length) {
-      tail.parts.push(prose);
-      tail.bytes += bytes;
-      this.queueOperations++;
-    } else {
-      this.pending.push({ kind: "chunk", block, parts: [prose], bytes });
-      this.queueOperations++;
-    }
-    this.queuedBytes += bytes;
-    return preceding;
   }
 
   private drop(block: TextBlock): void {
