@@ -336,8 +336,9 @@ export async function relayLinkDataRequest(
   let holdUntil: number | undefined;
   const holdForTunnel = async (gate: LinkTunnelGate): Promise<boolean> => {
     const clockNow = deps.now ?? Date.now;
-    holdUntil ??= clockNow() + (positive(deps.holdMs) ?? LINK_RELAY_HOLD_MS);
-    const remaining = holdUntil - clockNow();
+    const now = clockNow();
+    holdUntil ??= now + (positive(deps.holdMs) ?? LINK_RELAY_HOLD_MS);
+    const remaining = holdUntil - now;
     return remaining > 0 && await gate.waitForConnected(remaining, relayAbort.signal);
   };
   const tunnelUnavailable = async (): Promise<Response> => {

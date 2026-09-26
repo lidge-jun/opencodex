@@ -500,10 +500,12 @@ describe("client link relay while the tunnel reconnects", () => {
   test("holds a request while the tunnel reconnects and forwards it once when it connects", async () => {
     const gate = manualGate();
     const sent: string[] = [];
+    let clock = 0;
     const pending = relayLinkDataRequest(relayRequest({
       method: "POST", headers: { "Content-Type": "application/json" }, body: '{"input":"held"}',
     }), target, {
       tunnel: gate.tunnel,
+      now: () => clock++,
       fetchImpl: (async (_input, init) => {
         sent.push(await new Response(init!.body).text());
         return Response.json({ ok: true });
@@ -512,6 +514,7 @@ describe("client link relay while the tunnel reconnects", () => {
     await Bun.sleep(5);
     expect(sent).toEqual([]);
     expect(gate.waits).toEqual([LINK_RELAY_HOLD_MS]);
+    expect(clock).toBe(1);
     gate.release(true);
     const response = await pending;
     expect(response.status).toBe(200);
