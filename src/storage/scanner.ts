@@ -137,6 +137,23 @@ function createFsLimit(max: number): FsLimit {
   };
 }
 
+/** Entries started together at one directory level of an async scan. */
+const SCAN_BATCH_SIZE = 256;
+
+/**
+ * Map `items` through `fn` a batch at a time, keeping input order. A directory with tens of
+ * thousands of entries then has at most one batch of pending tasks at its level, instead of
+ * one promise per entry queued behind the fs limiter.
+ */
+async function mapInBatches<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += SCAN_BATCH_SIZE) {
+    const batch = await Promise.all(items.slice(start, start + SCAN_BATCH_SIZE).map(fn));
+    for (const result of batch) results.push(result);
+  }
+  return results;
+}
+
 /**
  * Async twin of {@link walkFiles}: same skip rules, and entries come back in readdir
  * order so the report (including `largest` tie order) matches the synchronous scan.
@@ -148,7 +165,7 @@ async function walkFilesAsync(dir: string, relPrefix: string, limit: FsLimit): P
   } catch {
     return [];
   }
-  const parts = await Promise.all(entries.map(async (entry): Promise<FileEntry[]> => {
+  const parts = await mapInBatches(entries, async (entry): Promise<FileEntry[]> => {
     const full = join(dir, entry.name);
     const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
     try {
@@ -161,7 +178,7 @@ async function walkFilesAsync(dir: string, relPrefix: string, limit: FsLimit): P
       /* entry vanished mid-scan — diagnostics tolerate racy trees */
     }
     return [];
-  }));
+  });
   return parts.flat();
 }
 
@@ -331,15 +348,15 @@ export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()
     rootNames = rootReadFailure(error);
   }
 
-  const roots = await Promise.all(rootNames.map(async name => {
+  const roots = await mapInBatches(rootNames, async name => {
     const full = join(codexHome, name);
     try {
       return { name, full, stat: await limit(() => statAsync(full)) };
     } catch {
       return null;
     }
-  }));
-  const walks = roots.map(async root => {
+  });
+  const walks = await mapInBatches(roots, async root => {
     if (!root) return;
     if (root.stat.isDirectory()) {
       // Quarantine trash (Phase 2) must not inflate "other" or totals.
@@ -355,7 +372,7 @@ export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()
   });
   // Appended in root order so bucket contents match the synchronous scan. One entry at a
   // time: spreading a large bucket into push() can exceed the engine's argument limit.
-  for (const walk of await Promise.all(walks)) {
+  for (const walk of walks) {
     if (!walk) continue;
     const bucket = files[walk.key];
     for (const entry of walk.entries) bucket.push(entry);
