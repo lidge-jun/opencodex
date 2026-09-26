@@ -164,8 +164,8 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
 
   return (
     <section className="panel" aria-labelledby="memory-models-title" aria-busy={busy || (saved === undefined && !loadError)}>
-      <div className="font-semibold" id="memory-models-title">
-        {t("memoryModels.title")}{" "}
+      <div className="font-semibold" id="memory-models-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {t("memoryModels.title")}
         <button
           ref={infoTriggerRef}
           type="button"
