@@ -4,8 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleResponses } from "../../src/server/responses";
 import { handleContextHistory } from "../../src/server/context-history";
-import { tryAdmitTurn } from "../../src/server/lifecycle";
+import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import { requestPolicyView, resolveApiAuth, type DataPlaneAdmission } from "../../src/server/auth-cors";
+import { saveConfig } from "../../src/config";
+import { linkStorePath } from "../../src/link/paths";
+import { readLinkStore, writeLinkStore } from "../../src/link/store";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
@@ -23,6 +26,7 @@ const destination = "https://chatgpt.com/backend-api/codex";
 const originalFetch = globalThis.fetch;
 let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
+let previousAdminToken: string | undefined;
 let home = "";
 let sent: Array<{ url: string; headers: Headers }> = [];
 let failFirstAccount: string | undefined;
@@ -75,6 +79,7 @@ function setContextFeature(enabled: boolean): void {
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME; previousCodexHome = process.env.CODEX_HOME;
+  previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   home = mkdtempSync(join(tmpdir(), "ocx-context-owner-"));
   process.env.OPENCODEX_HOME = home; process.env.CODEX_HOME = home;
   // Direct handler dispatches need the writer lease that startServer normally holds.
@@ -110,6 +115,8 @@ afterEach(() => {
   removeTreeWithRetry(home);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousCodexHome;
+  if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+  else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
 });
 
 test("successful explicit account A owns context while active B remains selected", async () => {
@@ -228,4 +235,70 @@ test("post-body admission revalidation consults the live link policy, not the re
     expect(admitted.status).toBe(200);
   }
   expect(sent.filter(row => row.url.includes("/alpha/"))).toHaveLength(1);
+});
+
+test("a real link listener refuses a revoked key after reading a delayed context body", async () => {
+  const linkId = "linked-listener-key";
+  const linkKey = "link-listener-revoke";
+  const sessionId = "root-delayed-listener";
+  const cfg = config();
+  cfg.runtimeRole = "hub";
+  cfg.apiKeys = [{ id: linkId, name: linkId, key: linkKey, createdAt: "2026-09-26T00:00:00.000Z" }];
+  const admissionRequest = new Request("http://opencodex-link.invalid/v1/responses", {
+    headers: { "x-opencodex-api-key": linkKey },
+  });
+  const entryPolicy = requestPolicyView(cfg, "opencodex-link.invalid", { allowedKeyIds: new Set([linkId]) });
+  const admission = resolveApiAuth(admissionRequest, entryPolicy);
+  expect(admission).not.toBeNull();
+  expect((await model(cfg, sessionId, "side/gpt-5.5", requestHeaders(sessionId), admission!)).status).toBe(200);
+  const upstreamBefore = sent.length;
+
+  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "test-listener-admin-token";
+  saveConfig(cfg);
+  writeLinkStore(linkStorePath(), {
+    version: 1, listenerPort: null,
+    links: [{ id: "lnk_0123456789abcdef", alias: "delayed-test", direction: "client-initiated",
+      hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: linkId,
+      createdAt: "2026-09-26T00:00:00.000Z" }],
+  });
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  const { startServer } = await import("../../src/server");
+  const server = startServer(0);
+  let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  try {
+    const port = readLinkStore(linkStorePath()).listenerPort;
+    expect(port).not.toBeNull();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+        controller.enqueue(new TextEncoder().encode('{"context":'));
+      },
+    });
+    const pending = originalFetch(`http://127.0.0.1:${port}/v1/alpha/notes/v2/read_file`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": linkKey,
+        authorization: "Bearer caller-native-token", "chatgpt-account-id": "caller-account" },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const waitUntil = Date.now() + 5_000;
+    while (getActiveTurnCount() === 0 && Date.now() < waitUntil) await Bun.sleep(5);
+    expect(getActiveTurnCount()).toBe(1);
+
+    const revoked = await originalFetch(new URL("/api/keys", server.url), {
+      method: "DELETE",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": "test-listener-admin-token" },
+      body: JSON.stringify({ id: linkId }),
+    });
+    expect(revoked.status).toBe(200);
+    bodyController!.enqueue(new TextEncoder().encode(`{"session_id":"${sessionId}"}}`));
+    bodyController!.close();
+    bodyController = undefined;
+    expect((await pending).status).toBe(401);
+    expect(sent).toHaveLength(upstreamBefore);
+  } finally {
+    try { bodyController?.close(); } catch { /* already closed after an early response */ }
+    await server.stop(true);
+  }
 });
