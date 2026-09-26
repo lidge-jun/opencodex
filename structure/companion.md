@@ -4,6 +4,8 @@ The dashboard preview, web tray, native macOS panel and WidgetKit snapshot consu
 companion settings. The runtime owns ledger aggregation; clients own presentation and display
 filters. Companion preferences do not implicitly change general Usage API requests.
 
+In the dashboard, `#usage` shows the usage report and `#usage/companion` shows only the Menu bar & widget settings panel. The companion view loads provider names from the report when available, or from `/api/config` when the report is empty or unavailable.
+
 ## Timeline query and response
 
 `src/companion/settings.ts` and `src/usage/timeline.ts` share model-id validation: a nonblank

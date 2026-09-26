@@ -34,6 +34,14 @@ test("Usage renders every section in one scrollable column with a sticky strip",
   expect(css).toContain("position: sticky");
 });
 
+test("Usage report section strip excludes companion settings", async () => {
+  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const workspace = page.slice(page.indexOf("function UsageWorkspaceBody"), page.indexOf("const usageMemoryCache"));
+  expect(workspace).not.toContain('id: "companion"');
+  expect(page).toContain('id="usage-panel-companion"');
+  expect(page).toContain('<UsageCompanionView apiBase={apiBase} providers={data?.providers ?? []} />');
+});
+
 test("the usage models table scrolls sideways with model and provider pinned", async () => {
   const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles-usage-workspace.css", import.meta.url)).text();

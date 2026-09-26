@@ -173,7 +173,7 @@ export default function UsageCompanionPanel({
   onSettingsLoaded,
 }: {
   apiBase: string;
-  providers: CompanionProvider[];
+  providers: readonly CompanionProvider[];
   onSettingsLoaded?: (metric: CompanionSettings["menuBarMetric"]) => void;
 }) {
   const { t, locale } = useI18n();
