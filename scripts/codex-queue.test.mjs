@@ -192,6 +192,16 @@ for (const shell of shells) {
       assert.ok(!result.output.includes(f.exe)); assert.ok(!result.output.includes(f.store));
       assert.deepEqual(records(f), []);
     });
+    if (!ps) {
+      it('returns promptly when queue help exits immediately', () => {
+        const f = fixture();
+        const started = performance.now();
+        const result = run(f, { thread: threadA, dryRun: true });
+        assert.equal(result.status, 0, result.output);
+        const elapsedMs = performance.now() - started;
+        assert.ok(elapsedMs < 5_000, `immediate queue help took ${elapsedMs.toFixed(0)}ms`);
+      });
+    }
     it('does not disclose discovered targets or message bodies during a dry run', () => {
       const f = fixture(); rollout(f.store, threadA, 100);
       const result = run(f, { latest: true, dryRun: true, message: 'private fixture prompt' });

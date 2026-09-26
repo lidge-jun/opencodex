@@ -100,9 +100,19 @@ supports_queue() {
   local help pid watcher rc
   [ -f "$1" ] && [ -x "$1" ] || return 1
   help=$( { "$1" queue --help 2>/dev/null & pid=$!
-    { sleep 10; kill -KILL "$pid" 2>/dev/null; } & watcher=$!
-    wait "$pid"; rc=$?
-    kill "$watcher" 2>/dev/null
+    # Detach timer descriptors from the help capture and reap it on cancellation.
+    (
+      timer=""
+      trap 'if [ -n "$timer" ]; then kill "$timer" 2>/dev/null || :; wait "$timer" 2>/dev/null || :; fi' EXIT
+      trap 'exit 0' TERM INT
+      sleep 10 >/dev/null 2>&1 & timer=$!
+      wait "$timer" || exit 0
+      kill -KILL "$pid" 2>/dev/null || :
+    ) >/dev/null 2>&1 & watcher=$!
+    rc=0
+    wait "$pid" || rc=$?
+    kill "$watcher" 2>/dev/null || :
+    wait "$watcher" 2>/dev/null || :
     exit "$rc"; } ) || return 1
   [[ "$help" == *--thread* && "$help" == *--message* ]]
 }
