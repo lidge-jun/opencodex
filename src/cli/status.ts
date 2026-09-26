@@ -29,6 +29,8 @@ import { tokenCollidesWithAdmin } from "../lib/admin-secrets";
 export { proxyHealthFailureReason, isConnectionRefused, isUncleanExitEvidence, probeUncleanExitState } from "./status-probes";
 export type { ListenTarget } from "./status-probes";
 import { checkProxyHealth, probeUncleanExitState, type ListenTarget } from "./status-probes";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -231,6 +233,84 @@ function statusDashboardUrl(config: StatusListenConfig, hostname: string | undef
     ? "localhost"
     : reachableHostname;
   return `http://${dashboardHostname}:${port}/`;
+}
+
+const STARTUP_HEALTH_BOOLEAN_FIELDS = [
+  "routingInjected", "localRoutingDependency", "autostartEnabled", "rebootSafe",
+  "serviceInstalled", "serviceViable", "serviceEnabled", "serviceRunning",
+  "serviceStale", "serviceConflict", "shimInstalled", "shimHealthy",
+  "serviceSupported", "diagnosticStale",
+] as const;
+
+export async function fetchLiveStartupHealth(
+  live: NonNullable<Awaited<ReturnType<typeof findLiveProxy>>>,
+  deps: Parameters<typeof fetchBoundLocalManagementRead>[2] = {},
+): Promise<StartupHealth | null> {
+  const result = await fetchBoundLocalManagementRead(
+    live, LOCAL_MANAGEMENT_READ_PATHS.startupHealth, { timeoutMs: 1_500, ...deps },
+  );
+  if (result.kind !== "response" || !result.response.ok) return null;
+  let payload: unknown;
+  try { payload = await result.response.json(); } catch { return null; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const row = payload as Record<string, unknown>;
+  if (row.status !== "native" && row.status !== "protected" && row.status !== "at-risk") return null;
+  if (row.protection !== "service" && row.protection !== "shim" && row.protection !== "none") return null;
+  if (row.routingKind !== "native" && row.routingKind !== "opencodex-local"
+    && row.routingKind !== "custom-local" && row.routingKind !== "custom-remote" && row.routingKind !== "unknown") return null;
+  if (row.shimCoverage !== "full" && row.shimCoverage !== "cli-only" && row.shimCoverage !== "none") return null;
+  if (typeof row.platform !== "string") return null;
+  if (row.recommendedCommand !== null && typeof row.recommendedCommand !== "string") return null;
+  if (!row.commands || typeof row.commands !== "object" || Array.isArray(row.commands)) return null;
+  for (const key of ["installService", "repairService", "installShim", "restoreNative"] as const) {
+    if (typeof (row.commands as Record<string, unknown>)[key] !== "string") return null;
+  }
+  if (row.routingAdoption !== undefined) {
+    if (!row.routingAdoption || typeof row.routingAdoption !== "object" || Array.isArray(row.routingAdoption)) return null;
+    const adoption = row.routingAdoption as Record<string, unknown>;
+    if (adoption.adoption !== "not-applicable" && adoption.adoption !== "adopted"
+      && adoption.adoption !== "pending-client-restart" && adoption.adoption !== "unknown") return null;
+    if (adoption.injectedAtMs !== null && typeof adoption.injectedAtMs !== "number") return null;
+    if (typeof adoption.observedClients !== "number" || !Array.isArray(adoption.staleClients)) return null;
+    for (const client of adoption.staleClients) {
+      if (!client || typeof client !== "object" || Array.isArray(client)) return null;
+      const row = client as Record<string, unknown>;
+      if (typeof row.pid !== "number" || typeof row.startedAtMs !== "number") return null;
+    }
+  }
+  for (const key of STARTUP_HEALTH_BOOLEAN_FIELDS) if (typeof row[key] !== "boolean") return null;
+  return payload as StartupHealth;
+}
+
+/** Prefer an attested live verdict and evaluate the local fallback only when live state is absent. */
+export function selectStatusStartupHealth(
+  liveStartup: StartupHealth | null,
+  fallback: () => StartupHealth,
+): StartupHealth {
+  return liveStartup ?? fallback();
+}
+
+/** Build the service summary from the same startup source that `ocx status` selected. */
+export function statusServiceSummary(
+  liveStartup: StartupHealth | null,
+  service: Pick<ReturnType<typeof diagnoseService>, "installed" | "summary">,
+  live: boolean,
+): string {
+  if (liveStartup) {
+    if (liveStartup.protection === "service" && liveStartup.serviceViable) {
+      return `running under the live managed service (logs: ${serviceLogPath()})`;
+    }
+    const state = [
+      liveStartup.serviceInstalled ? "installed" : "absent",
+      liveStartup.serviceRunning ? "running" : "not running",
+      liveStartup.serviceViable ? "viable" : "not viable",
+    ].join(", ");
+    const action = liveStartup.recommendedCommand ? `; run '${liveStartup.recommendedCommand}'` : "";
+    return `live startup reports service ${state}${action} (logs: ${serviceLogPath()})`;
+  }
+  return service.installed && !live
+    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
+    : service.summary;
 }
 
 /**
@@ -634,20 +714,19 @@ export async function collectStatus(): Promise<CliStatusView> {
     hostname: config.hostname,
   });
   const bunRuntime = durableBunRuntime();
+  const liveStartup = live ? await fetchLiveStartupHealth(live) : null;
   const service = diagnoseService();
   // A service can be registered and still not serve: the manager reports the job
-  // either way. `live` was already identity-probed a few lines above, so cross-check
-  // rather than print registration as if it were service.
-  const serviceSummary = service.installed && !live
-    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
-    : service.summary;
+  // either way. When the identity-probed live proxy provides an attested startup verdict,
+  // prefer it over a shell-local service-manager probe that lacks the service environment.
+  const serviceSummary = statusServiceSummary(liveStartup, service, Boolean(live));
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;
-  const startup = collectStartupHealth(config, {
+  const startup = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(config, {
     service,
     shim: codexShim,
     routingKind: getCodexRoutingKind(),
-  });
+  }));
   const codexPlugins = diagnoseCodexBundledPlugins();
   const lastClamp = loadLastEffortClamp();
   const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);

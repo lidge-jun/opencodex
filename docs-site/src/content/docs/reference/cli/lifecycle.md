@@ -164,6 +164,15 @@ default provider, Codex autostart setting, service state, shim state, and the re
 home. Only the explicit, high-confidence Windows Orca runtime-home signature adds an actionable App-home
 mismatch warning; it never changes `CODEX_HOME` automatically.
 
+When a live proxy has already passed the identity/liveness check, `ocx status` prefers that process's
+attested startup-health report for restart safety and service viability. This avoids false negatives
+from a shell-local service-manager probe that lacks the running service's manager environment. The
+live report is schema-validated; if it is unavailable or malformed, status falls back to the local
+service and shim diagnostics. `ocx doctor` uses the same live-first rule for its **Codex restart safety**
+section, so the two commands should agree on restart protection. If you are diagnosing a discrepancy,
+compare the reported live startup verdict with the local service details rather than treating the shell
+probe as more authoritative.
+
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
 non-healthy account (provider, masked account id, status such as reauthentication required, rate or
