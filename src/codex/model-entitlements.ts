@@ -648,9 +648,12 @@ function parseAccountModels(text: string): { models: ReadonlySet<string>; access
       if (typeof row.slug !== "string" || row.supported_in_api !== true || row.visibility === "hide") return [];
       const programs = row.available_access_programs;
       if (programs === null) accessProgramsByModel.set(row.slug, null);
-      else if (programs && typeof programs === "object" && !Array.isArray(programs)
-        && Object.values(programs).every(value => Array.isArray(value) && value.every(item => typeof item === "string"))) {
-        accessProgramsByModel.set(row.slug, programs as Record<string, string[]>);
+      else if (programs && typeof programs === "object" && !Array.isArray(programs)) {
+        const record = programs as Record<string, unknown>;
+        if (Array.isArray(record.cyber) && record.cyber.every(item => typeof item === "string")
+          && Object.values(record).every(value => Array.isArray(value) && value.every(item => typeof item === "string"))) {
+          accessProgramsByModel.set(row.slug, record as Record<string, string[]>);
+        }
       }
       return [row.slug];
     });

@@ -121,6 +121,7 @@ describe("Codex account model entitlements", () => {
       { slug: `secondary/${SOL}`, opencodex_catalog_kind: "account-selector-v1", available_access_programs: null },
       { slug: `other/${SOL}`, opencodex_catalog_kind: "account-selector-v1", available_access_programs: { cyber: ["daybreak_blue"] } },
       { slug: `other/${SOL}`, opencodex_catalog_kind: "routed-provider", available_access_programs: { cyber: ["daybreak_blue"] } },
+      { slug: SOL, owned_by: "combo", available_access_programs: { cyber: ["daybreak_blue"] } },
     ];
     applyNativeAccessPrograms(rows, snapshot, new Map([
       ["main", MAIN_CODEX_ACCOUNT_ID], ["secondary", "secondary"], ["other", "missing"],
@@ -130,6 +131,7 @@ describe("Codex account model entitlements", () => {
     expect(rows[2]?.available_access_programs).toEqual({ cyber: ["standard"] });
     expect(rows[3]).not.toHaveProperty("available_access_programs");
     expect(rows[4]?.available_access_programs).toEqual({ cyber: ["daybreak_blue"] });
+    expect(rows[5]).not.toHaveProperty("available_access_programs");
   });
 
   test("preserves explicit null and removes stale metadata when a roster omits the field", async () => {

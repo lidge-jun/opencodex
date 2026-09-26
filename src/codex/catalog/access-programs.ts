@@ -1,4 +1,5 @@
 import { isMainCodexAccountTarget } from "../account-namespaces";
+import { COMBO_NAMESPACE } from "../../combos";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import type { CodexModelEntitlementSnapshot } from "../model-entitlements";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
@@ -12,7 +13,13 @@ export function applyNativeAccessPrograms(
   accountTargets: ReadonlyMap<string, string>,
 ): void {
   for (const entry of entries) {
+    // A combo may deliberately claim a bare native slug. It is still a routed combo row,
+    // so the matching native Codex roster must not project its access programs onto it.
     if (isNativeAliasCatalogEntry(entry)) continue;
+    if (entry.owned_by === COMBO_NAMESPACE) {
+      delete entry.available_access_programs;
+      continue;
+    }
     const accountBoundSlug = trustedAccountBoundNativeCatalogSlug(entry);
     const bareSlug = typeof entry.slug === "string" && !entry.slug.includes("/")
       && SUPPORTED_NATIVE_OPENAI_SLUGS.has(entry.slug) ? entry.slug : undefined;
