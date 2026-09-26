@@ -93,11 +93,17 @@ resolve_latest_thread() (
 
 # Probe help only: an older CLI can print top-level help with exit 0, so require
 # both queue-specific flags. This does not prove the running daemon is compatible.
+# Bound the probe like the PowerShell helper's ten-second cap: a hung candidate
+# must not stall discovery. No coreutils timeout dependency.
 # Return failure for missing executables or failed probes.
 supports_queue() {
-  local help
+  local help pid watcher rc
   [ -f "$1" ] && [ -x "$1" ] || return 1
-  help=$("$1" queue --help 2>/dev/null) || return 1
+  help=$( { "$1" queue --help 2>/dev/null & pid=$!
+    { sleep 10; kill -KILL "$pid" 2>/dev/null; } & watcher=$!
+    wait "$pid"; rc=$?
+    kill "$watcher" 2>/dev/null
+    exit "$rc"; } ) || return 1
   [[ "$help" == *--thread* && "$help" == *--message* ]]
 }
 

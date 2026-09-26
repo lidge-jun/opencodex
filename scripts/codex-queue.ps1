@@ -181,8 +181,10 @@ function Resolve-LatestThread([string]$CodexHomeDir) {
   }
   $uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
   $pattern = '^rollout-.+-(' + $uuid + ')(_' + $uuid + ')?\.jsonl$'
+  # Reparse points are excluded: a linked rollout must not select a thread or
+  # path outside the effective session store.
   $latestFile = Get-ChildItem -LiteralPath $sessions -Recurse -File -Filter 'rollout-*.jsonl' |
-    Where-Object { $_.Name -match $pattern } |
+    Where-Object { $_.Name -match $pattern -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
     Sort-Object LastWriteTimeUtc, FullName -Descending |
     Select-Object -First 1
   if ($null -eq $latestFile -or $latestFile.Name -notmatch $pattern) {
