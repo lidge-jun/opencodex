@@ -7,6 +7,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { identifyRoutedModel } from "../identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "../tool-catalog-nudge";
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
+import type { ClaudeThinkingProjection } from "../../lib/claude-request-projection";
 import { inlineDocumentDataUrl } from "../../responses/inline-document";
 import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
 import { modelInList, namespacedToolName } from "../../types";
@@ -61,10 +62,36 @@ export function toolResultImageChatParts(content: string | OcxContentPart[]): un
   return parts;
 }
 
+/**
+ * Whether this wire serializes a replayed thinking block for the given model.
+ *
+ * The single source of truth for that question on the Chat wire: the assistant branch below uses
+ * it to decide `reasoning_content`, and the Messages ingress uses it to decide how much of a
+ * prompt is worth counting. Two copies of this rule would drift, and the count would then
+ * describe a body this adapter does not send.
+ */
+export function openAIChatSerializesThinking(
+  provider: OcxProviderConfig,
+  modelId: string,
+): ClaudeThinkingProjection {
+  return {
+    text: modelInList(provider.preserveReasoningContentModels, modelId),
+    // The wire has no `signature` field — base64 replay tokens are Anthropic-wire-only.
+    signature: false,
+    // A `redacted_thinking` block is opaque provider data with no Chat representation: the
+    // assistant branch below reads only `type: "thinking"` parts, so the encrypted form is
+    // dropped whatever the preserve list says.
+    redacted: false,
+  };
+}
+
 export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] {
   const out: unknown[] = [];
   const { context, options } = parsed;
   const replayCacheScope = parsed._reasoningReplayScope;
+  // One question, one answer for the whole conversion: does this wire carry replayed thinking
+  // back for this model? Asked once so a long history cannot pay for it per message.
+  const wireSerializesThinking = openAIChatSerializesThinking(provider, parsed.modelId).text;
 
   interface PendingToolCall { id: string; name: string }
   let pendingToolCalls: PendingToolCall[] = [];
@@ -225,7 +252,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         if (
           reasoningContent.length === 0
           && (toolCalls.length > 0 || thinkingParts.length > 0)
-          && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
+          && wireSerializesThinking
         ) {
           const cached = toolCalls
             .map(tc => (tc.id ? peekReasoningForCall(tc.id, replayCacheScope) : undefined))
@@ -248,7 +275,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             reasoningContent = " ";
           }
         }
-        if (reasoningContent.length > 0 && modelInList(provider.preserveReasoningContentModels, parsed.modelId)) {
+        if (reasoningContent.length > 0 && wireSerializesThinking) {
           // MiniMax's interleaved-thinking contract requires the structured
           // reasoning_details array back on the next turn; a reasoning_content
           // string is the native-format pass-back the docs mark unsupported.
@@ -302,7 +329,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           flushPendingToolCalls();
           const name = safeToolName(msg.toolName);
           const cachedReasoning =
-            toolCallId && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
+            toolCallId && wireSerializesThinking
               ? peekReasoningForCall(toolCallId, replayCacheScope)
               : undefined;
           // Same fallback as the main-assistant path: never emit a bare orphan
@@ -316,7 +343,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           // falsy hit as a miss so the placeholder still fires.
           const orphanReasoning =
             cachedReasoning
-            || (modelInList(provider.preserveReasoningContentModels, parsed.modelId)
+            || (wireSerializesThinking
               && modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)
               ? " "
               : undefined);
