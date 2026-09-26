@@ -46,6 +46,7 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-dispatch.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "advisor-slot.ts",
   "policy-refusal.ts",
 ] as const;
 
