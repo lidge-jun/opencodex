@@ -130,7 +130,7 @@ describe("combo-workspace-data", () => {
     });
   });
 
-  test("parse, edit and PUT round-trip a target-specific JEV profile", () => {
+  test("parse, edit and PUT round-trip a target-specific model note", () => {
     const parsed = parseComboList({ combos: [{
       id: "jev-auto", strategy: "jev",
       targets: [{ provider: "a", model: "m1", modelProfile: "Low marginal subscription cost; 1M context." }],
@@ -140,6 +140,16 @@ describe("combo-workspace-data", () => {
     expect(toPutBody(parsed).combo.targets[0]).toEqual({
       provider: "a", model: "m1", modelProfile: "Low marginal subscription cost; 1M context.",
     });
+    const switched = { ...parsed, strategy: "failover" as const };
+    expect(toPutBody(switched).combo.strategy).toBe("failover");
+    expect(toPutBody(switched).combo.targets[0]).toEqual({
+      provider: "a", model: "m1", modelProfile: "Low marginal subscription cost; 1M context.",
+    });
+    const blankNote = {
+      ...switched,
+      targets: [{ ...switched.targets[0]!, modelProfile: " \t " }],
+    };
+    expect(toPutBody(blankNote).combo.targets[0]).toEqual({ provider: "a", model: "m1" });
     expect(validate({ ...parsed, targets: [{ ...parsed.targets[0]!, modelProfile: "x".repeat(513) }] }))
       .toBe("invalidModelProfile");
   });
