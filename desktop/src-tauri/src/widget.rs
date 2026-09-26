@@ -162,7 +162,10 @@ mod macos {
                 // JSON null (or any non-number) is an absent window, not a row of dashes: a
                 // weekly-only plan reports `fiveHourPercent: null` and must show weekly only.
                 let percent = number(percent).filter(|value| value.is_finite() && *value >= 0.0);
-                let reset = reset_at(reset).filter(|value| *value > 0.0);
+                // Same bounds as the native panel's `reset`: after the millisecond conversion,
+                // a time past year 9999 is not a reset the widget can show.
+                let reset =
+                    reset_at(reset).filter(|value| *value > 0.0 && *value < 253_402_300_800.0);
                 if percent.is_some() || reset.is_some() {
                     rows.push(Quota {
                         provider_label: provider_label.clone(),
@@ -251,9 +254,14 @@ mod macos {
     fn without_generated_at(snapshot: &Snapshot) -> Snapshot {
         let mut snapshot = snapshot.clone();
         snapshot.generated_at = 0.0;
-        // `last_updated` moves on every successful poll. Counting it as a change would rewrite
-        // the file, and ask WidgetKit for a reload, every five minutes even when nothing the
-        // widget shows has changed; the widget renders that age as a self-updating relative date.
+        snapshot
+    }
+
+    /// What the widget displays apart from its age caption. `last_updated` moves on every
+    /// successful poll; reloading for it alone would spend WidgetKit's budget every five minutes
+    /// while the widget already renders that age as a self-updating relative date.
+    fn displayed(snapshot: &Snapshot) -> Snapshot {
+        let mut snapshot = without_generated_at(snapshot);
         snapshot.last_updated = None;
         snapshot
     }
@@ -265,6 +273,7 @@ mod macos {
 
     /// Whether `snapshot` should replace `previous` on disk. The heartbeat is measured from the
     /// file's own `generated_at`, so a restarted app decides the same way as a running one.
+    /// Writing spends no WidgetKit budget, so the file always carries the latest poll time.
     fn should_write(previous: Option<&Snapshot>, snapshot: &Snapshot) -> bool {
         let Some(previous) = previous else {
             return true;
@@ -272,6 +281,26 @@ mod macos {
         without_generated_at(previous) != without_generated_at(snapshot)
             || snapshot.generated_at - previous.generated_at >= HEARTBEAT_SECONDS
     }
+
+    /// Minimum spacing between reload requests: at most 72 a day, inside the 40-70 Apple quotes
+    /// as a typical budget once the widget's own 30-minute fallback timeline is counted separately.
+    /// A change that lands inside the window is already on disk, and that fallback rereads it.
+    const RELOAD_INTERVAL_SECONDS: f64 = 20.0 * 60.0;
+
+    /// Whether a snapshot that was just written should ask WidgetKit for a reload: only when what
+    /// the widget displays changed, and not sooner than `RELOAD_INTERVAL_SECONDS` after the last
+    /// request. Timestamp-only writes and heartbeats never reload.
+    fn should_reload(
+        previous: Option<&Snapshot>,
+        snapshot: &Snapshot,
+        last_reload: Option<f64>,
+        now: f64,
+    ) -> bool {
+        previous.map_or(true, |previous| displayed(previous) != displayed(snapshot))
+            && last_reload.map_or(true, |last| now - last >= RELOAD_INTERVAL_SECONDS)
+    }
+
+    static LAST_RELOAD: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
 
     fn write_if_changed(
         path: &std::path::Path,
@@ -311,8 +340,17 @@ mod macos {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
         match write_if_changed(&path, previous.as_ref(), snapshot) {
-            // SAFETY: a no-argument Swift export that only enqueues work on the main queue.
-            Ok(true) => unsafe { ocx_widget_reload_timelines() },
+            Ok(true) => {
+                let now = now_seconds();
+                let mut last = LAST_RELOAD
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if should_reload(previous.as_ref(), snapshot, *last, now) {
+                    *last = Some(now);
+                    // SAFETY: a no-argument Swift export that only enqueues work on the main queue.
+                    unsafe { ocx_widget_reload_timelines() };
+                }
+            }
             Ok(false) => {}
             Err(error) => {
                 crate::logging::log_once("widget snapshot write failed", &error.to_string())
@@ -513,7 +551,7 @@ mod macos {
         }
 
         #[test]
-        fn only_visible_changes_or_the_heartbeat_rewrite_the_snapshot() {
+        fn polls_are_written_but_only_visible_changes_reload_and_not_too_often() {
             let previous = Snapshot {
                 schema_version: 1,
                 state: "running".into(),
@@ -528,21 +566,43 @@ mod macos {
                 generated_at: 1_000.0,
             };
             assert!(should_write(None, &previous), "first write");
-            // A later poll that only refreshed the timestamps is not a change.
+            assert!(
+                should_reload(None, &previous, None, 1_000.0),
+                "first write reloads"
+            );
+            // Same content and poll time: nothing to write before the heartbeat.
+            let mut idle = previous.clone();
+            idle.generated_at = 1_300.0;
+            assert!(!should_write(Some(&previous), &idle));
+            idle.generated_at = previous.generated_at + HEARTBEAT_SECONDS;
+            assert!(should_write(Some(&previous), &idle), "heartbeat rewrites");
+            assert!(
+                !should_reload(Some(&previous), &idle, None, idle.generated_at),
+                "heartbeat never reloads"
+            );
+            // A new poll time is written so the file's "Updated" is current, but costs no reload.
             let mut polled = previous.clone();
             polled.generated_at = 1_300.0;
             polled.last_updated = Some(1_300.0);
-            assert!(!should_write(Some(&previous), &polled));
-            // Anything the widget displays is.
+            assert!(should_write(Some(&previous), &polled));
+            assert!(!should_reload(Some(&previous), &polled, None, 1_300.0));
+            // A visible change reloads, but not within the interval of the previous request.
             let mut counted = polled.clone();
             counted.menu_title = Some("13".into());
             assert!(should_write(Some(&previous), &counted));
-            // An unchanged snapshot is rewritten once the heartbeat elapses, and not before.
-            let mut late = polled.clone();
-            late.generated_at = previous.generated_at + HEARTBEAT_SECONDS - 1.0;
-            assert!(!should_write(Some(&previous), &late));
-            late.generated_at = previous.generated_at + HEARTBEAT_SECONDS;
-            assert!(should_write(Some(&previous), &late));
+            assert!(should_reload(Some(&previous), &counted, None, 1_300.0));
+            assert!(!should_reload(
+                Some(&previous),
+                &counted,
+                Some(1_300.0 - 60.0),
+                1_300.0
+            ));
+            assert!(should_reload(
+                Some(&previous),
+                &counted,
+                Some(1_300.0 - RELOAD_INTERVAL_SECONDS),
+                1_300.0
+            ));
         }
 
         #[test]
@@ -576,7 +636,9 @@ mod macos {
                     "fiveHourPercent": null, "fiveHourResetAt": null,
                     "weeklyPercent": 49.0, "weeklyResetAt": 1_900_000_000 } },
                 { "provider": "kimi", "label": "Kimi", "quota": {
-                    "fiveHourPercent": 0, "weeklyPercent": 35 } }
+                    "fiveHourPercent": 0, "weeklyPercent": 35 } },
+                // A reset-only window whose time is out of range is not a window either.
+                { "provider": "far", "label": "Far", "quota": { "weeklyResetAt": 1e20 } }
             ] });
             let rows = quotas(&reports, &json!({ "settings": {} }));
             let windows: Vec<_> = rows
