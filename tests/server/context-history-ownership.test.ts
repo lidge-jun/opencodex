@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { handleResponses } from "../../src/server/responses";
 import { handleContextHistory } from "../../src/server/context-history";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
-import type { DataPlaneAdmission } from "../../src/server/auth-cors";
+import { requestPolicyView, resolveApiAuth, type DataPlaneAdmission } from "../../src/server/auth-cors";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
@@ -175,4 +175,57 @@ test("Direct proxy-bearer model and notes use stored main without leaking the pr
   expect((await notes(cfg, "root-proxy", headers, admission)).status).toBe(200);
   expect(sent.map(row => row.headers.get("authorization"))).toEqual([`Bearer ${token}`, `Bearer ${token}`]);
   expect(sent.every(row => row.headers.get("chatgpt-account-id") === "physical-main")).toBe(true);
+});
+
+test("post-body admission revalidation consults the live link policy, not the request-entry snapshot", async () => {
+  // The hub-link listener resolves its policy at request entry and again inside the context
+  // relay's post-body revalidation. This drives that gate with the same requestPolicyView/
+  // resolveApiAuth pair the listener uses, so a key revoked mid-request must stop dispatch.
+  const LINK_KEY = "link-linked-revoke";
+  const LINK_ID = "linked-key";
+  const cfg = config();
+  cfg.apiKeys = [{ id: LINK_ID, name: LINK_ID, key: LINK_KEY, createdAt: "2026-09-26T00:00:00.000Z" }];
+  const linkIngress = { allowedKeyIds: new Set([LINK_ID]) };
+  const linkPolicy = () => requestPolicyView(cfg, "opencodex-link.invalid", linkIngress);
+
+  const linkRequest = (session: string) => new Request("http://opencodex-link.invalid/v1/alpha/notes/v2/read_file", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-opencodex-api-key": LINK_KEY,
+      authorization: "Bearer caller-native-token",
+      "chatgpt-account-id": "caller-account",
+    },
+    body: JSON.stringify({ context: { session_id: session } }),
+  });
+  const contextNotes = async (req: Request, admission: DataPlaneAdmission, revalidate: () => DataPlaneAdmission | null) => {
+    const lease = tryAdmitTurn(); expect(lease).not.toBeNull();
+    try {
+      return await handleContextHistory(req, cfg, { model: "context_history", provider: "" },
+        "alpha/notes/v2/read_file", lease!, admission, revalidate);
+    } finally { lease?.release(); }
+  };
+
+  const entryPolicy = linkPolicy();
+  const entryAdmission = resolveApiAuth(linkRequest("root-link"), entryPolicy);
+  expect(entryAdmission?.contextPrincipalId).toBeDefined();
+  // Record this principal's session owner the same way the ownership tests do: one model turn.
+  expect((await model(cfg, "root-link", "side/gpt-5.5", requestHeaders("root-link"), entryAdmission!)).status).toBe(200);
+
+  // Revoke the key mid-request: the next policy rebuild no longer resolves this credential.
+  cfg.apiKeys = cfg.apiKeys?.filter(k => k.id !== LINK_ID);
+
+  // Fixed wiring: the closure consults the live policy and the revoked key cannot dispatch.
+  {
+    const req = linkRequest("root-link");
+    const denied = await contextNotes(req, entryAdmission!, () => resolveApiAuth(req, linkPolicy()));
+    expect(denied.status).toBe(401);
+  }
+  // Pre-fix wiring kept the request-entry snapshot and still dispatched upstream.
+  {
+    const req = linkRequest("root-link");
+    const admitted = await contextNotes(req, entryAdmission!, () => resolveApiAuth(req, entryPolicy));
+    expect(admitted.status).toBe(200);
+  }
+  expect(sent.filter(row => row.url.includes("/alpha/"))).toHaveLength(1);
 });

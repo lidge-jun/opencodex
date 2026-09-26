@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import { linkStorePath } from "../../src/link/paths";
 import { emptyLinkStore, writeLinkStore } from "../../src/link/store";
+import { requestPolicyView, resolveApiAuth } from "../../src/server/auth-cors";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const ENV_KEY = "link-env-admission";
 const OTHER_KEY = "link-other-admission";
@@ -152,6 +154,19 @@ afterEach(async () => {
 });
 
 describe("hub-link admission", () => {
+  test("context revalidation refreshes the link policy after asynchronous request work", () => {
+    const source = readFileSync(repoPath("src/server/index/serve-options.ts"), "utf8");
+    expect(source).toContain('() => resolveApiAuth(req, ingress === "hub-link" ? linkPolicy() : policy)');
+
+    const liveConfig = config();
+    const req = new Request("http://opencodex-link.invalid/v1/alpha/notes/v2/read_file", { headers: headers(LINKED_KEY) });
+    const initialPolicy = requestPolicyView(liveConfig, "opencodex-link.invalid", { allowedKeyIds: new Set([LINKED_ID]) });
+    expect(resolveApiAuth(req, initialPolicy)?.kind).toBe("configured");
+    liveConfig.apiKeys = liveConfig.apiKeys?.filter(key => key.id !== LINKED_ID);
+    const refreshedPolicy = requestPolicyView(liveConfig, "opencodex-link.invalid", { allowedKeyIds: new Set([LINKED_ID]) });
+    expect(resolveApiAuth(req, refreshedPolicy)).toBeNull();
+  });
+
   test("applies the four-credential matrix on every allowlisted route", async () => {
     const linkPort = JSON.parse(await Bun.file(linkStorePath()).text()).listenerPort as number;
     const base = `http://127.0.0.1:${linkPort}`;
