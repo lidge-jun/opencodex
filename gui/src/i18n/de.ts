@@ -3491,4 +3491,7 @@ export const de: Record<TKey, string> = {
   "cws.plan.description": "Fragt den Proxy, wie jedes Ziel eine Anfrage mit allen Funktionen der Client-API übertragen würde und welche Funktionen alle Ziele erhalten. Es wird nichts an den Anbieter gesendet.",
   "cws.plan.run": "Pfade anzeigen",
   "cws.plan.savedOnly": "Zeigt die gespeicherte Kombination. Speichern Sie Ihre Änderungen, um sie in der Vorschau zu sehen.",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Verwaltet aktive OpenCodex-Modelle in der settings.json von Factory Droid. Synchronisieren ändert nur OpenCodex-Einträge; beim Deaktivieren werden sie entfernt, und mit „Rückgängig“ wird die vorherige Datei wiederhergestellt.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

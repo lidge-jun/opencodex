@@ -3514,4 +3514,7 @@ export const tr: Record<TKey, string> = {
   "cws.plan.description": "Proxy'ye her hedefin, istemci API'sinin ifade edebildiği tüm özellikleri içeren bir isteği nasıl taşıyacağını ve hangi özellikleri tüm hedeflerin koruduğunu sorar. Yukarı akışa hiçbir şey gönderilmez.",
   "cws.plan.run": "Yolları göster",
   "cws.plan.savedOnly": "Kaydedilmiş kombo gösteriliyor. Değişikliklerinizi önizlemek için kaydedin.",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Factory Droid settings.json dosyasındaki etkin OpenCodex modellerini yönetir. Eşitleme yalnızca OpenCodex girdilerini günceller, devre dışı bırakma bunları kaldırır ve geri alma önceki dosyayı geri yükler.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

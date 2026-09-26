@@ -19,9 +19,9 @@ import {
 
 const originalFetch = globalThis.fetch;
 
-test("all registered export clients include Cline in file integrations", () => {
+test("all registered export clients appear in file integrations", () => {
   expect(FILE_INTEGRATION_CLIENTS).toEqual([
-    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline",
+    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline", "droid",
   ]);
 });
 

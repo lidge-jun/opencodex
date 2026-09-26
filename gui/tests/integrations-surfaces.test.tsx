@@ -1428,7 +1428,7 @@ test("a loopback-only refusal is localized, not the server's English message", a
 });
 test("a populated overview journal collapses instead of flooding the page", async () => {
   /*
-   * The overview already carries a summary strip, a credential row and fifteen
+   * The overview already carries a summary strip, a credential row and sixteen
    * cards. It also rendered every row the journal returned — up to the route's
    * fifty — as individually bordered strips below them, which is what buried
    * the one control a user reaches for after a mistake.

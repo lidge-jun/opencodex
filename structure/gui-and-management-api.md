@@ -168,6 +168,11 @@ because they are a different plane. Upstream account response reads and OrcaRout
 The registered route set is larger than the areas described below; the code is the route SOT. What
 this document owns is which module holds which area and what invariant that area must not break.
 
+`GET /api/client-config` checks the export registry's `loopbackOnly` flag with
+`shouldInjectApiAuthHeader` before loading the model catalog. A destination requiring an admission
+header returns 400 with `reason: non_loopback` for these clients; loopback binds and enabled
+unauthenticated loopback listeners remain eligible.
+
 `GET /api/native-integrations` reads the Codex, Grok and Claude Desktop desired switch states from persisted configuration because those toggles write intent independently of the server's startup config snapshot; every other field still comes from that snapshot, and without a config file the snapshot's own intent stands. The dashboard can therefore refresh a switch immediately after a successful toggle while its routing badge remains based on observed routing. The Codex row reports the state its latest toggle in this process reported while the persisted intent still matches it, so a skipped or failed enable stays `absent` and an incomplete restore stays `unsafe` instead of being re-derived from intent alone.
 
 After `PUT /api/native-integrations/claude-desktop` persists its intent, and whenever the Desktop mode marker is
@@ -410,6 +415,7 @@ ownership, a GET HTTP failure stops polling without starting a second login POST
 
 Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed
 origins record no limiter state, and a valid grant redeems even from a throttled source.
+
 
 ## Durable provider PATCH
 

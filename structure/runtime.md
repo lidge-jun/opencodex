@@ -446,7 +446,7 @@ following a final symlink, so an exchange during a mutation cannot redirect the 
 `claudeCode.stabilizePromptCache` is a default-off operator setting for
 [translated instruction stabilization](data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
 Config JSON preserves the boolean; only literal true activates the role-changing transform. Claude skill-bundle marker parsing follows the [bounded inbound contract](data-planes/inbound-compat.md#claude-skill-marker-path-bound).
-The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
+The lightweight top-level CLI help counts Factory Droid among the sixteen registered export clients; registry parity remains covered by the client help and integration tests.
 
 Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination.
 

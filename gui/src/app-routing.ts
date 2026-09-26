@@ -109,6 +109,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/raycast",
   "integrations/omo",
   "integrations/cline",
+  "integrations/droid",
 ] as const;
 
 /**

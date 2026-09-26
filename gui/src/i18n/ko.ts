@@ -3513,4 +3513,7 @@ export const ko: Record<TKey, string> = {
   "cws.plan.description": "클라이언트 API가 표현할 수 있는 모든 기능을 담은 요청을 각 대상이 어떻게 전달하는지, 모든 대상이 유지하는 기능은 무엇인지 프록시에 묻습니다. 업스트림으로는 아무것도 보내지 않습니다.",
   "cws.plan.run": "경로 보기",
   "cws.plan.savedOnly": "저장된 콤보를 보여 줍니다. 변경 사항을 미리 보려면 먼저 저장하세요.",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Factory Droid settings.json에서 OpenCodex 활성 모델을 관리합니다. 동기화는 OpenCodex 항목만 갱신하고, 비활성화는 해당 항목을 제거하며, 되돌리기는 이전 파일을 복원합니다.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

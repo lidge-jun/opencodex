@@ -795,7 +795,7 @@ export default function IntegrationsOverview({
       <h3>{t("integrations.rollback.title")}</h3>
       {/*
         The newest operation stays visible and the rest collapse. This page
-        already carries a summary, an API row and fifteen cards, so fifty
+        already carries a summary, an API row and sixteen cards, so fifty
         bordered rows below them buried the one control a user wants after a
         mistake. The older rows are kept rather than dropped: this is the only
         place showing one chronology ACROSS clients, since each client tab reads

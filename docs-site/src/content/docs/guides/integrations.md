@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo and Cline CLI from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Fifteen clients work this way, each with a switch:
+file, and removes it again. Sixteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -23,10 +23,16 @@ file, and removes it again. Fifteen clients work this way, each with a switch:
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
+| Factory Droid | `~/.factory/settings.json` | JSON | new sessions and model picker refresh | none — loopback only |
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
 the full roster so you can enable additional models.
+
+Factory Droid receives one `customModels` row per active OpenCodex model through Factory's
+`generic-chat-completion-api` dialect. Exact stable-ID ownership preserves user models and every
+other setting. See [Factory Droid integrations](/guides/factory-droid/) for the managed outbound path and
+the separate inbound bridge design.
 
 `ocx uninstall` disables recorded integrations, including all owned Aside profiles, before deleting
 OpenCodex's recovery state. Unreadable ownership, missing profile registration or a conflicting edit
@@ -321,10 +327,10 @@ ocx mcode
 ```
 
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
-Raycast, and omo catalogs with the current model selection, context windows, and
+Raycast, omo, Cline, and Factory Droid catalogs with the current model selection, context windows, and
 reasoning-effort ladders. Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
-Raycast, and omo catalogs.
+Raycast, omo, and Factory Droid catalogs.
 Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
 you removed manually.
 An enabled Aside profile is an exception to the usual owned-only refresh: if its account

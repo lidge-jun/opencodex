@@ -205,7 +205,8 @@ it is promoted, so those files follow the promotion model rather than ordinary i
 
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
-alone with fresh process homes. Hosted batches assign shard membership by the per-file durations
+alone with fresh process homes. The history-lock suite runs alone so its child warm-up starts
+outside the long-lived isolate pool. Hosted batches assign shard membership by the per-file durations
 in `scripts/ci/test-durations.tsv` (sorted round-robin when nothing is recorded), run each shard's
 files in sorted order and split only process boundaries; every selected file still runs once.
 Ordinary macOS shards select 1/2 and 2/2 from the full file list; macOS control selects 1/1. Both
@@ -505,7 +506,7 @@ Codex pool settings and their consumers follow the [reset-first ordering contrac
 
 Hub/browser pairing instructions distinguish machine enrollment, session authentication, permission denial and network failure. The hosted dashboard preview is the render artifact used to review these states.
 The integrations guide documents Cline CLI as a two-file, loopback-only integration. Hosted CI validates its source-backed fixtures; the packaged dashboard exposes it through the existing client list.
-The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
+The lightweight top-level CLI help counts Factory Droid among the sixteen registered export clients; registry parity remains covered by the client help and integration tests.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 

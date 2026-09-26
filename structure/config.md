@@ -543,7 +543,7 @@ The Cline client keeps connection settings and models in a separate native file 
 [translated instruction stabilization](data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
 Config JSON preserves the boolean; only literal true activates the role-changing transform.
 
-The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
+The lightweight top-level CLI help counts Factory Droid among the sixteen registered export clients; registry parity remains covered by the client help and integration tests.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.

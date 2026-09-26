@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(15);
+    expect(expected).toHaveLength(16);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -273,10 +273,12 @@ describe("every client survives a full lifecycle", () => {
     // contract -- verified against senpi's own compiled validator, not assumed
     // from the family resemblance (260912 plan unit, 001).
     omo: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
+    droid: '{\n  "theme": "dark",\n  "customModels": [\n    { "id": "custom:user:local", "model": "local", "displayName": "Local", "baseUrl": "http://127.0.0.1:11434/v1", "provider": "generic-chat-completion-api" }\n  ]\n}\n',
   };
   /** Where the seed's user-owned entry lives when the seed is a sequence. */
   const USER_ELEMENT: Partial<Record<IntegrationClientId, readonly string[]>> = {
     raycast: ["providers", "[id=lmstudio]"],
+    droid: ["customModels", "[id=custom:user:local]"],
   };
 
   for (const clientId of INTEGRATION_CLIENT_IDS) {

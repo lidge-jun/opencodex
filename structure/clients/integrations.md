@@ -19,6 +19,17 @@ retained snapshots before retrying; preserved recovery state does not prove rest
 
 > Decision record: [ADR-0107](../decisions/ADR-0107-uninstall-integration-recovery.md)
 
+Factory Droid is the row-oriented case: its contribution contains one exact
+`customModels[id=custom:opencodex:<selector>]` fragment per active model. The shared selector merge
+preserves sibling rows and top-level settings; disable removes only recorded rows and restore uses
+the same snapshot transaction as every other JSON client. Droid reaches the loopback
+`/v1/chat/completions` surface through `generic-chat-completion-api`. The export stays loopback-only
+because its schema cannot carry the dedicated remote admission header without persisting a secret.
+Each row uses a fixed 16,384-token output ceiling selected by the Droid export from Factory's
+example because the catalog has no per-model output-limit field. It remains separate from the
+request context window. Mutation plans publish each owned row as `customModels.*`, keeping the
+model selector out of the value-free plan.
+
 Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
 The OrcaRouter login ceiling applies to its key exchange; client configuration files retain the
@@ -137,8 +148,9 @@ their existing visibility rules.
 
 ## Owned catalog convergence
 
-Visibility, selected-model and preset writes refresh already-owned Pi/Aside contributions after
-persisting the selection. Explicit sync refreshes MCode, Pi and Aside. The shared catalog-refresh
+Visibility, selected-model and preset writes refresh already-owned Pi, Aside, Raycast, omo and
+Factory Droid contributions after persisting the selection. Explicit sync also refreshes MCode
+and Cline. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
@@ -179,6 +191,7 @@ All registered integrations consume the shared catalog, including [Anthropic see
 | Kimi Code | `capabilities: ["image_in"]` only for declared image input; omitted for unknown/text-only models |
 | MiniMax Code | No per-model image capability field emitted |
 | Raycast | `abilities.vision.supported` |
+| Factory Droid | `noImageSupport` (inverse of declared image input) |
 
 No exporter infers image support from a model name. Existing client eligibility filters and ownership/refresh rules remain unchanged; exports do not add fields to schemas without a supported mapping.
 

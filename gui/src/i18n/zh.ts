@@ -3512,4 +3512,7 @@ export const zh: Record<TKey, string> = {
   "cws.plan.description": "询问代理每个目标会如何传递带有客户端 API 所有可表达功能的请求，以及哪些功能所有目标都保留。不会向上游发送任何内容。",
   "cws.plan.run": "显示路径",
   "cws.plan.savedOnly": "显示的是已保存的组合。请先保存更改再预览。",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "管理 Factory Droid settings.json 中启用的 OpenCodex 模型。同步仅更新 OpenCodex 条目，禁用会移除这些条目，撤销会恢复先前文件。",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

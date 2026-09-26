@@ -15,6 +15,15 @@ Export-client marks (used by the API tab's connect rows, not the provider list):
 - `cline-color.svg` — reuses the existing provider mark already tracked in this directory
   for Cline CLI; no new image was imported for the file integration.
 
+- `factory-droid.svg` — fetched 2026-09-20 from
+  `https://docs.factory.ai/favicon.svg`, linked by Factory's official docs.
+  Identical to `https://factory.com/icon.svg` (source SHA-256
+  `416ea4962d7b0b8be8bec7f7190c13c22d5f20fdcac401aa72886fd5c81d2fb2`).
+  The path, `#FAFAFA` mark, `#020202` background and 508x508 viewBox are verbatim;
+  redundant SVG wrappers, fixed dimensions, an unresolved clip reference and
+  no-op theme styles are removed. Kept as an image: masking the opaque
+  background would hide the mark. No geometry was redrawn.
+
 - `pi.svg` — fetched 2026-08-02 from `https://pi.dev/favicon.svg`, the Pi
   project's own favicon, unmodified. Pi is `earendil-works/pi`
   (formerly `badlogic/pi-mono`).

@@ -371,6 +371,8 @@ export const SERIAL_FULL_SUITE_FILES = [
   // Synchronous injection subprocesses can wedge the long-lived macOS isolate
   // parent while reaping a history Worker; contain them in a fresh bounded lane.
   "codex-integration/codex-inject-write-lock.test.ts",
+  // History-lock warm-up children can stall after the long-lived macOS isolate pool.
+  "codex-integration/codex-history-lock.test.ts",
   "update/update-stop-first.test.ts",
   // Relays a 50 MiB WebSocket frame end to end against a 15s deadline, so its result is a
   // measurement of the whole process, not of the relay. On a healthy 3-CPU macOS runner the
@@ -381,8 +383,10 @@ export const SERIAL_FULL_SUITE_FILES = [
   // changing. Quarantining it here is what keeps it a test of the relay instead of a test of
   // its neighbours.
   "server/server-live.test.ts",
-  // These exercise the default-home service authority, shared by parallel Bun workers.
-  // A fresh process/home prevents another file's authority from becoming this fixture's input.
+  // These exercise process-wide service-home and test-guard state. A fresh process/home
+  // prevents a parallel fixture from changing their authority or guard between assertions.
+  "service/service-claim.test.ts",
+  "service/service-wsl-home-ownership.test.ts",
   "service/service-ownership-state.test.ts",
   "service/service-sqlite-home.test.ts",
   "service/service.test.ts",

@@ -3513,4 +3513,7 @@ export const ja: Record<TKey, string> = {
   "cws.plan.description": "クライアント API が表現できるすべての機能を含むリクエストを各ターゲットがどう運ぶか、すべてのターゲットで保たれる機能は何かをプロキシに問い合わせます。上流には何も送信しません。",
   "cws.plan.run": "経路を表示",
   "cws.plan.savedOnly": "保存済みのコンボを表示しています。変更をプレビューするには保存してください。",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Factory Droid の settings.json で OpenCodex の有効なモデルを管理します。同期は OpenCodex の項目だけを更新し、無効化はそれらを削除し、元に戻すと以前のファイルを復元します。",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

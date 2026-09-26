@@ -11,12 +11,14 @@
  * so a process that dies between the two leaves a decision the next start can
  * act on — rather than artifacts the next start silently undoes.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { handleManagementAPI } from "../../src/server/management-api";
+import * as codexSync from "../../src/codex/sync";
+import type { CodexSyncResult } from "../../src/codex/sync";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -159,15 +161,31 @@ describe("turning Codex off", () => {
   test("the status read follows an off-then-on round trip against the same stale server config", async () => {
     const serverConfig = baseConfig();
     await put(serverConfig, { enabled: false });
-    await put(serverConfig, { enabled: true });
-    expect(persistedCodexIntent()).not.toBe(false);
+    const applied: CodexSyncResult = {
+      status: "applied",
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      message: "test sync applied",
+    };
+    const sync = spyOn(codexSync, "syncModelsToCodex").mockResolvedValue(applied);
+    try {
+      const enabled = await put(serverConfig, { enabled: true });
+      expect(enabled.body).toMatchObject({ state: "current", desiredEnabled: true });
+      expect(persistedCodexIntent()).not.toBe(false);
 
-    const response = await dispatch(serverConfig, "/api/native-integrations");
-    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
-    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
-      state: "current",
-      desiredEnabled: true,
-    });
+      const response = await dispatch(serverConfig, "/api/native-integrations");
+      const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+      expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+        state: "current",
+        desiredEnabled: true,
+      });
+    } finally {
+      sync.mockRestore();
+    }
   });
 
   test("a failed native restore stays unsafe on the next status read", async () => {

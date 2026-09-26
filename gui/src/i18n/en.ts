@@ -3525,6 +3525,9 @@ export const en = {
   "cws.plan.description": "Asks the proxy how each target would carry a request with every feature the client API can express, and which features all targets keep. Nothing is sent upstream.",
   "cws.plan.run": "Show candidate paths",
   "cws.plan.savedOnly": "Shows the saved combo. Save your changes to preview them.",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Manages OpenCodex active models in Factory Droid settings.json. Sync updates only OpenCodex rows, disable removes them, and undo restores the prior file.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 } as const;
 
 export type TKey = keyof typeof en;

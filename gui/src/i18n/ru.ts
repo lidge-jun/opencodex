@@ -3514,4 +3514,7 @@ export const ru: Record<TKey, string> = {
   "cws.plan.description": "Спрашивает прокси, как каждая цель передаст запрос со всеми возможностями клиентского API и какие возможности сохраняют все цели. Ничего не отправляется провайдеру.",
   "cws.plan.run": "Показать пути",
   "cws.plan.savedOnly": "Показан сохранённый комбо. Сохраните изменения, чтобы увидеть их в предпросмотре.",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Управляет активными моделями OpenCodex в файле settings.json клиента Factory Droid. Синхронизация обновляет только записи OpenCodex, отключение удаляет их, а отмена восстанавливает предыдущий файл.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

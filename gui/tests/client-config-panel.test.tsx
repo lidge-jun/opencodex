@@ -170,13 +170,14 @@ function rowButton(container: HTMLElement, name: string, label: string): HTMLBut
     .find(el => el.textContent?.trim() === label)!;
 }
 
-test("the API download surface includes DSH, MiniMax Code, Aside, Raycast and omo as clients", () => {
-  expect(CLIENTS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
+test("the API download surface includes every registered file client", () => {
+  expect(CLIENTS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline", "droid"]);
   expect(CLIENT_LABEL_KEYS.dsh).toBe("api.clientConfig.clientDsh");
   expect(CLIENT_LABEL_KEYS.mcode).toBe("api.clientConfig.clientMcode");
   expect(CLIENT_LABEL_KEYS.zcode).toBe("api.clientConfig.clientZcode");
   expect(CLIENT_LABEL_KEYS.aside).toBe("api.clientConfig.clientAside");
   expect(CLIENT_LABEL_KEYS.omo).toBe("api.clientConfig.clientOmo");
+  expect(CLIENT_LABEL_KEYS.droid).toBe("api.clientConfig.clientFactoryDroid");
 });
 
 test("each row fetches its own client and its dialog renders that client's exact bytes", async () => {

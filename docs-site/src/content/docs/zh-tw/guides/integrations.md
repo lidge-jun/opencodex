@@ -1,9 +1,9 @@
 ---
 title: 整合
-description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast 與 omo——每個客戶端一個開關，每次寫入前都會先備份。
+description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI 與 Factory Droid——每個客戶端一個開關，每次寫入前都會先備份。
 ---
 
-**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十五個客戶端以這種方式運作，每個都有一個開關：
+**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十六個客戶端以這種方式運作，每個都有一個開關：
 
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
@@ -22,6 +22,10 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 儲存後立即生效——Raycast 會監看該檔案 | 無——僅限 loopback |
 | omo | `~/.omo/agent/models.json` | JSON | 新工作階段 | loopback 佔位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | 結束並重新啟動後 | 僅限 loopback |
+| Factory Droid | `~/.factory/settings.json` | JSON | 新工作階段與重新整理模型選擇器後 | 無——僅限 loopback |
+
+Factory Droid 透過 Factory 的 `generic-chat-completion-api` 方言，為每個啟用中的 OpenCodex
+模型取得一筆 `customModels` 項目。整合只管理自己的穩定 ID、保留使用者模型，且僅支援 loopback。
 
 受管理 DSH 支援的相容性下限是 **DSH 0.1.0-rc.6**。OpenCodex 只擁有
 `llm-pi-ai.providers.opencodex`：Apply 與 Refresh 會取代該片段，Disable 只移除該片段，
@@ -146,8 +150,8 @@ ocx mcode
 ```
 
 完成一次連接後，`ocx sync` 與 `POST /api/sync` 會更新 OpenCodex 已擁有的
-MCode、Pi、Aside、Raycast 與 omo 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
-模型可見性、provider 或 preset 變更會更新 Pi、Aside、Raycast 與 omo。若區塊已刪除、
+MCode、Pi、Aside、Raycast、omo、Cline 與 Factory Droid 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
+模型可見性、provider 或 preset 變更會更新 Pi、Aside、Raycast、omo 與 Factory Droid。若區塊已刪除、
 遭外部修改、不安全或由你手動移除，sync 會保持原檔不動；只有在你確定要重新
 連接時才再次執行 enable。
 

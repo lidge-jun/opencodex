@@ -144,6 +144,7 @@ const CLIENT_MANAGED_PATHS = {
     ["settings", "providers", OPENCODE_PROVIDER_ID],
     ["catalog", "providers", OPENCODE_PROVIDER_ID],
   ],
+  droid: [["customModels", DYNAMIC_SEGMENT]],
 } satisfies Record<IntegrationClientId, readonly (readonly string[])[]>;
 
 /** Not a configuration surface. Exported so a parity case can compare it against the shipped clients. */

@@ -1,7 +1,40 @@
 ---
-title: Pont Factory Droid
-description: Connectez les modèles Factory Droid à OpenCodex au moyen d’un pont local compatible avec Responses.
+title: Intégrations Factory Droid
+description: Utilisez les modèles OpenCodex dans Droid ou connectez les modèles Factory à OpenCodex au moyen d’un pont local.
 ---
+
+Factory Droid et OpenCodex peuvent se connecter dans les deux sens. L’intégration gérée décrite ci-dessous est le choix habituel pour utiliser les modèles OpenCodex dans Droid. La section consacrée au pont décrit le sens inverse, dans lequel OpenCodex appelle un modèle fourni par Factory.
+
+## Utiliser les modèles OpenCodex dans Droid
+
+Installez le [CLI Droid](https://docs.factory.ai/droid-cli/quickstart) et connectez-vous, démarrez OpenCodex sur l’interface de bouclage, puis activez **Factory Droid** sur la page **Intégrations** d’OpenCodex. Les commandes CLI équivalentes sont :
+
+```bash
+ocx integration client status --client droid
+ocx integration client enable --client droid
+```
+
+OpenCodex ajoute une entrée par modèle actif dans `~/.factory/settings.json`, sous `customModels`. Chaque entrée utilise un identifiant stable `custom:opencodex:<provider/model>`, l’URL de base `/v1` d’OpenCodex et le fournisseur `generic-chat-completion-api` de Factory. Les métadonnées de contexte, de prise en charge des images et de raisonnement proviennent du catalogue dynamique d’OpenCodex. L’intégration configure un plafond de réponse de 16 384 jetons afin que Droid ne demande pas la totalité de la fenêtre de contexte en sortie. OpenCodex n’écrit aucune clé API réelle.
+
+L’intégration ne gère que ces entrées OpenCodex précisément identifiées. Les paramètres Factory et les modèles personnalisés existants restent inchangés. Un changement dans la sélection des modèles ou `ocx sync` actualise un catalogue déjà géré par l’intégration. La désactivation supprime uniquement les entrées OpenCodex, et la restauration rétablit l’instantané exact du fichier enregistré pour l’opération sélectionnée :
+
+```bash
+ocx integration client disable --client droid
+ocx integration client restore --op <opId> [--confirm-drift]
+```
+
+Pour un essai limité à l’exécution de Droid, sans modifier `~/.factory/settings.json`, exportez la configuration dans un fichier temporaire et passez-le à Droid :
+
+```bash
+ocx export --client droid --out /tmp/opencodex-droid-settings.json --force
+droid exec --settings /tmp/opencodex-droid-settings.json \
+  --model custom:opencodex:gpt-5.6-luna \
+  "Reply with DROID_OK only."
+```
+
+Cette intégration fonctionne uniquement sur l’interface de bouclage. L’intégration n’exporte aucun identifiant d’authentification ni en-tête dédié au contrôle d’accès distant d’OpenCodex dans la configuration Droid. OpenCodex refuse donc toute écoute sur une adresse autre que celle de l’interface de bouclage.
+
+## Utiliser les modèles Factory dans OpenCodex
 
 Factory Droid est un environnement d’exécution d’agents, et non un point de terminaison d’inférence compatible avec OpenAI et documenté. Si un fournisseur personnalisé qui pointe vers une URL interne de Factory LLM renvoie `403 Forbidden`, modifier uniquement l’adaptateur OpenCodex ou ajouter des en-têtes de fournisseur ne transforme pas cette route privée en API publique prise en charge.
 

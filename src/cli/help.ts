@@ -83,7 +83,7 @@ Usage:
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
   ocx api <sub>               Protocol paths: vocabulary, request-path preview, and policy
-  ocx export --client <id>    Print a client config wired to the running proxy (15 clients)
+  ocx export --client <id>    Print a client config wired to the running proxy (16 clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection

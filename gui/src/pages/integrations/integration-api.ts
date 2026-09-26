@@ -17,6 +17,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "raycast",
   "omo",
   "cline",
+  "droid",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -235,6 +236,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "models.*",
   "llm-pi-ai.providers.opencodex",
   "custom_provider.opencodex",
+  "customModels.*",
   "providers.[id=opencodex]",
   "settings.providers.opencodex",
   "catalog.providers.opencodex",

@@ -20,6 +20,8 @@ import {
   asideHomeDir,
   dshConfigPath,
   dshHomeDir,
+  droidConfigPath,
+  droidHomeDir,
   gajaeConfigPath,
   gajaeHomeDir,
   hermesConfigPath,
@@ -344,6 +346,11 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     configPath: (env = process.env, home = homedir()) => clineConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => clineSettingsDir(env, home),
     writerLock: { suffix: ".lock" },
+  },
+  droid: {
+    id: "droid",
+    configPath: (env = process.env, home = homedir()) => droidConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => droidHomeDir(env, home),
   },
 };
 
