@@ -835,6 +835,6 @@ test("the route refuses a self-unload before the manager is touched", () => {
     // `ocx stop` claims a receipt, defers the teardown, and performs it itself once the
     // proxy is proven down — so it must not be refused by the new branch.
     const source = readFileSync(repoPath("src", "server", "management-api.ts"), "utf8");
-    expect(source).toContain('const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();');
+    expect(source).toContain('const respawnRisk = holdsReceipt || sibling ? "none" : installedServiceRespawnRisk();');
   });
 });
