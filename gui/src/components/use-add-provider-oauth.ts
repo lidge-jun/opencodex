@@ -3,6 +3,7 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
+import type { LoginHintData } from "./login-url-block";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
@@ -123,7 +124,7 @@ export function useAddProviderOAuth({
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
-        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string }>(sRes) : null;
+        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
         if (s?.error) {
           activeProvidersRef.current.delete(providerId);
@@ -133,8 +134,15 @@ export function useAddProviderOAuth({
         }
         if (s?.loggedIn) {
           activeProvidersRef.current.delete(providerId);
+          setOauthMsg("");
           onAdded(providerId);
           return;
+        }
+        if (s?.hint) {
+          setOauthUrl(s.hint.url ?? "", providerId, s.hint.deviceCode, s.hint.instructions);
+          setOauthMsg(s.hint.url || s.hint.deviceCode
+            ? t("modal.waitingLogin")
+            : (s.hint.instructions || t("modal.loggingIn")));
         }
       }
       await cancelServerLogin(providerId);
@@ -150,7 +158,10 @@ export function useAddProviderOAuth({
         setOauthMsg(t("modal.networkError"));
       }
     } finally {
-      if (aliveRef.current && isCurrent()) setOauthBusy(false);
+      if (aliveRef.current && isCurrent()) {
+        setOauthBusy(false);
+        setOauthUrl("", providerId);
+      }
     }
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, t]);
 

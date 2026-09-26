@@ -212,6 +212,29 @@ per-request first-party callback reads that live object; a failed write leaves i
 | Sidebar | `src/server/management/sidebar-routes.ts` — `GET/POST /api/github/star`, `GET /api/update/badge`, and `POST /api/update/desktop-snapshot`. The snapshot POST accepts the raw admin-token principal or the dedicated `local-desktop-snapshot-capability`; GUI sessions and requests carrying `Origin` cannot publish desktop state. A capability's bounded raw body is verified against its authenticated digest before JSON parsing or storage. Badge state is cosmetic and a failed poll degrades silently. |
 | Logs | `src/server/management/logs-usage-routes.ts` — `GET /api/logs`, `GET /api/claude/inbound-debug`, and `GET /api/debug/injection-logs` join the debug streams described above. |
 
+### OAuth login continuations
+
+`src/server/management/oauth-account-routes.ts` filters `GET /api/oauth/providers` by the
+same server-resolved principal predicate enforced by login start and manual continuation.
+Meta Muse is advertised only to `gui-session`; discovery does not grant authority, and the
+POST checks remain independent. The direct CLI provider roster and consent policy are unchanged.
+
+`src/oauth/login-flow-state.ts` retains one transient `hint` per active provider login. The
+controller in `src/oauth/index.ts` replaces it on every owned, non-aborted `onAuth` callback,
+while only the first callback resolves the start request. `GET /api/oauth/status` projects a
+copy of only `url`, `deviceCode` and `instructions`; credential objects and other callback fields
+never enter that projection. Cancellation, clearing and successful or failed settlement discard
+the hint. A late callback cannot restore a cancelled hint or overwrite a replacement flow.
+
+Both provider-login GUI pollers replace their displayed hint after checking request-generation
+ownership. An omitted `deviceCode` clears the previous device stage, rather than preserving a
+stale code alongside manual instructions. `gui/src/components/login-url-block.tsx` hides the
+callback paste field while a device code is present: the code belongs on the vendor's verification
+page, whose approval is polled by the server. A later manual continuation restores the field.
+These additive status fields preserve the initial start-response shape and need no migration.
+
+> Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md)
+
 ### Claude Desktop picker management
 
 `GET /api/claude-desktop/picker` returns `200 { ok: true, picker }`, where `picker` is the

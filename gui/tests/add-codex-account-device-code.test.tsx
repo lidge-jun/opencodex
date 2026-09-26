@@ -141,6 +141,7 @@ test("a device login renders the short code, not just the verification URL", asy
   expect(code).toBeTruthy();
   expect(code?.textContent).toBe(DEVICE_CODE);
   expect(host.textContent).toContain(DEVICE_URL);
+  expect(host.querySelector(".login-hint-paste")).toBeNull();
 });
 
 test("the default browser flow does not ask for a device login", async () => {
