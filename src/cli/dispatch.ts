@@ -1003,7 +1003,7 @@ export const DISPATCH_ALIASES: ReadonlyMap<string, string> = aliasTargets;
 /** Resolve the runner key for a command, following registry aliases to the
  * canonical runner. Returns undefined when the command is unknown. */
 /** What `handleStart` does about a live proxy it found before binding. */
-export type StartOwnerDecision = "refuse" | "service-stay-out" | "sibling";
+export type StartOwnerDecision = "refuse" | "service-stay-out" | "sibling" | "await-parent";
 
 /**
  * Pure decision for `handleStart` when the pre-bind probe found a live proxy.
@@ -1015,12 +1015,21 @@ export type StartOwnerDecision = "refuse" | "service-stay-out" | "sibling";
  * decision allows isolated homes on one machine to remain independent.
  * The service wrapper always passes the configured port and keeps its exact
  * stay-out-of-the-way semantics: it never takes the sibling path.
+ *
+ * `"await-parent"` comes first and only for an exact pid match: the live proxy is the draining
+ * process that spawned this start as its restart replacement (`OCX_RESTART_PARENT_PID`, already
+ * checked against the real parent pid). Refusing it would leave no proxy once that parent exits,
+ * so the caller waits for it instead (`src/cli/restart-handoff.ts`). Every other owner, and a
+ * live proxy whose pid could not be verified, keeps the table above.
  */
 export function decideStartWithLiveOwner(input: {
   livePort: number;
   requestedPort: number | undefined;
   ocxService: string | undefined;
+  livePid?: number | null;
+  restartParentPid?: number | null;
 }): StartOwnerDecision {
+  if (input.restartParentPid != null && input.livePid === input.restartParentPid) return "await-parent";
   const sibling = input.requestedPort !== undefined
     && input.requestedPort !== input.livePort
     // Only the exact "1" sentinel is service context — the same check the exit teardown

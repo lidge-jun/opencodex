@@ -268,6 +268,44 @@ constants in child processes.
 
 `src/update/install-detection.mjs` examines both lexical and resolved package paths. An enclosing mise installation owns its nested npm/aube package only when the adjacent `.mise.backend.toml` identifies the containing tool alias and the canonical `npm:@bitkyc08/opencodex` backend. That verified outer owner takes precedence over the inner npm layout. Two verified owners whose tool roots differ only by a symlinked ancestor (macOS `/var` -> `/private/var`) are compared by canonical directory and count as one install. An unreadable or contradictory ownership boundary on either path takes precedence over a verified owner on the other path, refusing mutation without inventing a tool name or recovery command. One boundary is not OpenCodex's at all: on Windows, npm -g under a mise-managed Node puts the package directly in `<mise>/installs/node/<version>/node_modules`, whose adjacent record is Node's own (`short = "node"`, `full = "core:node"`). That exact record with the package directly in the runtime's global `node_modules` is an npm install and falls through to npm detection; any other backend, alias or deeper layout stays fail-closed (`tests/update/update-mise-node-runtime.test.ts`). `ocx update`, dashboard update checks, and update workers expose `installer: "mise"`; checks remain read-only, while mutation is refused with `mise upgrade <verified-alias>` before any proxy stop, package write, or worker creation. The package-tree integrity guard remains active for mise packages, and the managed Linux service additionally follows its mise package launcher onto an upgraded version ([package-tree integrity fence](docs-and-release.md#package-tree-integrity-fence)).
 
+## Restart handoff
+
+A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
+after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)
+replace their process through `src/server/restart-replacement.ts`. Every replacement `ocx start`
+carries `OCX_RESTART_PARENT_PID`. `handleStart` consumes the marker before its first probe and
+honors it only when it names the process's real parent. When the live owner that probe finds is
+exactly that pid, `decideStartWithLiveOwner` answers `await-parent`, and `src/cli/restart-handoff.ts`
+waits up to 30 seconds for the parent to exit or stop answering (re-probing once a second) before it
+probes again; a parent that outlives the wait is refused like any live proxy. An ordinary start
+carries no marker and probes once.
+
+Only a handoff that waits for health (the drain completed) respawns a replacement that exits before
+it answers, at most twice, inside the one 70-second readiness budget. A spawn error is not retried.
+A parent-exit handoff (drain deadline, failed or rejected drain, listener-stop fallback) resolves as
+soon as the child spawned: the parent must exit to release what the replacement waits for, so it
+cannot watch for an early exit. The replacement's `await-parent` wait and the link-mode port reclaim
+cover the known transient causes there. Any other early exit on that path is a residual: no proxy
+serves the port until something runs `ocx start` again, and Codex keeps pointing at that port.
+
+The replacement's stdout and stderr go to `<configDir>/restart-handoff.log`: mode 0600, opened
+without following a symlink, recorded as an owned config path, and bounded at 256 KiB on both sides.
+A handoff empties the file before it opens it. The replacement keeps writing to it for its whole
+life, so the parent hands it `OCX_RESTART_HANDOFF_LOG=1` along with the file; `handleStart` consumes
+the flag and arms one unref'd 60-second timer (`armRestartHandoffLogCap`) that lstats the file and
+empties it at the cap through a fresh descriptor. A start without the flag arms nothing. The parent
+writes only timestamps, pids, ports, attempt counts, exit codes and errno labels, never an
+environment value.
+
+When every attempt fails while client state is `connected` (a join has committed), the parent marks
+recycling before `exit(1)`, so its exit cleanup keeps the Codex routing `connectClient` wrote
+instead of restoring native Codex; a standalone restart still restores. The standalone recycle
+waits for its replacement to answer, exits 1 when it never did, and falls back to `config.port`
+when the listener recorded none. A supervised process (`OCX_SERVICE=1`) never spawns and exits 1
+for its supervisor. Coverage: `tests/server/restart-replacement.test.ts`,
+`tests/cli/cli-restart-handoff.test.ts`, `tests/server/system-restart.test.ts` and
+`tests/clients/client-runtime.test.ts`.
+
 ## Package cache refresh
 
 src/update/refresh-scheduler.ts owns the package cache timer and per-channel singleflight for the running proxy. Eligible npm, pnpm and Bun installs refresh missing or 20-hour-stale `version.json` after bind, check staleness hourly and retry failures with bounded backoff. Each server start owns one scheduler reference; the last matching stop disarms the timer. A stopped automatic lookup cannot write a late result, but an explicit check joining that lookup marks explicit interest and writes its successful result even if the last listener stops before it resolves. Source/mise installs and `OCX_DISABLE_UPDATE_CHECK=1` do not start automatic lookup; explicit requests remain available.

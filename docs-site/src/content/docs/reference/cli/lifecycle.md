@@ -82,6 +82,10 @@ When a proxy is running, ask that exact attested PID and port to restart in plac
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
 separate stop/start. If no proxy is running, the command falls back to the normal `ensure` start.
+When the proxy starts its own replacement (no background service supervises it) after the drain
+finished normally, a replacement that exits before it answers is started again up to twice. What
+the replacement prints goes to `~/.opencodex/restart-handoff.log`, which stays near 256 KiB: a
+restart empties it once it reaches that size, and the running replacement checks it once a minute.
 If a live listener cannot be attested to a runtime PID (including a pre-update proxy), restart fails
 closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by

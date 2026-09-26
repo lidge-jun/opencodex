@@ -14,14 +14,24 @@
  *   Installed-but-stale/missing service assets are NOT treated as supervised —
  *   exit(1) would leave the proxy dead with `Service: installed, stale or missing
  *   service assets` and a /healthz timeout.
- * - If detached spawn fails (sync throw or pre-start `error`): exit(1) without
- *   markRecycling — after drain the listen socket is already closed, so a latch
- *   reset cannot recover serving. Clear inherited `OCX_SERVICE` so exit cleanup
- *   can restore Codex/Grok fences when a stale service marker has no viable
- *   supervisor. Log only a stable errno code — never the raw message
+ * - The replacement is spawned by `src/server/restart-replacement.ts`: it carries
+ *   `OCX_RESTART_PARENT_PID` and its output goes to the bounded `restart-handoff.log`.
+ *   Only after a completed drain (the handoff waits for health) is a replacement that
+ *   exits before it answers retried, twice, inside the readiness budget. A deadline,
+ *   failed-drain or listener-stop-fallback handoff resolves on spawn and exits: the
+ *   replacement's own parent wait and port reclaim cover it, and any other early exit
+ *   there is not retried.
+ * - If detached spawn fails (sync throw, pre-start `error`, or every attempt exited
+ *   early): exit(1) without markRecycling — after drain the listen socket is already
+ *   closed, so a latch reset cannot recover serving. Clear inherited `OCX_SERVICE`
+ *   so exit cleanup can restore Codex/Grok fences when a stale service marker has no
+ *   viable supervisor. Log only a stable errno code — never the raw message
  *   (paths in ENOENT often include the OS username).
+ * - Except after a committed client connection (a join into a Child): Codex already
+ *   routes to the client runtime the next start serves on this port, so the failed
+ *   handoff still marks recycling and exit cleanup keeps that routing instead of
+ *   silently falling back to native Codex.
  */
-import { spawn } from "node:child_process";
 import {
   acquireTemporaryDrain,
   beginShutdownDrain,
@@ -34,26 +44,16 @@ import {
   stopServerListener,
 } from "../lifecycle";
 import { isServiceViable } from "../../service";
+import { readClientConnectionState } from "../../client/state";
 import { withSiblingMarker } from "../../codex/sibling-start";
 import { readRuntimePort } from "../../config/process-state";
-import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
-import { selfLaunchArgv } from "../../lib/self-launch-argv";
 import { spendLedgerRestartEnvironment } from "../../lib/spend-ledger-owner";
-import {
-  MEMORY_DRAIN_RESTART_MS,
-  REPLACEMENT_READY_TIMEOUT_MS,
-} from "../../lib/system-restart-contract";
-import { findLiveProxy } from "../proxy-liveness";
+import { MEMORY_DRAIN_RESTART_MS } from "../../lib/system-restart-contract";
+import { spawnReplacementStart } from "../restart-replacement";
 
 export { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../../lib/system-restart-contract";
+export { waitForReplacementReady, type ReplacementReadinessIo } from "../restart-replacement";
 export const DEADLINE_LISTENER_STOP_TIMEOUT_MS = 5_000;
-const REPLACEMENT_READY_POLL_MS = 150;
-
-export interface ReplacementReadinessIo {
-  findLive?: typeof findLiveProxy;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-}
 
 export interface SystemRestartIo {
   acquireTemporaryDrain?: () => { release(): void } | null;
@@ -66,6 +66,8 @@ export interface SystemRestartIo {
   /** Idempotent listener close; must settle before an ordinary start is spawned. */
   stopListener?: () => void | Promise<void>;
   markRecycling?: () => void;
+  /** True once a client connection has committed (a join into a Child); read only after a failed handoff. */
+  isClientConnected?: () => boolean;
   exitProcess?: (code: number) => void;
   schedule?: (fn: () => void | Promise<void>, ms: number) => void;
   scheduleDeadline?: (fn: () => void, ms: number) => () => void;
@@ -186,132 +188,53 @@ function spawnFailureCode(err: unknown): string {
   return "spawn_failed";
 }
 
-function handoffError(code: string): NodeJS.ErrnoException {
-  const error = new Error(code) as NodeJS.ErrnoException;
-  error.code = code;
-  return error;
+/**
+ * After a failed handoff, keep Codex routing when a client connection has committed.
+ *
+ * `connectClient` already pointed Codex at the client runtime that the next start (a service
+ * relaunch, the desktop app, or `ocx start`) serves on this same port. Restoring native Codex here
+ * would be a silent local fallback while client state says connected. An unreadable state is not
+ * proof of a join, so it keeps today's restore.
+ */
+function keepRoutingForCommittedClient(io: SystemRestartIo): void {
+  let connected = false;
+  try {
+    connected = (io.isClientConnected ?? (() => readClientConnectionState().kind === "connected"))();
+  } catch {
+    connected = false;
+  }
+  if (connected) (io.markRecycling ?? markRecyclingForExit)();
 }
 
-export async function waitForReplacementReady(
-  expectedPid: number | undefined,
-  parentPid: number,
-  expectedPort: number | undefined,
-  io: ReplacementReadinessIo = {},
-): Promise<boolean> {
-  const findLive = io.findLive ?? findLiveProxy;
-  const now = io.now ?? Date.now;
-  const sleep = io.sleep ?? Bun.sleep;
-  const deadline = now() + REPLACEMENT_READY_TIMEOUT_MS;
-  while (now() < deadline) {
-    try {
-      const live = await findLive({
-        deadlineAt: deadline,
-        nowFn: now,
-        sleepFn: sleep,
-      });
-      // A probe that began within budget can still return after it. Never accept
-      // delayed health as proof once the shared absolute handoff budget expired.
-      if (now() >= deadline) return false;
-      if (
-        live
-        && live.pid !== null
-        && live.pid !== parentPid
-        && (expectedPid === undefined || live.pid === expectedPid)
-        && (expectedPort === undefined || live.port === expectedPort)
-      ) {
-        return true;
-      }
-    } catch {
-      // A not-yet-bound replacement is indistinguishable from a transient
-      // liveness failure here; keep polling inside the one bounded window.
-    }
-    const remainingMs = deadline - now();
-    if (remainingMs <= 0) break;
-    await sleep(Math.min(REPLACEMENT_READY_POLL_MS, remainingMs));
-  }
-  return false;
+/**
+ * The replacement's environment before `spawnReplacementStart` adds the restart-parent marker and
+ * the runtime provenance: never under a service marker, a sibling's replacement stays a sibling,
+ * and only a parent-exit handoff marks the bounded spend-ledger lease wait.
+ */
+export function replacementStartEnvironment(
+  waitForHealthBeforeParentExit: boolean,
+  parentPid: number = process.pid,
+): NodeJS.ProcessEnv {
+  // A sibling's replacement stays a sibling even if the owner is down while it probes.
+  const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env);
+  delete sourceEnv.OCX_SERVICE;
+  return spendLedgerRestartEnvironment(
+    sourceEnv,
+    waitForHealthBeforeParentExit ? undefined : parentPid,
+  );
 }
 
 function spawnDetachedStart(
   port?: number,
   waitForHealthBeforeParentExit = true,
 ): Promise<void> {
-  const args = ["start"];
-  const expectedPort = typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535
-    ? Math.trunc(port)
-    : undefined;
-  if (expectedPort !== undefined) {
-    args.push("--port", String(expectedPort));
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = replacementStartEnvironment(waitForHealthBeforeParentExit);
+  } catch (err) {
+    return Promise.reject(err);
   }
-  const launchArgs = selfLaunchArgv(args);
-  return new Promise<void>((resolve, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      // A sibling's replacement stays a sibling even if the owner is down while it probes.
-      const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env);
-      delete sourceEnv.OCX_SERVICE;
-      const env = spendLedgerRestartEnvironment(
-        sourceEnv,
-        waitForHealthBeforeParentExit ? undefined : process.pid,
-      );
-      child = spawn(process.execPath, launchArgs, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: withProcessRuntimeProvenance(env),
-      });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    let settled = false;
-    const cleanup = () => {
-      child.off("error", onError);
-      child.off("exit", onExit);
-      child.off("spawn", onSpawn);
-    };
-    const finish = (error?: unknown) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (error !== undefined) {
-        if (child.exitCode === null && child.signalCode === null) {
-          try { child.kill(); } catch { /* best-effort failed-start cleanup */ }
-        }
-        try { child.unref(); } catch { /* best-effort */ }
-        reject(error);
-        return;
-      }
-      child.unref();
-      resolve();
-    };
-    const onError = (err: Error) => { finish(err); };
-    const onExit = () => { finish(handoffError("child_exit")); };
-    const onSpawn = () => {
-      if (!waitForHealthBeforeParentExit) {
-        // A deadline may have been caused by native-main ownership cleanup.
-        // Let the ordinary child survive parent exit, which releases those OS locks.
-        finish();
-        return;
-      }
-      void waitForReplacementReady(child.pid, process.pid, expectedPort).then(
-        ready => {
-          if (!ready) {
-            console.warn(
-              "Drain-and-restart replacement is still alive after the readiness window; allowing it to continue after parent exit",
-            );
-          }
-          // Never kill a live ordinary start at its valid reclaim boundary. Parent
-          // exit is the final resource release the child may still be waiting for.
-          finish();
-        },
-        err => finish(err),
-      );
-    };
-    child.once("error", onError);
-    child.once("exit", onExit);
-    child.once("spawn", onSpawn);
-  });
+  return spawnReplacementStart({ port, waitForHealth: waitForHealthBeforeParentExit, env });
 }
 
 async function completeDeferredParentExitHandoff(
@@ -329,6 +252,7 @@ async function completeDeferredParentExitHandoff(
       `Drain-and-restart ${phase} spawn failed (${spawnFailureCode(err)}); exiting without replacement`,
     );
     delete process.env.OCX_SERVICE;
+    keepRoutingForCommittedClient(io);
     exitProcess(1);
     return;
   }
@@ -489,8 +413,10 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
         );
         // Listen socket is already stopped; do not markRecycling — no child to inherit fences.
         // No replacement inherited the routing. Clear a stale service marker so
-        // this unsupervised parent restores clients after the failed handoff.
+        // this unsupervised parent restores clients after the failed handoff — unless a
+        // committed client connection already owns that routing.
         delete process.env.OCX_SERVICE;
+        keepRoutingForCommittedClient(io);
         exitProcess(1);
         return;
       }

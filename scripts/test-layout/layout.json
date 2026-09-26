@@ -168,6 +168,8 @@
     }
   },
   "explicit": {
+    "cli-restart-handoff.test.ts": "cli",
+    "restart-replacement.test.ts": "server",
     "deepseek-artifact-tool-schema.test.ts": "providers",
     "client-config-export-output-limit.test.ts": "config",
     "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
