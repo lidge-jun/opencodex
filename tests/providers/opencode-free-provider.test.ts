@@ -9,7 +9,6 @@ import {
   ZEN_FREE_SESSION_RE,
   ZEN_FREE_USER_AGENT,
   mintZenFreeSessionId,
-  resetZenFreeSessionCache,
 } from "../../src/adapters/opencode-free-session";
 import {
   ZEN_FREE_GATE_DECLARATION,
@@ -62,9 +61,13 @@ function nativeRequest(
   provider: OcxProviderConfig,
   body: Record<string, unknown>,
   model = "big-pickle",
+  requestSessionLane = "native-test-lane",
 ) {
   const request = buildOpenAIChatPassthroughRequest(provider, body, model, body.stream === true);
-  return transformProviderRequest(provider, request, { incomingHeaders: new Headers() });
+  return transformProviderRequest(provider, request, {
+    incomingHeaders: new Headers(),
+    requestSessionLane,
+  });
 }
 
 describe("opencode-free provider", () => {
@@ -106,7 +109,6 @@ describe("opencode-free provider", () => {
   });
 
   test("keyless requests mint the anonymous tier identity", async () => {
-    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const adapter = registered(provider);
     const req = await adapter.buildRequest(threadedRequest("thread-alpha"), metaWithSession());
@@ -122,7 +124,6 @@ describe("opencode-free provider", () => {
   });
 
   test("an operator User-Agent is preserved verbatim, only the bare default is repaired", async () => {
-    resetZenFreeSessionCache();
     const seed = providerConfigSeed(entry!);
     const custom = (await registered({
       ...seed,
@@ -133,7 +134,6 @@ describe("opencode-free provider", () => {
   });
 
   test("the minted session is stable per Codex thread and distinct across threads", async () => {
-    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const adapter = registered(provider);
     const first = ((await adapter.buildRequest(threadedRequest("thread-alpha"), metaWithSession())).headers as Record<string, string>)["x-opencode-session"];
@@ -145,7 +145,6 @@ describe("opencode-free provider", () => {
   });
 
   test("a valid caller session passes through, a malformed one is replaced", async () => {
-    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const adapter = registered(provider);
     const valid = mintZenFreeSessionId("caller-seed");
@@ -157,7 +156,6 @@ describe("opencode-free provider", () => {
   });
 
   test("an operator-configured Authorization header is never overwritten", async () => {
-    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = {
       ...providerConfigSeed(entry!),
       headers: { ...providerConfigSeed(entry!).headers, Authorization: "Bearer operator-key" },
@@ -168,7 +166,6 @@ describe("opencode-free provider", () => {
   });
 
   test("the Responses wire mints the same identity for Muse Spark turns", async () => {
-    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const headers = (await registered(provider, "openai-responses").buildRequest(
       responsesInboundRequest("thread-alpha"),
@@ -182,13 +179,22 @@ describe("opencode-free provider", () => {
   });
 
   test("the native Chat fast path mints the same identity", () => {
-    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const rawBody = { messages: [{ role: "user", content: "hi" }], stream: true };
     const headers = nativeRequest(provider, rawBody).headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer public");
     expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
+  });
+
+  test("native Chat sessions are stable per request lane and isolated across lanes", () => {
+    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const rawBody = { messages: [{ role: "user", content: "hi" }], stream: true };
+    const first = nativeRequest(provider, rawBody, "big-pickle", "lane-a").headers["x-opencode-session"];
+    const retry = nativeRequest(provider, rawBody, "big-pickle", "lane-a").headers["x-opencode-session"];
+    const other = nativeRequest(provider, rawBody, "big-pickle", "lane-b").headers["x-opencode-session"];
+    expect(retry).toBe(first);
+    expect(other).not.toBe(first);
   });
 
   test("the native Chat fast path leaves other endpoints byte-identical", () => {
@@ -205,7 +211,6 @@ describe("opencode-free provider", () => {
   });
 
   test("a relayed caller User-Agent is replaced when the operator configured none", () => {
-    resetZenFreeSessionCache();
     // A saved row with no header block: the Responses passthrough relays the
     // caller's fingerprint (e.g. codex-cli), which the gate refuses.
     const provider: OcxProviderConfig = {
@@ -430,7 +435,6 @@ describe("opencode-free provider", () => {
     }
 
     test("translated Chat appends the missing pair and never duplicates", async () => {
-      resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
       expect(await chatToolNames(provider, minimalRequest("big-pickle"))).toEqual(["shell", "read"]);
       const execOnly: OcxParsedRequest = {
@@ -455,7 +459,6 @@ describe("opencode-free provider", () => {
     });
 
     test("appended declarations carry the never-invoke wording", async () => {
-      resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
       const adapter = registered(provider);
       const built = await adapter.buildRequest(minimalRequest("big-pickle"), metaWithSession());
@@ -478,7 +481,6 @@ describe("opencode-free provider", () => {
     });
 
     test("Responses wire creates the pair when the turn declares no tools", () => {
-      resetZenFreeSessionCache();
       const provider: OcxProviderConfig = providerConfigSeed(entry!);
       const body = JSON.parse(registered(provider, "openai-responses").buildRequest(
         responsesInboundRequest("thread-gamma"),

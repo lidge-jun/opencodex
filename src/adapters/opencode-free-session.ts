@@ -86,21 +86,6 @@ export function mintZenFreeSessionId(seed?: string): string {
   return shapeSessionId(randomBytes(32));
 }
 
-// Per-process fallback when a request carries no thread identity. Memory
-// scope is enough: a Zen session needs no server round trip to create, and a
-// restart simply lands on another sticky replica.
-let processSessionId: string | null = null;
-
-function fallbackSessionId(): string {
-  if (!processSessionId) processSessionId = mintZenFreeSessionId();
-  return processSessionId;
-}
-
-/** Test hook: clear the process fallback so tests control minting. */
-export function resetZenFreeSessionCache(): void {
-  processSessionId = null;
-}
-
 /**
  * Stable seed for one conversation: Zen pins sticky provider replicas to the
  * session id, so every turn of a Codex thread must mint the same value or
@@ -117,12 +102,13 @@ function threadSeed(parsed?: OcxParsedRequest): string | undefined {
 /**
  * Identity inputs the transports forward. `parsed` carries the Codex thread
  * for a stable per-conversation session; lanes without a parsed request
- * (the native Chat fast path) omit it and share the process fallback.
+ * (the native Chat fast path) supply their request-scoped session lane.
  * `incomingHeaders` lets an explicit caller-supplied session win.
  */
 export interface ZenFreeIdentity {
   parsed?: OcxParsedRequest;
   incomingHeaders?: Headers;
+  requestSessionLane?: string;
 }
 
 function hasHeader(headers: Record<string, string>, name: string): boolean {
@@ -153,7 +139,7 @@ export function applyZenFreeIdentity(
     const caller = identity?.incomingHeaders?.get("x-opencode-session")?.trim();
     headers["x-opencode-session"] = caller && ZEN_FREE_SESSION_RE.test(caller)
       ? caller
-      : mintZenFreeSessionId(threadSeed(identity?.parsed) ?? fallbackSessionId());
+      : mintZenFreeSessionId(threadSeed(identity?.parsed) ?? identity?.requestSessionLane);
   }
   const hasCredential = zenFreeHasApiKey(provider);
   if (!hasCredential && !hasHeader(headers, "authorization")) {

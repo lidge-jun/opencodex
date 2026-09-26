@@ -76,6 +76,7 @@ import {
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";
+import { getOrAllocateRequestSessionLane } from "./request-log-conversation";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
@@ -341,7 +342,10 @@ export async function runNativeChatAttempt(
     return transformProviderRequest(
       activeProvider,
       request,
-      { incomingHeaders: req.headers },
+      {
+        incomingHeaders: req.headers,
+        requestSessionLane: getOrAllocateRequestSessionLane(req),
+      },
     );
   };
   try {
