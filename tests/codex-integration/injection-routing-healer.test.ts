@@ -25,12 +25,18 @@ function routedAt(port: number): string {
   return `${OCX_ROUTING_MARKER_LINE}\nopenai_base_url = "${url}"\n${OCX_ROUTING_MARKER_LINE}\nexperimental_realtime_ws_base_url = "${url}"\n`;
 }
 
+function routedAtHost(host: string, port: number): string {
+  const url = `http://${host}:${port}/v1`;
+  return `${OCX_ROUTING_MARKER_LINE}\nopenai_base_url = "${url}"\n${OCX_ROUTING_MARKER_LINE}\nexperimental_realtime_ws_base_url = "${url}"\n`;
+}
+
 /**
  * A manual clock and scheduler. `tick()` advances the clock by the scheduled delay and runs the
  * one pending callback to completion, so a test reads the state that tick produced.
  */
 function harness(options: {
   probe?: (port: number) => EndpointLiveness | Promise<EndpointLiveness>;
+  probeTarget?: (target: { hostname: string; port: number }) => EndpointLiveness | Promise<EndpointLiveness>;
   inject?: (port: number, config: OcxConfig, options: InjectCodexOptions) => CodexInjectResult | Promise<CodexInjectResult>;
   gates?: Partial<CodexRoutingHealGates>;
   config?: OcxConfig;
@@ -39,6 +45,7 @@ function harness(options: {
   let content: string | null = routedAt(DEAD_PORT);
   const queue: Array<{ fn: () => void; ms: number }> = [];
   const probes: number[] = [];
+  const endpoints: Array<{ hostname: string; port: number }> = [];
   const injects: Array<{ port: number; options: InjectCodexOptions }> = [];
   const warnings: string[] = [];
   let settle: Promise<void> = Promise.resolve();
@@ -51,7 +58,11 @@ function harness(options: {
     now: () => now,
     readConfig: () => content,
     readJournaled: () => ({ openaiBaseUrl: null, realtimeWsBaseUrl: null }),
-    probe: async target => { probes.push(target.port); return options.probe?.(target.port) ?? "dead"; },
+    probe: async target => {
+      probes.push(target.port);
+      endpoints.push({ hostname: target.hostname, port: target.port });
+      return options.probeTarget?.(target) ?? options.probe?.(target.port) ?? "dead";
+    },
     inject: async (port, config, injectOptions) => {
       injects.push({ port, options: injectOptions });
       const result = await (options.inject?.(port, config, injectOptions) ?? { success: true, message: "Injected" });
@@ -74,6 +85,7 @@ function harness(options: {
   return {
     handle,
     probes,
+    endpoints,
     injects,
     warnings,
     get pending() { return queue.length; },
@@ -96,6 +108,26 @@ function harness(options: {
 }
 
 describe("codex routing healer", () => {
+  test("a live IPv6 endpoint on the same port as dead IPv4 blocks the heal", async () => {
+    const h = harness({ probeTarget: target => target.hostname === "::1" ? "live" : "dead" });
+    h.setContent(`${OCX_ROUTING_MARKER_LINE}\nopenai_base_url = "http://127.0.0.1:${DEAD_PORT}/v1"\n${OCX_ROUTING_MARKER_LINE}\nexperimental_realtime_ws_base_url = "http://[::1]:${DEAD_PORT}/v1"\n`);
+    await h.ticks(4);
+    expect(h.endpoints.slice(0, 2)).toEqual([
+      { hostname: "127.0.0.1", port: DEAD_PORT }, { hostname: "::1", port: DEAD_PORT },
+    ]);
+    expect(h.injects).toHaveLength(0);
+  });
+
+  test("switching from dead IPv4 to dead IPv6 on one port starts a fresh proof streak", async () => {
+    const h = harness();
+    await h.tick();
+    h.setContent(routedAtHost("[::1]", DEAD_PORT));
+    await h.ticks(2);
+    expect(h.injects).toHaveLength(0);
+    await h.tick();
+    expect(h.injects).toHaveLength(1);
+  });
+
   test("dead on probes spanning 20 s heals exactly once through the plain injector", async () => {
     const h = harness();
     await h.ticks(2); // first dead probe, then a second one only 10 s later
@@ -125,7 +157,7 @@ describe("codex routing healer", () => {
     live = true;
     await h.ticks(8);
     expect(h.injects).toHaveLength(0);
-    expect(h.warnings).toEqual([`Codex routing points at another running opencodex on port ${DEAD_PORT}; leaving it.`]);
+    expect(h.warnings).toEqual([`Codex routing points at another running opencodex on 127.0.0.1:${DEAD_PORT}; leaving it.`]);
   });
 
   test("an unknown streak never writes", async () => {
@@ -252,7 +284,7 @@ describe("codex routing healer", () => {
     expect(h.injects).toHaveLength(1);
     expect(h.warnings.some(line => line.includes("failed"))).toBe(false);
     await h.tick();
-    expect(h.warnings).toEqual(["Codex routing points at another running opencodex on port 10300; leaving it."]);
+    expect(h.warnings).toEqual(["Codex routing points at another running opencodex on 127.0.0.1:10300; leaving it."]);
   });
 
   test("a failure line carries only the first message line, with home paths masked", async () => {

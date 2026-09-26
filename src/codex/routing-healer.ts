@@ -173,6 +173,10 @@ function endpointLabel(target: CodexRoutingDriftTarget): string {
   return `${target.hostname.includes(":") ? `[${target.hostname}]` : target.hostname}:${target.port}`;
 }
 
+function endpointKey(target: Pick<CodexRoutingDriftTarget, "hostname" | "port">): string {
+  return JSON.stringify([target.hostname, target.port]);
+}
+
 export function startCodexRoutingHealer(options: {
   port: number;
   config: OcxConfig;
@@ -218,7 +222,7 @@ export function startCodexRoutingHealer(options: {
   let backoffUntil = 0;
   /** While a cap is reached: until the oldest counted attempt or heal leaves the window. */
   let pausedUntil = 0;
-  const announcedLive = new Set<number>();
+  const announcedLive = new Set<string>();
   const attempts: number[] = [];
   const heals: number[] = [];
   let rateCapAnnounced = false;
@@ -233,28 +237,29 @@ export function startCodexRoutingHealer(options: {
     detectCodexRoutingDrift(content, { ownPorts, journaled: readJournaled });
 
   /** "live" wins over "unknown", which wins over "dead": all must be dead to proceed. */
-  const probeAll = async (targets: readonly CodexRoutingDriftTarget[]): Promise<{ verdict: EndpointLiveness; livePorts: number[] }> => {
-    const byPort = new Map<number, CodexRoutingDriftTarget>();
-    for (const target of targets) if (!byPort.has(target.port)) byPort.set(target.port, target);
-    const livePorts: number[] = [];
+  const probeAll = async (targets: readonly CodexRoutingDriftTarget[]): Promise<{ verdict: EndpointLiveness; liveEndpoints: CodexRoutingDriftTarget[] }> => {
+    const byEndpoint = new Map<string, CodexRoutingDriftTarget>();
+    for (const target of targets) byEndpoint.set(endpointKey(target), target);
+    const liveEndpoints: CodexRoutingDriftTarget[] = [];
     let unknown = false;
-    for (const target of byPort.values()) {
+    for (const target of byEndpoint.values()) {
       let result: EndpointLiveness;
       try { result = await probe({ port: target.port, hostname: target.hostname }); }
       catch { result = "unknown"; }
-      if (result === "live") livePorts.push(target.port);
+      if (result === "live") liveEndpoints.push(target);
       else if (result === "unknown") unknown = true;
     }
-    return { verdict: livePorts.length > 0 ? "live" : unknown ? "unknown" : "dead", livePorts };
+    return { verdict: liveEndpoints.length > 0 ? "live" : unknown ? "unknown" : "dead", liveEndpoints };
   };
 
-  const standDownForLive = (livePorts: readonly number[]) => {
+  const standDownForLive = (liveEndpoints: readonly CodexRoutingDriftTarget[]) => {
     streak = null;
     recheckAt = clock() + ROUTING_HEAL_RECHECK_MS;
-    for (const livePort of livePorts) {
-      if (announcedLive.has(livePort)) continue;
-      announcedLive.add(livePort);
-      warn(`Codex routing points at another running opencodex on port ${livePort}; leaving it.`);
+    for (const target of liveEndpoints) {
+      const key = endpointKey(target);
+      if (announcedLive.has(key)) continue;
+      announcedLive.add(key);
+      warn(`Codex routing points at another running opencodex on ${endpointLabel(target)}; leaving it.`);
     }
   };
 
@@ -289,7 +294,7 @@ export function startCodexRoutingHealer(options: {
     // One final look right before the write, then the gates again: the probe may have taken seconds.
     const final = await probeAll(targets);
     if (stopped) return; // the exit cleanup ran while the probe was out
-    if (final.verdict === "live") { standDownForLive(final.livePorts); return; }
+    if (final.verdict === "live") { standDownForLive(final.liveEndpoints); return; }
     if (final.verdict !== "dead") { recheckAt = clock() + ROUTING_HEAL_RECHECK_MS; return; }
     const gate = evaluateCodexRoutingHealGates(port, ownPorts, gates);
     if (!gate.open) {
@@ -382,12 +387,12 @@ export function startCodexRoutingHealer(options: {
     }
     const probed = await probeAll(drift.targets);
     if (stopped) return;
-    if (probed.verdict === "live") { standDownForLive(probed.livePorts); return; }
+    if (probed.verdict === "live") { standDownForLive(probed.liveEndpoints); return; }
     // Unknown never advances the streak and never resets it; it is asked again at the recheck pace.
     if (probed.verdict !== "dead") { recheckAt = clock() + ROUTING_HEAL_RECHECK_MS; return; }
     recheckAt = 0;
     const probedAt = clock();
-    const key = [...new Set(drift.targets.map(target => target.port))].sort((a, b) => a - b).join(",");
+    const key = JSON.stringify([...new Set(drift.targets.map(endpointKey))].sort());
     if (!streak || streak.key !== key) {
       streak = { key, firstDeadAt: probedAt, probes: 1 };
       return;

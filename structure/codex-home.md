@@ -180,8 +180,9 @@ reads `config.toml` every 10 s; unchanged bytes cost nothing more. `src/codex/ro
 calls routing foreign only when it is opencodex-owned (the marker line, the journaled value, or the
 `opencodex` provider table), names a loopback endpoint with an explicit port that is neither the
 bound port nor the loopback listener's, and no external `model_provider` is selected, so native,
-user, custom, external, restored, LAN and admission-token routing never is. Foreign ports are
-probed with `probeEndpointLiveness`: a live opencodex is left alone with one log line, `unknown`
+user, custom, external, restored, LAN and admission-token routing never is. Every distinct foreign
+hostname and port is probed with `probeEndpointLiveness`: a live opencodex is left alone with one
+log line per endpoint, `unknown`
 never advances the streak, and a heal needs dead on at least two probes spanning 20 s, dead again
 on a final probe, and every gate open (no sibling mark, no recycle or drain, the runtime record
 names this process, Codex ON and not hub-gated, no admission-token routing, a write target this

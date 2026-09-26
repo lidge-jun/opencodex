@@ -245,6 +245,6 @@ describe("codex routing heal against the real injector", () => {
     const out = runScenario(root, "corrupt");
     expect(out.journalIdentical).toBe(true);
     expect(out.configIdentical).toBe(true);
-    expect(out.warnings).toEqual(["Codex routing points at another running opencodex on port 10199; leaving it."]);
+    expect(out.warnings).toEqual(["Codex routing points at another running opencodex on 127.0.0.1:10199; leaving it."]);
   }, 2 * SPAWN_BUDGET_MS);
 });
