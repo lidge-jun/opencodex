@@ -339,7 +339,7 @@ MiMo model Command Code serves.
 - Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
   refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
-  hard quota failures and other service errors are not replayed. Every Kiro physical send uses
+  hard quota failures are not retried on that same account, and other service errors are not replayed. Every Kiro physical send uses
   configured provider egress. A header deadline returns 504; caller cancellation stops the turn.
   Final HTTP 5xx bodies use fixed public text without upstream detail.
 - Its non-streaming parser drains the same event stream for the web-search loop.
@@ -356,11 +356,14 @@ MiMo model Command Code serves.
   unavailable while an earlier same-login quota bar remains visible. Known quota and
   exhaustion evidence survive restart only for the same login, each until its own reset
   or ten-minute lifetime. Missing, old, or malformed evidence becomes unknown.
-- Participates in multi-account rotation. Two or more logged-in Kiro accounts enable
-  automatic failover on a 429, and rotation prefers the account with the most known
-  headroom; an account whose allowance is provably spent is cooled until its window resets
-  (bounded between five minutes and a day) instead of being retried every minute. Each
-  rotated bearer carries its own profile ARN and region.
+- Participates in multi-account rotation. With two stored accounts, a request-rate refusal
+  cools the refused account briefly; an exact monthly-quota refusal on HTTP 400 or 429
+  excludes it until the observed reset or evidence expiry. A confirmed HTTP 403 suspension
+  quarantines that account in process, while an ordinary 403 does not rotate. Reactive
+  rotation remains available when `oauthAccountFailover.enabled` is false. Refusal-aware
+  selection before the first send requires proactive preference, with the provider setting
+  taking precedence over the global setting. A completed turn from the same login clears an
+  older exhaustion verdict. Each rotated bearer carries its own profile ARN and region.
 
 ### Completion semantics
 
@@ -528,16 +531,20 @@ configuration that names the old id is rewritten at startup.
   `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
   makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
   it is clamped to the smallest accepted value.
-- A pre-output 429 that states a recovery delay is retried in place only when the full stated
-  delay fits within the remaining cumulative wait allowance. The adapter waits that full delay
-  and replays the request up to twice; the default cumulative allowance is 30 minutes
-  (`OPENCODEX_DEVIN_STATED_RESET_WAIT_MS`, hard ceiling one hour). If the delay exceeds the
-  remaining allowance, the original 429 is surfaced without waiting or replaying. Retrying
-  earlier than the stated delay is deliberately not attempted — the hint is the provider's best
-  estimate of its own window, and each replay slot is finite. If the limit still refuses, the
-  final 429 surfaces to the client with the stated delay preserved as its cooldown hint. A `~`
-  in the surfaced message marks a delay recovered from a secondhand trailer sentence rather
-  than an exact header value; clients still receive the parsed number itself.
+- A pre-output 429 with a stated recovery delay is surfaced immediately by default, releasing the
+  admitted turn's shared capacity. Set `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` to a positive cumulative
+  allowance in milliseconds to wait for the full stated delay and replay the same request up to twice.
+  The allowance has a one-hour ceiling; an absent, empty, invalid, or negative value disables waiting.
+  An opted-in standalone wait keeps the HTTP turn and its shared active-turn slot open throughout the delay.
+  Streaming turns start SSE on a safe cooldown heartbeat, then schedule heartbeats every 500 ms or less
+  during the wait so the stall watchdog stays fed. A later pre-output 429 may still rotate to another
+  eligible OAuth account; without one it is reported inside the already-open stream. Buffered Grok
+  turns retain an HTTP 429 and `Retry-After` on a final refusal.
+  Combo children surface the pre-output 429 immediately, even when waiting is enabled, so the combo
+  can try its next target without holding an uncommitted response. Delays exceeding the remaining
+  allowance on standalone turns surface the original 429 without an early retry. The
+  final 429 preserves the stated delay as a cooldown hint. A `~` in its message marks a delay recovered
+  from a secondhand trailer sentence rather than an exact header value.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 

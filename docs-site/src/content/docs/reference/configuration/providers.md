@@ -286,11 +286,20 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `directGeminiWireRenames?` | `boolean` | Google only. Applies only to direct AI Studio requests. Omitted or `true` keeps the `-tiered` wire rename for Gemini Flash ids (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`); `false` sends the requested bare ids to the wire unchanged. Vertex preserves the requested model ID, and Cloud Code Assist routing is unchanged. Set `false` when the configured upstream still serves the bare ids. |
 | `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. |
 | — | — | Antigravity account quota probes (`retrieveUserQuota` and `retrieveUserQuotaSummary`) always go to Google's own Cloud Code host through the pinned outbound transport, regardless of a configured `baseUrl`; the account bearer is never sent to an operator-configured endpoint and a redirect aborts the probe. Only the model-list fallback still honors `baseUrl`. |
+| — | — | If Antigravity quota summary returns 403 for a valid OAuth account, OpenCodex retries that endpoint once with the legacy `antigravity/1.0` User-Agent and the same token and project. A 401 is not retried. Inference and model discovery retain the IDE User-Agent. |
 | `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor only: stdio or Streamable HTTP MCP servers. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
+
+Command Code's shipped per-model effort defaults include live API measurements. DeepSeek
+v4/v4.1 Flash (including v4 Flash Vision), GLM-5.3 and GLM-5.3-Flash, Qwen3.8-Flash,
+and Gemini-3.7-Flash support `low`, `medium`, `high`, `xhigh`, and `max`. Ladders remain
+model-specific: `poolside/laguna-s-2.1-free` offers only `medium`, while Gemini-3.8-Flash
+and MiMo-v2.5-Pro offer `low`, `medium`, and `high`. To override a pinned Command Code
+row, set `modelReasoningEffortsAuthoritative: true` together with that model's
+`modelReasoningEfforts` list.
 
 Provider registration and replacement (`POST /api/providers`) validate `responsesPath` and `chatCompletionsPath` before changing live configuration or disk state. `PATCH /api/providers?name=<provider>` merges the request body with the stored provider; updates touching fields beyond `disabled` — except `requestPacing`-only updates — validate the merged provider's paths the same way before saving, and an invalid retained path returns `400` with the configuration unchanged. The same path rules apply when loading a configuration file.
 

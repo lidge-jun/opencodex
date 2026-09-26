@@ -3,7 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
-import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
+import type { OcxConfig } from "../../src/types";
+import { createLinkListenerLifecycle, linkListenerOwnsTarget } from "../../src/server/index/link-listener";
+import { createOptionalListenerSet } from "../../src/server/index/optional-listeners";
 import { emptyLinkStore, type LinkStore } from "../../src/link/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -53,6 +55,44 @@ afterEach(async () => {
 });
 
 describe("hub-link listener lifecycle", () => {
+  test("optional listener start only starts its supervisor after a successful bind", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-optional-bind-"));
+    const current = { value: store() };
+    let bindFails = true;
+    let supervisorStarts = 0;
+    const listeners = createOptionalListenerSet({
+      storePath: join(tempHome, "links.json"),
+      readStore: () => current.value,
+      writeStore: (_path, next) => { current.value = next; },
+      warn: () => {},
+      serve: options => {
+        if (bindFails) throw Object.assign(new Error("address already in use"), { code: "EADDRINUSE" });
+        const bound = Bun.serve(options);
+        servers.push(bound);
+        return bound;
+      },
+    });
+    listeners.linkSupervisor().start = () => { supervisorStarts += 1; };
+    const cfg = { port: 0, defaultProvider: "mock", providers: {
+      mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+    } } as OcxConfig;
+    const start = { config: cfg, publicPort: 0, requestedPort: 0,
+      maxRequestBodySize: 1024, dispatch: context().dispatch };
+    try {
+      listeners.start(start);
+      expect(listeners.status()).toEqual({ state: "failed", port: null, reason: "bind" });
+      expect(supervisorStarts).toBe(0);
+
+      bindFails = false;
+      listeners.start(start);
+      expect(listeners.status().state).toBe("listening");
+      expect(supervisorStarts).toBe(1);
+      expect(current.value.listenerPort).toBe(listeners.status().port);
+    } finally {
+      await listeners.stop();
+    }
+  });
+
   test("degrades a bind collision while an independent public listener stays healthy", async () => {
     tempHome = mkdtempSync(join(tmpdir(), "ocx-link-bind-"));
     const publicServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("public-ok") });
@@ -75,6 +115,12 @@ describe("hub-link listener lifecycle", () => {
     // Removing the last link after a failed bind leaves nothing to report as failed.
     await lifecycle.close();
     expect(lifecycle.status()).toEqual({ state: "off", port: null, reason: null });
+  });
+
+  test("only a successfully bound listener owns a reverse-forward target", () => {
+    expect(linkListenerOwnsTarget({ state: "failed", port: null, reason: "bind" })).toBe(false);
+    expect(linkListenerOwnsTarget({ state: "off", port: null, reason: null })).toBe(false);
+    expect(linkListenerOwnsTarget({ state: "listening", port: 45678, reason: null })).toBe(true);
   });
 
   test("closes the real link socket when listenerPort persistence fails", async () => {
