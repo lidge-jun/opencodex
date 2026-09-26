@@ -18,8 +18,10 @@ or signs them.
   `config.json`. Every ancestor of the resolved plugin directory up to `/` must be owned by the user
   or root and not group/other-writable unless sticky (`pluginAncestorsTrustError`), so no other user
   can swap a checked path before it is imported; files are imported through the resolved directory.
-  Owner and mode checks are POSIX-only; Windows auto-loading is disabled until an ACL trust
-  check can enforce the same boundary.
+  On macOS, `ls -lebd` must show no ACL entries on the file, plugin directory, or any ancestor;
+  an inspection error refuses loading. Linux uses `getfacl` when installed and refuses extended
+  ACL entries or probe failures; without that utility, only owner/mode checks apply. Windows
+  auto-loading is disabled until an ACL trust check can enforce the same boundary.
 - A missing plugin directory means no plugins. Any other read failure (`EACCES`, `ENOTDIR`) is
   reported as a skipped `plugins directory` entry.
 - A plugin module default-exports `{ name?, setup(context) }`. An asynchronous `setup` has five

@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { loadOcxPlugins, pluginFileTrustError } from "../../src/plugins/loader";
 import {
@@ -104,6 +105,38 @@ test.skipIf(process.platform === "win32")("a group- or world-writable plugin is 
   expect(pluginFileTrustError(path)).toContain("writable by group or others");
   const [result] = await loadOcxPlugins(dir);
   expect(result?.loaded).toBe(false);
+  expect(hasUpstreamRewriters()).toBe(false);
+});
+
+test.skipIf(process.platform !== "darwin")("a mode-0600 plugin with an everyone-write ACL is refused", async () => {
+  const path = writePlugin("acl.ts", REDIRECT_PLUGIN, 0o600);
+  execFileSync("chmod", ["+a", "everyone allow write", path]);
+  expect(pluginFileTrustError(path)).toBe("has an access control list");
+  const [result] = await loadOcxPlugins(dir);
+  expect(result?.error).toBe("file_untrusted");
+  expect(hasUpstreamRewriters()).toBe(false);
+});
+
+test.skipIf(process.platform !== "darwin")("an ACL on an ancestor directory blocks plugin loading", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "ocx-plugin-acl-parent-"));
+  const nested = join(parent, "plugins");
+  try {
+    mkdirSync(nested);
+    writeFileSync(join(nested, "redirect.ts"), REDIRECT_PLUGIN);
+    execFileSync("chmod", ["+a", "everyone allow write", parent]);
+    const [result] = await loadOcxPlugins(nested);
+    expect(result?.error).toBe("ancestor_untrusted");
+    expect(hasUpstreamRewriters()).toBe(false);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform !== "darwin")("an ACL on the plugin directory blocks plugin loading", async () => {
+  writePlugin("redirect.ts", REDIRECT_PLUGIN);
+  execFileSync("chmod", ["+a", "everyone allow write", dir]);
+  const [result] = await loadOcxPlugins(dir);
+  expect(result?.error).toBe("directory_untrusted");
   expect(hasUpstreamRewriters()).toBe(false);
 });
 

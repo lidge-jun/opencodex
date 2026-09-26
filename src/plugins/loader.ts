@@ -21,6 +21,7 @@
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawnSync } from "node:child_process";
 import { getConfigDir } from "../config/paths";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import { registerUpstreamRewriter, type UpstreamRewriter } from "./upstream-hooks";
@@ -57,6 +58,30 @@ export interface PluginLoadResult {
 
 const PLUGIN_EXTENSIONS = [".ts", ".js", ".mjs"];
 const SETUP_TIMEOUT_MS = 5_000;
+const ACL_PROBE_TIMEOUT_MS = 2_000;
+
+/** Refuse extended ACLs: mode bits alone cannot prove who can rewrite a plugin path. */
+function aclTrustError(path: string): string | null {
+  if (process.platform !== "darwin" && process.platform !== "linux") return null;
+  const mac = process.platform === "darwin";
+  const result = spawnSync(mac ? "ls" : "getfacl", mac
+    ? ["-lebd", "--", path]
+    : ["-cp", "--", path], {
+    encoding: "utf8",
+    timeout: ACL_PROBE_TIMEOUT_MS,
+    maxBuffer: 64 * 1024,
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  // getfacl is optional on Linux. Without it, the POSIX owner/mode checks below remain;
+  // the documented Linux ACL limitation must be visible to operators.
+  if (!mac && (result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
+  if (result.error || result.status !== 0) return "access control list inspection failed";
+  const lines = result.stdout.split("\n").slice(mac ? 1 : 0);
+  return lines.some(line => mac
+    ? /^\s*\d+:\s/.test(line)
+    : /^(?:user:[^:]+:|group:[^:]+:|mask::|default:)/.test(line))
+    ? "has an access control list" : null;
+}
 
 export function pluginDirectory(): string {
   return join(getConfigDir(), "plugins");
@@ -97,7 +122,7 @@ function trustError(path: string, kind: "file" | "directory"): string | null {
   const uid = process.getuid?.();
   if (uid !== undefined && stats.uid !== uid) return "owned by another user";
   if ((stats.mode & 0o022) !== 0) return "writable by group or others (chmod go-w)";
-  return null;
+  return aclTrustError(path);
 }
 
 /** Null when the file is safe to execute, otherwise the reason it is refused. */
@@ -135,6 +160,8 @@ export function pluginAncestorsTrustError(realDir: string): string | null {
     if ((stats.mode & 0o022) !== 0 && (stats.mode & 0o1000) === 0) {
       return `${current} is writable by group or others`;
     }
+    const aclError = aclTrustError(current);
+    if (aclError) return aclError;
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;

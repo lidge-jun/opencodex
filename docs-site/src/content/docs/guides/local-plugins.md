@@ -29,7 +29,9 @@ Put plugin files in `plugins/` inside the opencodex home (`~/.opencodex/plugins/
   symbolic links. Every directory above `plugins/`, up to `/`, must also be owned by you or root and
   not writable by group or others, unless it is sticky like `/tmp`. Fix permissions with
   `chmod go-w ~/.opencodex/plugins ~/.opencodex/plugins/*`; on systems whose default umask is
-  `002`, check the parent directories too.
+  `002`, check the parent directories too. On macOS, any ACL on the file or a path directory also
+  blocks loading, even if its mode is `0600`; inspect with `ls -le`. On Linux, extended ACLs are
+  checked when `getfacl` is installed. Without it, only owner and mode bits are verified.
 - On Windows automatic plugin loading is disabled until an ACL trust check is available.
 
 Restart the proxy after adding, changing or removing a plugin (`ocx service restart`, or stop and
