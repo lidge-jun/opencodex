@@ -1,4 +1,5 @@
 {
+  "cursor-local-installer.test.ts": "providers/cursor",
   "provider-antigravity-quota-retry.test.ts": "providers",
   "deepseek-artifact-tool-schema.test.ts": "providers",
   "client-config-export-output-limit.test.ts": "config",

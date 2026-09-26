@@ -25,6 +25,8 @@ export interface CursorIntegrationStatus {
   lastSeen: CursorSeen | null;
   effortTable: { source: "bundle" | "static"; version: string | null; families: number | null };
   models: CursorModelExpectation[];
+  /** Resolved only when regular Cursor exists and Private Inference does not (#5679). */
+  localInstaller: { available: boolean; url: string | null; version: string | null; reason: string | null };
   guideUrl: string;
 }
 

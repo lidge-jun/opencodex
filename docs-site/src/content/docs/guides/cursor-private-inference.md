@@ -42,7 +42,7 @@ Both builds are named "Cursor" in the Dock and share a bundle id, so check `prod
 |---|---|
 | macOS | `/Applications/Cursor Private Inference.app/Contents/Resources/app/product.json` |
 | Windows | `%LOCALAPPDATA%\\Programs\\cursor-private-inference\\resources\\app\\product.json` |
-| Linux | `<install root>/resources/app/product.json` (an AppImage must be extracted first) |
+| Linux | `<install root>/resources/app/product.json` (an AppImage must be extracted first). The dashboard looks for `cursor*` install roots under `/opt`, `/usr/share` and `~/.local/share`. |
 
 `nameLong` is `"Cursor Private Inference"` for the local-agent build and `"Cursor"` for the
 regular one; `version` is the build (3.18.25 at the time of writing). The dashboard's
@@ -105,9 +105,14 @@ bundle, so there is no switch to flip. What it does is hand you the values and s
 they took.
 
 - **Installed builds.** Whether Cursor Private Inference (with its path and version) and
-  regular Cursor (path only) are present. If only regular Cursor is found, the tab says so and links back here:
-  regular Cursor routes custom endpoints through Cursor's servers, so a loopback proxy is
-  unreachable without a public tunnel.
+  regular Cursor (path only) are present. If only regular Cursor is found, the tab asks Cursor's
+  own update channel which local-mode installer it advertises for this platform and CPU (the
+  `cursor-local` channel on `api2.cursor.sh`) and shows that version with a link to the
+  `downloads.cursor.com/local-mode/` installer, then links back here. opencodex only displays the
+  link: it never downloads, launches or installs anything. When the channel cannot be reached or
+  answers with something unusable, the tab says the installer could not be resolved right now;
+  the gateway values below stay valid either way. Regular Cursor itself still routes custom
+  endpoints through Cursor's servers, so it cannot reach a loopback proxy.
 - **Gateway values.** The Base URL on the proxy's own listening port (from its runtime record,
   so a reverse-proxied dashboard still shows the port Cursor on this machine can reach), with a
   Copy button. The API Key row depends on the bind: when it needs no credential the row is

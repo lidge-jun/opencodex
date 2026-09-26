@@ -70,7 +70,7 @@ Cursor Private Inference는 GUI 앱이므로 대화형 셸 프로필만 설정�
 
 opencodex 대시보드의 Integrations 아래에 **Cursor** 탭이 있습니다(`/#integrations/cursor`). Cursor에 대해서는 읽기 전용으로 동작합니다. Cursor 설정 데이터베이스, 키체인 항목, 앱 번들에 쓰지 않으므로 켜고 끌 스위치도 없습니다. 대신 필요한 값을 알려주고 적용 여부를 보여줍니다.
 
-- **설치된 빌드.** Cursor Private Inference의 경로와 버전, 일반 Cursor의 경로를 표시합니다. 일반 Cursor만 발견되면 탭에서 이를 알리고 이 문서로 연결합니다. 일반 Cursor는 사용자 지정 엔드포인트를 Cursor 서버를 통해 호출하므로 공개 터널이 없으면 loopback 프록시에 연결할 수 없습니다.
+- **설치된 빌드.** Cursor Private Inference의 경로와 버전, 일반 Cursor의 경로를 표시합니다. 일반 Cursor만 발견되면 탭은 Cursor 자체 업데이트 채널(`api2.cursor.sh`의 `cursor-local` 채널)에 이 플랫폼과 CPU용으로 안내되는 local-mode 설치 프로그램을 조회하고, 그 버전과 `downloads.cursor.com/local-mode/` 설치 프로그램 링크를 표시한 뒤 이 문서로 연결합니다. opencodex는 링크를 보여 줄 뿐이며 아무것도 다운로드, 실행, 설치하지 않습니다. 채널에 연결할 수 없거나 쓸 수 없는 응답이 오면 설치 프로그램을 지금은 확인할 수 없다고 표시합니다. 아래 게이트웨이 값은 어느 경우에나 유효합니다. 일반 Cursor 자체는 여전히 사용자 지정 엔드포인트를 Cursor 서버를 통해 호출하므로 loopback 프록시에 연결할 수 없습니다.
 - **게이트웨이 값.** 프록시가 실제로 듣는 포트의 Base URL과 Copy 버튼을 표시합니다. 이 값은 런타임 기록에서 가져오므로 역방향 프록시를 거친 대시보드에서도 이 컴퓨터의 Cursor가 접근할 수 있는 포트가 표시됩니다. API Key 행은 바인딩 방식에 따라 달라집니다. 인증 정보가 필요 없으면 Copy 버튼과 함께 `opencodex-loopback`이 표시됩니다. API 인증을 사용하거나 opencodex API 키를 하나라도 설정했다면 자신의 키를 사용하라고 안내하고 API Keys 탭으로 연결합니다. 설정된 키라면 `OPENCODEX_API_AUTH_TOKEN`이 아니어도 됩니다.
 - **연결 상태.** User-Agent가 정확히 `Cursor/<version>`인 마지막 `/v1/models` 요청의 시각과 버전을 표시합니다. 이 헤더는 Cursor 로컬 에이전트 런타임이 보냅니다. Cursor가 프록시를 호출하기 전까지는 "never seen"으로 표시되며, Cursor에서 **Refresh model list**를 누르면 상태가 바뀝니다. 탭이 열려 있는 동안 카드는 15초마다 갱신됩니다.
 - **Cursor에 표시될 항목.** opencodex가 광고하는 모델의 Model / Reasoning / Context 표입니다. 비활성 모델과 프로바이더 허용 목록이 원본 목록과 동일하게 적용됩니다. 다음 절의 규칙에 따른 예측값이며, Reasoning 단계는 Cursor 자체 표에서 고릅니다.
