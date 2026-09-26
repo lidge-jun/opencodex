@@ -1384,6 +1384,7 @@
   "responses-json-events.test.ts": "responses",
   "responses-legacy-dotted-tool-name-repair.test.ts": "responses",
   "responses-muse-tool-name-alias.test.ts": "responses",
+  "responses-muse-tool-choice.test.ts": "responses",
   "responses-native-main-refresh.test.ts": "responses",
   "responses-opaque-blob-recovery.test.ts": "responses",
   "responses-parser-agent-message.test.ts": "responses",
