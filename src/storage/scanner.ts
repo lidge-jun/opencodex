@@ -111,14 +111,40 @@ function walkFiles(dir: string, relPrefix: string, out: FileEntry[]): void {
   }
 }
 
+/** Upper bound on concurrent readdir/stat calls within one async scan. */
+const SCAN_FS_CONCURRENCY = 64;
+
+type FsLimit = <T>(op: () => Promise<T>) => Promise<T>;
+
+/**
+ * FIFO limiter for filesystem calls. A finishing call hands its slot straight to the next
+ * waiter, so the bound holds exactly. Only leaf fs calls take a slot: a directory walk
+ * never holds one while awaiting its children, so recursion cannot deadlock the pool.
+ */
+function createFsLimit(max: number): FsLimit {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async <T>(op: () => Promise<T>): Promise<T> => {
+    if (active < max) active += 1;
+    else await new Promise<void>(resolve => waiting.push(resolve));
+    try {
+      return await op();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else active -= 1;
+    }
+  };
+}
+
 /**
  * Async twin of {@link walkFiles}: same skip rules, and entries come back in readdir
  * order so the report (including `largest` tie order) matches the synchronous scan.
  */
-async function walkFilesAsync(dir: string, relPrefix: string): Promise<FileEntry[]> {
+async function walkFilesAsync(dir: string, relPrefix: string, limit: FsLimit): Promise<FileEntry[]> {
   let entries;
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    entries = await limit(() => readdir(dir, { withFileTypes: true }));
   } catch {
     return [];
   }
@@ -126,9 +152,9 @@ async function walkFilesAsync(dir: string, relPrefix: string): Promise<FileEntry
     const full = join(dir, entry.name);
     const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
     try {
-      if (entry.isDirectory()) return await walkFilesAsync(full, relPath);
+      if (entry.isDirectory()) return await walkFilesAsync(full, relPath, limit);
       if (entry.isFile()) {
-        const stat = await statAsync(full);
+        const stat = await limit(() => statAsync(full));
         return [{ relPath, bytes: stat.size, mtimeMs: stat.mtimeMs }];
       }
     } catch {
@@ -296,6 +322,7 @@ export function scanStorage(codexHome: string = resolveCodexHomeDir()): StorageR
  */
 export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()): Promise<StorageReport> {
   const files = emptyFiles();
+  const limit = createFsLimit(SCAN_FS_CONCURRENCY);
 
   let rootNames: string[] = [];
   try {
@@ -307,7 +334,7 @@ export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()
   const roots = await Promise.all(rootNames.map(async name => {
     const full = join(codexHome, name);
     try {
-      return { name, full, stat: await statAsync(full) };
+      return { name, full, stat: await limit(() => statAsync(full)) };
     } catch {
       return null;
     }
@@ -317,7 +344,7 @@ export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()
     if (root.stat.isDirectory()) {
       // Quarantine trash (Phase 2) must not inflate "other" or totals.
       if (root.name === TRASH_DIR) return;
-      return { key: DIR_BUCKETS[root.name] ?? "other", entries: await walkFilesAsync(root.full, root.name) };
+      return { key: DIR_BUCKETS[root.name] ?? "other", entries: await walkFilesAsync(root.full, root.name, limit) };
     }
     if (root.stat.isFile()) {
       return {
@@ -326,9 +353,12 @@ export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()
       };
     }
   });
-  // Appended in root order so bucket contents match the synchronous scan.
+  // Appended in root order so bucket contents match the synchronous scan. One entry at a
+  // time: spreading a large bucket into push() can exceed the engine's argument limit.
   for (const walk of await Promise.all(walks)) {
-    if (walk) files[walk.key].push(...walk.entries);
+    if (!walk) continue;
+    const bucket = files[walk.key];
+    for (const entry of walk.entries) bucket.push(entry);
   }
 
   return finishReport(codexHome, rootNames, files);

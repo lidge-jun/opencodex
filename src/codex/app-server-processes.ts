@@ -1103,6 +1103,11 @@ export async function collectCodexAppServerCatalogStateForRequest(
  * pages cannot render their rosters until these routes answer. The reading only
  * drives an advisory banner, so a slow probe answers `unknown` (which renders no
  * banner) and keeps running; its result is cached for the next poll.
+ *
+ * The deadline bounds the Windows path, where the request collector is asynchronous. On
+ * other platforms the request collector keeps its existing synchronous read (a /proc walk on
+ * Linux, `ps` on macOS, typically tens of milliseconds), which completes before the deadline
+ * timer can fire; making those reads asynchronous is outside this change.
  */
 export async function collectCodexAppServerCatalogStateWithin(
   deadlineMs: number,

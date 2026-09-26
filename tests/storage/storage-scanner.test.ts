@@ -5,6 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanStorage, scanStorageAsync, type StorageBucket, type StorageReport } from "../../src/storage/scanner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { sharedStorageScan } from "../../src/server/management/storage-log-guard-routes";
+import {
+  noteStorageMutationCompleted,
+  storageMutationEpoch,
+  tryBeginStorageMutation,
+} from "../../src/storage/storage-mutation-coordinator";
 
 const OLD_MTIME = new Date("2026-01-02T03:04:05Z");
 const MID_MTIME = new Date("2026-03-04T05:06:07Z");
@@ -316,4 +322,53 @@ describe("scanStorageAsync", () => {
       expect(after.get(path)).toEqual(stat);
     }
   }, 15_000);
+});
+
+describe("shared storage scan flights", () => {
+  const report = (bytes: number): StorageReport => ({
+    codexHome: "home",
+    generatedAt: 1,
+    total: { bytes, fileCount: 1 },
+    buckets: [],
+  });
+
+  test("a read after a completed storage mutation starts a new scan instead of joining the old one", async () => {
+    const home = join(tmpdir(), `ocx-scan-flight-${process.pid}-${Date.now()}`);
+    const releases: Array<(value: StorageReport) => void> = [];
+    let calls = 0;
+    const scan = () => {
+      calls += 1;
+      return new Promise<StorageReport>(resolve => releases.push(resolve));
+    };
+
+    const first = sharedStorageScan(home, scan);
+    const joined = sharedStorageScan(home, scan);
+    expect(calls).toBe(1);
+
+    // e.g. /api/storage/codex-logs/compact finishing while the first walk is still running
+    noteStorageMutationCompleted();
+    const afterMutation = sharedStorageScan(home, scan);
+    expect(calls).toBe(2);
+
+    // The older walk settling must not retire the newer flight.
+    releases[0]!(report(100));
+    expect(await first).toEqual(report(100));
+    expect(await joined).toEqual(report(100));
+    const laterRead = sharedStorageScan(home, scan);
+    expect(calls).toBe(2);
+
+    releases[1]!(report(40));
+    expect(await afterMutation).toEqual(report(40));
+    expect(await laterRead).toEqual(report(40));
+  });
+
+  test("releasing a coordinated mutation lease advances the storage mutation epoch", () => {
+    const home = join(tmpdir(), `ocx-scan-epoch-${process.pid}-${Date.now()}`);
+    const before = storageMutationEpoch();
+    const gate = tryBeginStorageMutation("cleanup", home);
+    expect(gate.acquired).toBe(true);
+    expect(storageMutationEpoch()).toBe(before);
+    if (gate.acquired) gate.lease.release();
+    expect(storageMutationEpoch()).toBe(before + 1);
+  });
 });
