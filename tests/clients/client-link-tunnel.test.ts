@@ -841,16 +841,60 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
   }
 });
 
+test("one unreadable adopted identity denies only this admission and recovers", async () => {
+  const argv = buildTunnelArgv({ alias: sidecar().alias, direction: "L", bindPort: 19002,
+    targetPort: 19001, knownHostsFile: "/tmp/ocx-known-hosts" });
+  let unreadable = false;
+  const h = supervisorHarness({
+    platform: "darwin",
+    isAlive: pid => pid === 42 || pid === process.pid,
+    readProcessInfo: pid => {
+      if (pid !== 42) return null;
+      if (unreadable) { unreadable = false; return null; }
+      return { ppid: process.pid, args: argv.join(" "), startTime: "adopted-start" };
+    },
+    ownsLoopbackListener: async (_port, pid) => pid === 42,
+  });
+  mkdirSync(join(h.configDir, "link"), { recursive: true });
+  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
+    linkId: sidecar().linkId, pid: 42, argv, ownerPid: process.pid, startTime: "adopted-start" }));
+  let forwarded = 0;
+  const relay = () => relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
+    method: "POST", body: '{"input":"private"}',
+  }), { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
+    tunnel: h.supervisor, holdMs: 10,
+    fetchImpl: (async () => { forwarded += 1; return Response.json({ relayed: true }); }) as typeof fetch,
+  });
+  try {
+    await h.start();
+    await h.step();
+    expect(await h.supervisor.connected()).toBe(true);
+    unreadable = true;
+    expect((await relay()).status).toBe(503);
+    expect(forwarded).toBe(0);
+    expect(h.supervisor.status()).toMatchObject({ state: { kind: "connected" }, pid: 42 });
+    expect((await relay()).status).toBe(200);
+    expect(forwarded).toBe(1);
+    await h.step(30_000);
+    expect(h.probes).toHaveLength(2);
+    expect(h.ssh.children).toHaveLength(0);
+  } finally {
+    await h.close();
+  }
+});
+
 test("an adopted PID with changed start identity cannot receive another probe or relay", async () => {
   const argv = buildTunnelArgv({ alias: sidecar().alias, direction: "L", bindPort: 19002,
     targetPort: 19001, knownHostsFile: "/tmp/ocx-known-hosts" });
   let currentStart = "adopted-start";
+  const signals: NodeJS.Signals[] = [];
   const h = supervisorHarness({
     platform: "darwin",
     isAlive: pid => pid === 42 || pid === process.pid,
     readProcessInfo: pid => pid === 42
       ? { ppid: process.pid, args: argv.join(" "), startTime: currentStart } : null,
-    ownsLoopbackListener: async (_port, pid) => pid === 42,
+    ownsLoopbackListener: async (_port, pid) => pid === 42 || pid >= 31_000,
+    signal: (_pid, signal) => { signals.push(signal); },
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
   writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
@@ -871,9 +915,12 @@ test("an adopted PID with changed start identity cannot receive another probe or
     });
     expect(response.status).toBe(503);
     expect(forwarded).toBe(0);
-    expect(h.supervisor.status()).toMatchObject({ state: { kind: "failed" } });
-    await h.step(30_000);
-    expect(h.probes).toHaveLength(1);
+    expect(signals).toEqual([]);
+    await h.step();
+    expect(h.ssh.children).toHaveLength(1);
+    await h.step();
+    expect(h.state()).toBe("connected");
+    expect(h.probes).toHaveLength(2);
   } finally {
     await h.close();
   }

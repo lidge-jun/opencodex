@@ -294,11 +294,13 @@ function darwinProcessInfo(pid: number): DarwinProcessInfo | null {
   }
 }
 
-/** Re-read a watched tunnel's current process identity on every key-bearing admission. */
-async function adoptedIdentityMatches(record: ClientTunnelPidfile, deps: OrphanReapDeps): Promise<boolean> {
-  if (!record.startTime) return false;
+type AdoptedIdentityVerdict = "match" | "mismatch" | "unknown";
+
+/** An unreadable identity denies this admission; only readable disagreement releases adoption. */
+async function inspectAdoptedIdentity(record: ClientTunnelPidfile, deps: OrphanReapDeps): Promise<AdoptedIdentityVerdict> {
+  if (!record.startTime) return "unknown";
   const platform = deps.platform ?? process.platform;
-  const check = async (): Promise<boolean> => {
+  const check = async (): Promise<AdoptedIdentityVerdict> => {
     if (platform === "linux") {
       const [argv, startTime] = await Promise.all([
         deps.readProcessArgv
@@ -308,7 +310,8 @@ async function adoptedIdentityMatches(record: ClientTunnelPidfile, deps: OrphanR
           ? Promise.resolve().then(() => deps.readProcessStartTime!(record.pid, platform))
           : readFileAsync(`/proc/${record.pid}/stat`, "utf8").then(parseLinuxStartTime),
       ]);
-      return argv !== null && sameArgv(argv, record.argv) && startTime === record.startTime;
+      if (argv === null || startTime === null) return "unknown";
+      return sameArgv(argv, record.argv) && startTime === record.startTime ? "match" : "mismatch";
     }
     if (platform === "darwin") {
       const info = deps.readProcessInfo
@@ -316,16 +319,17 @@ async function adoptedIdentityMatches(record: ClientTunnelPidfile, deps: OrphanR
         : await execFileAsync("/bin/ps", ["-ww", "-o", "ppid=", "-o", "lstart=", "-o", "args=", "-p", String(record.pid)], {
           encoding: "utf8", timeout: PROCESS_IDENTITY_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true,
         }).then(result => parseDarwinProcessInfo(result.stdout));
-      return info !== null && info.args === record.argv.join(" ") && info.startTime === record.startTime;
+      if (info === null) return "unknown";
+      return info.args === record.argv.join(" ") && info.startTime === record.startTime ? "match" : "mismatch";
     }
-    return false;
+    return "unknown";
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<false>(resolve => {
-    timer = setTimeout(() => resolve(false), PROCESS_IDENTITY_TIMEOUT_MS);
+  const deadline = new Promise<"unknown">(resolve => {
+    timer = setTimeout(() => resolve("unknown"), PROCESS_IDENTITY_TIMEOUT_MS);
     timer.unref?.();
   });
-  try { return await Promise.race([check().catch(() => false), deadline]); }
+  try { return await Promise.race([check().catch(() => "unknown" as const), deadline]); }
   finally { if (timer) clearTimeout(timer); }
 }
 
@@ -621,11 +625,20 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     if (!candidate) return false;
     if (adopted !== null) {
       const record = adoptedRecord;
-      if (!record || !await adoptedIdentityMatches(record, deps)) {
-        if (adopted === candidate.pid && ownerGeneration === candidate.generation) {
+      const identity = record ? await inspectAdoptedIdentity(record, deps) : "unknown";
+      if (identity !== "match") {
+        if (identity === "mismatch" && record && adopted === candidate.pid && ownerGeneration === candidate.generation) {
+          // The old PID may now name another process. Never signal it; discard only our stale
+          // pidfile and let the next supervisor tick launch a fresh tunnel.
+          abortProbe();
+          removePidfileIfPid(clientTunnelPidfilePath(deps.configDir), candidate.pid, record.startTime);
+          adopted = null;
           adoptedRecord = null;
+          tunnelPort = null;
+          linkId = null;
+          probe = null;
           invalidateOwnerProof();
-          setState(failedTunnel("forward", now(), policy, now()));
+          setState(IDLE);
         }
         return false;
       }
