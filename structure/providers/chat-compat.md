@@ -593,3 +593,8 @@ Canonical Responses identity sanitation and narrowly scoped pre-output combo rec
 Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+## DeepSeek Artifact schema compatibility
+
+`src/adapters/openai-chat/tool-schema.ts` omits schema `pattern` and `anyOf` constraints and strict mode for unnamespaced `Artifact` tools on `api.deepseek.com`. Surrounding properties and required fields remain; union-only nodes become unconstrained, so tool execution must validate inputs.
+Property names, literal defaults/examples, and caller schemas are preserved; other tools and hosts retain existing normalization. `tests/providers/deepseek-artifact-tool-schema.test.ts` checks the serialized request.
