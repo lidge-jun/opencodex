@@ -1682,6 +1682,93 @@ test("the proxy admission secret is never relayed to the forward upstream", asyn
   }
 });
 
+test("proxy admission bearer with pool forward candidate routes to OpenAI using pool credentials", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret-pool";
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  saveConfig({
+    ...forwardConfig(upstream.url.toString().replace(/\/$/, "")),
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "openai",
+    providers: {
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
+    },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-img", email: "pool-img@example.test", isMain: false, chatgptAccountId: "acct-pool-img" },
+    ],
+    activeCodexAccountId: "pool-img",
+  } as OcxConfig);
+  saveCodexAccountCredential("pool-img", {
+    accessToken: "pool-img-access-token",
+    refreshToken: "pool-img-refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    chatgptAccountId: "acct-pool-img",
+  });
+
+  const server = startServer(0);
+  try {
+    // Standard client authenticates with the proxy admission secret in Authorization: Bearer.
+    // In pool mode, this must route to OpenAI forward and replace the bearer with the managed pool token.
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-secret-pool",
+      },
+      body: JSON.stringify({ prompt: "editorial cartoon in ink", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].path).toBe("/images/generations");
+    expect(captured[0].headers.get("authorization")).toBe("Bearer pool-img-access-token");
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-img");
+    expect([...captured[0].headers.values()].some(v => v.includes("proxy-secret-pool"))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("proxy admission bearer with only direct forward candidate skips forward and falls back safely", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret-dir";
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeImagesUpstream(captured);
+  // Default canonicalOpenAiProvider has accountMode direct and no pool accounts configured
+  saveConfig({
+    port: 0,
+    hostname: "0.0.0.0",
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: canonicalOpenAiProvider,
+      "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
+    },
+  } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    // With direct candidate only, forwarding the proxy secret is prohibited, so forward is skipped
+    // and keyedProvider serves the request instead.
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer proxy-secret-dir",
+      },
+      body: JSON.stringify({ prompt: "test prompt", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer " + "sk-platform-key");
+    expect([...captured[0].headers.values()].some(v => v.includes("proxy-secret-dir"))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 // ── Google Antigravity (CCA) image generation fallback ──
 
 /**

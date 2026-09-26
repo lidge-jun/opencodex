@@ -659,21 +659,25 @@ export async function handleImages(
   }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
   // Admission bearer is valid proxy auth (requireApiAuth already passed) but must never be
-  // forwarded as OpenAI ChatGPT credentials. When the caller sent it, skip OpenAI forward
-  // and allow CCA / keyed paths instead of rejecting the whole request.
-  let skipOpenAiForwardForAdmissionBearer = false;
+  // forwarded as OpenAI ChatGPT credentials. When the caller sent it, direct candidates
+  // that would forward caller credentials are skipped, but managed pool candidates remain
+  // eligible because resolveFirstUsableOpenAiSidecar substitutes them with local OAuth credentials.
+  let callerBearerMayBeForwarded = true;
   if (!explicitKeyedProvider) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
       if (err instanceof ForwardAdmissionCredentialError) {
-        skipOpenAiForwardForAdmissionBearer = true;
+        callerBearerMayBeForwarded = false;
       } else {
         throw err;
       }
     }
   }
 
-  const canUseOpenAiForward = !skipOpenAiForwardForAdmissionBearer && candidates.forwardCandidates.length > 0;
+  const eligibleForwardCandidates = callerBearerMayBeForwarded
+    ? candidates.forwardCandidates
+    : candidates.forwardCandidates.filter(c => c.accountMode !== "direct");
+  const canUseOpenAiForward = eligibleForwardCandidates.length > 0;
 
   if (!canUseOpenAiForward && !candidates.keyed) {
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint, admission);
@@ -696,7 +700,7 @@ export async function handleImages(
   let forwardAuthError: Response | undefined;
   if (canUseOpenAiForward) {
     try {
-      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config, {
+      forward = await resolveFirstUsableOpenAiSidecar(eligibleForwardCandidates, req.headers, config, {
         beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
       });
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);
@@ -742,6 +746,7 @@ export async function handleImages(
     for (const [name, value] of forward.headers) headers[name] = value;
     // The ChatGPT codex backend takes bare paths (matches the adapter's `${baseUrl}/responses`).
     url = `${provider.baseUrl}/images/${endpoint}`;
+    validateForwardAdmissionCredential(new Headers(headers), config);
   } else if (forwardAuthError) {
     // Before surfacing the OpenAI auth failure, try CCA — the user may have a
     // valid Google Antigravity login even though their OpenAI pool is broken.
