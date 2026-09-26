@@ -44,6 +44,7 @@ import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { baseCompactionBody, compactionRequest, completedPayload, jsonResponse, keyProviderConfig, nativePoolConfig, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const originalFetch = globalThis.fetch;
 
@@ -981,7 +982,7 @@ describe("compact alternate-account attempt (#913)", () => {
           clearComboTargetCooldowns();
         }
       });
-    });
+    }, SERVER_BUDGET_MS);
   }
 
   for (const [model, account] of [["gpt-5.5", "pool-a"], ["side/gpt-5.5", "pool-b"]] as const) {
