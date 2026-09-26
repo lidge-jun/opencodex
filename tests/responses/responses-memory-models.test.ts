@@ -6,6 +6,7 @@ import {
   detectMemoryModelPhase,
 } from "../../src/server/responses/memory-models";
 import { handleResponses } from "../../src/server/responses";
+import { MODEL_NOT_ALLOWED_FOR_KEY } from "../../src/server/admission-model-scope";
 import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { warnDegradedMemoryModels } from "../../src/config/load-degrade";
@@ -301,6 +302,30 @@ describe("memory model routing", () => {
     const response = await handleResponses(request(body(), extractMetadata()), settings, { model: "", provider: "" });
     expect(response.status).toBe(409);
     expect((await response.json() as { error: { code: string } }).error.code).toBe(MEMORY_MODEL_TARGET_UNAVAILABLE_CODE);
+    expect(calls).toEqual([]);
+  });
+
+  test("an admission denial on the memory target keeps the key's own refusal", async () => {
+    const settings = config();
+    settings.apiKeys = [{
+      id: "scoped", name: "mail", key: "ocx_data_" + "c".repeat(40),
+      createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["elsewhere"],
+    }];
+    const calls: string[] = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)).model);
+      return Response.json(completion());
+    }) as typeof fetch;
+    const response = await handleResponses(
+      request(body(), extractMetadata()),
+      settings,
+      { model: "", provider: "" },
+      { admission: { kind: "configured", keyId: "scoped", source: "bearer" } },
+    );
+    // The shared resolver rethrows an admission refusal, so the memory path reports the key's
+    // scope instead of turning it into an unavailable target.
+    expect(response.status).toBe(403);
+    expect((await response.json() as { error: { type: string } }).error.type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
     expect(calls).toEqual([]);
   });
 
