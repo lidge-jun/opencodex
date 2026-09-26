@@ -1077,6 +1077,8 @@
     "kiro-remote-image.test.ts": "providers/kiro",
     "kiro-retry.test.ts": "providers/kiro",
     "kiro-review-regressions.test.ts": "providers/kiro",
+    "kiro-metering-events.test.ts": "providers/kiro",
+    "kiro-metering-usage.test.ts": "providers/kiro",
     "kiro-stream.test.ts": "providers/kiro",
     "kiro-usage-quota.test.ts": "providers/kiro",
     "kiro-windows-cli-db-path.test.ts": "providers/kiro",

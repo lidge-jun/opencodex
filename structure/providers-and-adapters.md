@@ -97,6 +97,9 @@ Inline document admission shares one encoding predicate between its scanner and 
 `src/responses/inline-document.ts`: malformed base64 quantum/padding lengths are refused,
 and valid padded or unpadded payloads pass unchanged without a decoding allocation.
 
+Kiro metering uses the [provider credit contract](providers/kiro.md#kiro-reasoning-round-trip-signature);
+`src/types/request.ts` keeps reported credits separate from estimated token usage.
+
 Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
 to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
 response. `src/bridge.ts` is the compatibility facade that re-exports both.

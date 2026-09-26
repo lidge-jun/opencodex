@@ -402,6 +402,14 @@ those providers, but `ocx login codex --reauth` routes to their account-pool rea
 the dashboard Codex account pool also performs. See
 [`ocx status` / `ocx doctor`](/reference/cli/) in the CLI reference.
 
+### Kiro request credits
+
+When Kiro emits credit metering, request logs preserve the reported spend as
+`usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
+token counts may still be estimated, and the credit value does not replace USD cost estimates.
+Completion fallback requests add their reported credits. An absent value means Kiro did not
+report credit usage; an explicit zero means it reported no spend.
+
 ### Kiro credential import
 
 Kiro login expects the Kiro CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
