@@ -31,7 +31,7 @@ import { confirmAction } from "./action-dialogs";
 import { hostOs, isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
-import { watchMacTitlebarMetrics } from "./lib/window-chrome";
+import { watchMacTitlebarMetrics, windowChromeHandlers } from "./lib/window-chrome";
 
 type Theme = "light" | "dark" | "system";
 
@@ -394,7 +394,9 @@ export default function App() {
         </ToastNotice>
       )}
       {/* inert while the drawer is open: keeps focus and assistive tech inside the drawer */}
-      <header className="mobile-topbar" inert={navOpen}>
+      {/* At narrow widths the sidebar strip is hidden and the main strip scrolls away, so in
+          the desktop shell the sticky header is the window's drag surface. */}
+      <header className="mobile-topbar" inert={navOpen} {...(desktopShell ? windowChromeHandlers() : {})}>
         <button ref={menuBtnRef} type="button" className="menu-toggle" onClick={() => setNavOpen(o => !o)}
           aria-expanded={navOpen} aria-controls="app-sidebar"
           aria-label={t(navOpen ? "nav.closeMenu" : "nav.openMenu")} title={t(navOpen ? "nav.closeMenu" : "nav.openMenu")}>
