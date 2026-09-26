@@ -121,8 +121,12 @@ function trustError(path: string, kind: "file" | "directory"): string | null {
   if (process.platform === "win32") return null;
   const uid = process.getuid?.();
   if (uid !== undefined && stats.uid !== uid) return "owned by another user";
+  // A POSIX ACL write mask may also set group-write mode bits. Inspect the ACL first so
+  // the extended grant is explicitly refused even when the mode check would also refuse it.
+  const aclError = aclTrustError(path);
+  if (aclError) return aclError;
   if ((stats.mode & 0o022) !== 0) return "writable by group or others (chmod go-w)";
-  return aclTrustError(path);
+  return null;
 }
 
 /** Null when the file is safe to execute, otherwise the reason it is refused. */
@@ -157,11 +161,11 @@ export function pluginAncestorsTrustError(realDir: string): string | null {
       return "ancestor inspection failed";
     }
     if (uid !== undefined && stats.uid !== uid && stats.uid !== 0) return `${current} is owned by another user`;
+    const aclError = aclTrustError(current);
+    if (aclError) return aclError;
     if ((stats.mode & 0o022) !== 0 && (stats.mode & 0o1000) === 0) {
       return `${current} is writable by group or others`;
     }
-    const aclError = aclTrustError(current);
-    if (aclError) return aclError;
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;

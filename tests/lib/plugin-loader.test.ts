@@ -1,10 +1,10 @@
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { delimiter, dirname, join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
-import { loadOcxPlugins, pluginFileTrustError } from "../../src/plugins/loader";
+import { loadOcxPlugins, pluginDirectoryTrustError, pluginFileTrustError } from "../../src/plugins/loader";
 import {
   hasUpstreamRewriters,
   resetUpstreamRewritersForTests,
@@ -12,6 +12,8 @@ import {
 } from "../../src/plugins/upstream-hooks";
 
 let dir: string;
+const linuxAclToolsAvailable = process.platform === "linux"
+  && ["getfacl", "setfacl"].every(command => spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0);
 
 // The loader refuses a plugin directory with a group- or other-writable, non-sticky ancestor.
 // The test runner nests per-process temp roots and creates them with the caller's umask, which is
@@ -138,6 +140,61 @@ test.skipIf(process.platform !== "darwin")("an ACL on the plugin directory block
   const [result] = await loadOcxPlugins(dir);
   expect(result?.error).toBe("directory_untrusted");
   expect(hasUpstreamRewriters()).toBe(false);
+});
+
+test.skipIf(process.platform === "win32")("recorded Linux getfacl output rejects a named ACL entry", () => {
+  const file = writePlugin("redirect.ts", REDIRECT_PLUGIN, 0o600);
+  // POSIX ACL write masks can surface as group-write mode bits after setfacl.
+  chmodSync(file, 0o660);
+  const fakeGetfacl = join(dir, "getfacl");
+  writeFileSync(fakeGetfacl, '#!/bin/sh\nprintf "user::rw-\\nuser:nobody:rw-\\ngroup::---\\nmask::rw-\\nother::---\\n"\n');
+  chmodSync(fakeGetfacl, 0o700);
+  const previousPath = process.env.PATH;
+  const platform = process.platform;
+  try {
+    process.env.PATH = `${dir}${delimiter}${previousPath ?? ""}`;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    expect(pluginFileTrustError(file)).toBe("has an access control list");
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+});
+
+test.skipIf(process.platform !== "linux" || process.env.GITHUB_ACTIONS !== "true")(
+  "ubuntu-latest exposes getfacl and setfacl for the ACL regression", () => {
+    expect(linuxAclToolsAvailable).toBe(true);
+  },
+);
+
+test.skipIf(process.platform !== "linux" || !linuxAclToolsAvailable)("a 0600 Linux plugin with a named write ACL is refused", async () => {
+  const file = writePlugin("redirect.ts", REDIRECT_PLUGIN, 0o600);
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+  execFileSync("setfacl", ["-m", "u:65534:rw", file]);
+  expect(pluginFileTrustError(file)).toBe("has an access control list");
+  const [result] = await loadOcxPlugins(dir);
+  expect(result?.error).toBe("file_untrusted");
+  expect(hasUpstreamRewriters()).toBe(false);
+});
+
+test.skipIf(process.platform !== "linux" || !linuxAclToolsAvailable)("a Linux plugin directory with a named write ACL is refused", async () => {
+  writePlugin("redirect.ts", REDIRECT_PLUGIN);
+  chmodSync(dir, 0o700);
+  expect(statSync(dir).mode & 0o777).toBe(0o700);
+  execFileSync("setfacl", ["-m", "u:65534:rwx", dir]);
+  expect(pluginDirectoryTrustError(dir)).toBe("has an access control list");
+  const [result] = await loadOcxPlugins(dir);
+  expect(result?.error).toBe("directory_untrusted");
+  expect(hasUpstreamRewriters()).toBe(false);
+});
+
+test.skipIf(process.platform !== "linux" || !linuxAclToolsAvailable)("a Linux plugin without an extended ACL still loads", async () => {
+  const file = writePlugin("redirect.ts", REDIRECT_PLUGIN, 0o600);
+  expect(pluginFileTrustError(file)).toBeNull();
+  const [result] = await loadOcxPlugins(dir);
+  expect(result?.loaded).toBe(true);
+  expect(hasUpstreamRewriters()).toBe(true);
 });
 
 test.skipIf(process.platform === "win32")("a symbolic link is refused even when it points to a trusted file", async () => {
