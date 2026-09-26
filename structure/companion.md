@@ -68,15 +68,18 @@ The native window/transport boundary remains in [Desktop shell](desktop-shell.md
 ## Widget refresh
 
 The Tauri app writes the widget snapshot from Rust (`desktop/src-tauri/src/widget.rs`) into the
-extension's container. A write happens when anything the widget displays changed, ignoring
-`generatedAt` and `lastUpdated`, or when the file on disk is older than a 15-minute heartbeat;
-the heartbeat reads the file's own `generatedAt`, so a restarted app decides the same way. After
-a write the host calls the NativeTray export `ocx_widget_reload_timelines`
-(`app/Sources/NativeTray/WidgetReload.swift`), which asks WidgetKit to reload the
-`OpenCodexWidget` kind on the main queue. WidgetKit's reload budget still applies, so the widget
-keeps a 15-minute fallback timeline, renders its "Updated" age as a self-updating relative date,
-and schedules a stale entry at `WidgetSnapshot.staleDate` (two heartbeats after the write, owned
-by `app/Sources/MenuBarCore/WidgetSnapshot.swift`). Coverage: `widget::macos` Rust tests and
+extension's container. Writing and reloading are separate. The file is written whenever anything
+other than `generatedAt` changed, so its `lastUpdated` is always the latest poll, and an unchanged
+file is rewritten after a 15-minute heartbeat measured from its own `generatedAt`, so a restarted
+app decides the same way. A reload is requested through the NativeTray export
+`ocx_widget_reload_timelines` (`app/Sources/NativeTray/WidgetReload.swift`, WidgetKit on the main
+queue) only when what the widget displays changed, ignoring both timestamps, and at most once
+every 20 minutes; timestamp-only writes and heartbeats never reload. Apple does not define whether
+a menu bar accessory app counts as foreground for the reload budget, so dashboard visibility does
+not lift the limit. The widget's own 30-minute fallback timeline rereads a change that landed
+inside the reload window, renders the "Updated" age as a self-updating relative date, and
+schedules a stale entry at `WidgetSnapshot.staleDate` (two heartbeats after the write, owned by
+`app/Sources/MenuBarCore/WidgetSnapshot.swift`). Coverage: `widget::macos` Rust tests and
 `WidgetSnapshotSuite`.
 
 Behavior coverage lives in `tests/usage/usage-timeline.test.ts`,
