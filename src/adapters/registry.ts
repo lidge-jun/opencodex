@@ -13,6 +13,7 @@ import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
 import { createOpenAIChatAdapter } from "./openai-chat";
+import { withZenFreeTierSupport } from "./openai-chat/zen-free-tier";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
@@ -85,7 +86,7 @@ export const ADAPTER_REGISTRY = {
     wire: "openai-chat",
     mutation: "codex-owned",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) =>
-      withUniqueToolCallIds(withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider))),
+      withZenFreeTierSupport(withUniqueToolCallIds(withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider))), provider),
   },
   "ollama-native": {
     wire: "ollama-native",
