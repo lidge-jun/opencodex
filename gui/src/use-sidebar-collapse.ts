@@ -34,12 +34,11 @@ function isEditableTarget(target: EventTarget | null): boolean {
  */
 export function useSidebarCollapse(): { collapsed: boolean; toggle: () => void } {
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed);
-  const toggle = useCallback(() => {
-    setCollapsed((current) => {
-      writeSidebarCollapsed(!current);
-      return !current;
-    });
-  }, []);
+  const toggle = useCallback(() => setCollapsed((current) => !current), []);
+  // Updaters may run without a commit, so the write follows the render instead.
+  useEffect(() => {
+    writeSidebarCollapsed(collapsed);
+  }, [collapsed]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
