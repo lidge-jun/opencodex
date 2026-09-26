@@ -718,6 +718,8 @@ export interface OcxConfig {
   modelPinnedEfforts?: Record<string, string>;
   compactionRouting?: {
     model: string;
+    /** Incoming model allowlist: exact selectors or provider/*; omitted means all models. */
+    sourceModels?: string[];
     reasoningEffort?: string;
     /** Compaction triggers this override covers; omission means `["manual"]`. */
     triggers?: ("manual" | "auto")[];

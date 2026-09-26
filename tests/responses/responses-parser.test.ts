@@ -1259,3 +1259,68 @@ test("parser leaf seams preserve tool and format contracts without importing the
     expect(readFileSync(repoPath("src", "responses", leaf), "utf8")).not.toMatch(/from\s+["\x27]\.\/parser["\x27]/);
   }
 });
+
+describe("compaction turns expose reasoning to the summarizer", () => {
+  const parse = (input: unknown[]) => parseRequest({ model: "kimi/k3-256k", input });
+  const reasoningItem = (text: string) => ({
+    type: "reasoning",
+    id: "rs_1",
+    content: [{ type: "reasoning_text", text }],
+  });
+  const userMsg = { type: "message", role: "user", content: [{ type: "input_text", text: "调整压缩方案" }] };
+  const assistantMsg = { type: "message", role: "assistant", content: [{ type: "output_text", text: "好的" }] };
+  const contentParts = (parsed: ReturnType<typeof parse>) => {
+    const assistant = parsed.context.messages.find((message) => message.role === "assistant");
+    const content = assistant && "content" in assistant ? assistant.content : [];
+    return (Array.isArray(content) ? content : []) as { type: string; text?: string; thinking?: string }[];
+  };
+
+  test("compaction_trigger turns render reasoning as visible text instead of thinking parts", () => {
+    const parsed = parse([userMsg, reasoningItem("应该保留推理"), assistantMsg, { type: "compaction_trigger" }]);
+    expect(parsed._compactionRequest).toBe(true);
+    const parts = contentParts(parsed);
+    expect(parts.filter((p) => p.type === "text").map((p) => p.text).join("\n")).toContain("应该保留推理");
+    expect(parts.some((p) => p.type === "thinking")).toBe(false);
+  });
+
+  test("consecutive reasoning items merge into one text block on compaction turns", () => {
+    const parsed = parse([
+      userMsg,
+      reasoningItem("第一步结论"),
+      { type: "reasoning", id: "rs_2", content: [{ type: "reasoning_text", text: "第二步结论" }] },
+      assistantMsg,
+      { type: "compaction_trigger" },
+    ]);
+    const parts = contentParts(parsed);
+    const reasoningTexts = parts.filter((p) => p.type === "text" && (p.text ?? "").includes("assistant_reasoning"));
+    expect(reasoningTexts).toHaveLength(1);
+    expect(reasoningTexts[0]?.text).toContain("第一步结论");
+    expect(reasoningTexts[0]?.text).toContain("第二步结论");
+  });
+
+  test("normal turns keep reasoning as thinking parts", () => {
+    const parsed = parse([userMsg, reasoningItem("应该保留推理"), assistantMsg]);
+    expect(parsed._compactionRequest).toBeUndefined();
+    expect(contentParts(parsed)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "thinking", thinking: "应该保留推理" })]),
+    );
+  });
+
+  test("keeps trailing reasoning when compaction follows without an assistant message", () => {
+    const parsed = parse([userMsg, reasoningItem("最终决策理由"), { type: "compaction_trigger" }]);
+    expect(parsed.context.messages).toMatchObject([
+      { role: "user" },
+      { role: "assistant", content: [{ type: "text", text: expect.stringContaining("最终决策理由") }] },
+    ]);
+  });
+
+  test("keeps reasoning on its assistant turn before the next user message", () => {
+    const followUp = { type: "message", role: "user", content: [{ type: "input_text", text: "继续" }] };
+    const parsed = parse([userMsg, reasoningItem("上一轮的决策理由"), followUp, { type: "compaction_trigger" }]);
+    expect(parsed.context.messages).toMatchObject([
+      { role: "user", content: "调整压缩方案" },
+      { role: "assistant", content: [{ type: "text", text: expect.stringContaining("上一轮的决策理由") }] },
+      { role: "user", content: "继续" },
+    ]);
+  });
+});

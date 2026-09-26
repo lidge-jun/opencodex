@@ -239,6 +239,12 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 
 ## Compaction routing overrides
 
+Optional `compactionRouting.sourceModels` restricts the override to exact incoming model selectors
+or provider-wide `provider/*` selectors. Omission keeps the existing all-model behavior; malformed
+or empty lists disable the override. Matching is case-sensitive and precedes all model rewrites.
+A bare native compaction model is not inferred to belong to a previous routed turn: scoped
+overrides leave it unchanged, including when Codex chose it for a routed thread's auto compaction.
+
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
 `x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
@@ -279,7 +285,7 @@ build both honor for canonical ChatGPT destinations. Native ciphertext is replay
 backend that minted it; the conversation model would otherwise resume with an omission marker
 in place of its history.
 
-`tests/responses/responses-compaction-override.test.ts` covers trigger selection, config validation,
+`tests/responses/responses-compaction-override.test.ts` covers source filtering, trigger selection, config validation,
 native and routed handlers, same-provider credential retention, cross-provider portable summaries
 and their replay, combo failover, and subsequent conversation settings.
 ## Ambiguous connection-reset replay boundary

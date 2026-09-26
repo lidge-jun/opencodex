@@ -594,8 +594,10 @@ subscription with a warning when detection is inconclusive. See
 ## Compaction routing
 
 In **Dashboard → Overview → Compaction routing**, choose a model, which triggers it applies to,
-and an optional reasoning effort, then click **Save**. Select **Use conversation model** and save
-to remove the override. Changes apply to the next compaction request without restarting the proxy.
+an optional reasoning effort, and whether the override covers all source models or only selected
+sources. For selected sources, check individual models or provider-wide `provider/*` entries,
+then click **Save**. Select **Use conversation model** and save to remove the override. Changes
+apply to the next compaction request without restarting the proxy.
 
 Set `compactionRouting` in OpenCodex `config.json` to override the model Codex's compaction
 requests use. The setting is disabled when omitted.
@@ -611,6 +613,16 @@ requests use. The setting is disabled when omitted.
 ```
 
 `model` accepts native model IDs, provider-qualified model IDs, and configured combos.
+Optional `sourceModels` limits the override to exact incoming model IDs or `provider/*` patterns,
+for example `["kimi/*", "google-antigravity/*"]`. Matching is case-sensitive. Omit it for the
+existing all-model behavior; empty, duplicate, or malformed lists are invalid. The Dashboard
+source-scope picker can edit the allowlist and preserves saved selectors absent from the current
+catalog. You can also edit it through `config.json` or `PUT /api/settings`.
+This checks the incoming compaction model, not an inferred conversation model. If Codex sends a
+bare native compaction model for a routed thread, it does not match those provider patterns and
+keeps its existing route. This conservative behavior protects GPT but can leave some automatic
+compactions on the native path. Ordinary non-compaction turns are never changed.
+
 `reasoningEffort` is optional; omit it to preserve the incoming effort. Supported declarations
 are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
 Existing provider effort rules still apply. The native `/responses/compact` endpoint keeps

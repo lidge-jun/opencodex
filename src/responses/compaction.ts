@@ -21,7 +21,9 @@ export const OCX_NATIVE_REPLAY_RECOVERY_NOTE =
   "Threads compacted through a routed provider can contain OpenCodeX-owned ocx1 state. "
   + "Before resuming one through native Codex, run `ocx recover-history --ocx-compaction <thread-id> --yes`.";
 
-/** Mirrors codex-rs core/templates/compact/prompt.md (the local-compaction instruction). */
+/** Mirrors codex-rs core/templates/compact/prompt.md (the local-compaction instruction), plus an
+ * ocx extension: routed compaction inlines reasoning as <assistant_reasoning> blocks (parser.ts),
+ * so the prompt tells the summarizer to mine them for rationale instead of ignoring the markup. */
 export const COMPACT_PROMPT = `You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
 
 Include:
@@ -29,6 +31,8 @@ Include:
 - Important context, constraints, or user preferences
 - What remains to be done (clear next steps)
 - Any critical data, examples, or references needed to continue
+
+The conversation may include the assistant's reasoning traces inside <assistant_reasoning>...</assistant_reasoning> blocks. Use them to capture the rationale behind key decisions, alternatives that were rejected, and open questions — summarize what they conclude, do not copy them verbatim.
 
 Be concise, structured, and focused on helping the next LLM seamlessly continue the work.`;
 

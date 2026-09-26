@@ -909,7 +909,7 @@ describe("manual compaction settings", () => {
     expect((await (await getSettings(config))!.json()).compactionRouting).toEqual(setting);
     await putSettings(config, { compactionRouting: { model: "gateway/cheap" } });
     expect(loadConfig().compactionRouting).toEqual({ model: "gateway/cheap" });
-    const automatic = { model: "gateway/cheap", triggers: ["manual", "auto"] };
+    const automatic = { model: "gateway/cheap", triggers: ["manual", "auto"], sourceModels: ["kimi/*", "google-antigravity/*"] };
     expect((await putSettings(config, { compactionRouting: automatic }))?.status).toBe(200);
     expect(loadConfig().compactionRouting).toEqual(automatic);
     await putSettings(config, { compactionRouting: null });
