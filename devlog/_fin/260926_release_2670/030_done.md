@@ -60,3 +60,8 @@ Promotions: #5899 `preview` `9c6fb1ee8b`, #5900 `main` `4bc92294aa` (merge commi
 - #5866 low findings: observed Claude intercept state is captured at listener start; `PUT /api/claude-code` has no
   toggle-flight lock.
 - Kiro forced-login rollback is skipped when a test injects `saveCredential` (test surface only).
+
+## Registry note
+
+A direct registry read at 04:05:51Z showed `latest` = 2.67.0 and `preview` = 2.67.0-preview.20260926 (package
+`time.modified` 04:03:05Z), closing the stable run's pending verification. The run was not re-dispatched.
