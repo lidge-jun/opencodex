@@ -13,6 +13,8 @@
 
 ## Diff
 
+- `desktop/src-tauri/src/proxy.rs`: the account-switch transport from 010 item 6, with the fixed
+  vectors shared with `tests/server/local-account-switch-capability.test.ts`.
 - `desktop/src-tauri/src/native_tray_accounts.rs`: `accountId`, `switch`, `exhausted`; switch kind
   per source; tests.
 - `desktop/src-tauri/src/native_tray.rs`: register switch handler; validate and copy C strings on
@@ -23,4 +25,3 @@
 ## Accept
 
 cargo test native_tray*, swift build + NativeTrayTests, render of hover/blocked/exhausted states.
-

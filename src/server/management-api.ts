@@ -89,6 +89,8 @@ import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
 import { packageVersion } from "../lib/package-version";
+import { isLocalAccountSwitchPath } from "../lib/local-account-switch-capability";
+import { readVerifiedAccountSwitchBody } from "./local-account-switch-auth";
 
 // installed npm version instead of a stale hardcode.
 const MANAGEMENT_VERSION_FALLBACK = "0.0.0";
@@ -212,6 +214,19 @@ export async function handleManagementAPI(
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+  }
+  if (principal === "local-account-switch-capability") {
+    if (req.method !== "PUT" || !isLocalAccountSwitchPath(url.pathname) || url.search !== "") {
+      return jsonResponse({ error: "account switch capability scope mismatch" }, 403, req, config);
+    }
+    if (req.headers.has("content-encoding")) {
+      return jsonResponse({ error: "content encoding is not supported" }, 415, req, config);
+    }
+    const verified = await readVerifiedAccountSwitchBody(req);
+    if (verified.status !== 200) {
+      return jsonResponse({ error: "account switch body rejected" }, verified.status, req, config);
+    }
+    req = new Request(req.url, { method: req.method, headers: req.headers, body: Buffer.from(verified.body) });
   }
   // Management bodies are small JSON (provider names, key ids, settings). Reject oversized
   // payloads before any handler buffers them — the data plane has its own decompression cap.

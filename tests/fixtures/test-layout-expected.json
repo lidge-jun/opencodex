@@ -966,6 +966,7 @@
   "link-store.test.ts": "clients",
   "link-tunnel-state.test.ts": "clients",
   "local-aside-sync-capability.test.ts": "server",
+  "local-account-switch-capability.test.ts": "server",
   "local-destinations.test.ts": "lib",
   "local-management-attestation.test.ts": "server",
   "local-management-capability.test.ts": "server",

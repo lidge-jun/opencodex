@@ -24,7 +24,9 @@
    path, query; tampered body and digest; replay; expiry; 1 KiB boundary; compressed body; read and
    snapshot proofs cannot authorize a switch and a switch proof cannot authorize a read, snapshot or
    another PUT. A fixed MAC vector shared with Rust.
-6. Rust `desktop/src-tauri/src/proxy.rs`: `AccountSwitch` kind enum → constant path,
+6. Moved to 020 (PR6) during B: the Rust transport has no caller until the panel exists, and
+   Linux clippy runs with `-D warnings`, so shipping it alone would fail as dead code. Contract
+   kept here for reference: `desktop/src-tauri/src/proxy.rs` `AccountSwitchKind` → constant path,
    `mint_account_switch`, `put_account_switch(kind, body)`; tests for the MAC vector, body bytes,
    and path selection. Error mapping stays the existing one: invalid kind or serialization →
    `Http(400)`, body over 1 KiB → `Http(413)`, no usable binding or proof → `Unauthorized`,

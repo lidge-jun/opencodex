@@ -84,6 +84,16 @@ The desktop tray uses the same read-v1 contract for its fixed GET allowlist in
 `/api/providers/keys`. Provider selectors and `quota=1` remain signed into the
 exact query; these grants authorize no account or API-key mutations.
 
+The native desktop account switch uses a separate single-use capability for exactly
+`PUT /api/codex-auth/active`,
+`PUT /api/oauth/accounts/active`, and `PUT /api/providers/keys/active`, with no query or
+browser `Origin`. The HMAC binds nonce, method, path, PID, port, ten-second expiry and
+the SHA-256 digest of the exact request bytes. Server admission
+retains the authenticated digest per request; `src/server/management-api.ts` reads at
+most 1 KiB, rejects content encoding, verifies those bytes and then passes the same
+bytes to the ordinary management handler. A read or desktop snapshot grant cannot
+switch accounts, and the switch grant authorizes no other management mutation.
+
 OAuth and API-key login use the same process-bound pattern for live provider
 convergence without transporting provider credentials. After the CLI durably saves
 `config.json`, it challenges the exact runtime listener and sends one bodyless

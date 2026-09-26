@@ -249,6 +249,16 @@ describe("route exemptions stay honest", () => {
     });
   });
 
+  test("account-switch routes remain ordinary management mutations", () => {
+    for (const path of [
+      "/api/codex-auth/active", "/api/oauth/accounts/active", "/api/providers/keys/active",
+    ]) {
+      const row = MANAGEMENT_ROUTES.find(r => r.method === "PUT" && r.path === path);
+      expect(row?.mutates, path).toBe(true);
+      expect(row?.exempt, path).toBeUndefined();
+    }
+  });
+
   test("every mutating lab route is either verbed or bounded by a deferred-verb owner", () => {
     // The original plan exempted "20 /api/lab/* reads" under local-transport. The family
     // holds 7 mutating routes, and reading local SQLite cannot start an automation run,

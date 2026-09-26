@@ -1,4 +1,5 @@
 import { request as httpRequest } from "node:http";
+import { accountSwitchBodyDigest, createLocalAccountSwitchCapability, LOCAL_ACCOUNT_SWITCH_BODY_HEADER } from "../../src/lib/local-account-switch-capability";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 // Holds INV-AUTH-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -321,6 +322,39 @@ describe("management and data-plane credential separation", () => {
       expect(requireManagementAuth(request, unavailable, remoteConfig(), local)).toBeNull();
       expect(managementPrincipal(request, unavailable, remoteConfig(), local))
         .toBe("system-restart-capability");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("local account switch reaches the real management handler", async () => {
+    const secret = "B".repeat(43);
+    const server = startServer(0, {
+      localAttestationSecret: secret,
+      managementAuthState: { available: false, reason: "test unavailable state" },
+    });
+    const path = "/api/oauth/accounts/active";
+    const body = JSON.stringify({ provider: "nonexistent", accountId: "missing" });
+    const digest = accountSwitchBodyDigest(new TextEncoder().encode(body));
+    const nonce = "A".repeat(43);
+    const expiry = Date.now() + 10_000;
+    try {
+      const response = await fetch(new URL(path, server.url), {
+        method: "PUT", body,
+        headers: {
+          "content-type": "application/json",
+          [LOCAL_MANAGEMENT_EXPECTED_PID_HEADER]: String(process.pid),
+          [LOCAL_MANAGEMENT_NONCE_HEADER]: nonce,
+          [LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER]: String(expiry),
+          [LOCAL_ACCOUNT_SWITCH_BODY_HEADER]: digest,
+          [LOCAL_MANAGEMENT_CAPABILITY_HEADER]: createLocalAccountSwitchCapability(
+            secret, nonce, "PUT", path, process.pid, server.port, expiry, digest,
+          )!,
+        },
+      });
+      expect([401, 403, 503]).not.toContain(response.status);
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error?: string }).error).toBe("unknown oauth provider");
     } finally {
       await server.stop(true);
     }
