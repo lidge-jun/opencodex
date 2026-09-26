@@ -1,4 +1,7 @@
 {
+  "responses-compaction-recovery.test.ts": "responses",
+  "compaction-recovery-settings.test.ts": "config",
+  "responses-compaction-recovery-policy.test.ts": "responses",
   "deepseek-artifact-tool-schema.test.ts": "providers",
   "client-config-export-output-limit.test.ts": "config",
   "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",

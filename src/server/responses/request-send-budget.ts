@@ -60,6 +60,7 @@ export function createResponsesSendBudget(
   const noteTransientSends = (used: number): void => {
     const charged = Math.max(0, used);
     sendBudget.used += charged;
+    options.onCompactionRecoverySendsReported?.(charged);
     chargeWorkflowSends(workflowRootId, charged);
   };
   // Refused before any dispatch, and deliberately not by evicting the root's ledger entry:
@@ -156,7 +157,7 @@ export function createResponsesSendBudget(
    * refused and the request would answer with a synthetic 502 in place of the real 429 the hop
    * was recovering from.
    */
-  let pendingHopPermit: SingleUseDispatchPermit | undefined;
+  let pendingHopPermit: SingleUseDispatchPermit | undefined = options.compactionRecoveryPermit;
   /**
    * The budget an adapter's OWN dispatch ladder reserves against.
    *

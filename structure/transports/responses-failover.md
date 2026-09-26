@@ -1,5 +1,22 @@
 # Responses Failover And Replay
 
+`src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher.
+It requires explicit configuration and normalized attempt evidence, preserves ordinary requests,
+and refuses cancellation, committed semantic output, tool effects, protected failures, exhausted
+send budgets and repeated recovery. Its Devin `invalid_argument` exception is separately opted in;
+an opaque HTTP 400 alone never grants replay. The caller owns canonical target resolution, output
+validation and shared-budget reservation. `compaction-recovery.ts` connects this policy to
+self-contained routed v1/v2 compaction in `core.ts` and `compact.ts`; normal and successful
+requests keep their original route. One configured emergency target shares the original send
+and translation budgets. Physical-send receipts and explicit retry-helper reports reconcile legacy
+fetch sends without double charging external reservations; one prepaid emergency permit is shared
+with adapter dispatch, and only additional retries draw from the remainder. Adapter observers retain partial-output and structured denial evidence
+before response projection. Native encrypted compaction, uploaded files, stored continuations,
+and policy/combo routes are excluded. Emergency output must contain one readable portable
+compaction item; recent original user messages are retained verbatim, and recovery failure keeps
+the original failure. `tests/responses/responses-compaction-recovery-policy.test.ts` and
+`tests/responses/responses-compaction-recovery.test.ts` pin these boundaries.
+
 Retry, replay, and combo failover on the Responses data plane: upstream reset retry, the
 ambiguous-resend gate and replay boundary, combo quota fallback and commit boundaries, compaction
 routing overrides, and output headroom. The endpoint and dispatch rules they build on are in

@@ -27,6 +27,7 @@ import { createAdapterContinuations } from "./adapter-continuation";
 import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
+import { runWithCompactionRecovery } from "./compaction-recovery";
 
 /** Public Responses entry and compatibility exports. Implementations live with their owners. */
 
@@ -43,7 +44,7 @@ export async function handleResponses(
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
   try {
-    const response = await handleResponsesInner(req, config, logCtx, {
+    const response = await runWithCompactionRecovery(req, config, logCtx, {
       ...options,
       openAiSidecarAuth: options.openAiSidecarAuth === undefined
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
@@ -57,7 +58,7 @@ export async function handleResponses(
       translatorBudget,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
-    });
+    }, handleResponsesInner);
     return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
   } catch (error) {
     if (ownsBudget) translatorBudget.dispose();
@@ -101,6 +102,7 @@ async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return transportState;
+    options.onCompactionRecoveryRoute?.(requestState.route);
     const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
     if (sidecarState instanceof Response) return sidecarState;
     const responseEffects = createResponsesEffects(

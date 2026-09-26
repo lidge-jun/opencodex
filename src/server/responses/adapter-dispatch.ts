@@ -321,11 +321,18 @@ export async function prepareAdapterExchange(
       // legacy direct-Google exception is preserved exactly; every other adapter still keeps
       // reset-only semantics so combo failover hops on the first 5xx.
       const transientPolicy = transientRetryPolicyFor(route.provider);
+      const compactPrepaid = options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined;
+      if (compactPrepaid) sendBudgetState.pendingHopPermit = undefined;
+      let compactPrepaidUsed = false;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
       upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
+          if (compactPrepaid && !compactPrepaidUsed) {
+            if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+            compactPrepaidUsed = true;
+          }
           transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
@@ -341,12 +348,15 @@ export async function prepareAdapterExchange(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
-          ...(transientPolicy
+          ...(transientPolicy || compactPrepaid
             // Draws the remainder, not the raw policy. A combo child inherits the parent's
             // holder but used to take a fresh full allowance on its own first send, so the
             // shared counter was inherited without ever being read as a limit.
             ? {
-              attempts: remainingTransientSendBudget(transientPolicy.attempts),
+              // The first emergency send is already paid for. Only retries consume the
+              // remaining allowance; treating the booking as unavailable blocks a cap of two.
+              attempts: Math.min(transientPolicy?.attempts ?? 1,
+                remainingTransientSendBudget(transientPolicy?.attempts ?? 1) + (compactPrepaid ? 1 : 0)),
               onSendsConsumed: noteTransientSends,
             }
             : {}),
@@ -1105,6 +1115,11 @@ export async function prepareAdapterExchange(
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      options.onCompactionRecoveryAdapterEvent?.({
+        type: "error", status: upstreamResponse.status,
+        errorType: normalized.type, code: normalized.code,
+        message: "Structured upstream failure observed before client formatting",
+      });
       const message = normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)

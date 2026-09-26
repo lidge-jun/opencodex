@@ -21,12 +21,12 @@ Native main reauthentication follows the [CLI JSON output contract](runtime.md#n
 
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
-`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command.
-Apply adds pool configuration under the shared mutation lock; the
-[source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs
-deduplication and credential storage separately from Codex config injection.
+`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command. Apply adds pool configuration under the shared mutation lock;
+the [source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs deduplication and credential storage separately from Codex config injection.
 
 ## Config surface
+
+`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged.
 
 Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
 `ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the

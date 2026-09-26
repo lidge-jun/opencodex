@@ -22,6 +22,11 @@ linked sources after the quota await to reject revoked or rotated captures.
 
 ## Compact desktop usage
 
+`GET /api/settings` and successful `PUT /api/settings` report `compactionRecovery` as a block or
+null. The write accepts the strict failure-recovery schema or null to remove it, and restores the
+prior field if persistence fails. Changing this field alone does not converge catalogs or inject
+Codex configuration. `tests/config/compaction-recovery-settings.test.ts` covers that boundary.
+
 The standalone `/#/tray` GUI route presents local usage and account limits without the
 full dashboard navigation. It reuses the existing API session and fetch wrapper; it
 has no Tauri IPC capability. Companion settings control its sections and chart. Account

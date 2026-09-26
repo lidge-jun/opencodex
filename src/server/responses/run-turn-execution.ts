@@ -219,6 +219,10 @@ export async function executeResponsesRunTurn(
     ): Promise<void> => {
       const attemptSeq = ++runTurnAttemptSeq;
       let pacingSlot = preacquiredSlot;
+      const emit = (event: AdapterEvent) => {
+        options.onCompactionRecoveryAdapterEvent?.(event);
+        targetQueue.push(event);
+      };
       try {
         if (!pacingSlotAcquired) {
           pacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
@@ -271,7 +275,7 @@ export async function executeResponsesRunTurn(
             ),
             onRecoveryWithheld: noteAdapterRecoveryWithheld,
           },
-          targetQueue.push,
+          emit,
         );
         // LOCAL PATCH (runturn-websearch): adapters may write conversation/
         // continuation state onto the object they received; merge it back so
@@ -285,7 +289,7 @@ export async function executeResponsesRunTurn(
           Object.assign(parsed, routeState);
         }
       } catch (err) {
-        targetQueue.push(err instanceof RequestPacingQueueOverloadError
+        emit(err instanceof RequestPacingQueueOverloadError
           ? {
               type: "error",
               status: 429,
