@@ -21,7 +21,7 @@ export function issueSiblingHandoff(ownerPort: number): string {
   const home = getConfigDir();
   assertNotRealHomeUnderTest(home);
   const runtime = readRuntimePort(process.pid);
-  if (siblingOfLivePort() !== ownerPort || !runtime?.attestationSecret
+  if (siblingOfLivePort() !== ownerPort || !runtime
     || runtime.siblingOfPort !== ownerPort || runtime.port === ownerPort) {
     throw new Error("Cannot hand off sibling status without this home's live sibling record.");
   }

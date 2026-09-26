@@ -680,6 +680,26 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
       removeTreeWithRetry(otherHome);
     }
   });
+
+  test("a sibling client runtime can hand off without a server attestation secret", () => {
+    const priorHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-client-sibling-handoff-"));
+    try {
+      process.env.OPENCODEX_HOME = home;
+      writeRuntimePort({ pid: process.pid, port: 10199, siblingOfPort: 10100 });
+      markSiblingStart(10100);
+      const issued = withSiblingMarker({ OPENCODEX_HOME: home }, issueSiblingHandoff);
+      resetSiblingStartForTests();
+      expect(honorSiblingMarker({ ...issued }, consumeSiblingHandoff)).toBe(10100);
+    } finally {
+      resetSiblingStartForTests();
+      process.env.OPENCODEX_HOME = home;
+      removeRuntimePort(process.pid);
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = priorHome;
+      removeTreeWithRetry(home);
+    }
+  });
 });
 
 describe("logout parses argv before touching the credential store", () => {
