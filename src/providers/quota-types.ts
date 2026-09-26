@@ -48,6 +48,9 @@ export interface ProviderQuota {
   weeklyResetAt?: number;
   monthlyPercent?: number;
   monthlyResetAt?: number;
+  /** Observed Kiro plan credits, independent of token and currency estimates. */
+  kiroCreditsUsed?: number;
+  kiroCreditsLimit?: number;
   customWindows?: ProviderQuotaWindow[];
   creditsUsd?: ProviderQuotaCreditsUsd;
   updatedAt: number;

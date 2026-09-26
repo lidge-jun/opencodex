@@ -104,7 +104,9 @@ function statusText(row: AccountRow): string {
   // held out -- so printing only one of the two would hide exactly the confusing case (#2703).
   if (row.paused) parts.push("paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
-  if (row.needsReauth) parts.push("needs-reauth");
+  if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) parts.push("needs-reauth");
+  if (row.provider === "kiro" && row.autoSelectable === false)
+    parts.push(row.skipReason ? `not-auto-selected(${row.skipReason})` : "not-auto-selected");
   if (row.validationPending) parts.push("validation-pending");
   if (row.selectionExcludedReason === "plan_excluded") {
     parts.push(`not-auto-selected(plan=${row.selectionExcludedPlan ?? row.plan ?? "unknown"})`);

@@ -171,6 +171,8 @@ en privilégiant celui dont l'allocation restante connue est la plus élevée ; 
 Pour Kiro, les refus de débit, de quota mensuel confirmé et de suspension confirmée peuvent changer de compte avant toute sortie. Le quota mensuel exclut seulement ce compte jusqu’à la réinitialisation ou l’expiration des données ; une réponse terminée du même compte efface un ancien verdict. Le réglage du fournisseur prime sur le réglage global pour la préférence proactive, sans désactiver la rotation réactive.
 Kiro peut choisir `least-loaded` pour placer les requêtes de façon proactive lorsque `pool.kernel` et la préférence proactive sont activés. `maxConcurrentPerAccount` (1–100) crée une file bornée par compte et par processus : un compte sélectionné saturé attend au plus 250 ms, puis renvoie 503 `account_capacity` avec `Retry-After: 1`. Cette limite ne déplace pas la requête vers un autre compte.
 
+`ocx account list kiro` affiche `not-auto-selected(<raison>)` pour un compte exclu de la sélection automatique. Le JSON contient `autoSelectable` et, si la valeur est fausse, un `skipReason` fermé (`needs_reauth`, `suspended`, `cooldown` ou `quota_exhausted`). Un compte actif unique peut encore servir. Les crédits `providerCredits` sont mesurés par `meteringEvent` : la dernière valeur d'une réponse est retenue et les envois facturés séparément sont additionnés, sans estimation à partir des jetons.
+
 `--json` renvoie :
 
 ```text

@@ -372,6 +372,7 @@ calls the injected recorder once from `addFinalRequestLog`; the management route
 snapshot capability. There is no module-global active registry, timer, outbound connection, scrape-time
 log scan, or persistence. Restart creates a fresh owner, resets every counter/histogram, and changes
 `opencodex_metrics_process_start_time_seconds`.
+The opt-in owner also renders four Kiro quota gauges from fresh, identity-matched cached observations in `src/providers/kiro-quota-metrics.ts`. It emits at most 32 distinct opaque account labels and makes no scrape-time upstream call; missing, future-dated, expired, or reset-passed evidence emits no sample.
 
 The label vocabularies are closed: protocol is `responses`, `chat`, `messages`, or `unknown`; result
 is `completed`, `failed`, `incomplete`, or `aborted`; recovery is one of the coarse classes listed in
@@ -386,8 +387,7 @@ recovery kind already retained on an attempt contributes once to its coarse clas
 and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
 only finite nonnegative first-output values, while `opencodex_ttft_missing_total` is the complementary
-denominator. No request, credential, account, provider, model, conversation, raw error, prompt, tool,
-body, header, or URL value enters a label or sample.
+denominator. The only account-specific metric label is the bounded Kiro opaque digest; no raw request, credential, account, provider, model, conversation, error, prompt, tool, body, header, or URL value enters a label or sample.
 
 For diagnosing upstream-shape / usage-extraction issues run `ocx debug usage on` (or set
 `OPENCODEX_USAGE_DEBUG=1` before start). The proxy then writes a rolling debug record per finalized

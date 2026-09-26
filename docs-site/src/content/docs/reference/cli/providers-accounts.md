@@ -380,6 +380,13 @@ kiro      oauth  3f0a91c2  a***r@examp***.com  -        active  mo 15%
 kiro      oauth  8b24de70  k***1@examp***.net  -                mo 88%
 ```
 
+`ocx account list kiro` marks an account excluded from automatic selection as
+`not-auto-selected(<reason>)`. JSON carries `autoSelectable` and, when false, a closed
+`skipReason` (`needs_reauth`, `suspended`, `cooldown`, or `quota_exhausted`). An active
+singleton or all-excluded pool may still send. Kiro `providerCredits` comes from measured
+`meteringEvent` values: the last reading within a physical response is retained, and
+separately billed sends add to the request spend. Credits are never estimated from tokens.
+
 With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota, and
 confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
 that login until reset or evidence expiry; completed service clears an older verdict.

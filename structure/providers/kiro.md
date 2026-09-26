@@ -49,6 +49,14 @@ account without a formable ARN is not probed. Persisted quota and exhaustion evi
 are bound independently by observation time, reset, and login identity, never by token
 or raw account label; removal, identity change, expiry, or malformed disk degrades routing
 evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
+The same identity-fenced reading carries precise plan `kiroCreditsUsed` and
+`kiroCreditsLimit`; missing or expired evidence has no metric sample. The automatic
+candidate filter and account list both use `kiroAutoSelection` from
+`src/oauth/generic-account-failover.ts`. Its closed reasons are `needs_reauth`,
+`suspended`, `cooldown`, and `quota_exhausted`. An active singleton can still send
+when it is excluded as an alternative. The existing `health` field does not reflect
+Kiro suspension or quota exhaustion, so `health: ok` can coexist with
+`autoSelectable: false`; the GUI does not display the new projection.
 
 After an account is admitted, a detached `ListAvailableModels` request reads that account's
 regional management host with its own timeout and account-paired bearer/profile. The request
@@ -186,6 +194,8 @@ is a snapshot; separate completion-fallback responses add their credits. Missing
 absent and measured zero stays zero. `initial-response` carries `conversationId` through the same
 validated provider-state path as `messageMetadataEvent`. Unknown event types produce opt-in
 `debugProviderDiagnostic` entries containing only the event-type length, never the raw header or payload.
+The final usage row records summed request spend across billed physical sends; sealed attempt
+rows preserve per-serving-account spend in `src/usage/log.ts`.
 Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
 `tests/providers/kiro/kiro-metering-usage.test.ts`, and
 `tests/server/server-kiro-completion-e2e.test.ts`.

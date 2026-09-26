@@ -381,6 +381,10 @@ MiMo model Command Code serves.
   unavailable while an earlier same-login quota bar remains visible. Known quota and
   exhaustion evidence survive restart only for the same login, each until its own reset
   or ten-minute lifetime. Missing, old, or malformed evidence becomes unknown.
+  The plan's precise credit balance is retained with that identity-fenced quota reading.
+  Separately, Kiro `meteringEvent` credit values are measured request spend: the last value
+  within a physical response is used, and credits from separately billed sends are added.
+  Token usage remains estimated; credits are never inferred from tokens.
 - After an admitted request, reads that account's available models from the regional management
   service without delaying the request. Cached results add model IDs to the shipped catalog.
   Empty or unrecognised replies retain the shipped list and any last good account list. Model

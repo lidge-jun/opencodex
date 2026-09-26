@@ -70,6 +70,8 @@ and uses `addedAt` for legacy rows without one.
 
 For Kiro, `src/oauth/generic-account-failover.ts` filters confirmed monthly exhaustion
 and process-local suspension by the live account identity before picking a replacement.
+Its `kiroAutoSelection` projection also supplies the account-list exclusion reason;
+cached plan credit amounts share the same identity and expiry fence.
 The account actually sent supplies the generation fence; a rotated bearer always travels
 with its own profile ARN and region. Reactive rotation follows the stored two-account
 quorum, while refusal-aware first admission follows the proactive preference setting.

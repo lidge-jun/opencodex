@@ -490,3 +490,57 @@ At implementation C, run the four new test files above, the four existing focuse
 ## Round-2 audit fold
 
 - **r3-R2-2 Medium** → Rebased the 070 eligibility hunk on 030's `eligibleIdsIn` filter and existing `cooldownSource: "kiro-suspension"` writes; `projectKiroAccountAutoSelection` maps active suspension to `skipReason: "suspended"` and ordinary rate/default cooldown to `"cooldown"` (`070:263-294,358`). The named candidate/list agreement test covers quarantine, refusal rotation, ordinary cooldown and expiry (`070:387`). Rebase-verify at this layer's P against the implemented 030 head.
+
+## wp8 P re-verification (2026-09-27, branch `codex/kiro-lb2-070-credits-ops` on dev `a91568ec5a`, which contains 010–060)
+
+Executable plan for the 070 build; **overrides** earlier sections where they conflict.
+
+| ID | Disposition |
+|---|---|
+| **P8/J metering (decision)** | **Already on dev**, outside this stack, as `OcxUsage.providerCredits` (`src/types/request.ts:451`): `meteringEvent` is a known Kiro event parsed from real kiro-cli captures (`src/adapters/kiro-events.ts:24-27,185-200`), the stream keeps the last credit value per attempt (`src/adapters/kiro/stream.ts:609-610`), and `usage/log.ts` persists it (582, 626), tested by `kiro-metering-usage.test.ts` and `kiro-metering-events.test.ts`. 070 therefore drops its own parser, `meteredCredits`, `kiro-credits.ts` and `kiro-metered-credits.test.ts`. The landed code **sums** credits across physical sends (completion fallback, continuations, request-log aggregate); that is kept, because each physical send is billed separately and summing is the correct request spend. The earlier "last value wins, never sum" rule is withdrawn. Docs describe the final request row as request spend and attempt rows (sealed per serving account) as per-account spend. |
+| D070-S3 | The metrics projector reads Kiro quota only through `kiroAccountEvidence(account)` (identity-fenced); the `quota.identity` clause is removed. |
+| D070-S4 | `parseKiroUsage` adds `kiroCreditsUsed`/`kiroCreditsLimit` to the quota (`src/providers/kiro-usage.ts:131-133,153-158`); `sanitizeKiroQuota` (`src/providers/kiro-account-state-disk.ts:19-30`) keeps both when finite and non-negative, so gauges survive a restart. |
+| D070-S5–S7, S9 | Anchors: `eligibleIdsIn` 239-251 (Kiro branch 248-249), `AccountHealth.identity` 84-88, identity-fenced `isCooled` 112-127; `projectAccounts` `oauth-account-routes.ts:392-408` (row literal 405); CLI `account-api.ts:16-34`, `account.ts:100-113` (reuse `not-auto-selected(<reason>)` wording from `selectionExcludedReason` 109-111); metrics owner `request-metrics.ts` (`createRequestMetricsOwner` 191, snapshot 239), `serve-options.ts:295`, `metrics-routes.ts:3-19`. |
+| D070-S8 | SD4'-era text and the run-turn reference are removed; the L projection follows SD4'' and the landed 030/040. |
+| **autoSelectable (L)** | `kiroAutoSelection(account, now, family?)` returns `{ autoSelectable, skipReason? }` mirroring exactly what `eligibleIdsIn` excludes: `needs_reauth`, `suspended` (`cooldownSource === "kiro-suspension"`, read after `isCooled` prunes and checks identity), `cooled` (any other cooldown), `exhausted` (`kiroAccountEvidence(account).exhausted === true`). It checks both the family key and the family-less key, as `eligibleIdsIn` does. The 040 cap, least-loaded order, 050 membership and 060 `loginOrigin` are preferences or provenance, never skip reasons. A test asserts the projection equals `eligibleIdsIn` membership over a table of states. Recorded limitation: the existing `health` field (`health.ts:180`) does not reflect Kiro suspension/exhaustion, so a row can read `health: ok` next to `autoSelectable: false`; the GUI does not read the new fields, so no GUI change. |
+| Metrics (K) | `src/providers/kiro-quota-metrics.ts` projects cached rows only (no scrape-time upstream call): quota percent, credits used, credit limit, seconds to reset; opaque `oauthAccountLogLabel` labels (`o` + 6 hex), at most 32 accounts, rows with `updatedAt > now` dropped. Wired from `serve-options.ts` into `createRequestMetricsOwner` with a type-only import in `request-metrics.ts`. `tests/server/management-metrics-export.test.ts:549-551` (source-oracle composition string) is updated. |
+| Residuals | 070:~390 test names become the landed ones (030: `kiro-refusal`, `kiro-refusal-failover`, `server-kiro-refusal-e2e`; 040: `kiro-account-load`, `kiro-leased-responses`, `kiro-pool-load-settings`); the "030/040 must also add" paragraph is deleted. |
+| Registry | `kiro-auto-selection.test.ts` (providers/kiro) between `kiro-auth-context-continuation` and `kiro-builder-id-profile` (layout 1079/1080; expected 900/901); `kiro-quota-metrics.test.ts` between `kiro-pool-rank` and `kiro-reasoning-roundtrip` (1091/1092; 912/913); `tests/cli/cli-kiro-auto-selection.test.ts` after `cli-json-contract` (528; 354). |
+
+Verifier set for C: `bun run typecheck`; `bun test tests/providers/kiro/ tests/server/management-metrics-export.test.ts tests/cli/cli-kiro-auto-selection.test.ts tests/oauth/generic-oauth-failover.test.ts` plus `bun test $(rg -l "metrics-routes|request-metrics|projectAccounts|oauth/accounts" tests)` in the clean `/tmp` worktree; layout, ratchet, lab-boundary; privacy; structure.
+
+
+### wp8 reflection fold (MISALIGNED → folded)
+
+1. **Gauge source:** `kiroAccountEvidence(account, now?)` is extended to also return the identity-fenced
+   `creditsUsed`/`creditsLimit` from the same quota row (same TTL/reset bound); the metrics projector
+   reads only that function.
+2. **One closed skip-reason set:** `KiroSkipReason = "needs_reauth" | "suspended" | "cooldown" |
+   "quota_exhausted"`. Every place uses exactly these: the type, `isKiroSkipReason`, the management
+   DTO, the CLI `AccountRow` and `not-auto-selected(<reason>)` output, docs and test names. The names
+   `cooled` and `exhausted` in "wp8 P re-verification" are replaced by `cooldown` and
+   `quota_exhausted`.
+3. **One source of truth:** `eligibleIdsIn` calls `kiroAutoSelection` for Kiro accounts (so routing and
+   the projection cannot drift), and the parity table test stays as a guard. `structure/providers/kiro.md`
+   and `001_research_gap_inventory.md` are checked for any "never summed" claim; the inventory's P8/J
+   row is updated to say metering landed outside this stack as `providerCredits` and sums per physical
+   send.
+
+
+### wp8 A round 1 fold (reviewer 01a0df8b: GO-WITH-FIXES, 3 Medium → folded)
+
+1. `parseKiroUsage` rejects `used < 0` (and non-finite `used`/`limit`); test: `a negative used reading yields no quota`.
+2. The metrics projector iterates the live Kiro roster in stable order and stops after 32 **valid** rows
+   with distinct labels (stale or unknown rows do not consume the budget); test:
+   `stale leading accounts do not hide later fresh gauges`.
+3. `kiroAutoSelection` has no family parameter: Kiro health keys are family-less (the classifier returns a
+   family only for `google-antigravity`, `src/oauth/account-quota-rank.ts:24`; Kiro refusal writes use
+   the family-less key, `generic-account-failover.ts:445`). The family branch is removed; tests cover the
+   reachable family-less states.
+
+## wp8 build notes
+
+- Added identity-fenced precise Kiro plan credits, cache-only bounded quota gauges, and a single `kiroAutoSelection` projection shared by candidate routing and account-list status. CLI text and JSON expose the same closed reason set. Existing `providerCredits` metering remains the request-spend source; no second parser or token-derived credit estimate was added.
+- Updated public English and directly affected translations, plus owning structure contracts. No GUI or scrape-time network path changed. The three `layout.json` entries share lines with their preceding alphabetical entries to stay below the 2,000-line file-size ratchet.
+- Verification: `bun run typecheck` passed; focused Kiro/metrics/CLI/failover/refusal suite passed (696 tests); layout, file-size, and Lab guards passed (52 tests); `bun run privacy:scan` and `bun run structure:check` passed; docs-site frozen install and build passed. A later focused test addition for disk sanitization is rerun in the final gate below. No full suite or live Kiro call was run.
+- Final focused rerun after the disk-sanitizer test: 697 pass, 0 fail across 39 files. The translated management rows were then corrected to place the new Kiro facts in the description column; the docs-site build completed (529 pages, 72,011 links checked). `git diff --check` reported no whitespace errors.

@@ -128,6 +128,22 @@ function isCooled(provider: string, accountId: string, now: number, family?: Quo
   return true;
 }
 
+export type KiroSkipReason = "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
+
+/** Eligibility for automatic alternatives; an active singleton can still send. */
+export function kiroAutoSelection(
+  account: ProviderAccount, now = Date.now(),
+): { autoSelectable: boolean; skipReason?: KiroSkipReason } {
+  if (account.needsReauth === true) return { autoSelectable: false, skipReason: "needs_reauth" };
+  const cooled = isCooled("kiro", account.id, now);
+  if (cooled && health.get(healthKey("kiro", account.id))?.cooldownSource === "kiro-suspension")
+    return { autoSelectable: false, skipReason: "suspended" };
+  if (kiroAccountEvidence(account, now).exhausted === true)
+    return { autoSelectable: false, skipReason: "quota_exhausted" };
+  if (cooled) return { autoSelectable: false, skipReason: "cooldown" };
+  return { autoSelectable: true };
+}
+
 /** True when this provider participates in generic rotation at all. */
 export function isGenericFailoverProvider(providerName: string, provider: OcxProviderConfig): boolean {
   return provider.authMode === "oauth" && !EXCLUDED_PROVIDERS.has(providerName);
@@ -244,9 +260,8 @@ function eligibleIdsIn(
 ): string[] {
   if (!set) return [];
   return set.accounts
-    .filter(account => account.needsReauth !== true && !isCooled(providerName, account.id, now, family)
-      && (providerName !== "kiro" || (!isCooled("kiro", account.id, now)
-        && kiroAccountEvidence(account, now).exhausted !== true)))
+    .filter(account => providerName === "kiro" ? kiroAutoSelection(account, now).autoSelectable
+      : account.needsReauth !== true && !isCooled(providerName, account.id, now, family))
     .map(account => account.id);
 }
 
