@@ -106,9 +106,9 @@ export interface MainAccountInfoFetchResult {
   hasCredential: boolean;
   /** Main identity generation captured while the native-main claim was held. */
   identityGeneration?: number;
-  /** Present only when this call freshly parsed a WHAM usage response. */
+  /** Freshly parsed usage from the current credential; stale ordinary return values are excluded. */
   freshQuota?: Omit<StoredAccountQuota, "updatedAt">;
-  /** Present only when this call's WHAM response included `rate_limit_reset_credits.available_count`. */
+  /** Current-credential response's `rate_limit_reset_credits.available_count`, when present. */
   freshResetCredits?: number;
 }
 
@@ -193,6 +193,11 @@ export async function fetchMainAccountInfoAttempt(
   }
 }
 
+/**
+ * Read native-main usage while ownership is held, publishing only current credential evidence.
+ * A replaced same-account bearer may return its parsed ordinary info without mutating shared
+ * state or supplying recovery proof. Conflicting identities and stale errors return cached info.
+ */
 export async function fetchMainAccountInfoWhileOwned(
   forceRefresh: boolean,
   retriesRemaining: number,
@@ -234,6 +239,11 @@ export async function fetchMainAccountInfoWhileOwned(
     ? observeMainQuotaCredential(tokens.access_token, tokens.account_id)
     : undefined;
   const mainQuotaCredentialGeneration = getMainQuotaCredentialGeneration();
+  /** Revalidate identity, bearer and its generation after each upstream await. */
+  const credentialIsCurrent = (): boolean => mainQuotaWriter !== undefined
+    && isMainQuotaWriterLive(mainQuotaWriter)
+    && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
+    && matchesMainQuotaCredential(tokens.access_token, tokens.account_id);
   // Keep diagnostics separate from authentication and freshness policy. Never serialize errors.
   const quotaSignal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
   let quotaPhase: "request" | "body" | "decode" | "publish" = "request";
@@ -250,11 +260,10 @@ export async function fetchMainAccountInfoWhileOwned(
         signal: quotaSignal,
       }, () => { dispatchSequence = nextQuotaDispatchSequence(); },
       paced ? { pacingKey: baseKey } : { unpaced: true });
-      if (!admission) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+      if (!admission) return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
+        credentialChecked: true, hasCredential: true };
       if (admission.kind === "joined") {
-        const current = mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
-          && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)
-          && writerGeneration === captureConfigGeneration();
+        const current = credentialIsCurrent() && writerGeneration === captureConfigGeneration();
         if (!current) return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: true, hasCredential: true };
         if (explicitRefresh && (admission.result.quotaRefresh?.status === "ok"
@@ -268,7 +277,7 @@ export async function fetchMainAccountInfoWhileOwned(
         const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
         const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh, paced);
         if (retried) return retried;
-        if (!isQuotaDispatchCurrent(dispatchSequence)) {
+        if (!isQuotaDispatchCurrent(dispatchSequence) || !credentialIsCurrent()) {
           return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
             credentialChecked: true, hasCredential: true };
         }
@@ -294,19 +303,15 @@ export async function fetchMainAccountInfoWhileOwned(
       if (data === null || typeof data !== "object" || Array.isArray(data)) {
         throw new Error("Invalid WHAM usage object");
       }
-      // Check after body/retry awaits and before any cache, credits, policy or
-      // Reserve publication. Returning cached state supplies no fresh recovery proof.
-      if (!isQuotaDispatchCurrent(dispatchSequence) || (mainQuotaWriter
-        && (mainQuotaCredentialGeneration !== getMainQuotaCredentialGeneration()
-          || !matchesMainQuotaCredential(tokens.access_token, tokens.account_id)))) {
+      // A newer published response wins over this attempt, including its returned display info.
+      if (!isQuotaDispatchCurrent(dispatchSequence)) {
         return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: true, hasCredential: true };
       }
       quotaPhase = "publish";
       // A delayed response from a replaced bearer cannot revoke a newer Reserve grant,
       // even in the same workspace or after an A→B→A credential transition.
-      if (mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
-        && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)) {
+      if (credentialIsCurrent()) {
         observeMainReserveRevocation(data, mainQuotaWriter);
       }
       quotaPhase = "decode";
@@ -315,16 +320,22 @@ export async function fetchMainAccountInfoWhileOwned(
       const quota = parseUsageQuota(usage);
       const policyQuota = parseMainPolicyUsageQuota(usage);
       quotaPhase = "publish";
-      const freshResetCredits = quota?.resetCredits;
-      // Tag the count with the identity it was read from, so a later response that omits the
-      // summary can restore the badge without ever crossing an account boundary.
-      rememberMainResetCredits(requestAccountId, freshResetCredits);
       const result = {
         email: data.email ?? null,
         plan,
         quota,
         ts: Date.now(),
       };
+      if (!credentialIsCurrent()) {
+        // Preserve same-identity ordinary info, but never publish stale evidence or state.
+        return { info: mainQuotaWriter && isMainQuotaWriterLive(mainQuotaWriter)
+          ? result : getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
+        credentialChecked: true, hasCredential: true };
+      }
+      const freshResetCredits = quota?.resetCredits;
+      // Tag the count with the identity it was read from, so a later response that omits the
+      // summary can restore the badge without ever crossing an account boundary.
+      rememberMainResetCredits(requestAccountId, freshResetCredits);
       setMainAccountInfoCache(result);
       // Only an explicit refresh may retract a reauth quarantine. A 200 from
       // /wham/usage proves the token authenticates to the usage endpoint; it does not
@@ -351,9 +362,7 @@ export async function fetchMainAccountInfoWhileOwned(
         credentialChecked: true,
         hasCredential: true,
         ...(quota ? { freshQuota: quota } : {}),
-        ...(quota && mainQuotaWriter && isMainQuotaWriterLive(mainQuotaWriter)
-          && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
-          && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)
+        ...(quota && mainQuotaWriter && credentialIsCurrent()
           ? { resetRecoveryProof: { writer: mainQuotaWriter, credentialGeneration: mainQuotaCredentialGeneration, dispatchSequence } }
           : {}),
         ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
