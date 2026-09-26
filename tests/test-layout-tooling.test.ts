@@ -312,6 +312,9 @@ describe("membership oracle", () => {
       // Placed under routing/ by its author (#3523, restored by #3530): it exercises the oauth
       // routing quorum, not the Anthropic adapter, so the anthropic- seed is wrong for it.
       "anthropic-quorum-cache.test.ts",
+      // Lives under server/ with the other management-route tests; the advisor- seed names the
+      // advisor SUBSYSTEM, not the domain this file's siblings live in.
+      "advisor-routes.test.ts",
     ]);
     const mismatches: string[] = [];
     let resolved = 0;
