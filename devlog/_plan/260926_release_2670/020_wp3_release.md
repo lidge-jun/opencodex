@@ -107,3 +107,15 @@ blindly.
 - Pre-move PR #5895 (`codex/dev-version-2.68.0`, head `4c64fd4acc`, base `dac1d25f48`) was opened by the
   workflow token, which does not trigger `pull_request` workflows; close/reopen by the maintainer started
   its CI. Diff is exactly the four version sources, 2.67.0 → 2.68.0.
+
+## wp3 execution log
+
+- Pre-move: `dev-version-bump.yml` run `36210933641` success opened #5895 (head `4c64fd4acc`). Its CI did not
+  start until a maintainer close/reopen. `enforce-target` and `hygiene` failed with `unsponsored_surface`
+  (bot author on release-owned files) and the readiness gate held it in draft; every CI job including the
+  aggregate `ci` passed. Marked ready and merged with admin as `c56dd47a6f`; `dev` carries 2.68.0.
+- Promotion: #5899 `preview` merge `9c6fb1ee8b8c06fd4ee68bd237099b6f9325802e` (tree = CAND + four version lines),
+  #5900 `main` merge `4bc92294aa23a7edba75805095808d892efa72e2` (tree = CAND). Both were drafted by the gate,
+  marked ready, merged with merge commits.
+- Release-branch CI: preview CI `36213263882`, Service lifecycle `36213264006`; main CI `36213267338`,
+  Service lifecycle `36213267275`.
