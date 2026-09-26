@@ -1914,6 +1914,33 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bHits).toBe(1);
   });
 
+  test("runTurn cooldown-ready heartbeat preserves combo fallback on a final 429", async () => {
+    let firstHits = 0;
+    let backupHits = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      firstHits += 1;
+      emit({ type: "heartbeat", preflightReady: true });
+      emit({ type: "error", status: 429, errorType: "rate_limit_error", message: "stated reset still active" });
+    };
+    const backup = serve(() => {
+      backupHits += 1;
+      return chatStream("backup after cooldown");
+    });
+    const config = comboConfig({
+      a: provider("test-run-turn", "test://run-turn", "key-a"),
+      b: provider("openai-chat", baseUrl(backup), "key-b"),
+    });
+
+    const response = await post(config, { stream: true });
+    const frames = await collectSse(response);
+
+    expect(response.status).toBe(200);
+    expect(firstHits).toBe(1);
+    expect(backupHits).toBe(1);
+    expect(JSON.stringify(frames)).toContain("backup after cooldown");
+    expect(JSON.stringify(frames)).not.toContain("stated reset still active");
+  });
+
   test("runTurn combo attempts retain requested effort without adapter wire metadata", async () => {
     customRunTurn = async (parsed, _incoming, emit) => {
       if (parsed.modelId === "m1") {

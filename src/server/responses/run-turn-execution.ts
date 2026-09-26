@@ -596,7 +596,9 @@ export async function executeResponsesRunTurn(
         if (refusal) return refusal;
       }
       if (options.comboAttempt) {
-        const preflight = await preflightAdapterEvents(eventSource, classifyUndeclaredFirstTool);
+        const preflight = await preflightAdapterEvents(
+          eventSource, classifyUndeclaredFirstTool, { honorReady: false },
+        );
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();

@@ -208,7 +208,9 @@ failure, since HTTP status is already committed. Text, reasoning, and tool outpu
 and prevent later rotation. Buffered Responses turns ignore the cooldown-ready heartbeat during
 preflight and apply the same HTTP 429 formatter to a final refusal after OAuth failover. Other
 buffered results retain the original event list, including output preceding a late error. Combo
-failover policy is unchanged.
+children ignore cooldown readiness during their own preflight, so a final 429 without output can
+still move to the next combo target. An earlier replay-unsafe heartbeat or meaningful output keeps
+the failure on the current target.
 
 ## Optional client transport hints
 
