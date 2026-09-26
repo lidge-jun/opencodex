@@ -360,9 +360,9 @@ describe("opencode-free provider", () => {
       expect(routed.headers?.["x-opencode-client"]).toBe("desktop");
     });
 
-    test("model discovery carries the same fingerprint as inference", () => {
-      // A provider identified as `opencode` when it completes but anonymous when it lists its
-      // own models reads as two different clients to an upstream rate limiter.
+    test("model discovery carries the static registry fingerprint", () => {
+      // Discovery uses the unversioned registry baseline. Only keyless inference needs the
+      // versioned identity enforced by Zen's anonymous admission gate.
       const req = buildModelsRequest(persisted({ "x-opencode-client": "desktop" }), undefined, "opencode-free");
       expect(req.headers["User-Agent"]).toBe("opencode");
       expect(req.headers["x-opencode-client"]).toBe("desktop");

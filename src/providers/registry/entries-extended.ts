@@ -1150,9 +1150,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://opencode.ai",
     staticHeaders: {
       // Zen answers a bare runtime User-Agent (Bun/x.y.z) more aggressively than a client
-      // that identifies itself, which is what the 429 in #2067 traced to. The value is
-      // deliberately unversioned: a pinned "opencode-cli/<version>" is a claim about an
-      // install we do not have and goes stale on the vendor's schedule, not ours.
+      // that identifies itself, which is what the 429 in #2067 traced to. This remains the
+      // deliberately unversioned registry baseline for discovery and keyed sends. The
+      // keyless inference profile repairs it to the live-verified versioned identity that
+      // Zen's anonymous admission gate requires; keyed requests bypass that profile.
       // Corroboration, not authority: OmniRoute — an independent open-source broker against
       // the same Zen upstream — defaults to exactly this pair (userAgent "opencode", client
       // "desktop") in open-sse/executors/opencode.ts, and got there by RETREATING from its

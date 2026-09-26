@@ -604,9 +604,9 @@ wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
 **The keyless `opencode-free` tier presents the anonymous client identity OpenCode's own CLI sends.** When the non-forward identity profile applies, requests carry a conversation-derived `x-opencode-session` (or a request-scoped one when no conversation identity is available), a versioned `opencode/<version>` User-Agent, and the `x-opencode-client` marker. The profile adds `Authorization: Bearer public` only when no Authorization header is already present; Zen maps it to its anonymous pool. Requests with `authMode: "forward"` skip this profile. Provenance: OpenCode's `packages/opencode/src/session/llm/request.ts` (headers) and `packages/console/app/src/routes/zen/util/handler.ts` (gateway admission). A configured `x-opencode-session` or API key always wins; with a key the request bills that account. Muse Spark contributor-free models route to Zen's `/v1/responses` endpoint per the Zen endpoint table. This admission is tolerated, not contracted: OpenCode may change or restrict it at any time, in which case these routes fail with the upstream error.
 
 The supported route to the same models is the keyed **`opencode-zen`** provider with an OpenCode
-Zen API key from [opencode.ai/auth](https://opencode.ai/auth). If OpenCode later publishes a
-supported third-party path for the keyless tier, opencodex can follow it; until then the preset
-stays as documentation of the restriction. Upstream terms:
+Zen API key from [opencode.ai/auth](https://opencode.ai/auth). Keyless access remains observed
+compatibility behavior rather than a supported third-party contract; if OpenCode publishes such
+a contract, opencodex can follow it. Upstream terms:
 [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
 Most use the `openai-chat` adapter with a bearer key; Anthropic-compatible presets such as
