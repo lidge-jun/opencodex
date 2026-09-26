@@ -16,16 +16,21 @@ export const INTERCEPT_TARGET_UNAVAILABLE_CODE = "intercept_target_unavailable";
 /** Non-retryable: the target stays unavailable until the operator changes the configuration. */
 export const INTERCEPT_TARGET_UNAVAILABLE_STATUS = 409;
 
-export type ShadowTargetResolution = { route: RouteResult } | { unavailable: string };
+export type ChosenTargetResolution = { route: RouteResult } | { unavailable: string };
+export type ShadowTargetResolution = ChosenTargetResolution;
 
 /**
- * Resolve the configured target. Admission-scope refusals, exhausted combos and policy
+ * Resolve one operator-chosen target. Admission-scope refusals, exhausted combos and policy
  * evaluations keep their existing responses, so they are rethrown to the caller's handler.
+ *
+ * Shared by the shadow-call intercept and the memory-model routing: both name a single destination
+ * whose unavailability must not be papered over by the router's terminal default-provider
+ * fallback. `shadowCallTargetsIntersect` and the memory setting are the two callers.
  */
-export function resolveShadowCallTarget(
+export function resolveChosenTarget(
   model: string,
   resolve: (model: string) => RouteResult,
-): ShadowTargetResolution {
+): ChosenTargetResolution {
   let route: RouteResult;
   try {
     route = resolve(model);
@@ -42,6 +47,14 @@ export function resolveShadowCallTarget(
     return { unavailable: "it names no configured provider and would only reach the default provider" };
   }
   return { route };
+}
+
+/** The shadow-call name for the shared resolver, kept because that is the surface's own vocabulary. */
+export function resolveShadowCallTarget(
+  model: string,
+  resolve: (model: string) => RouteResult,
+): ShadowTargetResolution {
+  return resolveChosenTarget(model, resolve);
 }
 
 const warnedTargets = new Set<string>();

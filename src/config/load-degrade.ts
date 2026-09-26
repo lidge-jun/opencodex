@@ -120,6 +120,26 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
+  warnDegradedMemoryModels(rawParsed, validated);
+}
+
+/**
+ * A malformed `memoryModels` phase disables that phase rather than failing the whole schema, so
+ * say so once: silently keeping the native model is the outcome a typo must not produce quietly.
+ */
+export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).memoryModels;
+  if (raw === undefined) return;
+  if (validated.memoryModels === undefined || raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    console.warn("\u26a0\ufe0f  config.json memoryModels is invalid (expected { extract?: { model, reasoningEffort? }, consolidation?: { model, reasoningEffort? } } with a nonblank model and a declared effort per phase) \u2014 Codex keeps its own model for the memory pipeline");
+    return;
+  }
+  for (const phase of ["extract", "consolidation"] as const) {
+    if ((raw as Record<string, unknown>)[phase] !== undefined && validated.memoryModels[phase] === undefined) {
+      console.warn("\u26a0\ufe0f  config.json memoryModels." + phase + " is invalid (expected { model, reasoningEffort? } with a nonblank model) \u2014 that phase keeps Codex's own model");
+    }
+  }
 }
 
 /**

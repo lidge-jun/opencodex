@@ -280,6 +280,22 @@ export async function applyFinalRouteRequestNormalization(args: {
   }
 
   {
+    // Last word on a memory turn's effort: the phase setting is more specific than a provider-wide
+    // pin, and Codex hard-codes the phase effort with no config key of its own.
+    const phase = parsed._memoryModelPhase;
+    if (phase) {
+      const { applyMemoryModelEffort } = await import("./memory-models");
+      const applied = applyMemoryModelEffort(parsed, config, phase);
+      if (applied) {
+        logCtx.requestedEffort = applied.from ? `${applied.from}->${applied.to}` : applied.to;
+        if (isInjectionDebugEnabled()) {
+          injectionDebugLog(`[opencodex] ${route.modelId}: memory ${phase} effort applied (${applied.from ?? "none"} -> ${applied.to})`);
+        }
+      }
+    }
+  }
+
+  {
     const { applyEffortCap, effortCapAppliesTo, supportedLadderFor } = await import("../effort-policy");
     const surface = collabSurface(parsed);
     if (effortCapAppliesTo(surface, req.headers, config, parsed._compactionRequest === true)) {

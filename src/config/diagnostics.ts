@@ -62,6 +62,7 @@ import {
   runtimeRoleSchema,
   spendSchema,
   compactionRoutingSchema,
+  memoryModelsSchema,
 } from "./schema/leaf-validators";
 
 export type ConfigDiagnostics = {
@@ -597,6 +598,10 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const compactionRouting = rawConfigRecord(value)?.compactionRouting;
   if (compactionRouting !== undefined && !compactionRoutingSchema.safeParse(compactionRouting).success) {
     return { ok: false, error: "schema_invalid: compactionRouting: requires a nonblank model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" };
+  }
+  const memoryModels = rawConfigRecord(value)?.memoryModels;
+  if (memoryModels !== undefined && !memoryModelsSchema.safeParse(memoryModels).success) {
+    return { ok: false, error: "schema_invalid: memoryModels: requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" };
   }
   const boundaryError = configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)

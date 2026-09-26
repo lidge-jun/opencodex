@@ -144,6 +144,12 @@ export interface OcxParsedRequest {
   /** Manual compaction moved to another provider: summarize portably even on a canonical ChatGPT target. */
   _portableCompaction?: boolean;
   /**
+   * Codex memory pipeline phase this turn belongs to, when `memoryModels` routes it
+   * (src/server/responses/memory-models.ts). Read at the effort choke point, which runs after the
+   * route is known.
+   */
+  _memoryModelPhase?: "extract" | "consolidation";
+  /**
    * True when the current request newly introduced a stored compaction summary/marker. Historical
    * markers restored by previous_response_id expansion were already acknowledged and do not reset
    * provider-private continuation caches again on every later turn.

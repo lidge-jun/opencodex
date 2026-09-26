@@ -27,6 +27,7 @@
   "start-args.test.ts": "cli",
   "start-ownership-publication.test.ts": "cli",
   "responses-core-modules.test.ts": "responses",
+  "responses-memory-models.test.ts": "responses",
   "responses-grok-devin-preflight.test.ts": "responses",
   "responses-passthrough-transient-policy.test.ts": "responses",
   "responses-spend-ledger-wiring.test.ts": "responses",

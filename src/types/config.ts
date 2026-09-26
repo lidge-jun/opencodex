@@ -723,6 +723,27 @@ export interface OcxConfig {
     triggers?: ("manual" | "auto")[];
   };
   /**
+   * Destination model for Codex's own memory pipeline, per phase
+   * (src/server/responses/memory-models.ts).
+   *
+   * Codex runs Phase 1 ("extract") once per finished thread to summarize that thread's rollout,
+   * and Phase 2 ("consolidation") once as an agent run that merges the summaries into the files
+   * under `$CODEX_HOME/memories`. Both ask for a bare native model, so without an entry here they
+   * resolve through the canonical OpenAI route even when ordinary turns are routed elsewhere.
+   *
+   * A phase is recognized from Codex's turn metadata, never inferred from the model id, the timing
+   * or the token counts: Phase 1 shares `gpt-5.6-luna` with the app's title/commit helper calls,
+   * and `shadowCallIntercept` is the setting for those. A configured phase wins over that
+   * intercept, because the memory decision is the more specific one.
+   *
+   * `model` is required for a configured phase; omitting the phase (or its `model`) leaves Codex's
+   * own choice in place. `reasoningEffort` overrides the effort Codex hard-codes for that phase.
+   */
+  memoryModels?: {
+    extract?: { model: string; reasoningEffort?: string };
+    consolidation?: { model: string; reasoningEffort?: string };
+  };
+  /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only
    * their generated selector row and are omitted from raw /v1/models. BARE native GPT ids hide
