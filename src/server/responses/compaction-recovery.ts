@@ -4,7 +4,7 @@ import { copyPlainData } from "../../lib/plain-data";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
-import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
+import { isRequestExecutionBudget, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import { isNonReplayableResponse, isNonReplayableUpstreamCode, markResponseNonReplayable, TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
 import { isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
@@ -29,6 +29,26 @@ const token = (value: unknown): string | undefined => typeof value === "string" 
 
 function identity(route: RouteResult): string {
   return JSON.stringify([route.providerName, route.modelId, route.codexAccountMode ?? "", route.codexAccountNamespace ?? ""]);
+}
+
+function physicalSends(log: RequestLogContext): number {
+  // activeAttempt normally also belongs to attempts: count each receipt exactly once.
+  const attempts = new Set([...(log.attempts ?? []), ...(log.activeAttempt ? [log.activeAttempt] : [])]);
+  return [...attempts].reduce((sum, attempt) => sum + Math.max(0, attempt.sendCount), 0);
+}
+
+/** Reconcile only this leg's physical receipts; never charge already-booked adapter sends again. */
+function settlePhysicalSends(log: RequestLogContext, budget: RequestExecutionBudget, beforeSends: number, beforeUsed: number, reported: number, permit?: SingleUseDispatchPermit): number {
+  const sent = Math.max(0, physicalSends(log) - beforeSends);
+  // A legacy fetch leg does not claim the hop through adapterDispatchBudget. Settle its
+  // prepaid booking explicitly; an adapter-owned leg already claimed it, making this a no-op.
+  if (sent > 0) permit?.assumeCharge();
+  else permit?.release();
+  // An external report may settle a prepaid booking without changing used. Its explicit
+  // receipt outranks the numeric delta, or the same source send would be charged twice.
+  const unreported = Math.max(0, sent - Math.max(reported, Math.max(0, budget.used - beforeUsed)));
+  if (unreported > 0) budget.used += unreported;
+  return sent;
 }
 
 function portableBody(body: Record<string, unknown>): boolean {
@@ -79,11 +99,18 @@ export async function runWithCompactionRecovery(
   let replayUnsafe = false;
   let adapterError: Extract<AdapterEvent, { type: "error" }> | undefined;
   let sourceFailure: Response | undefined;
+  let recoveryPermit: SingleUseDispatchPermit | undefined;
+  let sourceReportedSends = 0;
   const gate = createChildPassthroughCallbackGate(options);
   const signal = options.abortSignal ?? req.signal;
   const spentBefore = options.sendBudget?.used ?? 0;
+  const sendsBefore = physicalSends(logCtx);
   const firstOptions: Options = {
     ...options,
+    onCompactionRecoverySendsReported(count) {
+      sourceReportedSends += count;
+      options.onCompactionRecoverySendsReported?.(count);
+    },
     onRequestBodyParsed(body) {
       options.onRequestBodyParsed?.(body);
       if (!record(body) || !Array.isArray(body.input) || typeof body.model !== "string"
@@ -154,6 +181,10 @@ export async function runWithCompactionRecovery(
     const code = token(adapterError?.code) ?? token(failure.upstreamCode);
     const errorType = token(adapterError?.errorType) ?? token(failure.upstreamType);
     const budget = options.sendBudget;
+    // Reset-only fetch legs report their physical receipt but historically leave used alone.
+    // Reconcile only a failed, eligible compaction; successful/disabled requests stay unchanged.
+    const sourceSends = budget && isRequestExecutionBudget(budget)
+      ? settlePhysicalSends(logCtx, budget, sendsBefore, spentBefore, sourceReportedSends) : 0;
     const decision = decideCompactionRecovery(recovery, {
       requestKind: options.compactionRecoveryKind ?? "compaction-v2", recoveryAttempts: 0,
       cancelled: signal.aborted || req.signal.aborted, nonReplayable: !!failure.nonReplayable || isNonReplayableUpstreamCode(code),
@@ -163,9 +194,14 @@ export async function runWithCompactionRecovery(
       httpStatus: adapterError?.status ?? response.status, responseStatus: "failed", errorCode: code, errorType,
       authenticationDenied: response.status === 401 || response.status === 403,
       policyDenied: isCyberPolicyCode(code), budgetDenied: code === "translation_buffer_limit",
-      refusal: isTerminalRefusalCode(code), upstreamFailure: (budget?.used ?? 0) > spentBefore,
+      refusal: isTerminalRefusalCode(code), upstreamFailure: sourceSends > 0,
     });
-    if (!decision.recover) return keep(response);
+    if (!decision.recover || !budget || !isRequestExecutionBudget(budget)) return keep(response);
+    const fallbackBeforeSends = physicalSends(logCtx);
+    const fallbackBeforeUsed = budget.used;
+    const reservation = budget.reserveDispatch({ sendClass: "combo-failover", targetKey: `compaction:${identity(target)}`, countedExternally: true, replaySafe: true });
+    if (!reservation.allowed) return keep(response);
+    recoveryPermit = reservation.permit;
     sourceFailure = response;
     gate.discard();
     // Finish the first physical attempt while retaining its receipt in attempts[].
@@ -189,17 +225,25 @@ export async function runWithCompactionRecovery(
     const bytes = jsonUtf8Bytes(nextBody, MAX_BYTES);
     const serialization = options.translatorBudget.reserveTransient(bytes, { kind: "request_copies" });
     let fallback: Response;
+    let fallbackReportedSends = 0;
     try {
       const child = new Request(req.url, { method: "POST", headers, body: JSON.stringify(nextBody), signal: req.signal });
       linkRequestSessionLane(req, child);
       fallback = await dispatch(child, config, logCtx, {
-        ...options, compactionRecoveryAttempted: true,
+        ...options, compactionRecoveryAttempted: true, compactionRecoveryPermit: recoveryPermit,
         compactionRoutingOverride: { sourceModel: originalModel },
         onRequestBodyRead: undefined, onRequestBodyParsed: undefined,
         onCompactionRecoveryRoute: undefined, onCompactionRecoveryAdapterEvent: undefined,
+        onCompactionRecoverySendsReported: count => {
+          fallbackReportedSends += count;
+          options.onCompactionRecoverySendsReported?.(count);
+        },
         onResponseComplete: undefined, onNativePassthroughTerminal: undefined, onNativePassthroughCancel: undefined,
       });
-    } finally { serialization.release(); }
+    } finally {
+      settlePhysicalSends(logCtx, budget, fallbackBeforeSends, fallbackBeforeUsed, fallbackReportedSends, recoveryPermit);
+      serialization.release();
+    }
     if (signal.aborted || req.signal.aborted) {
       void fallback.body?.cancel().catch(() => undefined);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
@@ -244,6 +288,7 @@ export async function runWithCompactionRecovery(
     throw error;
   } finally {
     if (snapshotBytes) options.translatorBudget.releaseRetained(snapshotBytes, { kind: "request_copies" });
+    recoveryPermit?.release();
     snapshot = undefined;
   }
 }

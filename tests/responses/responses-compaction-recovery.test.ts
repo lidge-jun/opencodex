@@ -185,6 +185,82 @@ describe("routed compaction emergency integration", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test.each([[1, false], [2, false], [2, true]] as const)("fetch source and fetch emergency share cap=%s transient=%s", async (cap, transient) => {
+    const config = settings();
+    config.providers.source = { adapter: "openai-chat", authMode: "key", apiKey: "fixture-only", baseUrl: "https://source.example/v1" };
+    config.providers.emergency = { adapter: "openai-chat", authMode: "key", apiKey: "fixture-only", baseUrl: "https://emergency.example/v1", ...(transient ? { transientRetryOn5xx: { attempts: 3 } } : {}) };
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      requests.push(url);
+      return url.includes("source.example")
+        ? Response.json({ error: { type: "invalid_request_error", code: "context_length_exceeded", message: "Source input context is full" } }, { status: 400 })
+        : Response.json({ choices: [{ message: { role: "assistant", content: "Resume the report." }, finish_reason: "stop" }], usage: { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 } });
+    }) as typeof fetch;
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: cap, baseSendAllowance: cap, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    const json = await response.json();
+    expect(requests).toHaveLength(cap);
+    expect(budget.used).toBe(cap);
+    if (cap === 2) {
+      expect(json.status).toBe("completed");
+      expect(decodeCompactionSummary(json.output.find((item: { type: string }) => item.type === "compaction").encrypted_content)).toContain("ALPHA-729");
+    } else expect(json.error.code).toBe("context_length_exceeded");
+  });
+
+  test.each([false, true])("externally booked source settles once (transient=%s)", async transient => {
+    const config = settings();
+    config.providers.source = { adapter: "openai-chat", authMode: "key", apiKey: "fixture-only", baseUrl: "https://source.example/v1", ...(transient ? { transientRetryOn5xx: { attempts: 3 } } : {}) };
+    let sourceRequests = 0;
+    globalThis.fetch = (async () => {
+      sourceRequests++;
+      return Response.json({ error: { code: "context_length_exceeded", message: "Source context is full" } }, { status: 400 });
+    }) as typeof fetch;
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    const reservation = budget.reserveDispatch({ sendClass: "initial", targetKey: "source/swe-2", countedExternally: true });
+    expect(reservation.allowed).toBe(true);
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    expect((await response.json()).status).toBe("completed");
+    expect(sourceRequests).toBe(1);
+    expect(calls.map(call => call.model)).toEqual(["rescue"]);
+    expect(budget.used).toBe(2);
+  });
+
+  test("runTurn emergency consumes its prepaid permit once rather than taking another send", async () => {
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    const response = await handleResponses(request(), settings(), { model: "", provider: "" }, { sendBudget: budget });
+    expect((await response.json()).status).toBe("completed");
+    expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+    expect(budget.used).toBe(2);
+  });
+
+  test("emergency transient 5xx retry cannot exceed the shared cap", async () => {
+    const config = settings();
+    config.providers.emergency = { adapter: "openai-chat", authMode: "key", apiKey: "fixture-only", baseUrl: "https://emergency.example/v1", transientRetryOn5xx: { attempts: 3 } };
+    let emergencyRequests = 0;
+    globalThis.fetch = (async () => {
+      emergencyRequests++;
+      return Response.json({ error: { code: "server_error", message: "Emergency unavailable" } }, { status: 500 });
+    }) as typeof fetch;
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: 4, baseSendAllowance: 4, finalRecoveryAllowance: 0, maxAlternateTargetSends: 1, maxTargetTransitions: 1 });
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    expect(await response.text()).toContain("Source rejected compact fixture");
+    expect(emergencyRequests).toBe(3);
+    expect(1 + emergencyRequests).toBeLessThanOrEqual(4);
+    expect(budget.used).toBe(1 + emergencyRequests);
+  });
+
+  test("an emergency rejected before sending refunds the unused reservation", async () => {
+    const config = settings();
+    config.providers.emergency = { adapter: "openai-chat", authMode: "key", baseUrl: "https://emergency.example/v1" };
+    const budget = createRequestExecutionBudget();
+    const response = await handleResponses(request(), config, { model: "", provider: "" }, { sendBudget: budget });
+    expect(await response.text()).toContain("Source rejected compact fixture");
+    expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+    expect(budget.used).toBe(1);
+    expect(budget.alternateTargetSends).toBe(0);
+  });
+
   test.each(["disabled", "generic-400", "policy", "auth", "partial", "side-effect", "same-model", "opaque", "continuation"])("keeps source failure: %s", async variant => {
     const config = settings();
     const payload = body(true);
