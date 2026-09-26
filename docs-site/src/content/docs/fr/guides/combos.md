@@ -205,9 +205,9 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | Premier appel d'outil d'un tour Responses exécuté par un adaptateur interne (`runTurn`) que la requête courante n'a pas déclaré, avant toute sortie et tout effet de bord non rejouable | Met la cible en refroidissement et bascule avec le même catalogue d'outils. Après une sortie visible ou un effet de bord non rejouable, le refus est définitif. Les requêtes Chat Completions et Anthropic Messages ne changent pas. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
 
-Une cible sautée entre en temps de recharge pendant 60 secondes par défaut. Si la réponse en amont inclut un
-valeur `Retry-After` valide, opencodex l’utilise à la place. Les secondes numériques et les valeurs de date HTTP sont
-accepté, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
+Une cible sautée utilise par défaut un temps de recharge en amont : 5 secondes pour les codes de limitation de débit `1302`/`1305`, 10 minutes pour une fenêtre d’utilisation épuisée (quel que soit le statut HTTP, y compris 502) ou pour un échec d’identifiants ou de facturation, et 60 secondes dans les autres cas. Si la réponse en amont inclut une
+valeur `Retry-After` valide, opencodex l’utilise à la place ; les en-têtes de réinitialisation Codex viennent ensuite, puis le `cooldownMs` configuré. Les secondes numériques et les valeurs de date HTTP sont
+acceptées, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
 La requête actuelle ne réessaye jamais la même cible tentée. Les demandes ultérieures l'ignorent jusqu'à ce qu'il soit
 le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy renvoie HTTP 503 avec
@@ -354,8 +354,7 @@ exécution d'une instance opencodex qui reçoit des requêtes de modèle.
 
 Chaque cible est actuellement inéligible : par exemple, son fournisseur est désactivé, il est en phase de refroidissement,
 elle a déjà été tentée pour cette requête, ou une tâche v2 chiffrée l'exclut. Vérifier la cible
-état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, attendez la valeur par défaut de 60 secondes ou la
-délai indiqué par `Retry-After` en amont (au maximum 24 heures pour un `Retry-After` explicite, contre 10 minutes pour les autres), puis réessayez.
+état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, suivez d’abord la valeur `Retry-After` observée, puis les en-têtes de réinitialisation Codex, puis le `cooldownMs` configuré ; à défaut, le fallback en amont s’applique (5 secondes pour les codes `1302`/`1305`, 10 minutes pour une fenêtre d’utilisation épuisée, quel que soit le statut HTTP, ou pour un échec d’identifiants ou de facturation, 60 secondes sinon). Un `Retry-After` explicite est plafonné à 24 heures, les autres temps de recharge à 10 minutes, puis réessayez.
 
 ### Pourquoi mon alias a-t-il été rejeté ?
 

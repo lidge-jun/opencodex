@@ -365,8 +365,8 @@ describe("fetchProviderQuotaReports", () => {
     expect(byProvider.anthropic?.quota.fiveHourPercent).toBe(41.5);
     expect(byProvider.anthropic?.quota.fiveHourResetAt).toBe(Date.parse("2026-07-05T12:00:00Z"));
     expect(byProvider.anthropic?.quota.customWindows).toEqual([
-      { label: "Opus", percent: 88 },
-      { label: "Sonnet", percent: 19 },
+      { label: "Opus", scope: "model", percent: 88 },
+      { label: "Sonnet", scope: "model", percent: 19 },
     ]);
     expect(byProvider["google-antigravity"]?.quota.customWindows).toEqual([
       { label: "Gem", percent: 36, resetAt: Date.parse("2026-07-05T14:00:00Z") },

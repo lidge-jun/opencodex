@@ -93,6 +93,7 @@ describe("fetchProviderQuotaReports", () => {
 
     expect(result.reports[0]?.quota.customWindows).toEqual([{
       label: "Opus",
+      scope: "model",
       percent: 41,
     }]);
   });

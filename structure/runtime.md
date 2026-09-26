@@ -314,7 +314,7 @@ diagnostics only for a confirmed candidate and never reads adjacent auth state.
 Unix install-probe cleanup refusals retain their fail-closed behavior and report a bounded
 diagnostic suffix: a fixed probe phase, allowlisted native error/signal, and bounded exit status.
 Metadata contents, launcher paths and raw child errors never enter that suffix. Diagnostic
-classification does not grant process ownership or change rollback/termination policy.
+classification does not grant process ownership or change rollback/termination policy. An explicit `codex-shim install` (`src/cli/dispatch.ts`) exits nonzero when installation is refused or the resulting shim is unhealthy, printing the diagnostic summary; an already-installed healthy shim succeeds.
 
 Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,
@@ -502,7 +502,7 @@ This is also why the classifier cannot duplicate visible output. Native byte str
 
 Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, `tests/routing/routing-policy-fallback.test.ts`, `tests/helpers/combo-context-overflow-cases.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
 
-`src/combos/failover.ts` caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
+`src/combos/failover.ts` uses a 10-minute fallback for a spent account usage window (codes `usage_limit_exceeded`, `usage_limit_reached`, `1308`, or `usage limit reached` / `usage limit has been reached` prose, including HTTP 502) and for provider-scoped credential or billing failure codes such as `invalid_api_key` and `insufficient_quota`. This duration does not change failure classification or cooldown scope; upstream retry/reset signals and configured durations retain precedence. It caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
 
 ## Combo default effort precedence
 

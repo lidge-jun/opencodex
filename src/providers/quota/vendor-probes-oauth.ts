@@ -227,7 +227,7 @@ function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number
 
 const TERMINAL_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/gu;
 
-function parseClaudeLimit(value: unknown): { label: string; percent: number; resetAt?: number } | null {
+function parseClaudeLimit(value: unknown): ProviderQuotaWindow | null {
   const rec = asRecord(value);
   if (!rec) return null;
   const percent = normalizePercent(rec.percent);
@@ -247,7 +247,10 @@ function parseClaudeLimit(value: unknown): { label: string; percent: number; res
   // control characters still leaves attacker-chosen residue on the quota line.
   if (label === null) return null;
   const resetAt = normalizeResetAt(rec.resets_at);
-  return { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+  // Model scope is proven structurally here, not guessed from text: the caller admits only
+  // `kind: "weekly_scoped"`, and a limit without a recognized `scope.model.display_name` has
+  // already returned null above. Routing keys on `scope`, never on `label`.
+  return { label, scope: "model", percent, ...(resetAt !== undefined ? { resetAt } : {}) };
 }
 
 /** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
@@ -292,9 +295,9 @@ export async function fetchAnthropicUsageQuota(accessToken: string): Promise<Pro
     const opus = parseClaudeBucket(body.seven_day_opus);
     const sonnet = parseClaudeBucket(body.seven_day_sonnet);
     const customWindows: ProviderQuotaWindow[] = [];
-    if (fable?.percent !== undefined) customWindows.push({ label: "Fable", percent: fable.percent, ...(fable.resetAt !== undefined ? { resetAt: fable.resetAt } : {}) });
-    if (opus?.percent !== undefined) customWindows.push({ label: "Opus", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
-    if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
+    if (fable?.percent !== undefined) customWindows.push({ label: "Fable", scope: "model", percent: fable.percent, ...(fable.resetAt !== undefined ? { resetAt: fable.resetAt } : {}) });
+    if (opus?.percent !== undefined) customWindows.push({ label: "Opus", scope: "model", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
+    if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", scope: "model", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
     const knownLabels = new Set(customWindows.map(window => window.label.toLowerCase()));
     const limits = Array.isArray(body.limits) ? body.limits : [];
     for (const rawLimit of limits) {

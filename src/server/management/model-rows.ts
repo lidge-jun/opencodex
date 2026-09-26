@@ -241,6 +241,7 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
     ...(row.native ? { native: true } : {}),
     ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+    ...(row.maxOutputTokens !== undefined ? { maxTokens: row.maxOutputTokens } : {}),
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
     ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),
     ...(row.defaultReasoningEffort ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),

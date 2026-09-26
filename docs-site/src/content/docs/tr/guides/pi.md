@@ -41,7 +41,7 @@ export line, and how many models carry authoritative context limits.
           "name": "Claude Opus 5 (anthropic)",
           "input": ["text"],
           "contextWindow": 200000,
-          "maxTokens": 32000
+          "maxTokens": 128000
         }
       ]
     }
@@ -126,11 +126,7 @@ window. When it does not, both fields are omitted for that model and Pi applies
 its own defaults;
 `ocx export` prints how many rows fell into that case.
 
-`maxTokens` is a schema-satisfying budget of `32000`, clamped down to the
-context window so a
-small-context model is never given more output than context. It is not a claim
-about any specific
-model's true maximum.
+Çıktı sınırı, katalogdaki veya oluşturulan meta verilerdeki bilinen model sınırını kullanır. Yalnızca sınır bilinmiyorsa `32000` kullanılır. Çıktı sınırı her zaman bağlam penceresiyle sınırlanır; `32000` altındaki bilinen sınırlar da korunur.
 
 Two fields are deliberately absent. `cost` requires all four price fields and
 opencodex has no

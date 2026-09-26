@@ -135,3 +135,38 @@ export function isAnthropicOutputSchema(schema: Record<string, unknown>): boolea
     return false;
   }
 }
+
+/**
+ * Does every object in this schema list ALL of its properties as required?
+ *
+ * OpenAI's structured-output strict mode demands exactly that, and rejects anything else with
+ * `'required' is required to be supplied and to be an array including every key in properties`.
+ * Anthropic has no such rule, so a caller's legal optional field makes an otherwise identical
+ * schema a 400 on one vendor and fine on the other.
+ *
+ * A caller that marks a field optional means it. Rewriting `required` to satisfy strict mode
+ * would silently change the contract the caller asked for, so the only honest answer is to stop
+ * claiming strict for these schemas -- the schema is still sent and still honoured as guidance.
+ */
+export function satisfiesOpenAiStrictSchema(value: unknown): boolean {
+  if (Array.isArray(value)) return value.every(satisfiesOpenAiStrictSchema);
+  if (!value || typeof value !== "object") return true;
+  const node = value as Record<string, unknown>;
+  // `allOf` is not supported under strict Structured Outputs at all, wherever it appears.
+  if ("allOf" in node) return false;
+  const properties = node.properties;
+  if (isRecord(properties)) {
+    // An object node must list every property in `required` AND close itself to extras. The
+    // caller's schema is forwarded verbatim -- `isAnthropicOutputSchema` normalizes a CLONE for
+    // its own acceptance check -- so an object that never said `additionalProperties: false`
+    // reaches the wire without it and is refused, however complete its `required` is.
+    if (node.additionalProperties !== false) return false;
+    // Strict mode also requires `required` to be supplied at all, even for an empty
+    // `properties` map, so a missing array is not the same as an empty one.
+    if (!Array.isArray(node.required)) return false;
+    const keys = Object.keys(properties);
+    const required: unknown[] = node.required;
+    if (keys.some(key => !required.includes(key))) return false;
+  }
+  return Object.values(node).every(satisfiesOpenAiStrictSchema);
+}

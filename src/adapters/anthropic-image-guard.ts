@@ -170,8 +170,20 @@ export function collectImageRefs(messages: unknown[]): ImageBlockRef[] {
   return refs;
 }
 
+/**
+ * A rebuilt block must carry the caller's prompt-cache breakpoint. `cache_control` is a
+ * SIBLING of `type` on the original block, so replacing that block with a fresh object
+ * literal silently deletes it — the prefix is then re-written instead of read, which in a
+ * screenshot-driven session re-writes the whole conversation tail every turn. Only
+ * `cache_control` is carried over: an image block's `source` must never land on a text block.
+ */
+export function cacheControlOf(ref: ImageBlockRef): { cache_control?: unknown } {
+  const cacheControl = (ref.container[ref.index] as { cache_control?: unknown })?.cache_control;
+  return cacheControl === undefined ? {} : { cache_control: cacheControl };
+}
+
 function textify(ref: ImageBlockRef, text: string): void {
-  ref.container[ref.index] = { type: "text", text };
+  ref.container[ref.index] = { type: "text", text, ...cacheControlOf(ref) };
 }
 
 /**

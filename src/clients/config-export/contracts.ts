@@ -37,6 +37,7 @@ export interface OpencodeCatalogModel {
   provider?: string;
   id?: string;
   contextWindow?: number;
+  maxTokens?: number;
   displayName?: string;
   /**
    * Declared input modalities, carried verbatim from `/api/models`. Serialized as opencode's
@@ -71,6 +72,7 @@ export interface ExportModel {
   native?: boolean;
   displayName?: string;
   contextWindow?: number;
+  maxTokens?: number;
   inputModalities?: string[];
   /** Optional effort ladder exported only to clients that support it. */
   reasoningEfforts?: string[];
