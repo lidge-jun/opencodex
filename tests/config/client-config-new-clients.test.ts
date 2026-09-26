@@ -158,7 +158,7 @@ describe("gajae", () => {
     expect(Object.keys(provider).sort()).toEqual(["api", "apiKey", "baseUrl", "models"]);
     for (const model of provider.models) {
       for (const key of Object.keys(model)) {
-        expect(["id", "name", "input", "contextWindow", "maxTokens"]).toContain(key);
+        expect(["id", "name", "input", "contextWindow", "maxTokens", "reasoning", "thinking", "compat"]).toContain(key);
       }
     }
   });
