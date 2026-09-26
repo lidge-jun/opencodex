@@ -751,7 +751,9 @@ export async function handleImages(
     } catch (err) {
       try {
         forward.releaseProbeLease?.();
-      } catch {}
+      } catch (releaseErr) {
+        console.error("[images] Failed to release probe lease:", releaseErr);
+      }
       if (err instanceof ForwardAdmissionCredentialError) {
         return formatErrorResponse(
           500,
