@@ -1,13 +1,7 @@
 {
   "version": 1,
   "root": "tests",
-  "keepAtRoot": [
-    "preload.ts",
-    "fake-codex-server.ts",
-    "tsconfig.doctor-service-memory-contract.json",
-    "test-layout.test.ts",
-    "test-layout-tooling.test.ts"
-  ],
+  "keepAtRoot": ["preload.ts", "fake-codex-server.ts", "tsconfig.doctor-service-memory-contract.json", "test-layout.test.ts", "test-layout-tooling.test.ts"],
   "domains": {
     "providers": {
       "match": [
