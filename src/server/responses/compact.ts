@@ -583,7 +583,9 @@ export async function bufferCompactResponse(
     const result = await readBoundedResponseBytes(upstream, {
       signal,
       maxBytes: COMPACT_RESPONSE_MAX_BYTES,
-      inactivityTimeoutMs: resolveStallTimeoutMs(stallTimeoutSec, { localUpstream }),
+      // Compaction buffers the complete body while holding an active-turn lease. Keep its
+      // default bounded even for local destinations so silent bodies cannot exhaust that gate.
+      inactivityTimeoutMs: resolveStallTimeoutMs(stallTimeoutSec),
     });
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     if (result.oversized) return compactResponseTooLargeError();
