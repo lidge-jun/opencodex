@@ -132,7 +132,22 @@ function normalizePinnedChatEffort(options: HandleNativeChatOptions): void {
   const pinned = !compaction
     ? resolvePinnedEffort(route, selector, config)
     : undefined;
-  let normalizeForWire = false;
+  // Run the wire mapper whenever a reasoning_effort is present on the body, not only
+  // after a pin/cap rewrite: mapReasoningEffort is the identity for valid ladder
+  // spellings and folds "minimal"->"low" / "ultra"->"max" before they can leak to a
+  // strict upstream. "none" is a real caller instruction (thinking disable), not an
+  // invalid spelling — keep it verbatim so downstream adapters can translate it to
+  // thinking:{type:"disabled"} instead of dropping the field (absent ≠ disabled).
+  const callerEffort = typeof chatBody.reasoning_effort === "string" ? chatBody.reasoning_effort : undefined;
+  // Compaction turns keep their exemption: they are maintenance, not agent turns, so
+  // their effort reaches the wire untouched just as pin/cap leave them alone.
+  // "none" and provider-wire spellings the mapper cannot rank ("enabled"/"disabled"/
+  // "adaptive" — consumed by thinkingToggleModels adapters) also pass through: only
+  // spellings the mapper can fold or clamp ("minimal", "ultra", unknown ranks) get
+  // rewritten, while values it returns undefined for would otherwise be deleted.
+  let normalizeForWire = !compaction && callerEffort !== undefined
+    && callerEffort !== "none" && callerEffort !== "enabled"
+    && callerEffort !== "disabled" && callerEffort !== "adaptive";
   if (pinned !== undefined) {
     logCtx.requestedEffort = from ? `${from}->${pinned}` : pinned;
     if (pinned === "none") delete chatBody.reasoning_effort;

@@ -435,10 +435,12 @@ describe("operator pins on the actual request wire", () => {
     expect(wire.reasoning).toEqual({ effort: "max", summary: "auto" });
   });
 
-  test("native Chat without pins caps spawned children and preserves unqualified caller spelling", async () => {
+  test("native Chat without pins caps spawned children and maps unqualified caller spelling through the wire map", async () => {
     const c = config({ reasoningEfforts: ["low"], reasoningEffortMap: { max: "enabled" } }, { effortCap: "low", subagentEffortCap: "low" });
     expect((await request(c, "chat", { reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("low");
-    expect((await request(c, "chat", { reasoning_effort: "ultra" })).reasoning_effort).toBe("ultra");
+    // Unpinned main turns still run mapReasoningEffort: ultra folds to max, then the
+    // provider wire alias maps max -> enabled (was: verbatim "ultra" passthrough).
+    expect((await request(c, "chat", { reasoning_effort: "ultra" })).reasoning_effort).toBe("enabled");
     expect(Object.hasOwn(await request(c, "chat", { reasoning_effort: undefined }), "reasoning_effort")).toBe(false);
   });
 
@@ -448,14 +450,18 @@ describe("operator pins on the actual request wire", () => {
     expect((await request(c, "chat", { tools, reasoning_effort: "ultra" })).reasoning_effort).toBe("medium");
     expect((await request(c, "chat", { tools, reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("low");
     c.multiAgentMode = "v1";
-    expect((await request(c, "chat", { tools, reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("ultra");
+    // Cap-exempt v1 turn: effort still passes through the wire mapper, so ultra folds
+    // to max (was: verbatim "ultra" passthrough).
+    expect((await request(c, "chat", { tools, reasoning_effort: "ultra" }, { "x-openai-subagent": "collab_spawn" })).reasoning_effort).toBe("max");
   });
 
   test("native Chat maps newly capped values and preserves lower, non-ladder and absent efforts", async () => {
     const c = config({ reasoningEffortMap: { medium: "enabled", low: "disabled" } }, { subagentEffortCap: "medium" });
     const headers = { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) };
     expect((await request(c, "chat", { reasoning_effort: "ultra" }, headers)).reasoning_effort).toBe("enabled");
-    expect((await request(c, "chat", { reasoning_effort: "low" }, headers)).reasoning_effort).toBe("low");
+    // A low value the cap leaves alone still resolves through the provider wire map:
+    // low -> disabled (was: verbatim "low" passthrough).
+    expect((await request(c, "chat", { reasoning_effort: "low" }, headers)).reasoning_effort).toBe("disabled");
     expect((await request(c, "chat", { reasoning_effort: "enabled" }, headers)).reasoning_effort).toBe("enabled");
     expect(Object.hasOwn(await request(c, "chat", { reasoning_effort: undefined }, headers), "reasoning_effort")).toBe(false);
     c.providers.fixture!.pinnedReasoningEffort = "medium";

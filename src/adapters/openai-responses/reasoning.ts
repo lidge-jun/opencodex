@@ -266,8 +266,26 @@ export function mapRoutedResponsesReasoningEffort(
   modelId: string,
 ): unknown {
   if (provider.authMode === "forward") return body;
-  if (configuredReasoningEfforts(provider, modelId) === undefined) return body;
   if (!isPlainObject(body) || !isPlainObject(body.reasoning)) return body;
+  // An unconfigured provider still needs the wire mapper: it folds caller spellings
+  // outside the Codex ladder ("minimal"->"low", "ultra"->"max") and drops unknown
+  // values before they can hit a strict upstream's enum validator. Skipping this on
+  // `configuredReasoningEfforts === undefined` let those spellings leak through
+  // verbatim (observed: DeepSeek-channel 400 "Invalid option" on "minimal"/"ultra").
+  if (configuredReasoningEfforts(provider, modelId) === undefined) {
+    const effort = body.reasoning.effort;
+    // "none" and provider-wire spellings the mapper cannot rank ("enabled"/"disabled"/
+    // "adaptive") pass through verbatim — the mapper's undefined for those means
+    // "not a Codex rung", not "invalid", and downstream adapters translate them.
+    if (typeof effort !== "string" || effort === "none"
+      || effort === "enabled" || effort === "disabled" || effort === "adaptive") return body;
+    const mappedUnconfigured = mapReasoningEffort(provider, modelId, effort);
+    if (mappedUnconfigured === effort) return body;
+    const nextReasoning = { ...body.reasoning };
+    if (mappedUnconfigured === undefined) delete nextReasoning.effort;
+    else nextReasoning.effort = mappedUnconfigured;
+    return { ...body, reasoning: Object.keys(nextReasoning).length > 0 ? nextReasoning : undefined };
+  }
   const declaredEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
   // An explicitly empty ladder means no effort control, not no reasoning output.
   // Omit only effort so the upstream default applies; unknown/non-rankable ladders stay untouched.
