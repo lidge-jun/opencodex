@@ -257,7 +257,7 @@ ocx mcode
 ```
 
 Bağlandıktan sonra `ocx sync` ve `POST /api/sync`, yönetilen MCode, Pi, Aside,
-Raycast, omo ve Factory Droid kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
+Raycast, omo, Cline ve Factory Droid kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
 kataloğunu yeniler. Model görünürlüğü, sağlayıcı veya ön ayar değişiklikleri Pi,
 Aside, Raycast, omo ve Factory Droid kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
 veya elle kaldırılmış bloklara dokunmaz; yeniden bağlamak istediğinizde

@@ -150,7 +150,7 @@ ocx mcode
 ```
 
 完成一次連接後，`ocx sync` 與 `POST /api/sync` 會更新 OpenCodex 已擁有的
-MCode、Pi、Aside、Raycast、omo 與 Factory Droid 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
+MCode、Pi、Aside、Raycast、omo、Cline 與 Factory Droid 目錄。proxy 啟動也會更新已擁有的 Raycast 目錄。
 模型可見性、provider 或 preset 變更會更新 Pi、Aside、Raycast、omo 與 Factory Droid。若區塊已刪除、
 遭外部修改、不安全或由你手動移除，sync 會保持原檔不動；只有在你確定要重新
 連接時才再次執行 enable。

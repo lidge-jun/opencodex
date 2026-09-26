@@ -327,7 +327,7 @@ ocx mcode
 ```
 
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
-Raycast, omo, and Factory Droid catalogs with the current model selection, context windows, and
+Raycast, omo, Cline, and Factory Droid catalogs with the current model selection, context windows, and
 reasoning-effort ladders. Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
 Raycast, omo, and Factory Droid catalogs.

@@ -232,7 +232,7 @@ ocx mcode
 ```
 
 Une fois l’intégration connectée, `ocx sync` et `POST /api/sync` actualisent les catalogues MCode,
-Pi, Aside, Raycast, omo et Factory Droid gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
+Pi, Aside, Raycast, omo, Cline et Factory Droid gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
 Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast, omo et Factory Droid.
 Les blocs absents, modifiés par un tiers, non sûrs ou supprimés manuellement restent intacts ;
 réactivez explicitement l’intégration lorsque vous souhaitez la reconnecter.
