@@ -8,15 +8,30 @@ import {
   eligibleFailoverAccounts,
   genericFailoverRetryAfterSeconds,
   hasEligibleGenericOAuthFailoverTarget,
+  genericOAuthMaxFailovers,
+  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  getAccountHealthRecord,
   hasFailoverAccountQuorum,
+  isAccountHealthy,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
+  isGenericOAuthFailoverStatus,
+  isGenericOAuthFailoverResponse,
+  loadHealthCache,
   noteGenericPoolSelection,
   preferredInitialAccount,
+  recordAccountAuthFailure,
+  recordAccountHealthy,
   rotateGenericOAuthAccountOn429,
+  rotateGenericOAuthAccountOnError,
+  sweepAndHealAccounts,
 } from "../../src/oauth/generic-account-failover";
 import { getAccountSet, markAccountNeedsReauth, saveCredential, setActiveAccount } from "../../src/oauth/store";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import {
+  clearAccountQuotaCache,
+  setAntigravityAccountQuotaTransportForTests,
+  setCachedProviderAccountQuotaForTests,
+} from "../../src/providers/quota";
 import { resolveCopilotApiBaseUrl } from "../../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -35,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   clearGenericFailoverHealth();
   clearAccountQuotaCache("xai");
+  setAntigravityAccountQuotaTransportForTests(null);
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(home);
@@ -59,6 +75,49 @@ function config(enabled?: boolean, perProvider?: boolean): OcxConfig {
     },
     ...(enabled === undefined ? {} : { oauthAccountFailover: { enabled } }),
   } as unknown as OcxConfig;
+}
+
+function antigravityConfig(): OcxConfig {
+  return {
+    oauthAccountFailover: { enabled: true },
+    providers: {
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        authMode: "oauth",
+        oauthAccountFailover: { enabled: true },
+      } as unknown as OcxProviderConfig,
+    },
+  } as unknown as OcxConfig;
+}
+
+async function seedAntigravity(count: number): Promise<string[]> {
+  for (let i = 0; i < count; i++) {
+    await saveCredential("google-antigravity", {
+      access: `agy-access-${i}`,
+      refresh: `agy-refresh-${i}`,
+      expires: Date.now() + 3_600_000,
+      projectId: `agy-project-${i}`,
+      accountId: `agy-account-${i}`,
+    } as never, { addAccount: true });
+  }
+  return getAccountSet("google-antigravity")?.accounts.map(account => account.id) ?? [];
+}
+
+function setHealthyAntigravityProbe(): void {
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({
+      hostname: "daily-cloudcode-pa.googleapis.com",
+      addresses: [{ address: "142.250.0.1", family: 4 }],
+      privateNetwork: false,
+    }),
+    pinnedPost: async () => new Response(JSON.stringify({
+      groups: [{
+        displayName: "Gemini",
+        buckets: [{ window: "5h", remaining: { remainingFraction: 0.5 } }],
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
 }
 
 async function seed(count: number, offset = 0): Promise<string[]> {
@@ -352,7 +411,7 @@ describe("sidecar on429 wiring", () => {
     // The gate is a POSITIVE else-if, not an early return: an early bare return here made the
     // Anthropic arm below unreachable, because Anthropic never has a genericFailoverAccountId.
     expect(body).toContain("genericFailoverAccountId");
-    expect(body).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(body).toContain("genericFailovers < genericOAuthMaxFailovers(route.providerName)");
     expect(body).toContain("isGenericOAuthFailoverEnabled(config, route.providerName)");
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
@@ -445,7 +504,7 @@ describe("sidecar on429 wiring", () => {
     const rotators = {
       key: /hasKeyPoolFailover\(/g,
       anthropic: /rotateAnthropicAccountOn429\(/g,
-      generic: /rotateGenericOAuthAccountOn429\(/g,
+      generic: /rotateGenericOAuthAccountOn(?:429|Error)\(/g,
     };
     const counts = Object.fromEntries(
       Object.entries(rotators).map(([name, re]) => [name, (coreSource.match(re) ?? []).length]),
@@ -739,5 +798,193 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
 
     const next = rotateGenericOAuthAccountOn429(cfg, "xai", sorted[0]!, null);
     expect(next).toBe(sorted[1]!);
+  });
+});
+
+describe("Antigravity 403/401 failover and proactive steering", () => {
+  test("generic 429 stays broad while 401/403 auth rotation is Antigravity-only", () => {
+    expect(isGenericOAuthFailoverStatus(429, "xai")).toBe(true);
+    expect(isGenericOAuthFailoverStatus(401, "google-antigravity")).toBe(true);
+    expect(isGenericOAuthFailoverStatus(401, "xai")).toBe(false);
+    expect(isGenericOAuthFailoverStatus(403, "xai", "VALIDATION_REQUIRED")).toBe(false);
+    expect(isGenericOAuthFailoverStatus(403, "google-antigravity", "PERMISSION_DENIED")).toBe(false);
+    expect(isGenericOAuthFailoverStatus(403, "google-antigravity", "VALIDATION_REQUIRED")).toBe(true);
+    expect(isGenericOAuthFailoverStatus(200, "google-antigravity")).toBe(false);
+  });
+
+  test("bounded 403 response classification fails closed", async () => {
+    expect(await isGenericOAuthFailoverResponse(
+      new Response(JSON.stringify({ error: { details: [{ reason: "VALIDATION_REQUIRED" }] } }), { status: 403 }),
+      "google-antigravity",
+    )).toBe(true);
+    expect(await isGenericOAuthFailoverResponse(
+      new Response(JSON.stringify({ error: { message: "PERMISSION_DENIED" } }), { status: 403 }),
+      "google-antigravity",
+    )).toBe(false);
+    expect(await isGenericOAuthFailoverResponse(
+      new Response(`${"x".repeat(5000)}VALIDATION_REQUIRED`, { status: 403 }),
+      "google-antigravity",
+    )).toBe(false);
+    expect(await isGenericOAuthFailoverResponse(
+      new Response("VALIDATION_REQUIRED", { status: 403 }),
+      "xai",
+    )).toBe(false);
+  });
+
+  test("403 rotates only after VALIDATION_REQUIRED classification", async () => {
+    const gaConfig = antigravityConfig();
+    const ids = await seedAntigravity(2);
+    expect(ids.length).toBe(2);
+    await setActiveAccount("google-antigravity", ids[0]!);
+
+    const now = Date.now();
+    expect(rotateGenericOAuthAccountOnError(
+      gaConfig, "google-antigravity", ids[0]!, 403, null, now,
+    )).toBeNull();
+    expect(rotateGenericOAuthAccountOnError(
+      gaConfig, "google-antigravity", ids[0]!, 403, null, now, undefined, "PERMISSION_DENIED",
+    )).toBeNull();
+    expect(getAccountHealthRecord("google-antigravity", ids[0]!)).toBeUndefined();
+
+    const rotated = rotateGenericOAuthAccountOnError(
+      gaConfig, "google-antigravity", ids[0]!, 403, null, now, undefined, "VALIDATION_REQUIRED",
+    );
+    expect(rotated).toBe(ids[1]!);
+    expect(getAccountHealthRecord("google-antigravity", ids[0]!)?.status).toBe("validation_required");
+    expect(preferredInitialAccount(gaConfig, "google-antigravity", now + 1000)).toBe(ids[1]!);
+  });
+
+  test("401 records auth health once without manufacturing quota exhaustion", async () => {
+    const ids = await seedAntigravity(2);
+    const gaConfig = antigravityConfig();
+    const now = Date.now();
+    expect(rotateGenericOAuthAccountOnError(
+      gaConfig, "google-antigravity", ids[0]!, 401, null, now, "gemini-3.8-flash",
+    )).toBe(ids[1]!);
+
+    const persisted = JSON.parse(readFileSync(join(home, "oauth-account-health.json"), "utf-8")) as Record<string, { status?: string }>;
+    expect(Object.values(persisted).filter(entry => entry.status === "auth_failure")).toHaveLength(1);
+    expect(Object.values(persisted).some(entry => entry.status === "quota_exhausted")).toBe(false);
+  });
+
+  test("family-scoped 429 cooldowns still contribute to Retry-After", async () => {
+    const ids = await seedAntigravity(2);
+    const gaConfig = antigravityConfig();
+    expect(rotateGenericOAuthAccountOn429(
+      gaConfig, "google-antigravity", ids[0]!, "120", Date.now(), "gemini-3.8-flash",
+    )).toBe(ids[1]!);
+    expect(rotateGenericOAuthAccountOn429(
+      gaConfig, "google-antigravity", ids[1]!, "30", Date.now(), "gemini-3.8-flash",
+    )).toBeNull();
+    const retryAfter = genericFailoverRetryAfterSeconds("google-antigravity");
+    expect(retryAfter).toBeGreaterThan(0);
+    expect(retryAfter!).toBeLessThanOrEqual(30);
+  });
+
+  test("genericOAuthMaxFailovers scales dynamically without raising the legacy floor", async () => {
+    expect(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST).toBe(3);
+    expect(genericOAuthMaxFailovers()).toBe(3);
+    expect(genericOAuthMaxFailovers("unknown-provider")).toBe(1);
+
+    await saveCredential("xai", { access: "a0", refresh: "r0", expires: Date.now() + 3600000, accountId: "acc-0" } as never, { addAccount: true });
+    expect(genericOAuthMaxFailovers("xai")).toBe(1);
+    await saveCredential("xai", { access: "a1", refresh: "r1", expires: Date.now() + 3600000, accountId: "acc-1" } as never, { addAccount: true });
+    expect(genericOAuthMaxFailovers("xai")).toBe(3);
+    for (let i = 2; i < 5; i++) {
+      await saveCredential("xai", { access: `a${i}`, refresh: `r${i}`, expires: Date.now() + 3600000, accountId: `acc-${i}` } as never, { addAccount: true });
+    }
+    expect(genericOAuthMaxFailovers("xai")).toBe(4);
+    for (let i = 5; i < 20; i++) {
+      await saveCredential("xai", { access: `a${i}`, refresh: `r${i}`, expires: Date.now() + 3600000, accountId: `acc-${i}` } as never, { addAccount: true });
+    }
+    expect(genericOAuthMaxFailovers("xai")).toBe(15);
+  });
+
+  test("persistent validation health survives cache reload without storing provider text", async () => {
+    const gaConfig = antigravityConfig();
+    const ids = await seedAntigravity(3);
+    await setActiveAccount("google-antigravity", ids[0]!);
+    const now = Date.now();
+
+    rotateGenericOAuthAccountOnError(
+      gaConfig,
+      "google-antigravity",
+      ids[0]!,
+      403,
+      null,
+      now,
+      undefined,
+      "VALIDATION_REQUIRED: provider detail that must not be persisted",
+    );
+
+    const rec = getAccountHealthRecord("google-antigravity", ids[0]!);
+    expect(rec?.status).toBe("validation_required");
+    expect(rec?.lastError).toBe("HTTP 403: VALIDATION_REQUIRED");
+    expect(readFileSync(join(home, "oauth-account-health.json"), "utf-8")).not.toContain("provider detail");
+
+    loadHealthCache();
+    const reloaded = getAccountHealthRecord("google-antigravity", ids[0]!);
+    expect(reloaded?.status).toBe("validation_required");
+    expect(reloaded?.lastError).toBe("HTTP 403: VALIDATION_REQUIRED");
+    expect(preferredInitialAccount(gaConfig, "google-antigravity", now + 1000)).toBe(ids[1]!);
+  });
+
+  test("auth_failure self-heals through the existing bounded Antigravity quota probe", async () => {
+    const [accountId] = await seedAntigravity(1);
+    expect(accountId).toBeDefined();
+    setHealthyAntigravityProbe();
+
+    const now = Date.now();
+    recordAccountAuthFailure("google-antigravity", accountId!, now - 16 * 60_000);
+    await sweepAndHealAccounts("google-antigravity");
+
+    const healed = getAccountHealthRecord("google-antigravity", accountId!);
+    expect(healed?.status).toBe("healthy");
+    expect(healed?.lastError).toBeUndefined();
+  });
+
+  test("failed health probes keep the prior verdict and do not immediately re-probe", async () => {
+    const [accountId] = await seedAntigravity(1);
+    expect(accountId).toBeDefined();
+    let calls = 0;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({
+        hostname: "daily-cloudcode-pa.googleapis.com",
+        addresses: [{ address: "142.250.0.1", family: 4 }],
+        privateNetwork: false,
+      }),
+      pinnedPost: async () => {
+        calls += 1;
+        return new Response(null, { status: 500 });
+      },
+    });
+
+    recordAccountAuthFailure("google-antigravity", accountId!, Date.now() - 16 * 60_000);
+    await sweepAndHealAccounts("google-antigravity");
+    const firstCalls = calls;
+    expect(firstCalls).toBeGreaterThan(0);
+    expect(getAccountHealthRecord("google-antigravity", accountId!)?.status).toBe("auth_failure");
+
+    await sweepAndHealAccounts("google-antigravity");
+    expect(calls).toBe(firstCalls);
+  });
+
+  test("unflagged accounts are not probed merely because the background sweep started", async () => {
+    await seedAntigravity(1);
+    let calls = 0;
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({
+        hostname: "daily-cloudcode-pa.googleapis.com",
+        addresses: [{ address: "142.250.0.1", family: 4 }],
+        privateNetwork: false,
+      }),
+      pinnedPost: async () => {
+        calls += 1;
+        return new Response(null, { status: 500 });
+      },
+    });
+
+    await sweepAndHealAccounts("google-antigravity");
+    expect(calls).toBe(0);
   });
 });

@@ -813,9 +813,12 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 
 Rotates to another logged-in account of the same provider when one is rate-limited, for OAuth
 providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot, Google Antigravity,
-and Nous.
+and Nous. Google Antigravity also rotates on `401`, and on `403` only when a bounded error-body
+inspection identifies `VALIDATION_REQUIRED`. Raw provider error text is not stored in account
+health; flagged Antigravity accounts are rechecked after cooldown through the existing bounded
+quota/model probe and return to rotation only after a successful check.
 
-**Logging in a second account is what turns this on, and nothing turns it off.** Rotation
+**Logging in a second account is what turns reactive recovery on, and nothing turns it off.** Rotation
 activates for any of those providers holding 2 or more accounts that are not flagged for
 reauthentication — the same rule `apiKeyPool` already applies to a 2+ key pool. A provider with
 one stored account behaves exactly as before.
@@ -832,6 +835,7 @@ second account.
 | `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | — | Pool strategy for a generic OAuth provider (#695). Persisted through `ocx account strategy <provider> <name>` or `PUT /api/oauth/accounts/pool`. The selector acts on it only while `pool.kernel` is on; with the flag off, omitted and set behave the same. `quota` is the pre-kernel behaviour either way. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | `80` | 0–100 usage percent at which `fill-first` advances off the active account (#695). Set with `ocx account auto-switch <provider> threshold <n>`. Read only under `pool.kernel` with `strategy: "fill-first"`; an account with no measured usage counts as under the threshold. |
 | `providers.<name>.oauthAccountFailover.stickyLimit?` | `number` | `1` | Successful dispatches retained on one `round-robin` selection, 1–100 (#695). Read only under `pool.kernel` with `strategy: "round-robin"`. |
+| `providers.<name>.oauthAccountFailover.healthProbeEnabled?` | `boolean` | `true` | Google Antigravity only. Controls the periodic background recovery probe for accounts already flagged by a real 401 or `VALIDATION_REQUIRED` 403. `false` disables that background probe without disabling reactive failover or deleting persisted health. |
 
 To decline proactive account steering for one provider whose terms you would rather not test,
 while still recovering from a rate limit:

@@ -655,7 +655,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     return workspaceRuntimeFlight;
   };
   try {
-    backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy, config.providers?.["google-antigravity"]?.oauthAccountFailover?.healthProbeEnabled !== false);
     unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
       ?? registerCodexQuotaAutoRefreshWorker)(config);
     // External `ocx config set` / direct config.json edits run in other

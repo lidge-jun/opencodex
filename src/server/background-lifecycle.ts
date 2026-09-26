@@ -17,6 +17,10 @@ import {
   syncCatalogAutoRefreshCadence,
 } from "../codex/catalog-auto-refresh";
 import {
+  startGenericAccountHealthSweep,
+  stopGenericAccountHealthSweep,
+} from "../oauth/generic-account-failover";
+import {
   cancelQueuedStorageWorkerSpawns,
   drainStorageWorkers,
 } from "../storage/worker-lifecycle";
@@ -39,6 +43,7 @@ type ProcessLoops = {
 type LeaseOwner = {
   token: symbol;
   applyPolicy: PolicyApply;
+  genericOAuthHealthProbeEnabled: boolean;
   resources: ServerResourceOwnerLease;
 };
 
@@ -57,7 +62,10 @@ function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
   setStorageCleanupPolicyJobLiveApply(applyPolicy);
 }
 
-function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
+function startProcessLoops(
+  applyPolicy: PolicyApply,
+  genericOAuthHealthProbeEnabled: boolean,
+): ProcessLoops {
   let memoryWatchdog: MemoryWatchdog | null = null;
   let stateStoreSweeper: ReturnType<typeof startStateStoreSweeper> | null = null;
   try {
@@ -95,6 +103,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next poll tick retries.
       });
+    if (genericOAuthHealthProbeEnabled) startGenericAccountHealthSweep();
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
     memoryWatchdog?.stop();
@@ -102,6 +111,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     stopStorageCleanupScheduler();
     stopQuotaResetPoller();
     stopCatalogAutoRefresh();
+    stopGenericAccountHealthSweep();
     setLivePolicyOwner(null);
     throw error;
   }
@@ -115,6 +125,7 @@ function stopProcessLoops(): void {
   stopStorageCleanupScheduler();
   stopQuotaResetPoller();
   stopCatalogAutoRefresh();
+  stopGenericAccountHealthSweep();
   setLivePolicyOwner(null);
 }
 
@@ -152,6 +163,8 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
   const nextOwner = owners.at(-1);
   if (nextOwner) {
     setLivePolicyOwner(nextOwner.applyPolicy);
+    if (nextOwner.genericOAuthHealthProbeEnabled) startGenericAccountHealthSweep();
+    else stopGenericAccountHealthSweep();
     return "shared";
   }
   stopProcessLoops();
@@ -168,6 +181,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
  */
 export function acquireServerBackgroundLifecycle(
   applyPolicy: PolicyApply,
+  genericOAuthHealthProbeEnabled = true,
 ): ServerBackgroundLifecycleLease {
   if (cleanupInProgress) {
     throw new Error("server background lifecycle cleanup is still in progress");
@@ -176,13 +190,16 @@ export function acquireServerBackgroundLifecycle(
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),
     applyPolicy,
+    genericOAuthHealthProbeEnabled,
     resources: acquireServerResourceOwner(),
   };
   try {
     if (!processLoops) {
-      processLoops = startProcessLoops(applyPolicy);
+      processLoops = startProcessLoops(applyPolicy, genericOAuthHealthProbeEnabled);
     } else {
       setLivePolicyOwner(applyPolicy);
+      if (genericOAuthHealthProbeEnabled) startGenericAccountHealthSweep();
+      else stopGenericAccountHealthSweep();
     }
     owners.push(owner);
   } catch (error) {

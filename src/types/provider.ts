@@ -678,6 +678,8 @@ export interface OcxProviderConfig {
      * Read only under `pool.kernel` with `strategy: "round-robin"`.
      */
     stickyLimit?: number;
+    /** Background recovery probe for flagged Antigravity auth failures. Default true. */
+    healthProbeEnabled?: boolean;
   };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;

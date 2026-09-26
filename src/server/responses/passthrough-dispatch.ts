@@ -138,9 +138,12 @@ import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
+  genericOAuthMaxFailovers,
   isGenericOAuthFailoverEnabled,
+  isGenericOAuthFailoverStatus,
+  isGenericOAuthFailoverResponse,
+  rotateGenericOAuthAccountOnError,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
@@ -1312,31 +1315,41 @@ export async function preparePassthroughExchange(
 
     // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
     // the same quorum, cooldown and request budget here, before any client bytes flow.
-   if (
-     upstreamResponse.status === 429
+    if (
+      isGenericOAuthFailoverStatus(upstreamResponse.status, route.providerName)
       // Not a provider rate limit when this proxy synthesized it for a refused reset
       // replay; rotating accounts on it would re-send an inference that may already
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
-     && transportState.genericFailoverAccountId
-      && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && transportState.genericFailoverAccountId
+      && transportState.genericFailovers < genericOAuthMaxFailovers(route.providerName)
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
       // The roster cap above is one half of the bound; the request's shared budget is the
-      // other. A refused hop leaves the real 429 -- body, Retry-After and any quota evidence
+      // other. A refused hop leaves the real error -- body, Retry-After and any quota evidence
       // -- exactly as upstream sent it.
       const hop = reserveCredentialHop(
         "auth-recovery",
-        `${route.providerName}|${route.modelId}|oauth-account-429`,
+        `${route.providerName}|${route.modelId}|oauth-account-failover`,
         true,
       );
       if (hop.allowed) {
-        const nextAccountId = rotateGenericOAuthAccountOn429(
-          config, route.providerName, transportState.genericFailoverAccountId,
-          upstreamResponse.headers.get("retry-after"),
-          Date.now(),
-          route.modelId,
-        );
+        const validationRequired = upstreamResponse.status !== 403
+          || await isGenericOAuthFailoverResponse(
+            upstreamResponse,
+            route.providerName,
+            upstream.signal,
+          );
+        const nextAccountId = validationRequired
+          ? rotateGenericOAuthAccountOnError(
+            config, route.providerName, transportState.genericFailoverAccountId,
+            upstreamResponse.status,
+            upstreamResponse.headers.get("retry-after"),
+            Date.now(),
+            route.modelId,
+            upstreamResponse.status === 403 ? "VALIDATION_REQUIRED" : undefined,
+          )
+          : null;
         let snapshot: OAuthAccessSnapshot | undefined;
         if (nextAccountId) {
           try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }

@@ -22,9 +22,11 @@ import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuat
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
+  genericOAuthMaxFailovers,
   isGenericOAuthFailoverEnabled,
+  isGenericOAuthFailoverStatus,
+  rotateGenericOAuthAccountOnError,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
@@ -346,19 +348,19 @@ export async function executeResponsesRunTurn(
       if (error.code === SEND_BUDGET_EXHAUSTED_CODE) return false;
       const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
       if (
-        status !== 429
+        !isGenericOAuthFailoverStatus(status, route.providerName, error.message)
         || !transportState.genericFailoverAccountId
-        || transportState.genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        || transportState.genericFailovers >= genericOAuthMaxFailovers(route.providerName)
         || !isGenericOAuthFailoverEnabled(config, route.providerName)
       ) return false;
       // Intersection with the request's shared budget: the roster bound above answers "may this
       // credential set rotate again", this answers "may this request send again at all". The
       // replayed turn is dispatched by runTurnAttempt and never reaches `onSendsConsumed`, so
-      // this reservation is the charge. Refusing returns false, which leaves the preflight 429
+      // this reservation is the charge. Refusing returns false, which leaves the preflight error
       // to reach the client exactly as the adapter produced it.
       const hop = reserveCredentialHop(
         "auth-recovery",
-        `${route.providerName}|${route.modelId}|runturn-oauth-429`,
+        `${route.providerName}|${route.modelId}|runturn-oauth-failover`,
       );
       if (!hop.allowed) {
         // The activation quorum deliberately ignores cooldowns. Attribute a withheld recovery
@@ -368,13 +370,15 @@ export async function executeResponsesRunTurn(
         )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
         return false;
       }
-      const nextAccountId = rotateGenericOAuthAccountOn429(
+      const nextAccountId = rotateGenericOAuthAccountOnError(
         config,
         route.providerName,
         transportState.genericFailoverAccountId,
+        status,
         null,
         Date.now(),
         route.modelId,
+        error.message,
       );
       if (!nextAccountId) {
         hop.permit?.release();
