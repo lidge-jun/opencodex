@@ -199,6 +199,9 @@ export function useProvidersOAuth({
           finished = true;
           break;
         }
+        // A later provider step replaces the initial POST hint (including an
+        // absent device code); generation checks above keep old polls out.
+        if (s.hint) setLoginInfo({ provider, url: s.hint.url, instructions: s.hint.instructions, deviceCode: s.hint.deviceCode });
       }
       if (!finished && oauthLoginGenerationRef.current!.get(provider) === generation && aliveRef.current) {
         await cancelServerLogin(provider);

@@ -86,7 +86,8 @@ export type LoginHintPaste = {
  *
  * Order is deliberate: the device code first because it is the short thing a
  * human has to type, then the URL, then any provider prose, then the paste
- * fallback for when the browser cannot reach the loopback callback.
+ * fallback for when the browser cannot reach the loopback callback. Device
+ * grants poll for approval instead: their human code is not a callback code.
  */
 export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginHintPaste }) {
   const t = useT();
@@ -119,7 +120,7 @@ export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginH
       )}
       <LoginUrlBlock url={url} />
       {hint.instructions && <div className="muted text-label">{hint.instructions}</div>}
-      {paste && (
+      {paste && !deviceCode && (
         <div className="login-hint-paste">
           <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
           <div className="login-hint-paste-row">

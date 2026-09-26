@@ -115,6 +115,21 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     expect(await admitted?.json()).toEqual({ error: "Unknown account for reauth" });
   });
 
+  test("OAuth discovery advertises Muse only to the principal allowed to start it", async () => {
+    for (const principal of [undefined, "admin-token", "gui-pair-capability", "gui-session"] as const) {
+      const req = new Request("http://localhost/api/oauth/providers");
+      const response = await handleManagementAPI(req, new URL(req.url), config(), {}, principal);
+      expect(response?.status).toBe(200);
+      const { providers } = await response!.json() as { providers: string[] };
+      expect(providers.includes("meta-muse")).toBe(principal === "gui-session");
+      expect(providers).toContain("xai");
+      expect(providers).not.toContain("chatgpt");
+    }
+    // Discovery is management-principal-specific, not a global/CLI capability change.
+    expect(listOAuthProviders()).toContain("meta-muse");
+    expect(isPublicOAuthProvider("meta-muse")).toBe(true);
+  });
+
   test("Meta Muse manual code submission requires a GUI session", async () => {
     const cfg = config();
     const submit = spyOn(oauth, "submitManualLoginCode").mockReturnValue({ ok: true });
@@ -457,6 +472,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       const status = await waitForOAuthDone("xai");
       expect(status.error).toBeUndefined();
       expect(status.loggedIn).toBe(true);
+      expect(status.hint).toBeUndefined();
       expect(liveConfig.providers.xai).toEqual(loadConfig().providers.xai);
       expect(liveConfig.providers.xai).toBeDefined();
     } finally {
@@ -583,9 +599,72 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
         done: true,
         error: "Login cancelled",
       });
+      expect(getLoginStatus("xai").hint).toBeUndefined();
     } finally {
       OAUTH_PROVIDERS.xai.login = originalLogin;
       clearLoginState("xai");
+    }
+  });
+
+  test("status replaces the first login hint with the current token-safe continuation", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    const pending = Promise.withResolvers<never>();
+    let controller!: Parameters<typeof originalLogin>[0];
+    const first = { url: "https://auth.example.test/device", deviceCode: "ABCD-EFGH", instructions: "Approve the device" };
+    OAUTH_PROVIDERS.xai.login = async ctrl => {
+      controller = ctrl;
+      ctrl.onAuth(first);
+      return pending.promise;
+    };
+    try {
+      const started = await startLoginFlow("xai");
+      expect(started).toEqual(first);
+      expect(getLoginStatus("xai").hint).toEqual(first);
+      const next = { url: "https://auth.example.test/manual", instructions: "Paste the key instead" };
+      controller.onAuth({ ...next, access: "private-access-canary", refresh: "private-refresh-canary" } as typeof next);
+      expect(started).toEqual(first);
+      expect(getLoginStatus("xai").hint).toEqual({ ...next, deviceCode: undefined });
+      const req = new Request("http://localhost/api/oauth/status?provider=xai");
+      const response = await handleManagementAPI(req, new URL(req.url), config());
+      const body = await response!.json();
+      expect(body.hint).toEqual(next);
+      expect(JSON.stringify(body)).not.toContain("private-");
+      // Projection cannot hand a caller mutable ownership of the stored continuation.
+      getLoginStatus("xai").hint!.url = "https://wrong.example.test";
+      expect(getLoginStatus("xai").hint?.url).toBe(next.url);
+      pending.reject(new Error("synthetic login failure"));
+      expect((await waitForOAuthDone("xai")).hint).toBeUndefined();
+    } finally {
+      pending.reject(new Error("test cleanup"));
+      clearLoginState("xai");
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+    }
+  });
+
+  test("late auth hints cannot revive a cancelled flow or overwrite its replacement", async () => {
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    const pending = Promise.withResolvers<never>();
+    const controllers: Array<Parameters<typeof originalLogin>[0]> = [];
+    OAUTH_PROVIDERS.xai.login = async ctrl => {
+      controllers.push(ctrl);
+      ctrl.onAuth({ url: `https://auth.example.test/${controllers.length}` });
+      return pending.promise;
+    };
+    try {
+      await startLoginFlow("xai");
+      expect(cancelLoginFlow("xai")).toBe(true);
+      controllers[0]!.onAuth({ url: "https://stale.example.test", deviceCode: "STALE" });
+      expect(getLoginStatus("xai").hint).toBeUndefined();
+      await startLoginFlow("xai");
+      controllers[0]!.onAuth({ url: "https://stale.example.test", deviceCode: "STALE" });
+      expect(getLoginStatus("xai").hint?.url).toBe("https://auth.example.test/2");
+      expect(getLoginStatus("xai").hint?.deviceCode).toBeUndefined();
+      pending.reject(new Error("synthetic login failure"));
+      expect((await waitForOAuthDone("xai")).hint).toBeUndefined();
+    } finally {
+      pending.reject(new Error("test cleanup"));
+      clearLoginState("xai");
+      OAUTH_PROVIDERS.xai.login = originalLogin;
     }
   });
 

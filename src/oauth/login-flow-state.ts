@@ -10,7 +10,13 @@ import type { GenerationContext } from "../lib/state-store-sweeper";
  * a login that has started and not yet settled, and none of it reads or writes a stored
  * credential. `index.ts` re-exports the two public names, so existing importers are unaffected.
  */
-export const loginState = new Map<string, { error?: string; done: boolean }>();
+/** Human-facing continuation only: never retain credentials or provider response objects. */
+export interface OAuthLoginHint {
+  url: string;
+  instructions?: string;
+  deviceCode?: string;
+}
+export const loginState = new Map<string, { error?: string; done: boolean; hint?: OAuthLoginHint }>();
 export const loginAbort = new Map<string, { controller: AbortController; flowId?: string }>();
 export const kiroLoginSettling = new Set<string>();
 
