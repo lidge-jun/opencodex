@@ -741,10 +741,23 @@ export function clearCodexRuntimeResolveCache(): void {
   clearResolveCache();
 }
 
-/** Observe only an unexpired successful process memo; never resolves or probes. */
+/**
+ * Observe the successful process memo; never resolves or probes.
+ *
+ * An expired memo stays observable while an async refresh for the same inputs is in flight
+ * and nothing has invalidated it since. The sync resolver used to hold the event loop for the
+ * whole probe, so nothing could read in that window; with the refresh off the loop, dropping
+ * the memo there would send catalog gather to the persisted runtime (or none) and have
+ * convergence reject its process-local candidate every expiry. A published result or a clear
+ * still retires it; the deferred selection never enters this memo (#4458).
+ */
 export function peekCodexRuntimeProcessCache(): CodexRuntimeProcessCachePeek {
   const memo = resolveCache;
-  if (!memo || Date.now() - memo.at >= RESOLVE_CACHE_MS) {
+  const refreshing = memo !== null
+    && asyncResolveInflight !== null
+    && asyncResolveInflight.key === memo.key
+    && asyncResolveInflight.epoch === resolveCacheEpoch;
+  if (!memo || (Date.now() - memo.at >= RESOLVE_CACHE_MS && !refreshing)) {
     return Object.freeze({ kind: "unavailable" as const, epoch: resolveCacheEpoch });
   }
   return Object.freeze({

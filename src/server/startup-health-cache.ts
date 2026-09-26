@@ -38,6 +38,14 @@ export function startupHealthProbeTimeoutMs(): number {
   return PROBE_TIMEOUT_MS;
 }
 let cached: { timestamp: number; value: StartupHealth } | null = null;
+/**
+ * Last completed reading, kept across invalidation. Invalidation only means "no longer
+ * fresh": a settings write clears `cached` so the next fresh read re-probes, but answering
+ * the snapshot with the synthetic not-installed fallback meanwhile turned a healthy service
+ * into `at-risk` on the dashboard until the probe finished (up to 15s on Windows). The
+ * fallback is kept for a process that has never completed a reading.
+ */
+let lastReading: StartupHealth | null = null;
 let inflight: Promise<StartupHealth> | null = null;
 let generation = 0;
 
@@ -64,7 +72,11 @@ export function getStartupHealthSnapshot(
   const now = deps.now ?? Date.now;
   if (cached && now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
   refreshInBackground(config, deps);
-  return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
+  return staleOrFallback(config);
+}
+
+function staleOrFallback(config: Pick<OcxConfig, "codexAutoStart">): StartupHealth {
+  return lastReading ? markStartupHealthDiagnosticStale(lastReading) : conservativeFallback(config);
 }
 
 export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupHealth {
@@ -140,7 +152,7 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
           } catch { /* scan earlier output; config repair messages may precede JSON */ }
         }
       }
-      resolve(cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config));
+      resolve(staleOrFallback(config));
     });
   });
 }
@@ -156,10 +168,11 @@ function refreshInBackground(
     .then(value => {
       if (startedGeneration === generation) {
         cached = { timestamp: (deps.now ?? Date.now)(), value };
+        if (!value.diagnosticStale) lastReading = value;
       }
       return value;
     })
-    .catch(() => cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config))
+    .catch(() => staleOrFallback(config))
     .finally(() => {
       // An invalidated probe must never clear the newer generation's flight.
       if (inflight === probe) inflight = null;
@@ -189,11 +202,17 @@ export async function getCachedStartupHealth(
         ]));
     if (settled) return settled;
   }
-  return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
+  return staleOrFallback(config);
 }
 
 export function invalidateStartupHealthCache(): void {
   generation += 1;
   cached = null;
   inflight = null;
+}
+
+/** Test-only: also forget the last reading, returning to the never-probed state. */
+export function resetStartupHealthCacheForTests(): void {
+  invalidateStartupHealthCache();
+  lastReading = null;
 }
