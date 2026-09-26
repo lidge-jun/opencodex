@@ -21,12 +21,10 @@
  * API compatibility and must never be invoked.") when a proxy in the path
  * requires a tools array the turn would otherwise omit.
  *
- * Limits, stated plainly: the declarations satisfy admission, not execution.
- * If the model calls one instead of the client's own tools, the client
- * answers "unknown tool" and the turn fails visibly. There is no call
- * translation (a `shell` JSON call cannot be faithfully rewritten into the
- * client's native tool surface generically), so the wording steers the model
- * to the catalog it already has.
+ * The declarations satisfy admission, not execution. If the model calls one
+ * anyway, the provider compatibility response hook suppresses that synthetic
+ * call and emits the guidance below. A client-declared tool with the same name
+ * is never synthetic and flows through unchanged.
  */
 
 import type { CompatibilityFunctionTool } from "./provider-compatibility";
@@ -34,6 +32,17 @@ import type { CompatibilityFunctionTool } from "./provider-compatibility";
 /** OpenCode's compatibility-only wording, reused verbatim. */
 export const ZEN_FREE_GATE_DECLARATION =
   "Do not call this tool. It exists only for API compatibility and must never be invoked.";
+
+/** Guidance that keeps a mistaken compatibility-tool call from killing the turn. */
+export function zenFreeGateGuidanceText(callName: string, callerNames: readonly string[]): string {
+  const alternatives = callerNames.filter(name => name !== callName).slice(0, 4);
+  const instead = alternatives.length === 0
+    ? "Use one of this turn's other declared tools instead."
+    : alternatives.length === 1
+      ? `Use \`${alternatives[0]}\` instead.`
+      : `Use one of ${alternatives.map(name => `\`${name}\``).join(", ")} instead.`;
+  return `The \`${callName}\` tool is declared but cannot be executed in this session. ${instead}`;
+}
 
 /** Declarations required by Zen; the shared profile layer supplies each wire shape. */
 export const ZEN_FREE_GATE_TOOLS: readonly CompatibilityFunctionTool[] = [

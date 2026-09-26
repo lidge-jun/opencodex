@@ -261,6 +261,8 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 
 **키 없는 `opencode-free` 등급은 OpenCode 공식 CLI가 직접 보내는 익명 클라이언트 신원을 제시합니다.** forward가 아닌 신원 프로필이 적용되면 요청은 대화에서 파생된 `x-opencode-session`(대화 신원이 없으면 요청 범위), 버전이 있는 `opencode/<version>` User-Agent와 `x-opencode-client` 표식을 전달합니다. Authorization 헤더가 아직 없을 때만 프로필이 `Authorization: Bearer public`을 추가하며, Zen은 이를 익명 할당량으로 연결합니다. `authMode: "forward"` 요청은 이 프로필을 건너뜁니다. 출처는 OpenCode의 `packages/opencode/src/session/llm/request.ts`(헤더)와 `packages/console/app/src/routes/zen/util/handler.ts`(게이트웨이 승인)입니다. 직접 설정한 `x-opencode-session`이나 API 키는 항상 우선하며, 키가 있으면 해당 계정에 과금됩니다. Muse Spark contributor-free 모델은 Zen 엔드포인트 표에 따라 Zen의 `/v1/responses` 엔드포인트로 전달됩니다. 이 승인은 계약이 아닌 관용입니다. OpenCode가 언제든 변경하거나 제한할 수 있으며, 그 경우 업스트림 오류가 반환됩니다.
 
+Zen의 익명 admission에는 소문자 `shell` 및 `read` 선언도 필요합니다. opencodex는 요청에 없는 선언만 추가하고 호환성 전용으로 표시합니다. 모델이 이를 선택하더라도 프록시는 합성 호출을 요청의 실제 도구를 사용하라는 어시스턴트 안내로 바꾸며, 호환성 선언을 실행하지 않습니다. 호출자가 선언한 `shell` 또는 `read`는 일반 실행 가능 도구로 유지됩니다.
+
 같은 모델로 가는 지원 경로는 [opencode.ai/auth](https://opencode.ai/auth)에서 발급받은 OpenCode Zen API 키를 쓰는 **`opencode-zen`** 프리셋입니다. 업스트림 약관: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
 대부분은 bearer 키와 함께 `openai-chat` 어댑터를 사용하며, **Xiaomi MiMo**(`xiaomi`) 같은

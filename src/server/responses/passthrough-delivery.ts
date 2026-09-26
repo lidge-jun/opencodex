@@ -105,6 +105,10 @@ import {
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
 } from "../responses-undeclared-tool-guard";
+import {
+  createCompatibilityCallRedirectBlockRewrite,
+  redirectCompatibilityCallsInJson,
+} from "../responses-compatibility-call-redirect";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 
 /**
@@ -344,6 +348,7 @@ export async function deliverPassthroughResponse(
   const { parsed, route, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
+  const compatibilityRedirect = nativeExchange.request.compatibilityFunctionCallRedirect;
 
   let upstreamResponse = nativeExchange.upstreamResponse;
   const originalContentType = upstreamResponse.headers.get("content-type");
@@ -661,17 +666,19 @@ export async function deliverPassthroughResponse(
       // injection at the block level, after payload rewrites. Defaults come
       // from the finalized OUTBOUND body — the normalized internal tool shapes
       // are not the Responses wire shapes the snapshot must mirror.
-      // Only validated client blocks may publish plaintext continuation state.
-      // Raw inspection precedes rewriting on eager relays, so it cannot own this write.
-      const plaintextInspector = !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size > 0
+      // Only the final client blocks may publish continuation state when a rewrite changes
+      // the durable response snapshot. Raw inspection precedes rewriting on eager relays, so
+      // it would otherwise remember calls that the client never received.
+      const rewrittenSnapshotInspector = !grokUpstreamEchoEnabled
+        && (responseEffects.plaintextV2AgentMessageToolNames.size > 0 || compatibilityRedirect !== undefined)
         ? createSseInspector({ onCompletedResponse: rememberPassthroughResponseChecked })
         : undefined;
-      const plaintextEncoder = plaintextInspector ? new TextEncoder() : undefined;
-      const rememberPlaintextBlock = plaintextInspector
+      const rewrittenSnapshotEncoder = rewrittenSnapshotInspector ? new TextEncoder() : undefined;
+      const rememberRewrittenSnapshotBlock = rewrittenSnapshotInspector
         ? Object.assign((block: string): readonly string[] => {
-          plaintextInspector.feed(plaintextEncoder!.encode(`${block}\n\n`));
+          rewrittenSnapshotInspector.feed(rewrittenSnapshotEncoder!.encode(`${block}\n\n`));
           return [block];
-        }, { dispose: () => plaintextInspector.dispose() })
+        }, { dispose: () => rewrittenSnapshotInspector.dispose() })
         : undefined;
       const blockRewrites = [
         payloadRewrites.length > 0
@@ -724,6 +731,9 @@ export async function deliverPassthroughResponse(
         functionRepairSchemas.size > 0
           ? createResponsesFunctionToolRepairBlockRewrite(functionRepairSchemas, translatorBudget)
           : undefined,
+        compatibilityRedirect
+          ? createCompatibilityCallRedirectBlockRewrite(compatibilityRedirect)
+          : undefined,
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
         nativeExchange.undeclaredToolGuardActive
@@ -739,7 +749,7 @@ export async function deliverPassthroughResponse(
             rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
           )
           : undefined,
-        rememberPlaintextBlock,
+        rememberRewrittenSnapshotBlock,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const clientBlockRewrite = blockRewrites.length > 0
         ? composeSseBlockRewrites(...blockRewrites)
@@ -788,7 +798,7 @@ export async function deliverPassthroughResponse(
         const inspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,
-          onCompletedResponse: rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+          onCompletedResponse: rememberPassthroughResponse && !grokUpstreamEchoEnabled && rewrittenSnapshotInspector === undefined ? rememberPassthroughResponseChecked : undefined,
           onParsedPayload: noteInspectedPayload,
           onFirstOutput: options.onFirstOutput,
           pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
@@ -890,7 +900,7 @@ export async function deliverPassthroughResponse(
             responseEffects.responseCompletionCancelled = true;
             options.onNativePassthroughCancel?.();
           },
-          rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+          rememberPassthroughResponse && !grokUpstreamEchoEnabled && rewrittenSnapshotInspector === undefined ? rememberPassthroughResponseChecked : undefined,
           options.onFirstOutput,
           inspectionConsumerOptions,
         );
@@ -900,7 +910,7 @@ export async function deliverPassthroughResponse(
           logCtx,
           turnAc.signal,
           () => unregisterTurn(turnAc),
-          rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+          rememberPassthroughResponse && !grokUpstreamEchoEnabled && rewrittenSnapshotInspector === undefined ? rememberPassthroughResponseChecked : undefined,
           options.onFirstOutput,
           inspectionConsumerOptions,
         );
@@ -985,6 +995,7 @@ export async function deliverPassthroughResponse(
       if (grokUpstreamEchoEnabled) {
         clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
       }
+      clientJson = redirectCompatibilityCallsInJson(clientJson, compatibilityRedirect);
       // #1700: same fail-closed policy as the SSE relay above. Both the plain JSON answer and
       // the reframed-SSE branch below are built from this body, so one check covers them. This
       // runs BEFORE the continuation cache write below: a refused turn must not become state a
@@ -1015,7 +1026,7 @@ export async function deliverPassthroughResponse(
       commitReasoningReplayServingRoute(nativeExchange.request.headers);
       try {
         rememberPassthroughResponseChecked(
-          JSON.parse(grokUpstreamEchoEnabled ? clientJson : text) as { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
+          JSON.parse(grokUpstreamEchoEnabled || compatibilityRedirect ? clientJson : text) as { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
         );
       } catch { /* non-JSON despite content-type; recording is best-effort */ }
       // #875: the transport-neutral reliability policy forced a bounded JSON

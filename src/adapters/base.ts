@@ -123,6 +123,11 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Provider-added declarations whose accidental calls become assistant guidance. */
+    compatibilityFunctionCallRedirect?: {
+      names: ReadonlySet<string>;
+      message(name: string): string;
+    };
     /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
     /** Native custom-tool wire names authorized for representation-only response repair. */

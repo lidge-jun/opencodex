@@ -1,5 +1,5 @@
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
-import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
+import type { AdapterRequest } from "./base";
 import { openCodeFreeCompatibility } from "./opencode-free-compatibility";
 
 export interface ProviderRequestContext {
@@ -19,7 +19,9 @@ export interface CompatibilityFunctionTool {
   parameters: Record<string, unknown>;
 }
 
-export interface ProviderRequestCompatibility {
+export type CompatibilityFunctionCallRedirect = NonNullable<AdapterRequest["compatibilityFunctionCallRedirect"]>;
+
+export interface ProviderCompatibilityProfile {
   applies(provider: OcxProviderConfig, context: ProviderRequestContext): boolean;
   amendHeaders?(
     headers: Record<string, string>,
@@ -27,9 +29,10 @@ export interface ProviderRequestCompatibility {
     context: ProviderRequestContext,
   ): void;
   requiredFunctionTools?(provider: OcxProviderConfig): readonly CompatibilityFunctionTool[];
+  injectedFunctionCallGuidance?(name: string, callerNames: readonly string[]): string;
 }
 
-const PROVIDER_COMPATIBILITY: readonly ProviderRequestCompatibility[] = [
+const PROVIDER_COMPATIBILITY: readonly ProviderCompatibilityProfile[] = [
   openCodeFreeCompatibility,
 ];
 
@@ -41,6 +44,30 @@ function functionToolName(tool: unknown, chat: boolean): string | undefined {
   if (!isRecord(tool)) return undefined;
   const name = chat && isRecord(tool.function) ? tool.function.name : tool.name;
   return typeof name === "string" ? name : undefined;
+}
+
+function callerFunctionToolNames(body: Record<string, unknown>, chat: boolean): Set<string> {
+  const names = new Set<string>();
+  const visit = (specs: unknown) => {
+    if (!Array.isArray(specs)) return;
+    for (const tool of specs) {
+      if (!chat && isRecord(tool) && tool.type === "namespace") {
+        visit(tool.tools);
+        continue;
+      }
+      const name = functionToolName(tool, chat);
+      if (name) names.add(name);
+    }
+  };
+  visit(body.tools);
+  if (!chat && Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (isRecord(item) && (item.type === "additional_tools" || item.type === "tool_search_output")) {
+        visit(item.tools);
+      }
+    }
+  }
+  return names;
 }
 
 function serializeFunctionTool(tool: CompatibilityFunctionTool, chat: boolean): Record<string, unknown> {
@@ -63,13 +90,46 @@ export function missingCompatibilityFunctionTools(
   );
 }
 
+function matchingProfile(
+  provider: OcxProviderConfig,
+  context: ProviderRequestContext,
+): ProviderCompatibilityProfile | undefined {
+  return PROVIDER_COMPATIBILITY.find(candidate => candidate.applies(provider, context));
+}
+
+function callRedirect(
+  profile: ProviderCompatibilityProfile,
+  injected: readonly CompatibilityFunctionTool[],
+  callerNames: readonly string[],
+): CompatibilityFunctionCallRedirect | undefined {
+  if (injected.length === 0 || !profile.injectedFunctionCallGuidance) return undefined;
+  const guidance = profile.injectedFunctionCallGuidance;
+  return {
+    names: new Set(injected.map(tool => tool.name)),
+    message: name => guidance(name, callerNames),
+  };
+}
+
+/** Response policy for declarations this profile, rather than the caller, supplied. */
+export function providerCompatibilityFunctionCallRedirect(
+  provider: OcxProviderConfig,
+  context: ProviderRequestContext,
+  callerNames: Iterable<string>,
+): CompatibilityFunctionCallRedirect | undefined {
+  const profile = matchingProfile(provider, context);
+  if (!profile) return undefined;
+  const caller = [...callerNames];
+  const injected = missingCompatibilityFunctionTools(profile.requiredFunctionTools?.(provider) ?? [], caller);
+  return callRedirect(profile, injected, caller);
+}
+
 /** Apply provider-owned compatibility after the selected wire serializes its request. */
 export function transformProviderRequest(
   provider: OcxProviderConfig,
   request: AdapterRequest,
   context: ProviderRequestContext = {},
 ): AdapterRequest {
-  const profile = PROVIDER_COMPATIBILITY.find(candidate => candidate.applies(provider, context));
+  const profile = matchingProfile(provider, context);
   if (!profile) return request;
 
   const headers = { ...request.headers };
@@ -86,38 +146,14 @@ export function transformProviderRequest(
   if (!isRecord(body)) return { ...request, headers };
 
   const tools = Array.isArray(body.tools) ? body.tools : [];
-  const names = new Set<string>();
-  for (const tool of tools) {
-    const name = functionToolName(tool, chat);
-    if (name) names.add(name);
-  }
-  const missing = missingCompatibilityFunctionTools(required, names);
+  const callerNames = callerFunctionToolNames(body, chat);
+  const missing = missingCompatibilityFunctionTools(required, callerNames);
   if (missing.length === 0) return { ...request, headers };
-
+  const redirect = callRedirect(profile, missing, [...callerNames]);
   return {
     ...request,
     headers,
     body: JSON.stringify({ ...body, tools: [...tools, ...missing.map(tool => serializeFunctionTool(tool, chat))] }),
-  };
-}
-
-/** Install the transform seam on adapters that use ordinary `buildRequest`. */
-export function withProviderRequestCompatibility(
-  adapter: ProviderAdapter,
-  provider: OcxProviderConfig,
-  providerId?: string,
-): ProviderAdapter {
-  const buildRequest = adapter.buildRequest.bind(adapter);
-  return {
-    ...adapter,
-    buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
-      const apply = (request: AdapterRequest) => transformProviderRequest(provider, request, {
-        providerId,
-        parsed,
-        incomingHeaders: incoming?.headers,
-      });
-      const request = buildRequest(parsed, incoming);
-      return request instanceof Promise ? request.then(apply) : apply(request);
-    },
+    ...(redirect ? { compatibilityFunctionCallRedirect: redirect } : {}),
   };
 }

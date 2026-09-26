@@ -1,13 +1,13 @@
-import type { ProviderRequestCompatibility } from "./provider-compatibility";
+import type { ProviderCompatibilityProfile } from "./provider-compatibility";
 import { applyZenFreeIdentity, isZenFreeEndpoint, zenFreeHasApiKey } from "./opencode-free-session";
-import { ZEN_FREE_GATE_TOOLS } from "./opencode-free-tools";
+import { ZEN_FREE_GATE_TOOLS, zenFreeGateGuidanceText } from "./opencode-free-tools";
 
 /**
  * Anonymous Zen admission is provider policy, not an OpenAI wire behavior.
  * The generic compatibility layer owns JSON parsing and Chat/Responses shapes;
  * this profile only declares when the policy applies and what Zen requires.
  */
-export const openCodeFreeCompatibility: ProviderRequestCompatibility = {
+export const openCodeFreeCompatibility: ProviderCompatibilityProfile = {
   applies(provider, context) {
     return context.providerId === "opencode-free"
       && isZenFreeEndpoint(provider.baseUrl)
@@ -19,5 +19,8 @@ export const openCodeFreeCompatibility: ProviderRequestCompatibility = {
   },
   requiredFunctionTools() {
     return ZEN_FREE_GATE_TOOLS;
+  },
+  injectedFunctionCallGuidance(name, callerNames) {
+    return zenFreeGateGuidanceText(name, callerNames);
   },
 };

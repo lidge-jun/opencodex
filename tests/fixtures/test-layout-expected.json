@@ -1452,6 +1452,7 @@
   "responses-tool-conformance.test.ts": "responses",
   "responses-tool-groups.test.ts": "responses",
   "responses-tool-search-repair.test.ts": "responses",
+  "provider-compatibility-call-guidance.test.ts": "responses",
   "responses-undeclared-tool-guard.test.ts": "responses",
   "responses-usage-passthrough.test.ts": "responses",
   "responses-xai-request-compat.test.ts": "responses",

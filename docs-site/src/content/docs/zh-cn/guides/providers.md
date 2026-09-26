@@ -253,9 +253,11 @@ MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Cod
 **OpenCode Zen**（`opencode-zen`）与免密钥的 **OpenCode Free** 预设共用
 `https://opencode.ai/zen/v1`。该网关上的免费模型常会触发约每分钟 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。Zen 可能返回不带 `Retry-After` / `X-RateLimit-*` 的通用 429。这与免密钥桌面配额（`opencode-free` 上约每 5 小时 200 次 Big Pickle/免费模型请求）是分开的。当这类 429 省略 `Retry-After` 时，opencodex 会在客户端错误中补充说明并附带合成的 `Retry-After`；若上游已提供 `Retry-After`，则仍以它为准。同密钥等待重试仍可通过 [`retryOn429`](/zh-cn/reference/configuration/) 选择开启。
 
-**免密钥的 `opencode-free` 层级目前对第三方客户端关闭。** Zen 会拒绝任何不带 `x-opencode-session` 头的请求，返回错误类型 `MissingSessionID` 和消息 "OpenCode's free tier can only be used in OpenCode"。这道关卡只检查该头是否存在，因此代理完全可以编一个值蒙混过去，但 opencodex 不这么做。伪造会话标识并附上带版本号的 `opencode/<version>` User-Agent，等于声称自己就是 OpenCode 客户端，而 OpenCode 并未公布这一免密钥层级的第三方集成约定；用这种方式换来的 HTTP 200 是绕过了准入检查，而不是获得了许可。因此 opencodex 选择如实报告限制：发往 `opencode-free` 的请求会返回一条解释上游关卡的错误。
+**免密钥的 `opencode-free` 层级会呈现 OpenCode 官方 CLI 自身发送的匿名客户端身份。** 非 forward 身份配置生效时，请求会携带从会话派生的 `x-opencode-session`（没有会话身份时则限定在单次请求）、带版本号的 `opencode/<version>` User-Agent 和 `x-opencode-client` 标记。仅当请求没有 Authorization 头时，配置才会添加 `Authorization: Bearer public`；Zen 会将其归入匿名配额。`authMode: "forward"` 请求会跳过此配置。显式配置的 `x-opencode-session` 或 API 密钥始终优先；有密钥时请求计费到该账户。Muse Spark contributor-free 模型会路由到 Zen 的 `/v1/responses` 端点。此准入只是观测到的兼容行为，并非第三方契约；OpenCode 可随时更改或限制它，届时路由会返回上游错误。
 
-通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+Zen 的匿名准入还要求小写的 `shell` 和 `read` 声明。opencodex 只补充请求中缺少的声明，并将其标记为仅用于兼容。若模型仍选择其中之一，代理会把这个合成调用转换为提示模型使用请求中真实工具的助手文本，而不会执行兼容声明。调用方自己声明的 `shell` 或 `read` 仍是普通的可执行工具。
+
+通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等 Anthropic 兼容预设
 使用 `anthropic` adapter（`x-api-key`）。小米还提供 OpenAI Chat 预设 `xiaomi-mimo` 和 token plan 预设

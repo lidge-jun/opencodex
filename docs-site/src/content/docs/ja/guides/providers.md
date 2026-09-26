@@ -263,6 +263,8 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 
 **キー不要の `opencode-free` 枠は、OpenCode 公式 CLI 自身が送る匿名クライアント識別情報を提示します。** forward 以外の識別プロファイルが適用されると、リクエストは会話から導出した `x-opencode-session`（会話識別情報がない場合はリクエスト単位）、バージョン付き `opencode/<version>` User-Agent、`x-opencode-client` マーカーを運びます。Authorization ヘッダーがまだ存在しない場合に限り、プロファイルは `Authorization: Bearer public` を追加し、Zen はこれを匿名枠に割り当てます。`authMode: "forward"` のリクエストはこのプロファイルを適用しません。典拠は OpenCode の `packages/opencode/src/session/llm/request.ts`（ヘッダー）と `packages/console/app/src/routes/zen/util/handler.ts`（ゲートウェイの admission）です。設定した `x-opencode-session` や API キーは常に優先され、キーがある場合はそのアカウントに課金されます。Muse Spark の contributor-free モデルは Zen エンドポイント表に従い、Zen の `/v1/responses` エンドポイントに振り分けられます。この admission は許容であって契約ではありません。OpenCode がいつでも変更・制限できるため、その場合は上流のエラーが返ります。
 
+Zen の匿名 admission には、小文字の `shell` と `read` 宣言も必要です。opencodex はリクエストに欠けている宣言だけを追加し、互換性専用として印を付けます。モデルがそれでも選択した場合、プロキシはその合成呼び出しを、リクエスト本来のツールを使うよう促すアシスタント案内に変換し、互換性宣言を実行しません。呼び出し元が宣言した `shell` または `read` は通常の実行可能ツールのままです。
+
 同じモデルに至るサポートされた経路は、[opencode.ai/auth](https://opencode.ai/auth) で発行した OpenCode Zen API キーを使う **`opencode-zen`** プリセットです。上流の規約: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
 大半は bearer キーと共に `openai-chat` アダプターを使い、**Xiaomi MiMo**（`xiaomi`）などの

@@ -18,7 +18,7 @@ import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
-import { withProviderRequestCompatibility } from "./provider-compatibility";
+import { withProviderRequestCompatibility } from "./provider-compatibility-adapter";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
 

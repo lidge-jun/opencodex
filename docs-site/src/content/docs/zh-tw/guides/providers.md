@@ -322,17 +322,13 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 error 加入 provider guidance 與 synthetic `Retry-After`；若上游有 `Retry-After`，仍以上游值為準。
 same-key wait-and-retry 仍需透過 [`retryOn429`](/zh-tw/reference/configuration/) 明確 opt-in。
 
-**無 key 的 `opencode-free` tier 目前對第三方 client 關閉。** Zen 會拒絕任何沒有帶 `x-opencode-session`
-header 的 request，回傳 error type `MissingSessionID` 與訊息 "OpenCode's free tier can only be used in
-OpenCode"。這道 gate 只檢查該 header 是否存在，因此 proxy 大可捏造一個值通過，但 opencodex 不這麼做。
-偽造 session identifier 並附上帶版本號的 `opencode/<version>` User-Agent，等於宣稱自己就是 OpenCode
-client，而 OpenCode 並未公布這個 keyless tier 的第三方整合合約；用這種方式取得的 HTTP 200 是繞過
-admission check，而不是取得授權。因此 opencodex 選擇如實回報限制：送往 `opencode-free` 的 request 會
-收到一則說明上游 gate 的 error。
+**無 key 的 `opencode-free` tier 會呈現 OpenCode 官方 CLI 自己送出的匿名 client identity。** 非 forward identity profile 生效時，request 會帶有從對話衍生的 `x-opencode-session`（沒有對話 identity 時則限於單一 request）、帶版本號的 `opencode/<version>` User-Agent，以及 `x-opencode-client` 標記。只有在沒有 Authorization header 時，profile 才會加入 `Authorization: Bearer public`；Zen 會把它歸入匿名 quota。`authMode: "forward"` request 會略過此 profile。明確設定的 `x-opencode-session` 或 API key 一律優先；有 key 時 request 會計費到該帳戶。Muse Spark contributor-free model 會依 Zen endpoint table 路由到 `/v1/responses`。此 admission 是觀察到的相容行為，不是第三方合約；OpenCode 可隨時變更或限制，屆時 route 會回傳 upstream error。
+
+Zen 的匿名 admission 也要求小寫的 `shell` 與 `read` declaration。opencodex 只補上 request 缺少的 declaration，並標示為僅供 compatibility。若 model 仍選擇其中一個，proxy 會把這個 synthetic call 轉成提示使用 request 真正工具的 assistant guidance，而不會執行 compatibility declaration。caller 自己宣告的 `shell` 或 `read` 仍是一般可執行工具。
 
 通往同一批模型的受支援路徑，是使用 [opencode.ai/auth](https://opencode.ai/auth) 取得的 OpenCode Zen API
 key，走帶 key 的 **`opencode-zen`** preset。若 OpenCode 日後公布 keyless tier 的第三方路徑，opencodex 可以
-跟進；在此之前，這個 preset 的作用是記錄該限制。上游條款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+跟進。上游條款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
 大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等
 相容 Anthropic 的 preset 則使用 `anthropic` adapter（`x-api-key`）。Xiaomi 另有 OpenAI Chat

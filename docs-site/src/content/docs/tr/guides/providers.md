@@ -413,22 +413,14 @@ ekler; bir yukarı akış `Retry-After`'ı yine de önceliklidir. Aynı anahtarl
 bekle ve yeniden dene özelliği [`retryOn429`](/tr/reference/configuration/)
 aracılığıyla isteğe bağlı kalır.
 
-**Anahtarsız `opencode-free` katmanı şu anda üçüncü taraf istemcilere kapalıdır.** Zen,
-`x-opencode-session` başlığı olmadan gelen her isteği reddeder ve `MissingSessionID` hata
-tipiyle "OpenCode's free tier can only be used in OpenCode" mesajını döndürür. Kapıda
-yalnızca başlığın varlığı denetlenir; yani bir proxy uydurma bir değerle geçebilirdi,
-opencodex bunu yapmaz. Bir oturum kimliği ile sürüm taşıyan `opencode/<version>`
-User-Agent üretmek, kendini OpenCode istemcisi ilan etmek demektir ve OpenCode bu
-anahtarsız katman için üçüncü taraf entegrasyon sözleşmesi yayımlamamıştır; böyle elde
-edilen bir HTTP 200, izin değil atlatılmış bir kabul denetimidir. Bu yüzden opencodex
-kısıtlamayı aşmak yerine bildirir: `opencode-free` sağlayıcısına giden bir istek, yukarı
-akıştaki kapıyı açıklayan bir hata döndürür.
+**Anahtarsız `opencode-free` katmanı, OpenCode'un resmi CLI'sinin gönderdiği anonim istemci kimliğini sunar.** İletilmeyen kimlik profili uygulandığında istekler konuşmadan türetilen bir `x-opencode-session` (konuşma kimliği yoksa istek kapsamlı), sürümlü `opencode/<version>` User-Agent ve `x-opencode-client` işaretçisi taşır. Profil yalnızca Authorization başlığı yoksa `Authorization: Bearer public` ekler; Zen bunu anonim kotasına bağlar. `authMode: "forward"` istekleri profili atlar. Yapılandırılmış `x-opencode-session` veya API anahtarı her zaman önceliklidir; anahtar varsa istek o hesaba faturalandırılır. Muse Spark contributor-free modelleri Zen'in `/v1/responses` uç noktasına yönlendirilir. Bu kabul gözlemlenen uyumluluktur, sözleşme değildir; OpenCode bunu değiştirebilir veya sınırlayabilir ve bu durumda rota yukarı akış hatasını döndürür.
+
+Zen anonim kabul için küçük harfli `shell` ve `read` bildirimlerini de zorunlu tutar. opencodex yalnızca istekte eksik olan bildirimleri ekler ve bunları yalnızca uyumluluk için işaretler. Model yine de birini seçerse proxy sentetik çağrıyı isteğin gerçek araçlarını kullanma yönlendirmesine dönüştürür; uyumluluk bildirimini çalıştırmaz. Çağıran tarafından bildirilen `shell` veya `read` normal çalıştırılabilir araç olarak kalır.
 
 Aynı modellere giden desteklenen yol, [opencode.ai/auth](https://opencode.ai/auth)
 üzerinden alınan bir OpenCode Zen API anahtarıyla kullanılan anahtarlı
 **`opencode-zen`** sağlayıcısıdır. OpenCode ileride anahtarsız katman için desteklenen
-bir üçüncü taraf yolu yayımlarsa opencodex bunu izleyebilir; o zamana kadar önayar
-kısıtlamayı belgeler. Yukarı akış koşulları: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+bir üçüncü taraf yolu yayımlarsa opencodex bunu izleyebilir. Yukarı akış koşulları: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
 Çoğu, taşıyıcı anahtarla `openai-chat` adaptörünü kullanır; **Xiaomi MiMo** (`xiaomi`)
 gibi Anthropic uyumlu önayarlar `anthropic` adaptörünü (`x-api-key`) kullanır.

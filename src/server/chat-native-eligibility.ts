@@ -3,6 +3,7 @@ import type { ProtocolReasonCode } from "../protocols/contract";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
 import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
+import { providerCompatibilityFunctionCallRedirect } from "../adapters/provider-compatibility";
 
 type Rec = Record<string, unknown>;
 
@@ -15,6 +16,7 @@ export type NativeChatDeclineReason = Extract<
   ProtocolReasonCode,
   | "cross-wire-ir"
   | "auth-mode-not-native"
+  | "bridge-only-policy"
   | "combo-or-policy-route"
   | "responses-only-feature"
   | "tool-result-image"
@@ -37,6 +39,20 @@ export function nativeChatDeclineReason(
   if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return "auth-mode-not-native";
   // Combo and policy execution own multi-candidate retries in the Responses pipeline.
   if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return "combo-or-policy-route";
+  const callerToolNames = Array.isArray(rawBody.tools)
+    ? rawBody.tools.flatMap(tool => {
+      if (!isRec(tool) || !isRec(tool.function) || typeof tool.function.name !== "string") return [];
+      return [tool.function.name];
+    })
+    : [];
+  // A profile that injected callable-looking declarations needs the IR response
+  // hook so accidental calls become guidance. Native Chat remains available
+  // when the caller owns every required declaration.
+  if (providerCompatibilityFunctionCallRedirect(
+    provider,
+    { providerId: route.providerName },
+    callerToolNames,
+  )) return "bridge-only-policy";
   if (rawBody.store === true || rawBody.background === true) return "responses-only-feature";
   if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return "responses-only-feature";
   if (rawBody.compaction_trigger !== undefined) return "responses-only-feature";
