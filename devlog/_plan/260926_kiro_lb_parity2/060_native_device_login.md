@@ -560,3 +560,149 @@ The reference social and OIDC shapes have not been observed live from this proxy
 
 - `r3-R2-1` (High) → Native writer allocates a UUID inside the protected mutation and assigns it on both add paths and same-slot reauth (`:232-265`); receipt fences compensation on that UUID and restores the entire prior account, including its `loginId` (`:280-297`). Named Builder and social add, evidence-invalidation, compensation, and stale-compensation tests are at `:477-478`. **rebase-verify at this layer's P** against 010's `ProviderAccount.loginId` and store normalizer.
 - `r3-R2-3` (Medium, this 060 hunk) → Field chain uses `kiroEvidenceIdentity(account)` with exactly five fields, including `loginId` and no `authType`, and routes through `kiroAccountEvidence(account, now?)` (`:440`, `:451`); same-slot reauth test asserts the old evidence is unknown (`:466`, `:478`). **rebase-verify at this layer's P** against 010's `kiro-account-state-disk.ts` contract. The separate 020 hunk belongs to its own layer.
+
+## wp7 P re-verification (2026-09-27, branch `codex/kiro-lb2-060-device-login` on dev `e772bdb228`, which contains 010–050)
+
+Executable plan for the 060 build; **overrides** earlier sections where they conflict.
+
+| ID | Disposition |
+|---|---|
+| D060-S1–S7 | Accept anchors: `accountScopedProfileArn` `src/oauth/kiro.ts:188-191` (`loginKiro` 347, `oauthCredentialFromImported` 281, `resolveKiroRequestProfile` 520, social refresh 561, OIDC refresh 573, `refreshKiroToken` 657); `normalizeCredential` `src/oauth/store.ts:514`, `mutateStore` 778-832 (bookkeeping 803-810, `finalizeResult` 813), `saveCredentialWithReceipt` 844-925 (`loginId` write 909), `saveAccountCredential` 1077; `runLogin` 1604, `startLoginFlow` 1833; routes start 224-285, cancel 289-297, status 315-322 (`oauth-account-routes.ts`); CLI login 123-241 (generic branch 206-240), usage 35-52, cancel 280-296, reauth alias ~367 (`account-auth.ts`). |
+| **GUI (decision: option a)** | No GUI change. The management route runs the native flow **only when the request carries `method`** (`builder-id`, `google`, `github`); status and cancel are native only when a `flowId` is present. A method-less start keeps `startLoginFlow` (kiro-cli), so the dashboard's existing hooks (`gui/src/pages/use-providers-oauth.ts:101,132`, `use-add-provider-oauth.ts:98,126`) and provider-keyed cancel barrier are untouched. The GUI hunks, `tests/gui/kiro-device-login-ui.test.ts` and the `structure/gui-and-management-api.md` "dashboard uses native login" sentence are dropped. A dashboard device-code dialog is a recorded follow-up. |
+| **Identity (decision)** | Neither native method yields a verified identity (Builder ID approval carries no profile; social `profileArn` uniqueness is unverified live). Therefore **native login adds accounts only**: `reauth` with a `method` is refused (route 400, CLI usage error, state machine), and re-login stays on the existing kiro-cli path (`src/oauth/kiro.ts:615-676` identity match). Social adds always append a new slot; no de-duplication by ARN. The "identity check before reauth" gate is satisfied by not offering native reauth. The unbound-`--reauth` guard applies to every Kiro start, including the method-less path. |
+| Store write | New store-owned `appendKiroAccountFromDeviceLogin(credential, opts)` in `src/oauth/store.ts`: runs `normalizeCredential`, appends inside `mutateStore` with a fresh `loginId`, never changes `activeAccountId` for an existing set (first account becomes active), returns a receipt usable for rollback through `finalizeResult`. The flow module never calls `mutateStore` directly. |
+| Live config | When a poll returns `done`, the route calls `reconcileLiveConfigFromDisk` and `reconcileLiveStateStores`, as the generic path's `onSettled` does (`oauth-account-routes.ts:255-258`). |
+| Endpoints | As listed from `kiro/device_login.py` (`bee73b3`): social host `prod.us-east-1.auth.desktop.kiro.dev` with `/oauth/device/authorization` and `/oauth/device/poll` (millisecond expiry/interval); Builder ID `oidc.us-east-1.amazonaws.com` with `/client/register`, `/device_authorization`, `/token` (seconds), `slow_down` adds 5 s, expired is terminal, errors from `error` or `x-amzn-errortype`. All shapes are unverified live and pinned by fixtures; an unrecognised reply fails the flow and persists nothing. `verificationUriComplete` is shown when present. |
+| Tests / registry | `tests/providers/kiro/kiro-device-builder.test.ts` and `kiro-device-social.test.ts` between `kiro-calibration` and `kiro-fallback-error-body` (`scripts/test-layout/layout.json:1080/1081`, expected `:901/902`); `tests/server/server-kiro-device-login.test.ts` after `server-kiro-completion-e2e` (1666 / 1492); `tests/cli/cli-account-kiro-device.test.ts` between `cli-account-cancel-flow` and `cli-account-orca-import` (504/505; 330/331). `cli-account.test.ts` (2313 cap) untouched. Existing tests unaffected under option (a). |
+| CLI surface | `--method` joins the account-login flags in `src/cli/capabilities.ts` (~410); `bun run skill:surface` regenerates, `skill:surface:check` in C. |
+
+Verifier set for C: `bun run typecheck`; the four new test files; `tests/oauth/oauth-public-surface.test.ts`, `tests/oauth/oauth-reauth-bind.test.ts`, `tests/oauth/oauth-store-multi.test.ts`, `tests/providers/kiro/`; `bun test $(rg -l "oauth/login|startLoginFlow|account login" tests)` in the clean `/tmp` worktree; `bun run skill:surface:check`; layout, ratchet, lab-boundary; privacy; structure.
+
+
+### wp7 reflection fold (same architect: MISALIGNED → folded)
+
+1. **Re-login path corrected.** The kiro-cli reauth is `runLogin` with `reauthAccountId`
+   (`src/oauth/index.ts:1640-1656`), not the refresh retry at `kiro.ts:615-676`. Two changes:
+   - Native accounts are marked `loginOrigin: "kiro-device"` on their `ProviderAccount` (protected
+     store; normalized like `loginId`; never in management DTOs). `runLogin` refuses `reauthAccountId`
+     for a native-origin slot with a fixed message telling the operator to remove and re-add it; this
+     is the documented recovery for native accounts.
+   - The `reauthAccountId` write rotates `loginId` (a re-login is a login write), closing the 010
+     contract gap where `saveAccountCredential` kept it. Tests: `kiro-cli reauth refuses a native-origin
+     slot`; `a reauth write rotates loginId and invalidates Kiro evidence`.
+2. **Duplicate social adds.** Social adds still append; when the appended `profileArn` already exists in
+   the pool, the route response and CLI output carry `warning: "duplicate_profile_arn"` (non-blocking),
+   and the docs note that duplicate slots of one real account each get their own cap and load count.
+   Test: `adding a social account whose profileArn already exists appends with a warning`.
+3. **Verifier set adds** `tests/cli/cli-account-cancel-flow.test.ts`.
+
+
+## wp7 FINAL executable spec (supersedes every earlier section of this document)
+
+Everything above this heading is history. Where it disagrees with this section — including the
+route hunk at ~316, the writer at ~239-260, and the flow-state recipe at ~114-162 — this section
+wins, and the builder does not implement the superseded hunks or their tests.
+
+**Scope.** Native Kiro device login (Builder ID, Google, GitHub) through the CLI and management API,
+**add-only**. GUI unchanged.
+
+**Routes** (`src/server/management/oauth-account-routes.ts`, start 224-285, cancel 289-297, status 315-322):
+- `POST /api/oauth/login` with `provider: "kiro"` takes the native branch **only** when `method` is
+  exactly `"builder-id" | "google" | "github"`; any other present value is 400; an absent `method`
+  keeps `startLoginFlow` (kiro-cli) byte-for-byte. `reauth` with a `method` is 400
+  `native_login_is_add_only`. Unbound `reauth` (no `accountId`) is 400 on every Kiro start.
+- Status and cancel use the native table **only** when the request carries a `flowId`; otherwise
+  the existing provider-keyed behaviour runs unchanged.
+- On `done`, the route calls `reconcileLiveConfigFromDisk` and `reconcileLiveStateStores`.
+
+**Flow table** (`src/oauth/kiro-device-login.ts`):
+- `flowId` = 32 random bytes, base64url. Returned only in the start response; no endpoint lists flows.
+- Each flow records `ownerPrincipal` (`ctx.principal ?? "admin-token"`); status and cancel from a
+  different principal return 404 (same as unknown). Rationale: every management caller is already
+  authenticated as the local user; the principal check stops a token holder from driving a
+  dashboard-started flow and vice versa, and the unguessable id stops blind access.
+- **Cap reserved before network work:** `start` inserts a `pending` placeholder (counted toward
+  `MAX_KIRO_DEVICE_FLOWS` = 4) synchronously before any upstream call and removes it on every
+  failure path (`finally`). Test: `concurrent starts beyond the cap are refused without upstream calls`.
+- Polling is server-paced: a status call performs at most one upstream poll, never earlier than the
+  flow's `nextPollAt` (interval, +5 s on `slow_down`); earlier calls return the cached state. Expired
+  flows are removed on the next touch; a 15-minute absolute lifetime bounds any flow.
+- **Exact approved shape before persist:** Builder ID approval requires HTTP 200 with string
+  `accessToken`, `refreshToken`, positive finite `expiresIn`, and no `error`; social approval
+  requires HTTP 200, string `accessToken`/`refreshToken`, `profileArn` matching the Kiro profile
+  ARN shape, and **no** `status` field or `status === "approved"`-free body (any present `status`
+  other than an approval shape the fixture pins means not approved). Anything else: pending if it is
+  the recognised pending signal, expired if recognised as expired, otherwise the flow fails and
+  persists nothing. Test: `a 200 reply with an unknown status persists nothing`.
+- Client registration (Builder ID `clientId`/`clientSecret`) is validated non-empty and ≤ 4096 chars
+  before authorization and again before commit; it lives only in the flow record until commit, then
+  only in the protected store; `terminal()` erases it from memory.
+- Nothing from a flow (device code, client secret, tokens) appears in responses, logs, the debug ring
+  or errors; responses expose only `flowId`, `method`, `userCode`, `verificationUri`,
+  `verificationUriComplete` (when present), `expiresAt`, `state`, and `warning`.
+
+**Store** (`src/oauth/store.ts`):
+- `ProviderAccount.loginOrigin?: "kiro-device"` in `src/oauth/types.ts`; `normalizeAccount` keeps it only
+  when exactly that string; management summaries are allowlists and never include it.
+- `appendKiroAccountFromDeviceLogin(credential)`: `normalizeCredential`, append inside `mutateStore`
+  with a fresh `loginId` and `loginOrigin: "kiro-device"`, active account unchanged unless it is the
+  first account, returns a receipt for rollback through `finalizeResult`. Always appends (no identity
+  de-duplication); when a social `profileArn` already exists, the result carries
+  `warning: "duplicate_profile_arn"`.
+- `saveAccountCredential` gains an option `{ rotateLoginId?: boolean }` (default false, so refresh
+  writers keep `loginId`); only the `runLogin` reauth branch passes `true`.
+
+**`runLogin`** (`src/oauth/index.ts`): when `provider === "kiro"` and `opts.reauthAccountId` names a
+`loginOrigin: "kiro-device"` slot, throw a fixed "remove and re-add" error **before** `def.login`
+(line 1629), so no kiro-cli session work begins. The reauth write passes `rotateLoginId: true`.
+
+**CLI** (`src/cli/account-auth.ts`): `ocx account login kiro --method builder-id|google|github` prints
+the user code and verification URI (complete URI when present), polls via the flow, and prints the
+duplicate warning; `--method` with `--reauth` is a usage error; `ocx account cancel kiro --flow <id>`
+cancels a native flow. `--method` joins `src/cli/capabilities.ts` (~410); `bun run skill:surface`.
+
+**Tests** (named; each file registered in both registries at the positions in "wp7 P re-verification"):
+`tests/providers/kiro/kiro-device-builder.test.ts` (register/authorize/token happy path; pending,
+slow_down, expired; unknown 200 persists nothing; client-string validation; no service profile stored),
+`tests/providers/kiro/kiro-device-social.test.ts` (ms units; approval shape; unknown status persists
+nothing; duplicate ARN appends with warning), `tests/server/server-kiro-device-login.test.ts`
+(method-less start keeps kiro-cli; native only with method; reauth+method 400; unbound reauth 400;
+cross-principal status/cancel 404; concurrent starts beyond cap; server-paced polling; secrets absent
+from every response; live config reconciled on done; first-account config-save failure rolls back),
+`tests/cli/cli-account-kiro-device.test.ts` (method flag, reauth usage error, cancel by flow),
+plus in `tests/oauth/oauth-reauth-bind.test.ts` or a sibling: `kiro-cli reauth refuses a native-origin
+slot before any CLI work`, `a reauth write rotates loginId and invalidates Kiro evidence`,
+`a refresh write keeps loginId`.
+
+**Verifiers:** as in "wp7 P re-verification" plus `tests/cli/cli-account-cancel-flow.test.ts`.
+
+
+### wp7 FINAL spec amendments (re-audit round 2)
+
+1. **Session binding — claim narrowed (decision).** Management requests expose only a principal kind
+   (`"gui-session"` / `"admin-token"`, `src/server/management-auth.ts:578`) and no per-session identity
+   (`ManagementSessionControl` offers `revokeCurrent`/`isCurrent`/`isPaired`, 276-282). Adding a session
+   identity seam would change management auth, which is outside this layer. The guarantee is therefore
+   stated as: *a native flow can be polled or cancelled only by a caller of the same principal kind that
+   also holds its unguessable 256-bit `flowId`, which is returned only in the start response and never
+   listed.* Two dashboard sessions of the same local user are the same principal by design. This is
+   strictly stronger than today's kiro-cli login, whose status and cancel are keyed by provider alone.
+   Recorded as a follow-up: bind to an admitted-session identity if one is added to management auth.
+2. **Cancel/commit fence.** `appendKiroAccountFromDeviceLogin` takes an `assertBeforePersist` callback
+   that runs **inside** `mutateStore` immediately before the write; the flow passes a check that the flow
+   is still present, not cancelled, not expired, and owned by the same principal. A poll already in
+   flight when a cancel lands therefore writes nothing. Test:
+   `a cancel that lands during an approving poll persists nothing`.
+3. **Registration validation = store normalization.** Builder ID `clientId`/`clientSecret` must be
+   non-empty, at most 4096 characters, free of control characters, and unchanged by trimming — the same
+   predicate `normalizeCredential` applies (`src/oauth/store.ts:540`), exported from the store as
+   `isStorableKiroClientPart` so both checks share one definition. Checked after registration and again
+   before commit. Test: `a registration with a control character or surrounding whitespace is refused
+   before authorization`.
+
+## wp7 build notes
+
+- Implemented the add-only native Kiro device grants for Builder ID, Google, and GitHub behind an explicit management `method`; method-less Kiro login still uses the existing CLI flow. Status and cancellation require a flow ID and matching management principal kind.
+- The protected store appends a new native-origin slot with a fresh login ID. Approval is shape-checked before persistence; the commit fence rejects cancellation and expiry under the store lock. Config-publication failure uses the existing ownership receipt for rollback. Explicit reauth rotates login ID; refresh retains it.
+- Fixture transports cover approval, pending, slowdown, expiry, unknown replies, registration validation, duplicate ARN warnings, principal isolation, cap reservation, pacing, cancellation during a queued approving write, and config rollback. No provider hosts were contacted. The GUI was unchanged.
+- Verification: `bun run typecheck`; combined Kiro, server, CLI, and OAuth tests (687 pass, 0 fail); skill surface generation/check; layout, size-ratchet, Lab-boundary, and skill tests (68 pass, 0 fail); `bun run privacy:scan`; `bun run structure:check`; docs-site build. The two pre-existing OAuth test fixtures were moved to temporary directories because this worktree is inside the protected Codex home.

@@ -523,3 +523,94 @@ Append in each language that an unknown model ID is still sent upstream; model p
 
 - `r2-R2-5 High` → The reactive replacement now starts from 040's `ring.filter(... && !excludedAccountIds?.has(id))` and applies `preferKiroModelSupport` only to that result (`:198-204`). Named test `capacity-excluded Kiro alternate never reenters model-preferred refusal ranking` covers a full first positive alternate, a free second positive alternate, and fallback when all positives are excluded (`:373`, `:401`). Rebase-verify at this layer's P against 040's final refusal signature.
 - `r2-R2-6 High` → 050 replaces 040's final `filterInitialKiroRankCandidates` identity hook with positive-membership filtering before `admitInitialKiroWithLease` sorts or admits (`:231-258`), and keeps capacity fallback behind the preferred first sweep (`:259-284`). The original eligibility, cap, stale-selection, and cancellation guards remain in 040; absent/false evidence retains the entire eligible set. Named test `initial Kiro admission prefers a listed model over lower load and falls through on full cap` checks the first physical send and full-cap fallback (`:372`, `:374`, `:402`). Rebase-verify at this layer's P against 040's hook and sweep signatures.
+
+## wp6 P re-verification (2026-09-27, branch `codex/kiro-lb2-050-model-catalog` on dev `93e5d5bea5`, which contains 010–040)
+
+Executable plan for the 050 build; **overrides** earlier sections where they conflict.
+
+| ID | Disposition |
+|---|---|
+| D050-S1–S4, S7 | Accept anchors: `usageRegion` (private) `src/providers/kiro-usage.ts:92`, `kiroUsageManagementUrl` 102, probe 176 (no-ARN guard 177), `kiroUsageContextForAccount` 219; `isProactivePreferenceEnabled` already exported (`src/oauth/generic-account-failover.ts:201`); rotator candidates 441, at-cap filter 443-447, least-loaded return 451-454; `preferredInitialAccount` 525-607 (least-loaded 549-558, round-robin 561, fill-first eligible set 323, quota path 578-592); catalogue anchors `provider-models.ts` 215-218, `routed-gather.ts` 366-372, `kiro/usage.ts` 219-225, `request-log.ts` 1627-1633, `entries-core.ts` 596-610, `kiro-models.ts` 1-55, 67-77. |
+| D050-S5 | **Drop** `filterInitialKiroRankCandidates`, `admitInitialKiroWithLease`, the capacity sweep and `fallbackOrder` hunks (never landed; 040 was narrowed). Membership reaches first admission only through `preferredInitialAccount`. |
+| D050-S6 | Remove SD4'-era wording, capacity-move text, run-turn references and tests 12, 13, 16, 17. |
+| Residuals | `kiroManagementHost(ctx)` = `kiroUsageManagementUrl(usageRegion(ctx))`, exported after `kiro-usage.ts:104`, with tests "Builder ID management host ignores service ARN region" and "Kiro management host follows account region" in `tests/providers/kiro/kiro-usage-quota.test.ts`. The rotator's model argument is `requestedModelId?: string \| null` (7th positional, line 397). The stale-409 residual is closed as moot (no sweep landed). |
+| Membership placement (preference only) | Rotator: after the at-cap filter (447) — room beats membership; if no account with room lists the model, keep the accounts with room. `preferredInitialAccount`: least-loaded after 555, round-robin at 561, fill-first eligible set at 323, quota eligible list at 592; the active shortcut stays gated by the proactive predicate at 533. `undefined` (no evidence) never narrows a set. |
+| **Refresh trigger (decision)** | Discovery is **fire-and-forget from the request path** for the account actually admitted to serve, when its cached row is missing or older than `KIRO_MODEL_CATALOG_TTL_MS` (1 h); it is never awaited on a request. `provider-models.ts` gather merges **cached rows only** (no network, no token refresh of inactive accounts). The fetch uses `kiroUsageContextForAccount` + `kiroManagementHost` and `providerOutboundPost` (egress-correct), with the caller-supplied provider config (no `loadConfig()` per fetch). |
+| **Test isolation (decision)** | Discovery is disabled when `OPENCODEX_KIRO_MODEL_DISCOVERY === "0"`; `tests/preload.ts` sets it to `"0"` so existing suites that store Kiro credentials never reach a real host. The two new suites set it to `"1"` locally and inject `dependencies.pinnedPost`. Operators need no setting; discovery is on by default. |
+| Context windows | Observed token limits feed `routed-gather` (operator clamp still applies); `usage.ts`/`request-log.ts` use the smallest observed window across accounts, falling back to the static table. |
+| Public surface | Observed model IDs join `/api/models`, `/v1/models`, the GUI Models page and Codex catalogue sync through `fetchAllModels`; no GUI code change. Existing catalogue tests store no Kiro account and stay unchanged. |
+| Registry | `kiro-model-catalog.test.ts` and `kiro-model-preference.test.ts` between `kiro-leased-responses` and `kiro-oauth` (after `scripts/test-layout/layout.json:1081` and `tests/fixtures/test-layout-expected.json:902`). |
+
+Verifier set for C: `bun run typecheck`; `bun test tests/providers/kiro/ tests/oauth/generic-oauth-failover.test.ts tests/server/server-kiro-refusal-e2e.test.ts tests/server/server-kiro-completion-e2e.test.ts` plus `bun test $(rg -l "kiroModels|KIRO_MODELS|provider-models|routed-gather" tests)` in the clean `/tmp` worktree; `tests/lab/core-lab-boundary.test.ts`, layout, ratchet; privacy; structure. Capped files untouched: `codex-catalog.test.ts`, `kiro-adapter.test.ts`, `kiro-stream.test.ts`.
+
+
+### wp6 reflection fold (ALIGNED; 4 recorded gaps)
+
+1. **Dormant evidence (risk + docs):** only accounts that have served get a catalogue row; with
+   proactive preference off only the active account serves, so siblings gain membership evidence
+   after a refusal rotates onto them. Stated in Risks and in the docs sentence.
+2. **Switch mechanics:** `OPENCODEX_KIRO_MODEL_DISCOVERY` is read at call time; the new suites set it
+   per test and restore it in `afterEach`; a run launched outside the repository skips the preload
+   (`bunfig.toml:18-23`); the switch is documented in `structure/providers/kiro.md` as a test/kill switch.
+3. **Detached refresh:** the fire-and-forget refresh attaches its own `.catch` and uses only its own
+   `REQUEST_TIMEOUT_MS` signal — never the request's abort signal or send budget.
+4. **Verifiers add** the token-estimate and request-log estimate tests listed by
+   `git ls-files tests | grep -E "token-estimate|usage/.*(estimate|request-log)"`.
+
+
+### wp6 A round 1 fold (reviewer 01a0df28: FAIL, 4 High + 1 Medium → folded)
+
+1. **No predicate change.** 050 changes neither `isProactivePreferenceEnabled` (explicit `true`,
+   narrow-over-broad, `src/oauth/generic-account-failover.ts:201`) nor reactive rotation (ignores the
+   switch, 183). Any earlier sentence saying "unset enables proactive preference" or "explicit false
+   disables refusal rotation" is void. Membership preference runs only where selection already runs:
+   the reactive rotator always; proactive points only when the existing predicate allows them.
+2. **Two APIs replace the fetch-on-read module** (the complete module at plan ~50 and the gather
+   hunk at ~296 are superseded):
+   - `readKiroAccountModels(account: ProviderAccount): KiroAccountModel[] | undefined` — synchronous,
+     cache only, identity-fenced by `kiroEvidenceIdentity(account)`; returns the last good list for
+     up to 24 h, else `undefined`. Used by gather, selection and context-window lookups.
+   - `refreshKiroAccountModelsDetached(account, providerConfig)` — returns `void`; skips when
+     discovery is disabled (`kiroModelDiscoveryEnabled()`, reading `OPENCODEX_KIRO_MODEL_DISCOVERY` at
+     call time), when a flight for the same identity exists, or when the row is younger than
+     `KIRO_MODEL_CATALOG_TTL_MS` (1 h); otherwise starts a flight with its own `AbortSignal.timeout`,
+     never the request's signal or send budget, and `.catch(() => {})`. Caller supplies the provider
+     config (no `loadConfig()`). Call site: `request-transport.ts` immediately after the admitted
+     account's lease is taken (~622-630). `getKiroAccountModels` does not exist.
+3. **Final selection rule for membership** (`requested` = the normalized model id):
+   - *Rotator* (always): after the at-cap filter, prefer candidates whose catalogue lists `requested`;
+     `undefined` never excludes.
+   - *Refusal-aware first admission* (`refusalAwareInitialKiroAccount`, proactive): the same preference
+     among its candidates.
+   - *`preferredInitialAccount`* (proactive): a new, earliest check — if the active account's catalogue
+     explicitly **lacks** `requested` and an eligible sibling explicitly **lists** it, the active
+     account is treated as unsuitable before any strategy's healthy-active early return (this closes
+     the fill-first shortcut at 328 and the quota shortcut at 578-580); then each strategy's candidate
+     set prefers listing accounts (least-loaded after 555, round-robin 561, fill-first 323, quota 592).
+   - First-send regressions: `fill-first leaves a healthy active account that lacks the model for a
+     sibling that lists it`; `refusal-aware first admission prefers a sibling that lists the model`;
+     `no catalogue evidence never moves a healthy active account`.
+4. **Context window with a partial catalogue:** the lookup returns the smallest known limit among
+   accounts with evidence, and, if any live account has no evidence, `min(smallestKnown, staticWindow)`
+   (static alone when none is known). Test: `a mixed known/unknown roster never reports more than the
+   smallest known window`.
+5. **File map adds** `tests/preload.ts` (sets `OPENCODEX_KIRO_MODEL_DISCOVERY = "0"`) and the
+   `kiroModelDiscoveryEnabled()` seam in `src/providers/kiro-model-catalog.ts`.
+
+
+### wp6 A round 2 fold
+
+- **Refresh call site:** `refreshKiroAccountModelsDetached` is called **after** the conditional
+  lease block in `request-transport.ts` (after ~622-630), for the committed `admitted.accountId`
+  on every Kiro request, whether or not a cap or least-loaded is configured.
+- **Room before membership at first admission:** the earliest "active lacks the model" check and
+  every membership preference first drop accounts at their cap (`accountInFlight >= cap`, only when
+  a cap is configured); if no listing account has room, the check does not move the request and the
+  strategy runs on its normal eligible set. Test: `a listing sibling at its cap does not displace an
+  active account with room`.
+
+## wp6 build notes
+
+- Implemented cache-only, identity-fenced account model evidence with a detached management fetch and a call-time discovery switch. Kiro catalog gathering reads cached rows only; selection uses observed membership after eligibility and configured capacity checks.
+- Focused verification: `bun run typecheck`; the requested one-process Kiro/OAuth/server/token/usage suite (1501 pass, 0 fail); layout, ratchet, and Lab guards (52 pass, 0 fail); `bun run privacy:scan`; `bun run structure:check`; docs-site frozen install and build. No live provider call was made.
+- `bun run test:changed` was attempted after the focused gates, but the Bun changed runner produced no test output for nearly three minutes and was interrupted. The full suite was not run, per this layer's scope.

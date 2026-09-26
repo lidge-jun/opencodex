@@ -381,6 +381,12 @@ MiMo model Command Code serves.
   unavailable while an earlier same-login quota bar remains visible. Known quota and
   exhaustion evidence survive restart only for the same login, each until its own reset
   or ten-minute lifetime. Missing, old, or malformed evidence becomes unknown.
+- After an admitted request, reads that account's available models from the regional management
+  service without delaying the request. Cached results add model IDs to the shipped catalog.
+  Empty or unrecognised replies retain the shipped list and any last good account list. Model
+  membership guides eligible-account preference; unknown IDs still go upstream. Reported input
+  limits inform context windows, conservatively combined with shipped limits when evidence is partial.
+  Accounts that have not served have no list evidence yet.
 - Participates in multi-account rotation. With two stored accounts, a request-rate refusal
   cools the refused account briefly; an exact monthly-quota refusal on HTTP 400 or 429
   excludes it until the observed reset or evidence expiry. A confirmed HTTP 403 suspension

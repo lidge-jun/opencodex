@@ -7,6 +7,7 @@ import {
   fetchKiroUsageSnapshot,
   getKiroAccountExhaustion,
   kiroUsageManagementUrl,
+  kiroManagementHost,
   reconcileKiroAccountUsageState,
 } from "../../../src/providers/kiro-usage";
 
@@ -47,6 +48,16 @@ function breakdown(extra: Record<string, unknown> = {}) {
 }
 
 describe("Kiro usage limits", () => {
+  test("Builder ID management host ignores service ARN region", () => {
+    expect(kiroManagementHost({ ...baseContext, builderIdFallback: true,
+      apiRegion: "eu-west-1" })).toBe("https://management.eu-west-1.kiro.dev/");
+  });
+
+  test("Kiro management host follows account region", () => {
+    expect(kiroManagementHost({ ...baseContext,
+      profileArn: "arn:aws:codewhisperer:ap-southeast-2:123456789012:profile/TEST",
+      apiRegion: "eu-west-1" })).toBe("https://management.ap-southeast-2.kiro.dev/");
+  });
   test("maps an agentic-request breakdown onto the monthly window", async () => {
     stubUsageResponse({
       usageBreakdownList: [breakdown()],

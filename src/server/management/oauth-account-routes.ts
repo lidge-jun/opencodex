@@ -24,6 +24,7 @@ import {
   submitManualLoginCode,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
+import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { emailMaskingEnabled } from "../../lib/privacy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -222,7 +223,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     // Muse may import a local Keychain credential or start a device grant; add-account
@@ -235,6 +236,20 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
     const accountId = body.accountId?.trim();
     const reauth = body.reauth === true || Boolean(accountId);
+    if (provider === "kiro") {
+      if (reauth && !accountId) return jsonResponse({ error: "Kiro reauth requires an accountId" }, 400);
+      if (body.method !== undefined) {
+        if (body.method !== "builder-id" && body.method !== "google" && body.method !== "github") {
+          return jsonResponse({ error: "invalid Kiro device method" }, 400);
+        }
+        if (reauth) return jsonResponse({ error: "native_login_is_add_only" }, 400);
+        try {
+          return jsonResponse(await startKiroDeviceLogin(body.method as KiroDeviceMethod, principal ?? "admin-token", readConfigDiagnostics().config));
+        } catch {
+          return jsonResponse({ error: "Kiro device login could not start" }, 409);
+        }
+      }
+    }
     try {
       if (accountId) {
         const { getAccountSet } = await import("../../oauth/store");
@@ -287,9 +302,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Cancel an in-progress browser/device OAuth login (GUI "Cancel" / modal close). Guarded by
   // the same public predicate as /api/oauth/login — only publicly startable flows are cancellable.
   if (url.pathname === "/api/oauth/login/cancel" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; flowId?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (provider === "kiro" && body.flowId !== undefined) {
+      if (typeof body.flowId !== "string") return jsonResponse({ error: "unknown login flow" }, 404);
+      const result = cancelKiroDeviceLogin(body.flowId, principal ?? "admin-token");
+      return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
+    }
     const { cancelLoginFlow } = await import("../../oauth");
     const cancelled = cancelLoginFlow(provider);
     return jsonResponse({ ok: true, cancelled });
@@ -315,6 +335,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (provider === "kiro" && url.searchParams.has("flowId")) {
+      const flowId = url.searchParams.get("flowId") ?? "";
+      const baseline = kiroDeviceConfigBaseline(flowId, principal ?? "admin-token");
+      const status = await statusKiroDeviceLogin(flowId, principal ?? "admin-token");
+      if (!status) return jsonResponse({ error: "unknown login flow" }, 404);
+      if (status.state === "done") {
+        reconcileLiveConfigFromDisk(config, baseline ?? structuredClone(config));
+        reconcileLiveStateStores();
+      }
+      return jsonResponse(status);
+    }
     // Resolved here, at the request boundary that already holds the config, and passed down.
     // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
     // consumes the already-projected status rather than redacting a second time.

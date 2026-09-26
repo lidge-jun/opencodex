@@ -10,6 +10,20 @@ provider capabilities below; see [Responses compatibility](../transports/respons
 
 ## Kiro CLI executable resolution
 
+Native device login is an add-only Kiro account path for Builder ID, Google, and GitHub.
+It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded process-local
+flow table. A flow ID is returned only at start; status and cancellation require that ID and
+the same management principal kind. Polling follows the server's interval, and only an exact
+approval shape reaches the protected OAuth store. Device codes and tokens never enter
+management responses. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
+refuses them before starting CLI work. Upstream verification URLs require HTTPS, no credentials
+or control characters, and a 2048-character limit; user codes use 4–32 plain alphanumeric or
+hyphen characters. Completed flow results are consumed once, terminal entries expire after
+60 seconds, and the table holds at most 16 entries. Terminal entries retain no config snapshot.
+Explicit reauth rotates login identity, while token
+refresh preserves it. A first-account config-publication failure compensates the new slot
+through the existing receipt ownership check.
+
 Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
 `src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The
 canonical `kiro-cli` name is tried on `PATH` and then in the platform install locations. Only
@@ -35,6 +49,20 @@ account without a formable ARN is not probed. Persisted quota and exhaustion evi
 are bound independently by observation time, reset, and login identity, never by token
 or raw account label; removal, identity change, expiry, or malformed disk degrades routing
 evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
+
+After an account is admitted, a detached `ListAvailableModels` request reads that account's
+regional management host with its own timeout and account-paired bearer/profile. The request
+never waits for discovery. `OPENCODEX_KIRO_MODEL_DISCOVERY=0` disables this optional path at
+call time, primarily for tests or operational rollback. The process-local list is fenced to
+the login identity, refreshed after one hour, and retained as last good for at most 24 hours.
+Malformed or empty replies preserve the static model roster. Observed model membership only
+prefers accounts already eligible and with room under a configured cap; unknown IDs remain
+callable. Reported `tokenLimits.maxInputTokens` informs a conservative catalog and token
+estimate window, including the static limit when any live account lacks evidence. Only accounts
+that have served acquire list evidence; inactive siblings may remain unknown until refusal
+rotation reaches them. The public catalog advertises only observed IDs made of plain
+characters (no `/` the router would have to decode), at most 64 across the roster; every
+observed ID still informs routing preference.
 
 `src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
 confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account

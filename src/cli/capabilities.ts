@@ -387,6 +387,23 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["account", "login"],
+    summary: "Log in to an OAuth provider; Kiro can add a native device account.",
+    routes: [
+      { method: "POST", path: "/api/oauth/login" },
+      { method: "GET", path: "/api/oauth/status" },
+    ],
+    flags: [
+      { name: "--method", value: "string", summary: "For Kiro: builder-id, google, or github device login (add only)." },
+      { name: "--reauth", value: "boolean", summary: "Reauthenticate a selected existing account." },
+      { name: "--id", value: "string", summary: "Account id for reauthentication." },
+      { name: "--no-wait", value: "boolean", summary: "Return after the login flow starts." },
+      { name: "--json", value: "boolean", summary: "Emit flow state as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+  },
+  {
     command: ["account", "history"],
     summary: "Cached quota observations for one stored Codex pool account.",
     routes: [{ method: "GET", path: "/api/codex-auth/quota/history" }],
