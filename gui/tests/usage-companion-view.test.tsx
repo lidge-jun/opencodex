@@ -32,11 +32,16 @@ test("companion settings use config providers when the usage report fails", asyn
     chartGrouping: "model", models: null, hiddenProviders: [],
   };
   const requests: string[] = [];
-  globalThis.fetch = (async input => {
+  const saves: string[] = [];
+  globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push(url);
     if (url.includes("/api/usage?")) return Response.json({ error: "unavailable" }, { status: 503 });
     if (url.endsWith("/api/config")) return Response.json({ providers: { alpha: {}, beta: {} } });
+    if (url.endsWith("/api/companion/settings") && init?.method === "PUT") {
+      saves.push(String(init.body));
+      return Response.json({ settings, defaults: settings, updatedAt: 1 });
+    }
     if (url.endsWith("/api/companion/settings")) return Response.json({ settings, defaults: settings, updatedAt: null });
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
@@ -58,12 +63,19 @@ test("companion settings use config providers when the usage report fails", asyn
     expect(host.querySelector(".usage-workspace-shell")).toBeNull();
     expect(requests.some(url => url.includes("/api/usage?"))).toBe(true);
     expect(requests.some(url => url.endsWith("/api/config"))).toBe(true);
+    // An edit still inside the 300 ms autosave delay survives an immediate switch to the report.
+    await act(async () => {
+      (host.querySelector('.usage-companion-check-list input[type="checkbox"]') as HTMLInputElement).click();
+    });
+    expect(saves).toHaveLength(0);
     await act(async () => {
       browser.location.hash = "#usage";
       browser.dispatchEvent(new browser.Event("hashchange"));
     });
     expect(host.querySelector('[aria-selected="true"]')?.id).toBe("usage-tab-report");
     expect(host.querySelector(".usage-companion-panel")).toBeNull();
+    expect(saves).toHaveLength(1);
+    expect(JSON.parse(saves[0]!).settings.hiddenProviders).toEqual(["alpha"]);
     await act(async () => {
       browser.location.hash = "#usage/companion";
       browser.dispatchEvent(new browser.Event("hashchange"));
