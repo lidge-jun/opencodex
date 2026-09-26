@@ -416,7 +416,7 @@ export const vi: Record<TKey, string> = {
   "memoryModels.off": "Tắt — mặc định của Codex",
   "memoryModels.defaultEffort": "Mặc định của Codex",
   "memoryModels.dataNotice": "Mô hình được chọn sẽ nhận nội dung phiên mà Codex tóm tắt cho bộ nhớ.",
-  "memoryModels.accountNotice": "Giai đoạn để ở mặc định của Codex sẽ đi tới tài khoản OpenAI của bạn như mọi mô hình gốc khác.",
+  "memoryModels.accountNotice": "Chỉ có một giai đoạn được định tuyến; giai đoạn còn lại vẫn gửi các lệnh gọi bộ nhớ tới tài khoản OpenAI của bạn như mọi mô hình gốc khác.",
   "memoryModels.loadFailed": "Không tải được cài đặt bộ nhớ.",
   "memoryModels.saved": "Đã lưu cài đặt bộ nhớ.",
   "memoryModels.saveFailed": "Không lưu được. Thay đổi của bạn vẫn còn; hãy thử lại.",

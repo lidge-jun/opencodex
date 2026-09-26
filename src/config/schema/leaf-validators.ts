@@ -60,7 +60,7 @@ export const compactionRoutingSchema = z.object({
  * removes the phase instead of blanking it, so an empty entry would only ever come from a
  * hand-edited file, where failing the write is the honest answer.
  */
-const memoryModelSettingSchema = z.object({
+export const memoryModelSettingSchema = z.object({
   model: z.string().trim().min(1),
   reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
 }).strict();

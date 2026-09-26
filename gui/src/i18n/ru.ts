@@ -417,7 +417,7 @@ export const ru: Record<TKey, string> = {
   "memoryModels.off": "Выключено — по умолчанию Codex",
   "memoryModels.defaultEffort": "Как в Codex",
   "memoryModels.dataNotice": "Выбранная модель получает текст сессии, который Codex сжимает для памяти.",
-  "memoryModels.accountNotice": "Фаза, оставленная на значении Codex по умолчанию, идёт в ваш аккаунт OpenAI, как любая другая нативная модель.",
+  "memoryModels.accountNotice": "Смаршрутизирована только одна фаза; другая по-прежнему отправляет вызовы памяти в ваш аккаунт OpenAI, как любая другая нативная модель.",
   "memoryModels.loadFailed": "Не удалось загрузить настройки памяти.",
   "memoryModels.saved": "Настройки памяти сохранены.",
   "memoryModels.saveFailed": "Не удалось сохранить. Ваши изменения на месте; попробуйте снова.",

@@ -294,7 +294,7 @@ export const zhTW: Record<TKey, string> = {
   "memoryModels.off": "關閉 — Codex 預設",
   "memoryModels.defaultEffort": "Codex 預設",
   "memoryModels.dataNotice": "所選模型會收到 Codex 用於記憶的工作階段文字。",
-  "memoryModels.accountNotice": "留在 Codex 預設值的階段會像其他原生模型一樣送往你的 OpenAI 帳戶。",
+  "memoryModels.accountNotice": "只路由了一個階段；另一個階段仍像其他原生模型一樣，把記憶呼叫送往你的 OpenAI 帳戶。",
   "memoryModels.loadFailed": "無法載入記憶設定。",
   "memoryModels.saved": "記憶設定已儲存。",
   "memoryModels.saveFailed": "儲存失敗。你的變更還在，請再試一次。",

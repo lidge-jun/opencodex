@@ -426,7 +426,7 @@ export const en = {
   "memoryModels.off": "Off — Codex default",
   "memoryModels.defaultEffort": "Codex default",
   "memoryModels.dataNotice": "The chosen model receives the session text Codex summarizes for memory.",
-  "memoryModels.accountNotice": "A phase left on Codex default goes to your OpenAI account like any other native model.",
+  "memoryModels.accountNotice": "Only one phase is routed; the other still sends its memory calls to your OpenAI account like any other native model.",
   "memoryModels.loadFailed": "Could not load memory settings.",
   "memoryModels.saved": "Memory settings saved.",
   "memoryModels.saveFailed": "Could not save. Your changes are still here; try again.",

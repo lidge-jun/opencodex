@@ -52,9 +52,10 @@ function verdictOf(parsed: Record<string, unknown>): CopyVerdict {
  *
  * Every copy of the turn metadata the request carries must agree — the same rule
  * `applyCompactionRoutingOverride` applies to compaction turns: a request that contradicts itself
- * is not a memory turn, so neither copy can widen what the setting covers. The sub-agent header is
- * accepted on its own because the WS bridge rebuilds internal requests from a header allowlist and
- * may deliver only that copy.
+ * is not a memory turn, so neither copy can widen what the setting covers. On HTTP the sub-agent
+ * header is accepted on its own because Codex may deliver only that copy; on websocket it is not,
+ * because the bridge re-attaches the handshake's header to every frame, so there it marks the
+ * connection rather than the turn and the per-frame metadata decides alone.
  */
 export function detectMemoryModelPhase(
   body: unknown,
@@ -82,6 +83,11 @@ export function detectMemoryModelPhase(
     verdict = copy;
   }
   if (verdict === "extract" || verdict === "consolidation") return verdict;
+  // The websocket bridge rebuilds internal requests from a header allowlist and re-attaches the
+  // handshake's sub-agent header to every frame. Trusting it here would sweep the connection's
+  // later ordinary turns into the consolidation phase, so websocket frames rely on the per-frame
+  // turn metadata above and nothing else.
+  if (options.transport === "websocket") return null;
   return headers.get(SUBAGENT_HEADER) === MEMORY_THREAD_SOURCE ? "consolidation" : null;
 }
 

@@ -417,7 +417,7 @@ export const ja: Record<TKey, string> = {
   "memoryModels.off": "オフ — Codex の既定",
   "memoryModels.defaultEffort": "Codex の既定",
   "memoryModels.dataNotice": "選んだモデルには、Codex がメモリ用に要約するセッション本文が送られます。",
-  "memoryModels.accountNotice": "Codex の既定のままにしたフェーズは、他のネイティブモデルと同じく OpenAI アカウントへ送られます。",
+  "memoryModels.accountNotice": "片方のフェーズだけがルーティングされています。Codex 既定のままのフェーズは、他のネイティブモデルと同じく OpenAI アカウントへメモリ呼び出しを送り続けます。",
   "memoryModels.loadFailed": "メモリ設定を読み込めませんでした。",
   "memoryModels.saved": "メモリ設定を保存しました。",
   "memoryModels.saveFailed": "保存できませんでした。変更は残っています。もう一度お試しください。",

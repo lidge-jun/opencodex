@@ -412,7 +412,7 @@ export const zh: Record<TKey, string> = {
   "memoryModels.off": "关闭 — Codex 默认",
   "memoryModels.defaultEffort": "Codex 默认",
   "memoryModels.dataNotice": "所选模型会收到 Codex 用于记忆的会话文本。",
-  "memoryModels.accountNotice": "留在 Codex 默认值的阶段会像其他原生模型一样发往你的 OpenAI 账户。",
+  "memoryModels.accountNotice": "只路由了一个阶段；另一个阶段仍像其他原生模型一样，把记忆调用发往你的 OpenAI 账户。",
   "memoryModels.loadFailed": "无法加载记忆设置。",
   "memoryModels.saved": "记忆设置已保存。",
   "memoryModels.saveFailed": "保存失败。你的改动仍在，请重试。",

@@ -680,15 +680,17 @@ single agent run that merges those raw memories into the files under `$CODEX_HOM
 `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Codex hard-codes `low` for
 extract and `medium` for consolidation, so a configured effort replaces that value.
 
-OpenCodex recognizes these requests from Codex's own turn metadata only: `request_kind: "memory"` in
+OpenCodex recognizes these requests from Codex's own turn metadata: `request_kind: "memory"` in
 the `x-codex-turn-metadata` header marks an extract pass, and `thread_source:
-"memory_consolidation"` (plus the `x-openai-subagent: memory_consolidation` header on the
-consolidation pass) marks the consolidation thread. The model id is deliberately not a signal: the
-extract pass runs on the same helper model Codex uses for titles and commit messages, so a
-model-based rule would also capture ordinary helper calls. Missing, malformed, or conflicting
-metadata does not activate the override; when several copies of the metadata are supplied they must
-name the same phase. WebSocket requests use each frame's metadata rather than the connection's
-earlier handshake metadata.
+"memory_consolidation"` marks the consolidation thread. On HTTP, a request whose
+`x-openai-subagent` header names `memory_consolidation` counts as a consolidation pass on its
+own. The model id is deliberately not a signal: the extract pass runs on the same helper model
+Codex uses for titles and commit messages, so a model-based rule would also capture ordinary
+helper calls. Missing, malformed, or conflicting metadata does not activate the override; when
+several copies of the metadata are supplied they must name the same phase. WebSocket requests use
+each frame's metadata rather than the connection's earlier handshake metadata — the bridge
+re-attaches the handshake's `x-openai-subagent` header to every frame, so that header names the
+connection, not the current pass, and is not a websocket signal.
 
 A configured phase wins when `shadowCallIntercept` would match the same request. A phase left off
 keeps its current routing, which includes the shadow-call intercept: extract runs on a helper model

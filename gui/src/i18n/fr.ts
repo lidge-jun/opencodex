@@ -416,7 +416,7 @@ export const fr: Record<TKey, string> = {
   "memoryModels.off": "Désactivé — valeur Codex",
   "memoryModels.defaultEffort": "Valeur Codex",
   "memoryModels.dataNotice": "Le modèle choisi reçoit le texte de session que Codex résume pour la mémoire.",
-  "memoryModels.accountNotice": "Une phase laissée sur la valeur par défaut de Codex part vers votre compte OpenAI comme tout autre modèle natif.",
+  "memoryModels.accountNotice": "Une seule phase est routée ; l'autre envoie toujours ses appels de mémoire vers votre compte OpenAI comme tout autre modèle natif.",
   "memoryModels.loadFailed": "Impossible de charger les réglages de mémoire.",
   "memoryModels.saved": "Réglages de mémoire enregistrés.",
   "memoryModels.saveFailed": "Échec de l'enregistrement. Vos modifications sont conservées ; réessayez.",

@@ -23,6 +23,7 @@ import {
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
   compactionRoutingSchema,
+  memoryModelSettingSchema,
   memoryModelsSchema,
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
@@ -157,9 +158,17 @@ export const configSchema = z.object({
   providers: z.record(z.string(), providerConfigSchema),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
-  // A hand-edited malformed phase disables that phase instead of rejecting providers/apiKeys;
-  // the management write boundary (validateConfigCandidate) still refuses the bad value.
-  memoryModels: memoryModelsSchema.optional().catch(undefined),
+  // A hand-edited malformed phase disables only that phase instead of rejecting
+  // providers/apiKeys, matching the load-time degradation notice; the management write
+  // boundary (validateConfigCandidate) still refuses the bad value through the shared,
+  // catch-free memoryModelsSchema.
+  memoryModels: z
+    .object({
+      extract: memoryModelSettingSchema.optional().catch(undefined),
+      consolidation: memoryModelSettingSchema.optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.

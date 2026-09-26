@@ -412,7 +412,7 @@ export const ko: Record<TKey, string> = {
   "memoryModels.off": "사용 안 함 — Codex 기본값",
   "memoryModels.defaultEffort": "Codex 기본값",
   "memoryModels.dataNotice": "선택한 모델은 Codex가 메모리용으로 요약하는 세션 텍스트를 받습니다.",
-  "memoryModels.accountNotice": "Codex 기본값으로 둔 단계는 다른 네이티브 모델과 마찬가지로 OpenAI 계정으로 갑니다.",
+  "memoryModels.accountNotice": "한 단계만 라우팅했습니다. Codex 기본값으로 둔 단계는 다른 네이티브 모델과 마찬가지로 OpenAI 계정으로 메모리 호출을 보냅니다.",
   "memoryModels.loadFailed": "메모리 설정을 불러오지 못했습니다.",
   "memoryModels.saved": "메모리 설정을 저장했습니다.",
   "memoryModels.saveFailed": "저장하지 못했습니다. 변경 사항은 그대로 있습니다. 다시 시도하세요.",

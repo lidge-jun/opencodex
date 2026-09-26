@@ -408,7 +408,7 @@ export const de: Record<TKey, string> = {
   "memoryModels.off": "Aus — Codex-Standard",
   "memoryModels.defaultEffort": "Codex-Standard",
   "memoryModels.dataNotice": "Das gewählte Modell erhält den Sitzungstext, den Codex für das Memory zusammenfasst.",
-  "memoryModels.accountNotice": "Eine Phase, die auf Codex-Standard bleibt, geht wie jedes andere native Modell an dein OpenAI-Konto.",
+  "memoryModels.accountNotice": "Nur eine Phase ist geroutet; die andere schickt ihre Speicher-Aufrufe weiterhin wie jedes andere native Modell an dein OpenAI-Konto.",
   "memoryModels.loadFailed": "Memory-Einstellungen konnten nicht geladen werden.",
   "memoryModels.saved": "Memory-Einstellungen gespeichert.",
   "memoryModels.saveFailed": "Speichern fehlgeschlagen. Deine Änderungen stehen noch da; versuch es erneut.",
