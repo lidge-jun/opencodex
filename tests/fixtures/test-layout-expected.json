@@ -307,6 +307,7 @@
   "claude-management-api.test.ts": "claude-integration",
   "claude-manual-env.test.ts": "gui",
   "claude-messages-endpoint.test.ts": "claude-integration",
+  "claude-messages-thread.test.ts": "claude-integration",
   "messages-native.test.ts": "claude-integration",
   "messages-native-decline-trace.test.ts": "claude-integration",
   "messages-native-oauth.test.ts": "claude-integration",
