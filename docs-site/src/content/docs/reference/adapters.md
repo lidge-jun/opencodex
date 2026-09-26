@@ -520,16 +520,15 @@ configuration that names the old id is rewritten at startup.
   `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
   makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
   it is clamped to the smallest accepted value.
-- A pre-output 429 that states a recovery delay is retried in place only when the full stated
-  delay fits within the remaining cumulative wait allowance. The adapter waits that full delay
-  and replays the request up to twice; the default cumulative allowance is 30 minutes
-  (`OPENCODEX_DEVIN_STATED_RESET_WAIT_MS`, hard ceiling one hour). If the delay exceeds the
-  remaining allowance, the original 429 is surfaced without waiting or replaying. Retrying
-  earlier than the stated delay is deliberately not attempted — the hint is the provider's best
-  estimate of its own window, and each replay slot is finite. If the limit still refuses, the
-  final 429 surfaces to the client with the stated delay preserved as its cooldown hint. A `~`
-  in the surfaced message marks a delay recovered from a secondhand trailer sentence rather
-  than an exact header value; clients still receive the parsed number itself.
+- A pre-output 429 with a stated recovery delay is surfaced immediately by default, releasing the
+  admitted turn's shared capacity. Set `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` to a positive cumulative
+  allowance in milliseconds to wait for the full stated delay and replay the same request up to twice.
+  The allowance has a one-hour ceiling; an absent, empty, invalid, or negative value disables waiting.
+  An opted-in wait keeps the HTTP turn and its shared active-turn slot open throughout the delay.
+  The adapter sends heartbeats during that wait so the response stream stays active.
+  Delays exceeding the remaining allowance surface the original 429 without an early retry. The
+  final 429 preserves the stated delay as a cooldown hint. A `~` in its message marks a delay recovered
+  from a secondhand trailer sentence rather than an exact header value.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 

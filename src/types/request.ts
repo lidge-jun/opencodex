@@ -361,7 +361,7 @@ export interface OcxProviderContinuationState {
 }
 
 export type AdapterEvent =
-  | { type: "heartbeat"; replayUnsafe?: true }
+  | { type: "heartbeat"; replayUnsafe?: true; preflightReady?: true }
   | { type: "text_delta"; text: string; phase?: OcxMessagePhase }
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and

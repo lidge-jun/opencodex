@@ -194,6 +194,9 @@ export async function preflightAdapterEvents(
         replayUnsafe ||= next.value.replayUnsafe === true;
         // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
         buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
+        if (next.value.preflightReady === true) {
+          return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        }
         if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
         continue;
       }
@@ -255,10 +258,12 @@ export function createAdapterEventQueue(opts?: {
       // marker is not ordering — it is a latch. Dropping the incoming event
       // would discard the only record that Cursor already performed a local
       // side effect, and preflight would then permit an OAuth replay of it.
-      if (event.replayUnsafe === true && tail.replayUnsafe !== true) {
-        return { type: "heartbeat", replayUnsafe: true };
-      }
-      return tail;
+      if (event.replayUnsafe !== true && event.preflightReady !== true) return tail;
+      return {
+        type: "heartbeat",
+        ...(tail.replayUnsafe === true || event.replayUnsafe === true ? { replayUnsafe: true as const } : {}),
+        ...(tail.preflightReady === true || event.preflightReady === true ? { preflightReady: true as const } : {}),
+      };
     }
     if (event.type === "text_delta" && tail.type === "text_delta" && tail.phase === event.phase) {
       if (tail.text.length + event.text.length > COALESCE_MAX_CHUNK_LENGTH) return null;

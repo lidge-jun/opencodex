@@ -267,6 +267,32 @@ describe("run-turn adapter event queue", () => {
 });
 
 describe("run-turn adapter event preflight", () => {
+  test("a cooldown heartbeat commits preflight while preserving later output", async () => {
+    const ready: AdapterEvent = { type: "heartbeat", preflightReady: true };
+    const values = [ready, text("resumed"), done];
+
+    const preflight = await preflightAdapterEvents(events(values));
+
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.replayUnsafe).toBe(false);
+    expect(await collect(preflight.stream)).toEqual(values);
+  });
+
+  test("queued heartbeat coalescing retains the cooldown preflight signal", async () => {
+    const queue = createAdapterEventQueue();
+    queue.push(heartbeat);
+    queue.push({ type: "heartbeat", preflightReady: true });
+    queue.push(text("resumed"));
+    queue.close();
+
+    const preflight = await preflightAdapterEvents(queue.stream());
+
+    expect(await collect(preflight.stream)).toEqual([
+      { type: "heartbeat", preflightReady: true },
+      text("resumed"),
+    ]);
+  });
+
   test("10,000 leading heartbeats retain only the bounded tail and still complete", async () => {
     const values = [...Array.from({ length: 10_000 }, () => heartbeat), done];
     const preflight = await preflightAdapterEvents(events(values));
