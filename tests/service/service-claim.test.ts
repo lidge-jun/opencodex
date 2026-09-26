@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, statSync } from "node:fs";
 import { parseClaimArgs, runServiceClaim, CLAIM_SCHEMA } from "../../src/service/claim";
-import { ServiceOwnershipSubjectMismatchError, serviceStatePath, serviceStatePaths } from "../../src/service/state";
+import { recordServiceOwner, ServiceOwnershipSubjectMismatchError, serviceStatePath, serviceStatePaths } from "../../src/service/state";
 import type { ServiceOwnershipSubject } from "../../src/service/state";
 import { createTempHome } from "../helpers/temp-home";
 
@@ -153,6 +153,8 @@ describe("runServiceClaim", () => {
       mkdirSync(sandboxStatePath);
       const lines: string[] = [];
       const code = await runServiceClaim([...VALID, "--json"], {
+        // Keep legacy default-home records from overriding this unreadable fixture.
+        recordOwner: (request, deps) => recordServiceOwner(request, { ...deps, paths: [sandboxStatePath] }),
         stdout: { log: value => lines.push(value) },
       });
       expect(code).toBe(1);
