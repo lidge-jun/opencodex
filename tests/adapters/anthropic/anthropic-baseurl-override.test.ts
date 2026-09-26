@@ -177,9 +177,11 @@ test("the placeholder probe accepts braces that never form a placeholder", () =>
 
 test("the placeholder probe stays linear on brace-only input", () => {
   // `\{[^}]*\}` rescans the tail from every `{` start position on input with no
-  // closing brace, so 100k braces would take ~1e10 steps — far past the test
-  // timeout. The indexOf probe scans once.
+  // closing brace, so the old regex is quadratic: 100k braces took ~1.2s, 300k take
+  // ~10s. The indexOf probe scans once, so it must finish far inside the deadline.
+  const started = performance.now();
   expect(resolveAnthropicMessagesUrl({
-    baseUrl: "https://gateway.example/" + "{".repeat(100_000),
+    baseUrl: "https://gateway.example/" + "{".repeat(300_000),
   })).toContain("/v1/messages");
+  expect(performance.now() - started).toBeLessThan(1_000);
 });
