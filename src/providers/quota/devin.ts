@@ -89,12 +89,16 @@ function sub(fields: Fields, num: number): Buffer | undefined {
   return Buffer.isBuffer(value) ? value : undefined;
 }
 
-function timestampMs(buf: Buffer | undefined): number | undefined {
-  const f = buf ? fieldsOf(buf) : null;
-  return f ? epochMillis(int(f, 1)) : undefined;
+/** Undefined for an absent timestamp; null for one that is present but malformed. */
+function timestampMs(buf: Buffer | undefined): number | undefined | null {
+  if (!buf) return undefined;
+  const f = fieldsOf(buf);
+  return f ? epochMillis(int(f, 1)) : null;
 }
 
+/** Null when neither plan copy is present: a zero-valued plan would read as an exhausted account. */
 function decodePlanInfo(buf: Buffer | undefined): DevinPlanInfo | null {
+  if (!buf) return null;
   const f = fieldsOf(buf);
   if (!f) return null;
   return {
@@ -120,6 +124,7 @@ export function decodeDevinUserStatus(buf: Buffer): DevinUserStatus | null {
   if (!plan) return null;
   if (!plan.teamsTier) plan.teamsTier = int(user, 10);
   const planEndMs = timestampMs(sub(status, 3));
+  if (planEndMs === null) return null;
   const dailyResetMs = epochMillis(int(status, 17));
   const weeklyResetMs = epochMillis(int(status, 18));
   return {
