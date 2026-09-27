@@ -184,4 +184,42 @@ describe("deliverClientEncodedResponse", () => {
     expect(body.choices[0]!.message.content).toBe("hi");
     expect(run.completed).toHaveLength(1);
   });
+
+  test("the client-encoder fold preserves code-mode direct MCP recovery", async () => {
+    const logCtx: RequestLogContext = { model: "m", provider: "p" };
+    const toolEvents: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_mcp", name: "mcp__codex_app__get_usage_limits" },
+      { type: "tool_call_delta", id: "call_mcp", arguments: "{}" },
+      { type: "tool_call_end", id: "call_mcp" },
+      { type: "done" },
+    ];
+    const completed: Record<string, unknown>[] = [];
+    const input = {
+      encoder: { protocol: "chat" as const, stream: false, model: "client-model" },
+      events: replay(toolEvents),
+      logCtx,
+      translatorBudget: createTestTranslatorBudget(),
+      responseModelId: "internal/model",
+      adapterName: "anthropic",
+      fold: {
+        declaredToolNames: new Set(["exec"]),
+        freeformToolNames: new Set(["exec"]),
+        bareCustomToolNames: new Set(["exec"]),
+      },
+      stopUpstream: () => {},
+      onStreamDone: () => {},
+      onCompletedResponse: (response: Record<string, unknown>) => { completed.push(response); },
+      bindUsage: () => {},
+    };
+    const response = await deliverClientEncodedResponse(input);
+    expect(response.status).toBe(200);
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      output: [{
+        type: "custom_tool_call",
+        name: "exec",
+        input: 'const result = await tools.mcp__codex_app__get_usage_limits({});\ntext(result);',
+      }],
+    });
+  });
 });

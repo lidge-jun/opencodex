@@ -153,7 +153,7 @@ export async function deliverAdapterResponse(
         fold: {
           replayCacheScope: parsed._reasoningReplayScope,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
-          toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames,
+          toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames,
         },
         stallTimeoutSec: config.stallTimeoutSec,
         localUpstream,
