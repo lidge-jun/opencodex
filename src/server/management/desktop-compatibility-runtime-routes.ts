@@ -7,7 +7,7 @@ const PATH = "/api/codex/desktop-compatibility/runtime";
 let runtime: DesktopCompatibilityRuntime | undefined;
 const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stopping", "build_unverified", "egress_proxy_unsupported",
   "trust_required", "certificate_expiring", "certificate_not_prepared", "certificate_invalid", "certificate_expired",
-  "native_identity_unverified", "cleanup_incomplete", "not_running"]);
+  "native_identity_unverified", "cleanup_incomplete", "not_running", "connection_invalid", "connection_changed", "connection_cleanup_required", "connection_unavailable"]);
 
 export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== PATH) return null;

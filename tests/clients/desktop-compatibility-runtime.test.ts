@@ -6,6 +6,8 @@ import { UsageRelayController, type UsageIdentity } from "../../src/codex/deskto
 import { desktopCompatibilityRuntimeActive } from "../../src/codex/desktop-compatibility/runtime-ownership";
 import { createDesktopCertificateService } from "../../src/codex/desktop-compatibility/certificate-service";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
+import type { DesktopConnectionIdentity, DesktopConnectionStore } from "../../src/codex/desktop-compatibility/connection-store";
+import { createServer as createTcpServer } from "node:net";
 
 const account: UsageIdentity = { id: "fixture-account", userId: "fixture-user", plan: "pro", structure: "personal" };
 const usage = { account_id: account.id, user_id: account.userId, plan_type: "pro", rate_limit: { allowed: false, limit_reached: true,
@@ -50,13 +52,15 @@ describe("bounded compatibility usage controller", () => {
   });
 });
 
-function fixture(trusted = true) {
+function fixture(trusted = true, connectionStore?: DesktopConnectionStore) {
   const authority = createCertificateAuthority({ commonName: "runtime-fixture", validityDays: 1 });
   const cert = new X509Certificate(authority.certPem);
   const identity = { readCurrentIdentity: async () => account, verifyFreshIdentity: async () => account };
   const calls: { path: string; method: string; bytes: number; cookie: string | null }[] = [];
   let streamSequence = 0, cancelledStreams = 0, buildSupported = true;
+  let connection: DesktopConnectionIdentity | null = null;
   const runtime = createDesktopCompatibilityRuntime({ platform: "win32", testOnly: true, identity, buildSupported: () => buildSupported,
+    connectionStore: connectionStore ?? { read: () => connection, publish: async value => (connection ??= value) },
     loadAuthority: async () => ({ authority, commonName: "runtime-fixture", fingerprint: cert.fingerprint256.replaceAll(":", ""),
       expiresAt: Date.parse(cert.validTo), renewalDue: false, reused: true }), trust: async () => trusted ? "trusted" : "not-trusted",
     upstreamFetch: (async (input, init) => {
@@ -128,5 +132,35 @@ describe("optional native compatibility runtime", () => {
     await expect(io.runtime.start()).rejects.toThrow("build_unverified"); expect(desktopCompatibilityRuntimeActive()).toBe(false);
     io.setBuildSupported(true); await io.runtime.start(); io.setBuildSupported(false);
     await expect(io.runtime.apply(true)).rejects.toThrow("build_unverified"); expect(io.runtime.status().usage?.mode).toBe("observe");
+  });
+  test("a cached PAC reconnects to the same ports after restart and Apply is never resumed", async () => {
+    const io = fixture(); await io.runtime.start();
+    const originalUrl = io.runtime.getPacUrl()!, pac = await fetch(originalUrl).then(res => res.text());
+    const port = Number(/PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1]);
+    const request = () => fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
+    expect((await request()).rate_limit.allowed).toBe(false); await io.runtime.apply(true);
+    expect((await request()).rate_limit.allowed).toBe(true);
+    await io.runtime.stop(); await io.runtime.start();
+    expect(io.runtime.getPacUrl()).toBe(originalUrl); expect(await fetch(originalUrl).then(res => res.text())).toBe(pac);
+    expect((await request()).rate_limit.allowed).toBe(false); expect(io.runtime.status().usage?.mode).toBe("observe");
+  });
+  test("a reused port conflict refuses startup and never replaces the cached connection identity", async () => {
+    let stored: DesktopConnectionIdentity | null = null;
+    const io = fixture(true, { read: () => stored, publish: async value => (stored ??= value) });
+    await io.runtime.start(); const originalUrl = io.runtime.getPacUrl(); await io.runtime.stop();
+    const original = { ...stored! };
+    for (const occupied of ["connectPort", "pacPort"] as const) {
+      const blocker = createTcpServer();
+      await new Promise<void>(resolve => blocker.listen(original[occupied], "127.0.0.1", resolve));
+      try {
+        await expect(io.runtime.start()).rejects.toThrow("connection_unavailable");
+        expect(stored).toEqual(original); expect(io.runtime.status().phase).toBe("off"); expect(desktopCompatibilityRuntimeActive()).toBe(false);
+        // The other port must be bindable even when startup had already opened it.
+        const probe = createTcpServer();
+        try { await new Promise<void>((resolve, reject) => { probe.once("error", reject); probe.listen(original[occupied === "connectPort" ? "pacPort" : "connectPort"], "127.0.0.1", resolve); }); }
+        finally { await new Promise<void>(resolve => probe.close(() => resolve())); }
+      } finally { await new Promise<void>(resolve => blocker.close(() => resolve())); }
+      await io.runtime.start(); expect(io.runtime.getPacUrl()).toBe(originalUrl); await io.runtime.stop();
+    }
   });
 });

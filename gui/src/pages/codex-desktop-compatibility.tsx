@@ -8,6 +8,7 @@ import { setClientResourceData, useClientResource } from "../client-resource";
 const label = { prepare: "desktopCompat.prepare", trust: "desktopCompat.trust", "remove-trust": "desktopCompat.remove", renew: "desktopCompat.renew",
   start: "desktopCompat.start", stop: "desktopCompat.stop", launch: "desktopCompat.launch", observe: "desktopCompat.observe", apply: "desktopCompat.apply" } as const;
 const errorLabel = { build_unverified: "desktopCompat.blockedByBuild", egress_proxy_unsupported: "desktopCompat.blockedByProxy",
+  connection_unavailable: "desktopCompat.connectionUnavailable", connection_invalid: "desktopCompat.connectionUnavailable", connection_changed: "desktopCompat.connectionUnavailable",
   app_running: "desktopCompat.closeApp", local_dashboard_confirmation_required: "desktopCompat.localOnly" } as const;
 
 function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: boolean }) {

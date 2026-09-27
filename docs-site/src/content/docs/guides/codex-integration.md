@@ -910,6 +910,14 @@ the certificate for reuse; active connections may be interrupted. For renewal or
 stop the service and close Codex first. Renewal prepares a new untrusted certificate; review the
 new fingerprint before registering it. An uncertain action is not automatically retried.
 
+The service preserves its PAC address and local connection ports for reuse after a restart.
+With the same trusted certificate, an already configured app can reconnect through its cached
+PAC; restarting the service never resumes a correction trial. If a saved port cannot be bound
+or connection metadata is invalid, startup refuses rather than silently assigning another
+address. The first successful start owns `codex-desktop-compatibility/connection.json` under
+the OpenCodex home. Do not delete that file as a routine restart fix: a different address
+requires launching the app with a fresh managed connection.
+
 Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
 login and direct outbound connectivity. Configured outbound proxies and OpenCodex managed client
 mode are not yet supported by these controls. There is no saved automatic-start preference yet.

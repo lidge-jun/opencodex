@@ -92,6 +92,15 @@ upstream is fixed to chatgpt.com; request Host cannot select another destination
 allows only chatgpt.com:443. PAC has a certificate-relative deadline and `DIRECT` fallback.
 The package launcher uses only the runtime-owned PAC and never kills an existing app.
 
+`connection-store.ts` preserves the PAC nonce and two public loopback ports in a bounded,
+strictly validated `connection.json` beside the protected authority. No account, credential,
+key or expiry is stored there. First publication is create-only under a lifecycle lease;
+another identity cannot be overwritten. Startup binds the recorded ports and revalidates
+publication before exposing a launch URL. A conflict or malformed file fails without new
+port allocation. Existing cached PACs can reconnect after a service restart using the same
+authority and endpoints; correction always restarts in Observe. Certificate renewal still
+requires a closed app, so its next launch fetches the new certificate-relative PAC deadline.
+
 `usage-controller.ts`, `usage-activation.ts` and `usage-policy.ts` implement a maximum
 three-minute, explicitly confirmed account-UI trial after a fresh supported exhaustion
 snapshot. They cannot assert selected-provider isolation. Two usage gate booleans may

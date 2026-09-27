@@ -729,6 +729,10 @@ ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in
 An outbound proxy configuration is currently unsupported and refuses startup rather than
 routing some app connections outside that proxy. Start never registers a certificate or changes
 login. Launch preserves package identity and refuses an app that is already running.
+PAC and CONNECT ports are persisted after successful first binding and reused on restart.
+`connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
+means stored endpoint identity could not be accepted. These failures never silently rotate
+ports or overwrite the existing connection record. Restart returns to Observe, not Apply.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,

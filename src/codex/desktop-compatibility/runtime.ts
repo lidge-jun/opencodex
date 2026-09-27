@@ -15,6 +15,7 @@ import { createUsageControlledFetch } from "./usage-controlled-fetch";
 import { startDesktopRelay } from "./relay-listener";
 import { launchWindowsCodexCompatibility } from "./windows-package-launch";
 import { acquireDesktopCompatibilityRuntime } from "./runtime-ownership";
+import { createDesktopConnectionStore, type DesktopConnectionStore } from "./connection-store";
 
 // Reviewed usage.snapshot v1/cache/composer contract. A new build needs a new assessment.
 export const DESKTOP_COMPATIBILITY_ASSESSED_VERSION = "26.924.2738.0";
@@ -29,6 +30,7 @@ export interface DesktopRuntimeIo {
   identity?: ReturnType<typeof createNativeIdentityReader>;
   buildSupported?: () => boolean;
   upstreamFetch?: typeof fetch;
+  connectionStore?: DesktopConnectionStore;
   /** Synthetic-test execution is admitted only with explicit fixture identity and CA seams. */
   testOnly?: boolean;
 }
@@ -56,7 +58,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   async function start() {
     if (phase !== "off") throw new Error("desktop_compatibility_busy");
     if (platform !== "win32") throw new Error("desktop_compatibility_unsupported");
-    if (isTestHomeGuardArmed() && !(io.testOnly && io.identity && io.loadAuthority && io.trust && io.buildSupported)) throw new Error("desktop_compatibility_test_environment");
+    if (isTestHomeGuardArmed() && !(io.testOnly && io.identity && io.loadAuthority && io.trust && io.buildSupported && io.connectionStore)) throw new Error("desktop_compatibility_test_environment");
     if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
     if (!buildSupported()) throw new Error("desktop_compatibility_build_unverified");
     if (effectiveProxyFor(new URL("https://chatgpt.com"), process.env)) throw new Error("desktop_compatibility_egress_proxy_unsupported");
@@ -82,6 +84,8 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       const authority = await (io.loadAuthority?.() ?? loadDesktopCompatibilityAuthority({ directory }));
       const trust = await (io.trust?.(authority) ?? inspectWindowsCertificateTrust(authority.authority.certPem, authority.fingerprint));
       if (trust !== "trusted") throw new Error("desktop_compatibility_trust_required");
+      const connections = io.connectionStore ?? createDesktopConnectionStore(directory);
+      const previousConnection = connections.read();
       const deadline = authority.expiresAt - 300_000;
       if (deadline <= Date.now()) throw new Error("desktop_compatibility_certificate_expiring");
       const identity = io.identity ?? createNativeIdentityReader(join((await import("../paths")).getCodexHome(), "auth.json"));
@@ -91,14 +95,17 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       controller = new UsageRelayController(account, identity.readCurrentIdentity, identity.verifyFreshIdentity, Date.now, deadline);
       relay = await startDesktopRelay({ leaf: issueServerLeaf(authority.authority, authority.commonName, ["chatgpt.com"]),
         fetchImpl: createUsageControlledFetch(controller, io.upstreamFetch ?? fetch) });
-      proxy = await startConnectProxy(0, { interceptPort: relay.port, interceptHosts: ["chatgpt.com"], allowedTargets: ["chatgpt.com:443"] });
-      const runId = randomUUID(), proxyPort = proxy.port;
-      pac = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      try { proxy = await startConnectProxy(previousConnection?.connectPort ?? 0, { interceptPort: relay.port, interceptHosts: ["chatgpt.com"], allowedTargets: ["chatgpt.com:443"] }); }
+      catch { throw new Error("desktop_compatibility_connection_unavailable"); }
+      const runId = previousConnection?.id ?? randomUUID(), proxyPort = proxy.port;
+      try { pac = Bun.serve({ hostname: "127.0.0.1", port: previousConnection?.pacPort ?? 0, fetch(req) {
         const url = new URL(req.url);
         if (req.method !== "GET" || req.headers.has("origin") || url.origin !== `http://127.0.0.1:${pac!.port}` || url.pathname !== `/${runId}/proxy.pac`) return new Response(null, { status: 404 });
         return new Response(`function FindProxyForURL(url, host) { return Date.now() < ${deadline} && host.toLowerCase() === "chatgpt.com" && url.indexOf("https:") === 0 ? "PROXY 127.0.0.1:${proxyPort}; DIRECT" : "DIRECT"; }`,
           { headers: { "content-type": "application/x-ns-proxy-autoconfig", "cache-control": "no-store" } });
-      } });
+      } }); } catch { throw new Error("desktop_compatibility_connection_unavailable"); }
+      const connection = await connections.publish({ version: 1, id: runId, connectPort: proxyPort, pacPort: pac.port! });
+      if (connection.id !== runId || connection.connectPort !== proxyPort || connection.pacPort !== pac.port) throw new Error("desktop_compatibility_connection_changed");
       if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
       const active = controller; let ticking = false, deadlineHandled = false;
       timer = setInterval(() => {
