@@ -3,14 +3,17 @@
  *
  * Codex 0.154.0+ sends `gpt-6-luna` for helper calls. Clients from 0.145.0
  * through 0.153.x sent `gpt-5.6-luna`, which stays a default prefix so those
- * clients keep their interception. Clients through 0.144.x used `gpt-5.4-mini`;
- * operators supporting them can restore that prefix with the `sourceModels`
- * override. The GPT-6 slug comes first because surfaces show the list in order.
- * Every surface that names the
+ * clients keep their interception. `gpt-5.6-terra` is the model Codex asks for
+ * its background memory-consolidation pass, so an install that intercepts
+ * helper traffic keeps the whole memory pipeline off the native route instead
+ * of leaving that one phase on the account the operator routed away from.
+ * Clients through 0.144.x used `gpt-5.4-mini`; operators supporting them can
+ * restore that prefix with the `sourceModels` override. The order is the order
+ * the surfaces show. Every surface that names the
  * intercepted model (management API, GUI badges/tooltips, CLI) reads it from
  * here instead of hard-coding a slug that goes stale on the next client bump.
  */
-export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-6-luna", "gpt-5.6-luna"] as const;
+export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"] as const;
 
 /**
  * Optional blocked model redirects at the shared routing layer.

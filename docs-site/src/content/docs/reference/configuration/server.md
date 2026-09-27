@@ -40,7 +40,7 @@ runs helper features around provider requests.
 | `codexProviderDisplayName?` | `string` | `"OpenCodex Proxy"` | Label Codex shows for the injected `opencodex` provider, written as its `name` field in `config.toml` and the reference profile. Presentation only: routing resolves through the provider id `opencodex`, so a rename never moves `model_provider = "opencodex"` or the `[model_providers.opencodex]` header and cannot orphan threads already tagged with that id. Codex refuses to load a provider with no name, so there is no way to omit the field — choose a neutral label instead. A blank, over-128-character, or control-character value is ignored and the default label is written. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna`, `gpt-5.6-luna`, and `gpt-5.6-terra`, the model Codex asks for its background memory-consolidation pass; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
 | `memoryModels?` | `{ extract?: { model: string; reasoningEffort?: string }; consolidation?: { model: string; reasoningEffort?: string } }` | off | Route Codex's two memory phases to a chosen model, with an optional reasoning effort per phase. See [Memory routing](#memory-routing). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
@@ -698,8 +698,9 @@ re-attaches the handshake's `x-openai-subagent` header to every frame, so that h
 connection, not the current pass, and is not a websocket signal.
 
 A configured phase wins when `shadowCallIntercept` would match the same request. A phase left off
-keeps its current routing, which includes the shadow-call intercept: extract runs on a helper model
-id, so an enabled intercept already covers it. The selected model's provider receives the session
+keeps its current routing, which includes the shadow-call intercept: both phases run on default
+intercept source models (`gpt-5.6-luna` for extract, `gpt-5.6-terra` for consolidation), so an
+enabled intercept already covers them. The selected model's provider receives the session
 text Codex summarizes for memory, including sessions that normally run on another provider; the
 dashboard panel states this next to the model pickers. Without a choice, memory requests reach your
 OpenAI account like any other native model. A phase whose target stopped resolving — the provider is
@@ -711,10 +712,13 @@ proxy after editing `config.json` by hand. Dashboard saves apply immediately.
 
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
-replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
-uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
-extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x clients) in the
-list when current clients should still be intercepted.
+replacement keeps the request's configured reasoning effort. The defaults also cover
+`gpt-5.6-terra`, the model Codex asks for its background memory-consolidation pass, so an install
+that intercepts helper traffic keeps the whole memory pipeline off the native account instead of
+leaving that one phase on the route the operator moved away from. Set `sourceModels` only when a
+client uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead
+of extending them, so include `gpt-6-luna` and `gpt-5.6-terra` (plus `gpt-5.6-luna` for
+0.145.0-0.153.x clients) in the list when current clients should still be intercepted.
 Interception is model-based: every request whose bare model id matches `sourceModels` can be
 redirected, including normal `request_kind: "turn"` requests. Requests marked as spawned children by
 `x-openai-subagent: collab_spawn` or `subagent_kind: "thread_spawn"` in the `x-codex-turn-metadata`
@@ -725,7 +729,7 @@ JSON header are exempt, so an explicitly spawned sub-agent keeps its model.
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"]
   }
 }
 ```

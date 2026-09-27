@@ -777,7 +777,8 @@ export interface OcxConfig {
   /**
   * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
-  * source models: gpt-6-luna (Codex 0.154.0+) and gpt-5.6-luna (0.145.0-0.153.x).
+  * source models: gpt-6-luna (Codex 0.154.0+), gpt-5.6-luna (0.145.0-0.153.x), and
+  * gpt-5.6-terra, which Codex asks for its background memory-consolidation pass.
   * Clients through 0.144.x emitted gpt-5.4-mini instead; that model is retired upstream,
   * but it stays available as an opt-in `sourceModels` prefix so an old client's helper
   * calls can still be intercepted.
@@ -792,7 +793,7 @@ export interface OcxConfig {
    enabled?: boolean;
    /** Replacement model id (e.g. "gpt-5.5"). */
    model?: string;
-   /** Optional override of intercepted source-model prefixes (default: gpt-6-luna, gpt-5.6-luna). */
+   /** Optional override of intercepted source-model prefixes (default: gpt-6-luna, gpt-5.6-luna, gpt-5.6-terra). */
    sourceModels?: string[];
  };
   /**
