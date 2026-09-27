@@ -34,6 +34,14 @@ function readSettings(payload: { memoryModels?: unknown }): Settings {
   return out;
 }
 
+/**
+ * One phase's PUT payload. A phase with no model is "Off", which the route reads as an absent
+ * key, so it must stay out of the object rather than travel as an empty string.
+ */
+function phasePayload(model: string, effort: string): PhaseSetting | undefined {
+  return model ? { model, ...(effort ? { reasoningEffort: effort } : {}) } : undefined;
+}
+
 export default function MemoryModelsPanel(props: { apiBase: string; models: ModelInfo[] }) {
   return <MemoryModelsControls key={props.apiBase} {...props} />;
 }
@@ -90,10 +98,6 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
       pending.current = null;
     };
   }, [load]);
-
-  const phasePayload = (model: string, effort: string) => (model
-    ? { model, ...(effort ? { reasoningEffort: effort } : {}) }
-    : undefined);
 
   const save = async () => {
     if (pending.current || saved === undefined) return;
