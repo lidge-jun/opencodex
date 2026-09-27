@@ -54,6 +54,22 @@ export function mergeDevinUsage(previous: OcxUsage, next: OcxUsage): OcxUsage {
  */
 const DEVIN_CLIENT_CLOSED_MESSAGE = "client closed request";
 
+/** Below the bridge's upstream stall deadline, so held reasoning never reads as a stall. */
+const HELD_REASONING_HEARTBEAT_MS = 15_000;
+
+type DevinUsageEvent = Extract<CloudChatEvent, { kind: "usage" }>;
+
+/** The retry's cumulative usage plus the refused attempt's final counts. */
+function addDevinUsage(event: DevinUsageEvent, prior: DevinUsageEvent): DevinUsageEvent {
+  const sum = (a?: number, b?: number) => (a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0));
+  const out: DevinUsageEvent = { ...event };
+  for (const key of ["promptTokens", "completionTokens", "totalTokens", "cachedInputTokens", "cacheCreationInputTokens", "reasoningTokens"] as const) {
+    const value = sum(event[key], prior[key]);
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 /** Map a cloud-direct failure onto the structured fields the error event carries. */
 export function devinErrorClassification(error: unknown): { status?: number; errorType?: string; retryable?: boolean } {
   const status = error instanceof CloudChatError ? error.status : undefined;
@@ -669,7 +685,11 @@ export function createDevinAdapter(
           // reasoning and signature, and the next turn would replay that signature against
           // the retry's thinking.
           const held: CloudChatEvent[] = [];
+          // Usage is still real: the refused attempt was processed, so its final counts are
+          // added to every usage frame of the retry (frames are cumulative per request).
+          let refusedUsage: Extract<CloudChatEvent, { kind: "usage" }> | undefined;
           let visible = false;
+          let lastHeartbeat = Date.now();
           try {
             for await (const event of request(signedMessages)) {
               // Only visible output makes a retry unsafe. Live, the refusal often lands after the
@@ -678,15 +698,26 @@ export function createDevinAdapter(
                 visible = true;
                 yield* held.splice(0);
               }
-              if (visible) yield event;
-              else held.push(event);
+              if (visible) {
+                yield event;
+                continue;
+              }
+              held.push(event);
+              if (event.kind === "usage") refusedUsage = event;
+              // Held reasoning must not look like a stalled upstream to the bridge.
+              if (Date.now() - lastHeartbeat >= HELD_REASONING_HEARTBEAT_MS) {
+                lastHeartbeat = Date.now();
+                emit({ type: "heartbeat" });
+              }
             }
           } catch (error) {
             if (visible || !(error instanceof CloudChatError && error.code === "invalid_argument")) {
               yield* held.splice(0);
               throw error;
             }
-            yield* request(unsignedMessages);
+            for await (const event of request(unsignedMessages)) {
+              yield event.kind === "usage" && refusedUsage ? addDevinUsage(event, refusedUsage) : event;
+            }
             return;
           }
           yield* held.splice(0);
