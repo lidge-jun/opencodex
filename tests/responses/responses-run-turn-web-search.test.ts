@@ -68,11 +68,19 @@ mock.module("../../src/server/responses/request-sidecar-auth", () => ({ ...sidec
     } as Awaited<ReturnType<typeof sidecarAuth.prepareResponsesSidecarAuth>>;
   },
 }));
+let fixtureSidecarResponse: Response | undefined;
+const webSearchModule = await import("../../src/web-search");
+const executeWebSearch = webSearchModule.runWithWebSearch;
+mock.module("../../src/web-search", () => ({ ...webSearchModule,
+  runWithWebSearch: async (...args: Parameters<typeof executeWebSearch>) =>
+    fixtureSidecarResponse ?? executeWebSearch(...args),
+}));
 const { handleResponses } = await import("../../src/server/responses");
 const originalHome = process.env.OPENCODEX_HOME;
 let home = "";
 let release: (() => void) | undefined;
 beforeEach(async () => {
+  fixtureSidecarResponse = undefined;
   home = mkdtempSync(join(tmpdir(), "ocx-runturn-search-"));
   process.env.OPENCODEX_HOME = home;
   release = acquireOwnedSpendHome();
@@ -319,3 +327,43 @@ test("superseded 429 attempt cannot restore stale route state", async () => {
   expect(owner(attempts[1])).not.toBe(owner(attempts[0]));
   expect(owner(attempts[1])).not.toBe("stale-superseded");
 });
+
+for (const settlement of ["complete", "cancel", "error"] as const) {
+  test(`a non-success sidecar body retains its probe until ${settlement}`, async () => {
+    releasedFixtureProbe = false;
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    fixtureSidecarResponse = new Response(new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+    }), { status: 503, headers: { "content-type": "text/event-stream" } });
+    const config = {
+      port: 0, defaultProvider: "fetchonly",
+      webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+      providers: { fetchonly: { adapter: "fetchonly", baseUrl: "https://fetchonly.test/v1",
+        apiKey: "fixture-key", models: ["model"] } },
+    } as OcxConfig;
+    let response: Response | undefined;
+    try {
+      response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", "x-fixture-probe": "held" },
+        body: JSON.stringify({ model: "fetchonly/model", input: "search this", stream: true,
+          tools: [{ type: "web_search" }] }),
+      }), config, { model: "", provider: "" });
+      expect(response.status).toBe(503);
+      expect(releasedFixtureProbe).toBe(false);
+      if (settlement === "complete") {
+        controller.enqueue(new TextEncoder().encode("data: fixture-error\n\n"));
+        controller.close();
+        expect(await response.text()).toContain("fixture-error");
+      } else if (settlement === "cancel") {
+        await response.body!.cancel();
+      } else {
+        controller.error(new Error("fixture body failure"));
+        await expect(response.text()).rejects.toThrow("fixture body failure");
+      }
+      expect(releasedFixtureProbe).toBe(true);
+    } finally {
+      if (response?.body && !response.bodyUsed) await response.body.cancel();
+      fixtureSidecarResponse = undefined;
+    }
+  });
+}

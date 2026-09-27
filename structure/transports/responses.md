@@ -61,6 +61,8 @@ the code let a provider-scoped transport past it is what #4992 recorded, and it 
 regression for this policy has to enter through `handleResponses` rather than through a
 hand-written override that cooperates by calling the executor it was handed.
 
+`src/server/responses/sidecar-execution.ts` owns search probe settlement: local validation releases immediately, bodyless responses release before returning, and upstream bodies retain the lease through completion, error or cancellation regardless of HTTP status. The core dispatcher does not infer body completion from a non-success status.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
@@ -72,9 +74,7 @@ retention limits, and the stall watchdog is a silence limit. None is a cumulativ
 semantic no-progress budget.
 
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
-
 > Decision record: [ADR-0032](../decisions/ADR-0032-responses-http-sse.md)
-
 > Decision record: [ADR-0033](../decisions/ADR-0033-responses-http-sse.md)
 
 > Decision record: [ADR-0034](../decisions/ADR-0034-responses-http-sse.md)

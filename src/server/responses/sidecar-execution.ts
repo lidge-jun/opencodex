@@ -144,6 +144,8 @@ export async function executeResponsesSidecars(
           || (message as { toolCallId: string }).toolCallId.length === 0),
     );
     if (unpaired) {
+      // Local validation has no running sidecar body to own this lease.
+      releaseSearchProbeLease();
       // Never interpolate the tool output: this message reaches the client and the logs.
       return formatErrorResponse(
         400,
@@ -341,6 +343,7 @@ export async function executeResponsesSidecars(
     // the bridge entirely so enabling the feature doesn't break ordinary non-streaming traffic.
     if (!parsed.stream) {
       if (imgPlan) {
+        releaseSearchProbeLease();
         return formatErrorResponse(400, "invalid_request_error", "image bridge requires stream=true");
       }
       // Video-only: skip bridge for non-streaming requests
