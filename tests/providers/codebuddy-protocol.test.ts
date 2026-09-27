@@ -8,8 +8,10 @@ import {
   projectedHistoryCharLimit,
   readJsonLines,
   type StreamParseState,
+  releaseOpenToolBlocks,
   usageFromResult,
 } from "../../src/adapters/coding-agent/protocol";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import type { OcxParsedRequest } from "../../src/types";
 
 // The stream-json protocol for coding-agent CLIs
@@ -254,6 +256,33 @@ describe("codebuddy stream-json event mapping", () => {
     ]);
     expect(state.completedToolCalls).toBe(1);
     expect(state.openToolBlocks?.size ?? 0).toBe(0);
+  });
+
+  test("charges buffered tool arguments and releases them on failure cleanup", () => {
+    const translatorBudget = createTestTranslatorBudget({ maxCallArgumentBytes: 4 });
+    const state = {
+      sawPartialText: false,
+      sawPartialThinking: false,
+      sawTerminalResult: false,
+      translatorBudget,
+    };
+    const feed = (event: unknown) => mapStreamMessageToEvents(
+      { type: "stream_event", event: event as Record<string, unknown> },
+      state,
+    );
+
+    feed({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tu_1", name: "exec" } });
+    feed({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "1234" } });
+    expect(translatorBudget.snapshot()).toMatchObject({ currentBytes: 4, activeCalls: 1 });
+    expect(() => feed({
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: "5" },
+    })).toThrow("translator tool_args buffer exceeded 4 bytes");
+    expect(state.openToolBlocks?.get(1)?.argParts).toEqual(["1234"]);
+
+    releaseOpenToolBlocks(state);
+    expect(translatorBudget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
   });
 
   test("interleaved parallel tool_use blocks are serialized per block index", () => {

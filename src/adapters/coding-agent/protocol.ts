@@ -1,4 +1,5 @@
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxUsage } from "../../types";
+import type { TranslatorBudget } from "../../lib/translator-budget";
 
 /**
  * Shared stream-json protocol for official coding-agent CLIs (CodeBuddy Code and Qoder CLI).
@@ -235,6 +236,8 @@ export interface StreamParseState {
    * when its own stop arrives, or when a new tool_use start reuses its index.
    */
   openToolBlocks?: Map<number, OpenToolBlock>;
+  /** Request budget charged while argument fragments are retained before atomic emission. */
+  translatorBudget?: TranslatorBudget;
   /** Synthetic decreasing keys for tool_use start frames that omit the block index. */
   nextSyntheticToolBlockKey?: number;
   /** Tool_use blocks opened in this stream, whether or not they have closed yet. */
@@ -354,6 +357,8 @@ export interface OpenToolBlock {
   name: string;
   argParts: string[];
   indexed: boolean;
+  /** Budget identity is unique even if a malformed upstream reuses its public tool-call ID. */
+  budgetCallId?: string;
 }
 
 /** Key a tool_use start frame by content-block index, falling back to a synthetic key. */
@@ -408,10 +413,19 @@ function closeToolBlock(state: StreamParseState, key: number, events: AdapterEve
     }
   }
   state.openToolBlocks.delete(key);
+  if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
   events.push({ type: "tool_call_start", id: block.id, name: block.name });
   for (const part of block.argParts) events.push({ type: "tool_call_delta", arguments: part });
   events.push({ type: "tool_call_end" });
   state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
+}
+
+/** Release parser-owned argument reservations when a stream ends or fails with blocks open. */
+export function releaseOpenToolBlocks(state: StreamParseState): void {
+  for (const block of state.openToolBlocks?.values() ?? []) {
+    if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
+  }
+  state.openToolBlocks?.clear();
 }
 
 /** Map a raw Anthropic SSE event (carried inside a `stream_event` frame) to AdapterEvents. */
@@ -454,7 +468,13 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
             "Coding-agent CLI sent a tool argument delta that cannot be attributed to an open tool block.",
           );
         }
-        if (block) block.argParts.push(partial);
+        if (block) {
+          state.translatorBudget?.chargeRetained(Buffer.byteLength(partial), {
+            kind: "tool_args",
+            callId: block.budgetCallId,
+          });
+          block.argParts.push(partial);
+        }
       }
     }
     return events;
@@ -475,13 +495,17 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
           // block only after the capture path verifies its arguments form a complete object.
           closeToolBlock(state, key, events, true);
         }
+        const startOrdinal = (state.toolBlockStarts ?? 0) + 1;
+        const budgetCallId = state.translatorBudget ? `coding-agent:${startOrdinal}:${key}:${id}` : undefined;
+        if (budgetCallId) state.translatorBudget?.openCall(budgetCallId);
         (state.openToolBlocks ??= new Map()).set(key, {
           id,
           name,
           argParts: [],
           indexed: typeof event.index === "number" && Number.isInteger(event.index),
+          budgetCallId,
         });
-        state.toolBlockStarts = (state.toolBlockStarts ?? 0) + 1;
+        state.toolBlockStarts = startOrdinal;
         state.partialToolCallIds?.add(id);
       }
     }

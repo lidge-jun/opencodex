@@ -10,6 +10,8 @@ argument delta that cannot be attributed fails immediately. Turn completion
 requires every opened block to close, preserving the downstream single-open-call contract.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.
+The bridge admits the raw start count before allocating a block, and buffered argument
+fragments consume the shared translator budget until closure or turn cleanup.
 The capture-only bridge checks each raw tool-use start against the init handshake before
 buffering; a later init cannot authorize a call that started earlier.
 

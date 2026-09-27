@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { commandInvocation } from "../../lib/win-exec";
 import { isStandaloneBinary } from "../../lib/standalone";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -13,6 +14,7 @@ import {
   mapStreamMessageToEvents,
   projectedHistoryCharLimit,
   readJsonLines,
+  releaseOpenToolBlocks,
   toolBridgeInitError,
   type StreamParseState,
 } from "./protocol";
@@ -369,6 +371,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   };
 
   let streamProtocolError: string | undefined;
+  let streamProtocolCode: string | undefined;
   let turnError: string | undefined;
   // A successful result frame that arrived after every captured tool call completed but
   // before message_stop. The bridge contract still ends the leg with the synthesized
@@ -382,6 +385,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     sawTerminalResult: false,
     openToolBlocks: new Map(),
     strictToolBlockCapture: Boolean(toolBridge),
+    translatorBudget: incoming.translatorBudget,
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -405,6 +409,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     try {
       let initValidated = false;
       let toolCallStarts = 0;
+      let admittedToolStarts = 0;
       let failClosed = false;
       for await (const message of readJsonLines(stdout)) {
         if (incoming.abortSignal?.aborted) break;
@@ -427,13 +432,14 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             ? message.event as Record<string, unknown>
             : undefined;
           const rawBlock = rawEvent?.content_block;
-          if (
-            !initValidated
-            && rawEvent?.type === "content_block_start"
+          const rawToolStart = rawEvent?.type === "content_block_start"
             && rawBlock !== null
             && typeof rawBlock === "object"
             && !Array.isArray(rawBlock)
-            && (rawBlock as Record<string, unknown>).type === "tool_use"
+            && (rawBlock as Record<string, unknown>).type === "tool_use";
+          if (
+            !initValidated
+            && rawToolStart
           ) {
             emitOnce({
               type: "error",
@@ -445,6 +451,22 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             });
             kill();
             break;
+          }
+          if (rawToolStart) {
+            admittedToolStarts += 1;
+            if (admittedToolStarts > toolBridge.maxTurnToolCalls) {
+              emitOnce({
+                type: "error",
+                message: `Coding-agent CLI returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
+                status: 502,
+                errorType: "upstream_error",
+                code: "tool_call_limit",
+                retryable: false,
+              });
+              failClosed = true;
+              kill();
+              break;
+            }
           }
         }
         const mappedEvents = mapStreamMessageToEvents(message, state);
@@ -620,11 +642,13 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     } catch (err) {
       kill();
       streamProtocolError = err instanceof Error ? err.message : String(err);
+      if (isTranslatorBudgetExceededError(err)) streamProtocolCode = err.code;
     }
   } catch (err) {
     kill();
     turnError = err instanceof Error ? err.message : String(err);
   } finally {
+    releaseOpenToolBlocks(state);
     cleanup();
     if (toolBridgeDir) {
       await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
@@ -671,7 +695,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         message: redactSecrets(streamProtocolError, profile.tokenEnv, apiKey),
         status: 502,
         errorType: "upstream_error",
-        code: "protocol_error",
+        code: streamProtocolCode ?? "protocol_error",
         retryable: false,
       });
     } else if (child.exitCode !== null && child.exitCode !== 0) {
