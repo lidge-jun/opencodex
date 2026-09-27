@@ -757,6 +757,7 @@
   "devin-image-passthrough.test.ts": "providers",
   "devin-live-models.test.ts": "providers",
   "devin-login.test.ts": "providers",
+  "devin-quota.test.ts": "providers",
   "devin-output-budget.test.ts": "providers",
   "devin-prompt-cache.test.ts": "providers",
   "devin-provider-merge-migration.test.ts": "providers",
