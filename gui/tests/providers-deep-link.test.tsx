@@ -61,9 +61,6 @@ async function hash(next: string) {
   await act(async () => {
     testWindow.location.hash = next;
     testWindow.dispatchEvent(new testWindow.HashChangeEvent("hashchange"));
-    // happy-dom delivers a changed assignment's own hashchange on a timer; draining
-    // it here folds it into this batch instead of a stray later apply.
-    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
   });
 }
 
