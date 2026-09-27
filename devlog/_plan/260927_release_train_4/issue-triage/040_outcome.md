@@ -31,3 +31,31 @@ All five comments were posted once from the reviewed English drafts while remote
 | #4198 | [status and next step](https://github.com/lidge-jun/opencodex/issues/4198#issuecomment-5856933529) |
 | #4173 | [status and next step](https://github.com/lidge-jun/opencodex/issues/4173#issuecomment-5856934021) |
 | #2834 | [status and next step](https://github.com/lidge-jun/opencodex/issues/2834#issuecomment-5856934492) |
+
+## wp2 PR comment receipts
+
+At posting, remote `dev` remained `24b2f39b`; each of the 21 PRs retained its audited full head and `dev` base. The poster checked review/draft state and latest comment ID/update time, posted the English item-specific decision once, and read its body and URL back. No original PR was closed. #6079 will receive the focused carry PR URL by editing its same comment in wp3.
+
+| PR | Decision comment |
+|---|---|
+| #6079 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/6079#issuecomment-5857047467) |
+| #6077 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/6077#issuecomment-5857048095) |
+| #5955 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5955#issuecomment-5857048648) |
+| #5947 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5947#issuecomment-5857049158) |
+| #5800 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5800#issuecomment-5857049686) |
+| #5782 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5782#issuecomment-5857050257) |
+| #5631 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5631#issuecomment-5857050737) |
+| #5424 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5424#issuecomment-5857051217) |
+| #5374 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5374#issuecomment-5857051718) |
+| #5253 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5253#issuecomment-5857052212) |
+| #5912 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/5912#issuecomment-5857052786) |
+| #4647 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4647#issuecomment-5857053337) |
+| #4259 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4259#issuecomment-5857053915) |
+| #4228 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4228#issuecomment-5857054492) |
+| #4222 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4222#issuecomment-5857054992) |
+| #4177 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4177#issuecomment-5857055544) |
+| #4056 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4056#issuecomment-5857056048) |
+| #4022 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/4022#issuecomment-5857056608) |
+| #3742 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/3742#issuecomment-5857057185) |
+| #3463 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/3463#issuecomment-5857057686) |
+| #3025 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/3025#issuecomment-5857058233) |
