@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   guiUpdateWorkerCommand, isTrustedSystemdRunFile, resolveSystemdRun, resetSystemdRunProbeForTests,
-  SYSTEMD_SCOPE_ARGS,
+  resolveSystemdRunAsync, SYSTEMD_SCOPE_ARGS,
 } from "../../src/update/worker-launch";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -79,6 +79,33 @@ describe("trusted systemd-run discovery", () => {
     expect(calls).toBe(4);
     resetSystemdRunProbeForTests();
   });
+
+  test("resolveSystemdRunAsync shares one probe pass across concurrent first callers", async () => {
+    resetSystemdRunProbeForTests();
+    let probes = 0;
+    const hooks = {
+      isExecutableFile: () => true,
+      probeScope: () => { throw new Error("sync probe must not run on the request path"); },
+      probeScopeAsync: async (path: string) => {
+        probes++;
+        await new Promise(resolve => setTimeout(resolve, 5));
+        return path === "/bin/systemd-run";
+      },
+    };
+    const [first, second, third] = await Promise.all([
+      resolveSystemdRunAsync(hooks),
+      resolveSystemdRunAsync(hooks),
+      resolveSystemdRunAsync(hooks),
+    ]);
+    expect(first).toBe("/bin/systemd-run");
+    expect(second).toBe("/bin/systemd-run");
+    expect(third).toBe("/bin/systemd-run");
+    expect(probes).toBe(2);
+    // The resolved value is now cached: the sync resolver agrees without probing again.
+    expect(resolveSystemdRun(hooks)).toBe("/bin/systemd-run");
+    expect(probes).toBe(2);
+    resetSystemdRunProbeForTests();
+  });
 });
 
 // The default trust check must run against the real filesystem, not a stubbed seam. uid/mode
@@ -132,5 +159,70 @@ describe("isTrustedSystemdRunFile (real filesystem)", () => {
       chmodSync(dir, 0o755);
       expect(isTrustedSystemdRunFile(file)).toBe(true);
     } finally { cleanup(); }
+  });
+});
+
+/*
+ * A trusted-path symlink is only as strong as the file it resolves to and the
+ * directories able to substitute that file. The link's own parent being
+ * root-only is not enough — these run against stub seams so the substitution
+ * chain is exercised without needing a uid-0 fixture on disk.
+ */
+describe("isTrustedSystemdRunFile (resolved substitution chain)", () => {
+  const fileStat = (mode: number, uid = 0) => ({ isFile: () => true, isDirectory: () => false, uid, mode });
+  const dirStat = (mode: number, uid = 0) => ({ isFile: () => false, isDirectory: () => true, uid, mode });
+  const trustedDeps = {
+    accessSync: () => {},
+    statSync: (path: string) => dirStat(0o755),
+    realpathSync: (path: string) => path,
+  };
+
+  test("rejects a trusted-dir symlink whose resolved target can be substituted", () => {
+    // /usr/bin/systemd-run -> /home/user/bin/systemd-run: the file itself is
+    // root-owned and mode-pinned, but /home/user/bin is user-writable, so the
+    // user can replace it outright.
+    const deps = {
+      ...trustedDeps,
+      realpathSync: () => "/home/user/bin/systemd-run",
+      statSync: (path: string) =>
+        path === "/home/user/bin/systemd-run" ? fileStat(0o755)
+          : path === "/home/user/bin" ? dirStat(0o775)
+          : dirStat(0o755),
+    };
+    expect(isTrustedSystemdRunFile("/usr/bin/systemd-run", deps)).toBe(false);
+  });
+
+  test("rejects when any resolved ancestor can be substituted, not just the parent", () => {
+    // Target dir is pinned, but /opt/vendor is world-writable: swapping
+    // /opt/vendor/tools there substitutes the binary below it.
+    const deps = {
+      ...trustedDeps,
+      realpathSync: () => "/opt/vendor/tools/systemd-run",
+      statSync: (path: string) =>
+        path === "/opt/vendor/tools/systemd-run" ? fileStat(0o755)
+          : path === "/opt/vendor" ? dirStat(0o777)
+          : dirStat(0o755),
+    };
+    expect(isTrustedSystemdRunFile("/usr/bin/systemd-run", deps)).toBe(false);
+  });
+
+  test("accepts a resolved chain that is root-owned and pinned end to end", () => {
+    const deps = {
+      ...trustedDeps,
+      realpathSync: () => "/usr/lib/systemd/systemd-run",
+      statSync: (path: string) =>
+        path === "/usr/lib/systemd/systemd-run" ? fileStat(0o755) : dirStat(0o755),
+    };
+    expect(isTrustedSystemdRunFile("/usr/bin/systemd-run", deps)).toBe(true);
+  });
+
+  test("rejects a non-root resolved target even inside a pinned chain", () => {
+    const deps = {
+      ...trustedDeps,
+      realpathSync: () => "/usr/lib/systemd/systemd-run",
+      statSync: (path: string) =>
+        path === "/usr/lib/systemd/systemd-run" ? fileStat(0o755, 1000) : dirStat(0o755),
+    };
+    expect(isTrustedSystemdRunFile("/usr/bin/systemd-run", deps)).toBe(false);
   });
 });

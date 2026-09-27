@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 /**
@@ -35,6 +35,8 @@ const TRUSTED_SYSTEMD_RUN_PATHS = [
 export interface SystemdRunHooks {
   isExecutableFile: (path: string) => boolean;
   probeScope: (path: string) => boolean;
+  /** Async variant of probeScope; resolveSystemdRunAsync prefers it when present. */
+  probeScopeAsync?: (path: string) => Promise<boolean>;
 }
 
 const GROUP_OR_WORLD_WRITE = 0o022;
@@ -42,9 +44,18 @@ const GROUP_OR_WORLD_WRITE = 0o022;
 // stat (follow) rather than lstat: a root-owned symlink to a user-writable directory must fail
 // on the target's mode, not pass on the symlink's (mirrors isTrustedSystemPath in
 // src/codex/desktop-app/linux.ts).
-function rootOnlyWritable(path: string): boolean {
+export interface SystemdRunTrustDeps {
+  /** Test seam: canonicalizes the candidate before its substitution chain is checked. */
+  realpathSync?: (path: string) => string;
+  /** Test seam: stats a resolved path for ownership and mode. */
+  statSync?: (path: string) => { isFile(): boolean; uid: number; mode: number };
+  /** Test seam: checks the candidate's executable bit. */
+  accessSync?: (path: string, mode: number) => void;
+}
+
+function rootOnlyWritable(path: string, stat: SystemdRunTrustDeps["statSync"] = statSync): boolean {
   try {
-    const st = statSync(path);
+    const st = stat!(path);
     return st.uid === 0 && (st.mode & GROUP_OR_WORLD_WRITE) === 0;
   } catch {
     return false;
@@ -56,12 +67,23 @@ function rootOnlyWritable(path: string): boolean {
 // replaced systemd-run there would be exec'd by the scope probe under the service account;
 // the fallback is the plain detached spawn, so nothing breaks when it is skipped.
 // Exported for unit tests.
-export function isTrustedSystemdRunFile(path: string): boolean {
+export function isTrustedSystemdRunFile(path: string, deps: SystemdRunTrustDeps = {}): boolean {
   try {
-    accessSync(path, constants.X_OK);
-    const st = statSync(path);
-    return st.isFile() && st.uid === 0 && (st.mode & GROUP_OR_WORLD_WRITE) === 0
-      && rootOnlyWritable(dirname(path));
+    (deps.accessSync ?? accessSync)(path, constants.X_OK);
+    // The lexical path may be a symlink. Checking the link's own parent only proves
+    // the *entry* is pinned; the file it resolves to — and every ancestor able to
+    // substitute that resolved file — is what the scope probe will actually exec.
+    const realpath = deps.realpathSync ?? realpathSync;
+    const resolved = realpath(path);
+    const stat = deps.statSync ?? statSync;
+    const st = stat(resolved);
+    if (!(st.isFile() && st.uid === 0 && (st.mode & GROUP_OR_WORLD_WRITE) === 0)) {
+      return false;
+    }
+    for (let dir = dirname(resolved), previous = ""; dir !== previous; previous = dir, dir = dirname(dir)) {
+      if (!rootOnlyWritable(dir, stat)) return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -75,9 +97,21 @@ const systemdRunHooks: SystemdRunHooks = {
     const probe = spawnSync(path, [...SYSTEMD_SCOPE_ARGS, "true"], { stdio: "ignore", timeout: 5_000 });
     return !probe.error && probe.status === 0;
   },
+  probeScopeAsync: path => new Promise<boolean>(resolve => {
+    const probe = spawn(path, [...SYSTEMD_SCOPE_ARGS, "true"], { stdio: "ignore" });
+    probe.unref();
+    const timer = setTimeout(() => {
+      try { probe.kill(); } catch { /* already exited */ }
+      resolve(false);
+    }, 5_000);
+    timer.unref();
+    probe.once("error", () => { clearTimeout(timer); resolve(false); });
+    probe.once("close", code => { clearTimeout(timer); resolve(code === 0); });
+  }),
 };
 
 let systemdRunProbe: string | null | undefined;
+let systemdRunProbePending: Promise<string | null> | undefined;
 
 export function resolveSystemdRun(hooks: SystemdRunHooks = systemdRunHooks): string | undefined {
   if (systemdRunProbe === undefined) {
@@ -93,8 +127,36 @@ export function resolveSystemdRun(hooks: SystemdRunHooks = systemdRunHooks): str
   return systemdRunProbe ?? undefined;
 }
 
+/**
+ * Management-request path variant. The synchronous resolver blocks the shared
+ * event loop for up to four sequential five-second scope probes on first use;
+ * the dashboard update route awaits this instead, so probing overlaps other
+ * requests. Concurrent first callers share one probe pass.
+ */
+export async function resolveSystemdRunAsync(hooks: SystemdRunHooks = systemdRunHooks): Promise<string | undefined> {
+  if (systemdRunProbe !== undefined) return systemdRunProbe ?? undefined;
+  if (!systemdRunProbePending) {
+    systemdRunProbePending = (async () => {
+      const probeScope = hooks.probeScopeAsync ?? (async (path: string) => hooks.probeScope(path));
+      for (const command of TRUSTED_SYSTEMD_RUN_PATHS) {
+        if (!hooks.isExecutableFile(command)) continue;
+        if (await probeScope(command)) {
+          return command;
+        }
+      }
+      return null;
+    })();
+  }
+  const found = await systemdRunProbePending;
+  // Honor a cache the sync resolver may have filled while the probe ran — the
+  // older observation wins so every caller converges on one launcher.
+  if (systemdRunProbe === undefined) systemdRunProbe = found;
+  return systemdRunProbe ?? undefined;
+}
+
 export function resetSystemdRunProbeForTests(): void {
   systemdRunProbe = undefined;
+  systemdRunProbePending = undefined;
 }
 
 export function guiUpdateWorkerCommand(

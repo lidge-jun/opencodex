@@ -761,7 +761,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/update/run" && req.method === "POST") {
-    const { normalizeUpdateChannel, startUpdateJob, UpdateJobError } = await import("../../update/job");
+    const { normalizeUpdateChannel, startUpdateJob, UpdateJobError, spawnGuiUpdateWorker } = await import("../../update/job");
     let body: { tag?: unknown; restart?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (body.tag !== undefined && body.tag !== "latest" && body.tag !== "preview") {
@@ -774,8 +774,17 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       const channel = normalizeUpdateChannel(body.tag as string | undefined);
       const { packageRefresh } = await import("../../update/refresh-scheduler");
       const checked = await (deps.checkPackageUpdate ?? packageRefresh.check)(channel);
+      // Resolve the systemd-scope launcher before spawning: the first request
+      // would otherwise run up to four sequential five-second probes inside
+      // spawnSync on the shared event loop.
+      const { resolveSystemdRunAsync } = await import("../../update/worker-launch");
+      const systemdRun = process.platform === "linux" && process.env.INVOCATION_ID
+        ? await resolveSystemdRunAsync()
+        : undefined;
       return jsonResponse({ ok: true, job: startUpdateJob(channel, body.restart !== false, {
         checkForUpdateFn: () => checked,
+        spawnWorkerFn: (jobId, runChannel, runRestart) =>
+          spawnGuiUpdateWorker(jobId, runChannel, runRestart, { resolveSystemdRun: () => systemdRun }),
       }) });
     } catch (err) {
       if (err instanceof UpdateJobError) {
