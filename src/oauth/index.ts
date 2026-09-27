@@ -849,7 +849,9 @@ function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OA
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
-    // A refresh that re-read the CLI's own file is still that CLI's session (Devin).
+    // Shared: a refresh function returns "local-cli" only when the credential it hands back
+    // still is the local CLI's (Devin re-reading the CLI file, Meta Muse echoing its durable
+    // CLI key). Relabelling that "oauth" would stop the next forced refresh from re-reading it.
     source: fresh.source === "local-cli" ? "local-cli"
       : previous.source === "local-cli" ? "oauth" : fresh.source ?? previous.source ?? "oauth",
     ...(fresh.projectId === undefined && previous.projectId ? { projectId: previous.projectId } : {}),

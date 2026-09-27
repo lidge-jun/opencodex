@@ -27,7 +27,7 @@ import {
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
-import { OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage, type OAuthAccessSnapshot } from "../../oauth/index";
+import { publicOAuthAuthenticationErrorMessage, type OAuthAccessSnapshot } from "../../oauth/index";
 import { tryAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
@@ -409,7 +409,10 @@ export async function executeResponsesRunTurn(
         try {
           admitted = await applyFailoverSnapshot(await refreshResolvedOAuthSelection(sent));
         } catch (err) {
-          const alternate = err instanceof OAuthLoginRequiredError
+          // Not only OAuthLoginRequiredError: a concurrent request that already flagged this
+          // account and moved the selection makes this refresh fail as "selection changed". The
+          // helper still requires the sent generation to be flagged needsReauth, so it is safe.
+          const alternate = transportState.genericFailovers < transportState.genericFailoverLimit
             ? await tryAlternateAfterTerminalRefresh(config, route.providerName, sent.accountId, sent.generation)
             : null;
           admitted = alternate ? await applyFailoverSnapshot(alternate) : null;
