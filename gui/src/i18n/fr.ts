@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("fr"),
   "kiroLogin.title": "Se connecter à Kiro",
   "kiroLogin.chooseMethod": "Choisir une méthode de connexion",
   "kiroLogin.cli": "Importer avec Kiro CLI",

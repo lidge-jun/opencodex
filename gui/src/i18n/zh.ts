@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("zh"),
   "kiroLogin.title": "登录 Kiro",
   "kiroLogin.chooseMethod": "选择登录方式",
   "kiroLogin.cli": "从 Kiro CLI 导入",

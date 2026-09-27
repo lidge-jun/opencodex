@@ -2,18 +2,19 @@ import { useEffect, useState } from "react";
 import { useT } from "../i18n/shared";
 import CodexSetMultiauth from "./codex-set-multiauth";
 import CodexSetPrompt from "./codex-set-prompt";
+import CodexDesktopCompatibility from "./codex-desktop-compatibility";
 import { codexSetTabKeyDown, readCodexSetTabFromHash, selectCodexSetTab } from "./codex-set-tab";
 
 /**
  * Codex Set — the page that configures Codex as a whole, not just its accounts.
  *
- * Two exclusive tabpanels shaped like Logs/Debug rather than the scrolling
+ * Exclusive tabpanels shaped like Logs/Debug rather than the scrolling
  * SectionTabs strip: Multi-auth and Prompt are unrelated surfaces, and Multi-auth
  * polls /api/codex-auth/* on a 30s timer that has no business running while the
  * user is editing prompts. Prompt lazy-mounts on first visit and stays mounted
  * afterwards, so hopping between tabs does not refetch either side.
  */
-export default function CodexSet({ apiBase }: { apiBase: string }) {
+export default function CodexSet({ apiBase, machineApiBase = apiBase, connected = false }: { apiBase: string; machineApiBase?: string; connected?: boolean }) {
   const t = useT();
   const [tab, setTab] = useState(readCodexSetTabFromHash);
   const [promptMounted, setPromptMounted] = useState(() => readCodexSetTabFromHash() === "prompt");
@@ -22,6 +23,7 @@ export default function CodexSet({ apiBase }: { apiBase: string }) {
   // account poll behind a hidden panel - exactly the cost this shell was shaped to
   // avoid. Both panels now mount on first selection and stay mounted after.
   const [multiauthMounted, setMultiauthMounted] = useState(() => readCodexSetTabFromHash() === "multiauth");
+  const [desktopMounted, setDesktopMounted] = useState(() => readCodexSetTabFromHash() === "desktop");
 
   useEffect(() => {
     const onHash = () => setTab(readCodexSetTabFromHash());
@@ -37,6 +39,8 @@ export default function CodexSet({ apiBase }: { apiBase: string }) {
   const showMultiauth = multiauthMounted || tab === "multiauth";
   if (showPrompt !== promptMounted) setPromptMounted(true);
   if (showMultiauth !== multiauthMounted) setMultiauthMounted(true);
+  const showDesktop = desktopMounted || tab === "desktop";
+  if (showDesktop !== desktopMounted) setDesktopMounted(true);
 
   return (
     <>
@@ -67,6 +71,10 @@ export default function CodexSet({ apiBase }: { apiBase: string }) {
         >
           {t("codexSet.tab.prompt")}
         </button>
+        <button type="button" role="tab" id="codex-set-tab-desktop" aria-selected={tab === "desktop"}
+          aria-controls="codex-set-panel-desktop" tabIndex={tab === "desktop" ? 0 : -1}
+          className={`page-tab${tab === "desktop" ? " page-tab--active" : ""}`}
+          onClick={() => selectCodexSetTab("desktop")} onKeyDown={codexSetTabKeyDown}>{t("desktopCompat.title")}</button>
       </div>
 
       {showPrompt && (
@@ -90,6 +98,9 @@ export default function CodexSet({ apiBase }: { apiBase: string }) {
           <CodexSetMultiauth apiBase={apiBase} />
         </div>
       )}
+      {showDesktop && <div role="tabpanel" id="codex-set-panel-desktop" aria-labelledby="codex-set-tab-desktop" hidden={tab !== "desktop"}>
+        <CodexDesktopCompatibility apiBase={machineApiBase} active={tab === "desktop"} connected={connected} />
+      </div>}
     </>
   );
 }

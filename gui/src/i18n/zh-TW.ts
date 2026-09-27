@@ -1,7 +1,9 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("zh-TW"),
   "kiroLogin.title": "登入 Kiro",
   "kiroLogin.chooseMethod": "選擇登入方式",
   "kiroLogin.cli": "從 Kiro CLI 匯入",

@@ -889,6 +889,33 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+## Experimental Windows desktop compatibility
+
+**Codex Set → Desktop compatibility** provides local controls for a bounded compatibility
+trial while retaining the native Codex login. This is an experimental relay, not a guarantee
+that every Codex build or exhausted-account state can recover its composer.
+
+1. Inspect status, prepare the encrypted certificate and review its fingerprint before
+   registering trust. Windows may ask for confirmation. Trust applies to the current Windows
+   user and allows the local relay to handle `chatgpt.com` traffic.
+2. Start observation. Save drafts, close Codex, then use **Open Codex** in this panel to launch
+   the packaged app with the managed connection. The panel never forcibly closes an existing app.
+3. Only after eligible exhaustion is observed, **Run 3-minute trial** offers a separate account-wide
+   consent. It adjusts two UI flags across the signed-in account, not just the selected model.
+   Actual usage, credits, spending restrictions and server limits remain unchanged. A produced
+   response alone does not establish that the composer recovered.
+
+**Return to observation** disarms correction. **Stop service** closes its connections and leaves
+the certificate for reuse; active connections may be interrupted. For renewal or trust removal,
+stop the service and close Codex first. Renewal prepares a new untrusted certificate; review the
+new fingerprint before registering it. An uncertain action is not automatically retried.
+
+Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
+login and direct outbound connectivity. Configured outbound proxies and OpenCodex managed client
+mode are not yet supported by these controls. There is no saved automatic-start preference yet.
+Unknown app builds refuse correction; the integration does not patch application files or
+switch to login-free mode.
+
 ## Routed models during Codex reserve mode
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
@@ -903,7 +930,7 @@ When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback m
 **every other entry unselectable — including opencodex routed models**, even though those
 run on independent providers and credentials and consume none of the exhausted quota.
 
-**This is a Codex client behavior and the proxy cannot change it.** The reserve state
+**This is a Codex client behavior that ordinary model-proxy routing cannot change.** The reserve state
 arrives from the ChatGPT backend on the client's own authenticated connection, not through
 the proxy. The desktop app polls `backend-api/wham/usage` and treats reserve as active when
 the response carries `rate_limit_upsell.banner_type = "luna_reserve"`, the primary

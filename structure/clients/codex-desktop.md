@@ -110,5 +110,20 @@ a failed cleanup retains ownership and reports `cleanup-required`, never a false
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
 local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
 separate account-wide consent for apply. No setting, login, quota, automatic startup or
-dashboard panel is changed by this API. GUI and persisted startup integration are pending.
+dashboard preference is changed by this API. Persisted startup integration is pending.
 The status CLI verb remains deferred to this integration owner.
+
+## Dashboard controls
+
+`gui/src/pages/codex-desktop-compatibility.tsx` is a lazy Codex Set tab at
+`#codex-set/desktop`. It uses the machine API base, never the shared hub base. Managed
+OpenCodex client mode does not offer these controls because its local listener deliberately
+does not admit durable machine mutations through a dashboard bootstrap session.
+
+`gui/src/desktop-compatibility-api.ts` projects public status and issues one POST per action.
+Fingerprint-bound trust/renew/removal and the account-wide trial require separate acknowledgement.
+Observe/start/stop/launch follow explicit button actions. No action is replayed after an uncertain
+response; a fresh status read is required. Changing the API target remounts the panel and discards
+pending consent. `useClientResource` owns bounded, visibility-aware reads and invalidates earlier
+reads when a mutation result is published. Certificate status is not repeatedly polled; runtime
+status polls only while the tab is active. Consent copy exists in all ten locale catalogs.

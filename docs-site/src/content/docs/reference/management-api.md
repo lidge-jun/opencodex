@@ -720,7 +720,9 @@ CurrentUser protection does not isolate secrets from other processes running as 
 `GET /api/codex/desktop-compatibility/runtime` is an inert status read. POST requires a
 local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
 `observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
-The endpoint is experimental; a dashboard panel and saved startup preference are not yet provided.
+The endpoint is experimental. The dashboard exposes it under **Codex Set → Desktop compatibility**;
+a saved startup preference is not yet provided. OpenCodex managed client mode does not offer these
+local controls or forward them to the shared hub.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
 ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.

@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,7 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("tr"),
   "kiroLogin.title": "Kiro oturumu aç",
   "kiroLogin.chooseMethod": "Oturum açma yöntemi seç",
   "kiroLogin.cli": "Kiro CLI ile içe aktar",

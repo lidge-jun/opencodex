@@ -1,9 +1,11 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import type { TKey } from "./en";
 
 /**
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("ja"),
   "kiroLogin.title": "Kiro にログイン",
   "kiroLogin.chooseMethod": "ログイン方法を選択",
   "kiroLogin.cli": "Kiro CLI から取り込む",
