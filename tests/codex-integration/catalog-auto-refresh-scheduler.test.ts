@@ -17,6 +17,7 @@ import {
 import { lastCatalogAutoRefreshOutcome, resetCatalogAutoRefreshStatusForTests } from "../../src/codex/catalog-refresh-status";
 import type { CatalogOnlyOutcome } from "../../src/codex/convergence-types";
 import * as managementConvergence from "../../src/codex/management-convergence";
+import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import {
   CATALOG_AUTO_REFRESH_MIN_INTERVAL_MS,
   armDetachedConfigBaseline,
@@ -67,6 +68,7 @@ beforeEach(() => {
   openCodexHome = mkdtempSync(join(tmpdir(), "ocx-catalog-auto-refresh-"));
   process.env.OPENCODEX_HOME = openCodexHome;
   isolatedCodexHome = installIsolatedCodexHome("ocx-catalog-auto-refresh-codex-");
+  writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify({ models: [] }), "utf8");
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
   convergeFactoryCalls = 0;
@@ -483,6 +485,64 @@ describe("catalog auto-refresh drift heal", () => {
       });
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ received: join(realpathSync.native(codex), "alternate-catalog.json") });
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  });
+
+  test("a missing catalog defers injection until catalog convergence creates one", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-heal-missing-catalog-"));
+    const home = join(root, "home");
+    const ocx = join(root, "ocx");
+    const codex = join(root, "codex");
+    const tmp = join(root, "tmp");
+    for (const directory of [home, ocx, codex, tmp]) mkdirSync(directory);
+    const source = (name: string) => fileURLToPath(new URL(`../../src/${name}`, import.meta.url));
+    const script = `
+      const { spyOn } = require("bun:test");
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const config = require(${JSON.stringify(source("config.ts"))});
+      const scheduler = require(${JSON.stringify(source("codex/catalog-auto-refresh.ts"))});
+      const drift = require(${JSON.stringify(source("codex/config-drift-heal.ts"))});
+      const desired = require(${JSON.stringify(source("codex/desired-state.ts"))});
+      const processState = require(${JSON.stringify(source("config/process-state.ts"))});
+      const inject = require(${JSON.stringify(source("codex/inject.ts"))});
+      const management = require(${JSON.stringify(source("codex/management-convergence.ts"))});
+      const catalog = path.join(process.env.CODEX_HOME, "opencodex-catalog.json");
+      fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), 'model = "gpt-5"\\n');
+      fs.writeFileSync(config.getConfigPath(), JSON.stringify({ ...config.getDefaultConfig(), defaultProvider: "xai", providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" } }, catalogAutoRefresh: { enabled: true, intervalMinutes: 60 } }));
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true);
+      spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] });
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43210 });
+      const received = [];
+      spyOn(inject, "injectCodexConfig").mockImplementation(async (_port, _config, options) => { received.push(options.catalogPath); return { success: true, message: "fixture" }; });
+      let converges = 0;
+      spyOn(management, "createManagementConvergeCodex").mockImplementation(() => async () => {
+        if (++converges === 1) fs.writeFileSync(catalog, JSON.stringify({ models: [] }));
+        return { kind: "catalog-only", changed: false, catalogRefresh: { status: "committed", changed: false, degraded: false, notices: [] } };
+      });
+      const info = [];
+      spyOn(console, "info").mockImplementation((message) => info.push(message));
+      await scheduler.runCatalogAutoRefreshTickForTests();
+      const first = { received: [...received], converges, catalogExists: fs.existsSync(catalog),
+        rootsStillMissing: !fs.readFileSync(path.join(process.env.CODEX_HOME, "config.toml"), "utf8").includes("openai_base_url"),
+        deferred: info.some(line => line.includes("not re-injected this tick")) };
+      await scheduler.runCatalogAutoRefreshTickForTests();
+      process.stdout.write(JSON.stringify({ first, received, converges }));
+    `;
+    try {
+      const result = spawnSync(process.execPath, ["--eval", script], {
+        cwd: process.cwd(),
+        env: { ...process.env, HOME: home, OPENCODEX_HOME: ocx, CODEX_HOME: codex, TMPDIR: tmp },
+        encoding: "utf8", timeout: 20_000,
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        first: { received: [], converges: 1, catalogExists: true, rootsStillMissing: true, deferred: true },
+        received: [join(realpathSync.native(codex), "opencodex-catalog.json")],
+        converges: 2,
+      });
     } finally {
       removeTreeWithRetry(root);
     }

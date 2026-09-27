@@ -39,3 +39,4 @@ Implemented as planned in `picker-ca.ts`, with startup draining in the new `pick
 
 Evidence: isolated focused runs from the leaves — `claude-picker-ca`, `claude-picker-runtime`, `claude-picker-recovery`, test-layout and file-size ratchet tests: 129 pass / 0 fail; `bun run typecheck` and `bun run privacy:scan` passed; the assessor observed pending-file mode `0600` and refusal of a symlinked record and found no new private-key write path.
 
+PR review follow-up: a legacy owner row with no start identity is now considered stale on macOS when `/bin/ps` supplies an absolute process start time more than 2 seconds after `ca-owner.json` was written; missing/unparseable time or mtime remains conservative. A new live-PID regression failed before the fix and now proves that old owner files permit startup rotation while newer ones still refuse it. Isolated `bun test tests/claude-integration/*picker*.test.ts` passed 103/103, and `bun run typecheck` passed.

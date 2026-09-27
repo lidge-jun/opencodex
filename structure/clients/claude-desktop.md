@@ -194,7 +194,8 @@ picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside t
 callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
 certificate is rewritten under the lock so a second process cannot rotate out a live owner's
 authority. The owner record carries the OS process start identity where the platform exposes one,
-so a reused PID does not count as the live owner.
+so a reused PID does not count as the live owner; an older record without one still counts as live
+unless, on macOS, the PID's process started after the record was written.
 Before a startup rotation replaces `ca.pem`, the outgoing certificate's **public** PEM and its
 SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
 exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it

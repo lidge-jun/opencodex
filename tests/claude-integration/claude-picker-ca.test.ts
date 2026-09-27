@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -253,6 +253,30 @@ test("a live foreign owner is never clobbered; a dead one is reclaimed", async (
   } finally {
     child.kill();
   }
+});
+
+test("a legacy live PID is reclaimed only when it started after the owner file", () => {
+  if (process.platform !== "darwin") return; // Linux's /proc start ticks are not wall-clock time.
+  const dir = tempDir();
+  const ours = ensurePickerCa(dir);
+  const foreign = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  const ownerPath = pickerCaOwnerPath(dir);
+  writeFileSync(pickerCaCertPath(dir), foreign.certPem);
+  writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, sha256: pickerCaFingerprints(foreign.certPem).sha256 }));
+
+  utimesSync(ownerPath, new Date(0), new Date(0));
+  ensurePickerCa(dir, { rotation: "startup" });
+  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ours.certPem);
+  expect(readPendingPickerCaUntrust(dir)?.certPem).toBe(foreign.certPem);
+
+  const newerDir = tempDir();
+  ensurePickerCa(newerDir);
+  writeFileSync(pickerCaCertPath(newerDir), foreign.certPem);
+  writeFileSync(pickerCaOwnerPath(newerDir), JSON.stringify({ pid: process.pid, sha256: pickerCaFingerprints(foreign.certPem).sha256 }));
+  const future = new Date(Date.now() + 10_000);
+  utimesSync(pickerCaOwnerPath(newerDir), future, future);
+  expect(() => ensurePickerCa(newerDir, { rotation: "startup" })).toThrow("picker_ca_live_owner");
+  expect(readFileSync(pickerCaCertPath(newerDir), "utf8")).toBe(foreign.certPem);
 });
 
 test("a held picker CA lock never permits publication outside the critical section", async () => {

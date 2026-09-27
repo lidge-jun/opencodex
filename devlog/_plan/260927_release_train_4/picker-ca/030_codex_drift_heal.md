@@ -42,3 +42,5 @@ Verification used a fresh isolated `HOME`, `OPENCODEX_HOME`, `CODEX_HOME`, and `
 - `bun run typecheck`: exit 0, rerun after the final test edit.
 
 The source-ownership map lists `structure/config.md` for `src/codex/` (`structure/INDEX.md:121`), and its scheduler paragraph at `structure/config.md:584` should be updated by the coordinator; that file is outside this lane's write scope.
+
+PR review follow-up: when neither the journaled nor default catalog is usable, drift healing now defers injection and leaves the missing routing roots in place. Catalog-only convergence may create the catalog in that tick, and the next tick retries injection with the new path. The new two-tick regression failed before the fix and passes afterward; isolated scheduler tests passed 19/19, test-layout and file-size ratchet tests passed 27/27, and `bun run typecheck` passed.

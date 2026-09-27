@@ -139,6 +139,9 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
   if (!runtime) return "not-healed";
   const catalogPath = selectDriftHealCatalogPath(JOURNAL_PATH, DEFAULT_CATALOG_PATH, resolveCodexConfigPath);
   if (!current()) return "none";
+  // Keep the missing routing roots visible to the next tick. Catalog-only convergence below
+  // may recreate the file now, but it does not re-inject config.toml in this tick.
+  if (catalogPath === null) return "not-healed";
   await injectCodexConfig(runtime.port, config, {
     catalogPath,
     lockTimeoutMs: TICK_DEADLINE_MS,
