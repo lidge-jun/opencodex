@@ -160,12 +160,12 @@ public enum NativeTrayFormat {
     /// Visible percentage. Floored like the dashboard's `formatQuotaPercent`, so the number never
     /// reaches a threshold the bar color has not: 89.9% reads "89%" on an orange bar, never "90%".
     public static func percentText(_ percent: Double?) -> String {
-        guard let percent = number(percent) else { return "—" }
+        guard let percent = number(percent), percent < Double(Int.max) else { return "—" }
         return "\(Int(percent.rounded(.down)))%"
     }
     /// VoiceOver value for a quota bar, floored the same way as the visible text.
     public static func percentDescription(_ percent: Double?) -> String {
-        guard let percent = number(percent) else { return "Unavailable" }
+        guard let percent = number(percent), percent < Double(Int.max) else { return "Unavailable" }
         return "\(Int(percent.rounded(.down))) percent"
     }
     public static func reset(_ timestamp: Double?, now: Date = Date()) -> String {
