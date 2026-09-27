@@ -45,9 +45,17 @@ export function decodeDevinSignature(stored: string): { signature: string; signa
  *   GPT or Gemini row, where the signature is the only reasoning there is.
  * Any other mix (two signed blocks, a signed block beside unsigned text) has no
  * single attestation for the joined text, so the turn is replayed unsigned.
+ *
+ * An Anthropic signature is never replayed. Cognition streams Claude's thinking
+ * as a summary while the signature covers the original, so the pair fails
+ * validation: live on claude-opus-5-5 the next turn was refused with
+ * `invalid_argument` in 5 of 6 signed replays and 0 of 3 text-only ones. The
+ * text still goes back. A stored signature from before the type was recorded
+ * falls back to the model being called.
  */
 export function devinAssistantReasoning(
   message: OcxAssistantMessage,
+  modelId = "",
 ): { thinking?: string; signature?: string; signature_type?: string } {
   const blocks = message.content.filter(
     (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
@@ -61,7 +69,8 @@ export function devinAssistantReasoning(
   } else if (textBlocks.length <= 1 && signatureOnly.length === 1) {
     stored = signatureOnly[0]!.signature;
   }
-  const decoded = stored ? decodeDevinSignature(stored) : undefined;
+  let decoded = stored ? decodeDevinSignature(stored) : undefined;
+  if (decoded && (decoded.signatureType ?? (/claude/i.test(modelId) ? "anthropic" : undefined)) === "anthropic") decoded = undefined;
   return {
     ...(text ? { thinking: text } : {}),
     ...(decoded ? { signature: decoded.signature } : {}),

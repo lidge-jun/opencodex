@@ -73,6 +73,24 @@ describe("Devin reasoning continuation across turns", () => {
     expect(assistant?.thinking).toBeUndefined();
     expect(assistant?.signature).toBe(openaiSig);
     expect(assistant?.signature_type).toBe("openai");
+    const wire = assistantPrompt(history);
+    expect(wire.has(11)).toBe(false);
+    expect(wire.get(12)).toBe(openaiSig);
+    expect(wire.get(18)).toBe("openai");
+
+    // No text, no tool call: the signature alone still keeps the assistant turn.
+    const bare = mapOcxMessagesToDevin(parseRequest({
+      model: "devin/gemini-3-8-flash",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "go" }] },
+        { type: "reasoning", id: "rs_sig", summary: [], encrypted_content: encodeReasoningEnvelope({ sig: encodeDevinSignature("AY89gemini", "gemini") }) },
+        { role: "user", content: [{ type: "input_text", text: "and then?" }] },
+      ],
+    }));
+    const kept = bare.find(m => m.role === "assistant");
+    expect(kept?.signature).toBe("AY89gemini");
+    expect(kept?.signature_type).toBe("gemini");
+    expect(assistantPrompt(bare).get(12)).toBe("AY89gemini");
   });
 
   test("two late signatures beside one thinking block cannot be paired", () => {
@@ -89,5 +107,26 @@ describe("Devin reasoning continuation across turns", () => {
     const assistant = history.find(m => m.role === "assistant");
     expect(assistant?.thinking).toBe("thought");
     expect(assistant?.signature).toBeUndefined();
+  });
+
+  test("an Anthropic signature is never replayed, only the thinking text", () => {
+    // Cognition streams Claude's thinking as a summary while the signature covers the
+    // original; live, a signed replay was refused with invalid_argument 5 of 6 times.
+    const turn = (sig: string, model: string) => mapOcxMessagesToDevin(parseRequest({
+      model,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "go" }] },
+        { type: "reasoning", id: "rs", summary: [], encrypted_content: encodeReasoningEnvelope({ txt: "summarised thought", sig }) },
+        { type: "function_call", call_id: "call_1", name: "get_time", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_1", output: "12:00" },
+      ],
+    })).find(m => m.role === "assistant");
+    const typed = turn(encodeDevinSignature("EpcBClaude", "anthropic"), "devin/claude-opus-5-5");
+    expect(typed?.thinking).toBe("summarised thought");
+    expect(typed?.signature).toBeUndefined();
+    expect(typed?.signature_type).toBeUndefined();
+    // A signature stored before its type was recorded falls back to the model being called.
+    expect(turn("EpcBClaude", "devin/claude-opus-5-5")?.signature).toBeUndefined();
+    expect(turn(SEALED, "devin/swe-2")?.signature).toBe(SEALED);
   });
 });
