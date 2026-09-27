@@ -19,7 +19,8 @@ client ──HTTPS──▶ Worker ──▶ OpencodexHub (Durable Object) ─�
 This is the first stage of Cloudflare support. `ocx` still runs as a Linux process inside a
 container; it is not yet a Workers-native runtime. The deployment is a data-plane hub: clients call
 `/v1/*` with a key, and the dashboard and management API are not available remotely. It has been
-exercised with `wrangler dev` (local containers), not yet against a production Cloudflare account.
+exercised with `wrangler dev` and on a production Cloudflare account, without routing a request to
+a real model provider.
 :::
 
 ## Requirements
@@ -155,10 +156,10 @@ Set `OCX_SNAPSHOT_INTERVAL_SECONDS` (5–60) to change the upload interval, and 
 | Update to a new release | `git pull`, then `npx wrangler deploy` |
 | Rotate the data token | Repeat the two token lines from [Deploy](#deploy), save the new value, and update your clients |
 
-A running container keeps the secrets it started with; changed secrets reach it the next time it
-starts, for example after it has slept. The Worker also tries to restart the container as soon as it
-sees a changed secret, but that path has not yet been verified on a production account, so after a
-rotation check that a request with the old token gets `401`.
+A running container keeps the secrets it started with. When any secret it receives changes, the
+next request stops the container, which saves its state, and starts a new one with the new values;
+requests in between get `503` with `Retry-After`. After a rotation, confirm that a request with the
+old token gets `401`.
 
 ## Limits
 
