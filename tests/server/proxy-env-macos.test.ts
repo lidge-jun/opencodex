@@ -24,7 +24,10 @@ afterEach(() => {
 });
 
 describe('macOS proxy: "auto" (#5853)', () => {
-  test("enabled schemes and safe IP exceptions reach Bun's lowercase bypass", () => {
+  // Windows environment names are case-insensitive, so NO_PROXY and no_proxy are one variable
+  // there. Cases that need the two bypass lists to differ can only run where they can differ.
+  const caseSensitiveEnv = process.platform !== "win32";
+  test.skipIf(!caseSensitiveEnv)("enabled schemes and safe IP exceptions reach Bun's lowercase bypass", () => {
     process.env.NO_PROXY = "upper.example";
     process.env.no_proxy = "lower.example";
     applyProxyEnvWith(config("auto", "private.example"), {
@@ -68,7 +71,7 @@ describe('macOS proxy: "auto" (#5853)', () => {
     },
   );
 
-  test("without inherited lowercase bypass, configured localhost keeps the uppercase-only route", () => {
+  test.skipIf(!caseSensitiveEnv)("without inherited lowercase bypass, configured localhost keeps the uppercase-only route", () => {
     applyProxyEnvWith(config("auto", ["localhost", "private.example"]), {
       platform: "darwin", macOSReader: () => scutil(both),
     });
@@ -215,14 +218,14 @@ describe('macOS proxy: "auto" (#5853)', () => {
     applyProxyEnvWith(config("auto"), { platform: "darwin", macOSReader: () => { called = true; return scutil(both); } });
     expect(called).toBe(false);
     expect(snapshot()).toEqual(before);
-    if (key.toLowerCase().includes("all")) {
+    if (caseSensitiveEnv && key.toLowerCase().includes("all")) {
       // SOCKS wrapper reads uppercase; Bun's native HTTP transport reads lowercase.
       expect(resolveProxyRoute(new URL("http://upper.example"))).toEqual({ kind: "direct" });
       expect(resolveProxyRoute(new URL("http://lower.example")).kind).toBe("fallback");
     }
   });
 
-  test("mixed inherited SOCKS and HTTP routes keep their distinct bypass decisions", () => {
+  test.skipIf(!caseSensitiveEnv)("mixed inherited SOCKS and HTTP routes keep their distinct bypass decisions", () => {
     process.env.ALL_PROXY = "socks5h://socks.example:1080";
     process.env.HTTP_PROXY = "http://http.example:8080";
     process.env.NO_PROXY = "upper.example";
