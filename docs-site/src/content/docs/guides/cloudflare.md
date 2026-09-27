@@ -37,13 +37,15 @@ bun install
 npx wrangler login
 npx wrangler r2 bucket create opencodex-state
 
-# The data-plane token clients will send. Piping keeps it out of your shell history.
-openssl rand -hex 32 | npx wrangler secret put OPENCODEX_API_AUTH_TOKEN
+# The data-plane token clients will send. History records the command, not the value.
+export OPENCODEX_API_AUTH_TOKEN="$(openssl rand -hex 32)"
+printf '%s' "$OPENCODEX_API_AUTH_TOKEN" | npx wrangler secret put OPENCODEX_API_AUTH_TOKEN
 
 npx wrangler deploy
 ```
 
-Keep a copy of the token in your password manager; Cloudflare will not show it again. Until the
+Save the value of `$OPENCODEX_API_AUTH_TOKEN` in your password manager now; Cloudflare will not show
+it again, and the steps below use it. Until the
 `OPENCODEX_API_AUTH_TOKEN` secret exists, the Worker answers every request with `503` and names the
 missing secret.
 
@@ -150,7 +152,7 @@ Set `OCX_SNAPSHOT_INTERVAL_SECONDS` (5–60) to change the upload interval, and 
 |---|---|
 | Follow Worker logs | `npx wrangler tail` |
 | Update to a new release | `git pull`, then `npx wrangler deploy` |
-| Rotate the data token | `openssl rand -hex 32 \| npx wrangler secret put OPENCODEX_API_AUTH_TOKEN` |
+| Rotate the data token | Repeat the two token lines from [Deploy](#deploy), save the new value, and update your clients |
 
 A running container keeps the secrets it started with. When any secret it receives changes, the
 next request stops the container, which saves its state, and starts a new one with the new values.

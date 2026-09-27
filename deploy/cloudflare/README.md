@@ -8,7 +8,8 @@ between container runs. Setup, client configuration, and limits:
 ```bash
 bun install
 npx wrangler r2 bucket create opencodex-state
-openssl rand -hex 32 | npx wrangler secret put OPENCODEX_API_AUTH_TOKEN
+export OPENCODEX_API_AUTH_TOKEN="$(openssl rand -hex 32)"   # save this value; clients need it
+printf '%s' "$OPENCODEX_API_AUTH_TOKEN" | npx wrangler secret put OPENCODEX_API_AUTH_TOKEN
 npx wrangler deploy
 ```
 
