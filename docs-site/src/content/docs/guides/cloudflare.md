@@ -57,11 +57,13 @@ curl -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
   https://opencodex.<your-subdomain>.workers.dev/healthz
 ```
 
-The Worker answers `401` to any request that does not carry the data token, without starting the
-container, so scanners and wrong keys cannot keep it running. It reads the token from the same places
-`ocx` does: `x-opencodex-api-key`, `Authorization: Bearer`, `x-api-key`, or, for the audio WebSocket,
-the key subprotocol. The comparison takes the same time whatever the key. `ocx` still checks every
-key it receives.
+By default the Worker answers `401` to any request that does not carry the data token, without
+starting the container, so scanners and wrong keys cannot keep it running. It reads the token from the
+same places `ocx` does: `x-opencodex-api-key`, `Authorization: Bearer`, `x-api-key`, or, for the audio
+WebSocket, the key subprotocol. The comparison takes the same time whatever the key. `ocx` still checks
+every key it receives. The exceptions: with `OPENCODEX_API_AUTH_TOKEN` unset it answers `503` naming the
+secret; with `OCX_EDGE_KEY_CHECK=presence` it forwards any non-empty key (see below); and on `/api/*`,
+when you have exposed the management API, it also accepts `OPENCODEX_ADMIN_AUTH_TOKEN`.
 
 The Worker only knows the data token. If you issue further client keys through `apiKeys` in the
 hub's configuration, the Worker would refuse them, so store `OCX_EDGE_KEY_CHECK=presence` as a secret
@@ -233,7 +235,7 @@ the last periodic snapshot. Deployed containers are not affected: Cloudflare sen
   single writer.
 - Each deployment needs its own Worker `name` and R2 `bucket_name` in `wrangler.jsonc`; two
   deployments with the same names in one account overwrite each other.
-- The Worker and container are billed separately from the $5 Workers Paid base; see
-  [Containers pricing](https://developers.cloudflare.com/containers/pricing/).
+- Workers Paid ($5 a month) includes a monthly Containers allowance; container usage above it is
+  billed separately. See [Containers pricing](https://developers.cloudflare.com/containers/pricing/).
 - Cloudflare's Deploy to Cloudflare button does not document support for Containers, so deploy with
   Wrangler as above.
