@@ -32,17 +32,33 @@ export function createToolCallIdReminter(reservedIds: Iterable<string>): (rawId:
     // base: distinct ids sharing it would otherwise each restart at -2 and re-run every probe an
     // earlier base already made, which is quadratic in the number of such ids.
     const prefix = base.slice(0, MAX_TOOL_CALL_ID_LENGTH - 2);
-    for (let n = nextSuffixByPrefix.get(prefix) ?? 2; ; n++) {
+    let n = nextSuffixByPrefix.get(prefix) ?? 2;
+    for (;;) {
       // Hyphen, not underscore: an id that extends another id as `<earlier>_<digits>` is parsed by
       // at least one client as a batch sub-call of `<earlier>`, which pairs the second call's
       // result to the first call. A `-<n>` suffix is in the same id family without that reading.
       const suffix = `-${n}`;
-      const candidate = prefix.slice(0, Math.max(1, MAX_TOOL_CALL_ID_LENGTH - suffix.length)) + suffix;
+      // The domain is the kept prefix of the CANDIDATE, not the fixed 62-char base prefix: the
+      // domain shrinks as the suffix widens (-10 keeps 61 chars, -100 keeps 60), so distinct
+      // 62-char prefixes that share those characters emit identical candidates and must share
+      // one cursor. Keying the cursor on the base prefix would make each of them restart the
+      // search at the same already-occupied candidates — quadratic again at longer suffixes.
+      const keep = Math.max(1, MAX_TOOL_CALL_ID_LENGTH - suffix.length);
+      const domain = prefix.slice(0, keep);
+      const candidate = domain + suffix;
+      // A wider suffix can land in a domain whose cursor is already ahead: resume there, never
+      // backwards, because every probe below that point is known-occupied in this domain.
+      const resume = nextSuffixByPrefix.get(domain);
+      if (resume !== undefined && resume > n) {
+        n = resume;
+        continue;
+      }
       if (!occupied.has(candidate)) {
-        nextSuffixByPrefix.set(prefix, n + 1);
+        nextSuffixByPrefix.set(domain, n + 1);
         occupied.add(candidate);
         return candidate;
       }
+      n++;
     }
   };
 }

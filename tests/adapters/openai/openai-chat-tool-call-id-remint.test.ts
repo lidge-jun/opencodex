@@ -105,6 +105,38 @@ describe("createToolCallIdReminter", () => {
     expect(probes).toBeLessThan(10_000);
   });
 
+  test("suffix widening merges collision domains at the shorter shared prefix", () => {
+    // At suffix -<n> with three digits the candidate keeps only MAX-4=60 characters of the base.
+    // Distinct 62-char prefixes agreeing on those 60 characters emit identical candidates, so a
+    // cursor keyed on the base prefix restarts each of them at -100 — quadratic probes again.
+    const remint = createToolCallIdReminter([]);
+    const originalHas = Set.prototype.has;
+    let probes = 0;
+    Set.prototype.has = function (value) {
+      probes++;
+      return originalHas.call(this, value);
+    };
+
+    const shared = "q".repeat(MAX_TOOL_CALL_ID_LENGTH - 4);
+    const rawIds = Array.from({ length: 300 }, (_, i) => shared + i.toString(36).padStart(2, "0"));
+    const emitted: string[] = [];
+    try {
+      // Two passes put every id into the -10..-99 suffix band; 33 more rounds reach -<3 digits>.
+      for (let round = 0; round < 35; round++) {
+        for (const rawId of rawIds) emitted.push(remint(rawId));
+      }
+    } finally {
+      Set.prototype.has = originalHas;
+    }
+
+    // First occurrences pass through; every repeat must still mint a distinct, conforming id.
+    expect(emitted.slice(0, rawIds.length)).toEqual(rawIds);
+    expect(new Set(emitted).size).toBe(emitted.length);
+    // One pass-through probe per first occurrence plus one probe per minted candidate, not one
+    // per already-occupied slot under the shared domain.
+    expect(probes).toBeLessThan(150_000);
+  });
+
   test("skips a suffix the reserved set already occupies", () => {
     const remint = createToolCallIdReminter(["call-0-0", "call-0-0-2"]);
 
