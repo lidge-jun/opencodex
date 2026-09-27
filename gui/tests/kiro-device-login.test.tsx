@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, createRef, useRef } from "react";
+import { act, createRef, useEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import KiroDeviceLoginDialog from "../src/components/KiroDeviceLoginDialog";
@@ -215,7 +215,7 @@ test("finalizer failed subscriber reloads accounts and shows failure without suc
       fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: async () => { reloads++; },
       fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {}, onLoginSettled: () => { reveals++; },
     });
-    handler = oauth.onNativeLoginSettled;
+    useEffect(() => { handler = oauth.onNativeLoginSettled; });
     return null;
   }
   await act(async () => { root = createRoot(host); root.render(<Harness />); });
@@ -296,7 +296,8 @@ test("two rapid native starts dispatch only one POST", async () => {
   responder = async url => url.endsWith("/api/oauth/login") ? pending.promise : json(view("cancelled"));
   let startLogin: ((method: "builder-id" | "google" | "github") => Promise<void>) | undefined;
   function Harness() {
-    startLogin = useKiroDeviceLogin("", undefined, pollDelay).start;
+    const login = useKiroDeviceLogin("", undefined, pollDelay);
+    useEffect(() => { startLogin = login.start; });
     return null;
   }
   await act(async () => { root = createRoot(host); root.render(<Harness />); });
@@ -387,14 +388,15 @@ test("native outcomes remain visible when roster reload rejects", async () => {
   const t: TFn = (key, vars) => interpolate(en[key], vars);
   function Harness() {
     const aliveRef = useRef(true);
-    handler = useProvidersOAuth({
+    const oauth = useProvidersOAuth({
       apiBase: "", t, aliveRef, accountSets: {}, setAccountSets: () => {}, setBusy: () => {}, setStatus: () => {},
       setLoginInfo: () => {}, setOauthStatus: () => {}, notify: (text, ok) => { notices.push({ text, ok }); },
       fetchConfig: async () => { configReads++; }, fetchOauth: async () => {},
       fetchAccountSets: async () => { reloads++; throw new Error("roster unavailable"); },
       fetchProviderQuotas: async () => { quotaReads++; }, bumpModelsRefresh: () => { modelRefreshes++; },
       onLoginSettled: () => { reveals++; },
-    }).onNativeLoginSettled;
+    });
+    useEffect(() => { handler = oauth.onNativeLoginSettled; });
     return null;
   }
   await act(async () => { root = createRoot(host); root.render(<Harness />); });
