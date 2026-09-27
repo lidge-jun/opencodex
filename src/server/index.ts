@@ -23,7 +23,7 @@ import {
   loopbackCompanionBindError,
   websocketsEnabled,
 } from "../config";
-import { flushConfigDirHardening } from "../config/paths";
+import { flushConfigDirHardeningAndReaps } from "../config/paths";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
@@ -117,7 +117,7 @@ import { setUsageLedgerRetention } from "./usage-ledger-retention";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
-  filterRequestLogs,
+  filterRequestLogs, queryRequestLogs,
   hydrateRequestLogsFromDisk,
   httpStatusForTerminalStatus,
   httpStatusFromTerminalError,
@@ -788,12 +788,12 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
             await backgroundLifecycle.release();
             await releaseNativeMainStartupLifecycle(server);
           } finally {
-            // icacls.exe from hardenConfigDir() holds the config dir open; a caller that
-            // removes the dir right after stop() settles would hit EPERM/EBUSY on Windows
-            // otherwise. Config hardening still flushes when an earlier release rejects. The
-            // spend owner is retained when a listener stop failed because the socket may live.
+            // icacls.exe from hardenConfigDir() holds the config dir open. The caller-facing
+            // hardening deadline can settle before its child exits, so also wait for that
+            // child's reap before stop() promises the directory is removable. The spend owner
+            // is retained when a listener stop failed because the socket may live.
             try { if (listenersStopped) spendLedgerLifecycle.release(); }
-            finally { await flushConfigDirHardening(startupConfigDir); }
+            finally { await flushConfigDirHardeningAndReaps(startupConfigDir); }
           }
         },
       );

@@ -34,6 +34,7 @@ import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRout
 import { desktop3pAlias } from "../claude/desktop-3p";
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
+import { withoutSiblingMarker } from "../codex/sibling-start";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -506,7 +507,8 @@ export async function ensureProxyForClaude(deps: ClaudeProxyEnsureDeps = {}): Pr
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+    // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
+    env: withProcessRuntimeProvenance(withoutSiblingMarker({ ...process.env, OCX_SERVICE: "1" })),
   });
   child.unref();
   const deadline = Date.now() + 8_000;

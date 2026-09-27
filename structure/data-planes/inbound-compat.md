@@ -310,6 +310,20 @@ The [explicit model-capability contract](../config.md#explicit-per-model-capabil
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
+## Claude message threads on translated routes
+
+Claude Code enables its message-threads beta only against first-party Anthropic, so it reaches
+OpenCodex through the first-party intercept. A threaded request carries a `thread` object; a
+`continue` sends only the messages after `previous_message_id` and may leave `system` and `tools`
+to the thread Anthropic stores. `src/server/claude-messages.ts` forwards the request unchanged on
+native passthrough. On the translated path, before compatibility analysis or inference, it
+answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
+`error.details.error_code` is `thread_unsupported_request` and whose request-log error code is
+`claude_thread_unsupported`. A translated `count_tokens` request with a `thread` object gets the
+same 400, because counting the delta would undercount the conversation. Claude Code then resends the turn with the full conversation and keeps
+that model stateless for the session. Translating the delta instead would drop the task,
+instructions and earlier turns without an error.
+
 ## Shared inbound Chat image recognition
 
 `src/chat/image-parts.ts` owns which `messages[].content[]` shapes count as an image

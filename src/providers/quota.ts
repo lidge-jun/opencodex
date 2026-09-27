@@ -67,6 +67,8 @@ import {
 } from "./quota/vendor-probes-oauth";
 import { fetchCommandCodeQuota, fetchKimiQuota, keyQuotaReaderForProvider } from "./quota/vendor-probes-key";
 import { antigravityQuotaDiagnosticIdentity, fetchAntigravityQuota, probeAntigravityUsageQuota } from "./quota/antigravity";
+import { persistKiroAccountState } from "./kiro-account-state-disk";
+import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe";
 
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 export { QUOTA_RESPONSE_MAX_BYTES } from "./quota-wire";
@@ -413,8 +415,6 @@ async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderCo
   if (read.result && typeof read.result !== "symbol") accountReportCurrent.set(read.result, isCurrent);
   return read.result;
 }
-
-
 async function fetchAccountQuota(
   provider: string,
   accountId: string,
@@ -423,16 +423,22 @@ async function fetchAccountQuota(
 ): Promise<AccountQuotaCacheEntry> {
   if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
-  if (provider === "anthropic") hydrateAccountQuotaCache();
+  if (provider === "anthropic" || provider === "kiro") hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, accountId);
   const writerGeneration = captureConfigGeneration();
-  const cached = accountQuotaCache.get(key);
+  const kiroIdentity = provider === "kiro" ? kiroProbeIdentity(accountId) : undefined;
+  const cachedCandidate = accountQuotaCache.get(key);
+  const cached = provider !== "kiro" || cachedCandidate?.identity === kiroIdentity ? cachedCandidate : undefined;
   if (!forceRefresh && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) {
     if (provider === "google-antigravity" && cached.quotaFailure && cached.quotaFailureIsCurrent?.() !== true) return { ...cached, quotaFailure: undefined };
     return provider === "anthropic" ? { ...cached, quota: normalizeAnthropicQuota(cached.quota, Date.now()) } : cached;
   }
   const joinable = accountQuotaInflight.get(key);
-  if (joinable) return joinable;
+  if (joinable) {
+    const joined = await joinable;
+    return provider !== "kiro" || joined.identity === kiroIdentity
+      ? joined : fetchAccountQuota(provider, accountId, true, providerConfig);
+  }
 
   const epoch = explicitAccountEpoch;
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
@@ -448,12 +454,6 @@ async function fetchAccountQuota(
       let quota: ProviderQuota | null;
       let kiroSnapshot: KiroUsageSnapshot | null = null;
       if (provider === "kiro") {
-        // Kiro resolves the bearer and its routing metadata from ONE account-scoped
-        // snapshot. It deliberately does not use getTokenForAccountQuotaProbe: that
-        // helper refuses to refresh a background `local-cli` slot because Anthropic's
-        // lock can adopt a mismatched Claude CLI identity, but Kiro marks every
-        // CLI-imported credential `local-cli`, so the same rule would blank the quota of
-        // every inactive pool account the moment its token expired.
         kiroSnapshot = await fetchKiroUsageSnapshot(await kiroUsageContextForAccount(accountId));
         quota = kiroSnapshot?.quota ?? null;
       } else {
@@ -475,31 +475,29 @@ async function fetchAccountQuota(
         }
       }
       if (!quota) {
-        // Preserve last-good bars and mark unavailable; advance TTL so failures
-        // negative-cache instead of re-probing on every GUI poll.
+        // Preserve last-good bars while negative-caching the failed probe.
         const entry: AccountQuotaCacheEntry = {
           ts: Date.now(),
-          // Settle once for all joiners against observations committed during the probe.
           quota: provider === "anthropic"
             ? normalizeAnthropicQuota(accountQuotaCache.get(key)?.quota, Date.now()) : cached?.quota ?? null,
           unavailable: true,
+          ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
           ...diagnosticFields(),
         };
-        if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+        if (mayCommitAccountQuotaKey(key, writerGeneration) && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
           accountQuotaCache.set(key, entry);
-          if (provider === "kiro") commitKiroAccountUsageState(key, null);
+          if (provider === "kiro") persistKiroAccountState();
           sweepExpiredOnWrite(entry.ts);
         }
         return entry;
       }
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(), quota: provider === "anthropic" ? normalizeAnthropicQuota(quota, Date.now()) : quota,
+        ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
       };
-      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+      if (mayCommitAccountQuotaKey(key, writerGeneration) && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
         accountQuotaCache.set(key, entry);
-        // Exhaustion state rides the SAME commit guard as the quota row: a probe from a
-        // superseded config generation must not publish either half.
-        if (provider === "kiro") commitKiroAccountUsageState(key, kiroSnapshot);
+        if (provider === "kiro") { commitKiroAccountUsageState(key, kiroSnapshot, kiroIdentity); persistKiroAccountState(); }
         sweepExpiredOnWrite(entry.ts);
       }
       return entry;
@@ -510,10 +508,12 @@ async function fetchAccountQuota(
         quota: provider === "anthropic"
           ? normalizeAnthropicQuota(accountQuotaCache.get(key)?.quota, Date.now()) : cached?.quota ?? null,
         unavailable: true,
+        ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
         ...diagnosticFields(),
       };
-      if (mayCommitAccountQuotaKey(key, writerGeneration)) {
+      if (mayCommitAccountQuotaKey(key, writerGeneration) && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
         accountQuotaCache.set(key, entry);
+        if (provider === "kiro") persistKiroAccountState();
         sweepExpiredOnWrite(entry.ts);
       }
       return entry;

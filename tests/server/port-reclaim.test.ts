@@ -1,5 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { reclaimListenPort, type ReclaimListenPortOptions } from "../../src/server/port-reclaim";
+import {
+  ownsIpv4LoopbackListener,
+  parseIpv4LoopbackListenPidsFromNetstat,
+  parseProcLoopbackListenInodes,
+  reclaimListenPort,
+  type ReclaimListenPortOptions,
+} from "../../src/server/port-reclaim";
 import {
   isBareIpv6Address,
   parseTcpQuadsForLocalPort,
@@ -38,6 +44,85 @@ describe("parseListenPidsFromNetstat", () => {
       "tcp        0      0 127.0.0.1:22            0.0.0.0:*               LISTEN      1/sshd",
     ].join("\n");
     expect(parseListenPidsFromNetstat(output, 10100)).toEqual([4242]);
+  });
+});
+
+describe("exact IPv4 loopback listener ownership", () => {
+  test("recorded proc TCP rows keep IPv4 and mapped IPv4 LISTEN inodes, excluding ::1", () => {
+    const tcp = [
+      "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+      "   0: 0100007F:61A8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  501        0 44001 1 0000000000000000 100 0 0 10 0",
+      "   1: 0100007F:61A8 00000000:0000 01 00000000:00000000 00:00000000 00000000  501        0 44002 1 0000000000000000 100 0 0 10 0",
+    ].join("\n");
+    const tcp6 = [
+      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+      "   0: 00000000000000000000000001000000:61A8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 501 0 44003 1 0000000000000000 100 0 0 10 0",
+      "   1: 0000000000000000FFFF00000100007F:61A8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 501 0 44004 1 0000000000000000 100 0 0 10 0",
+    ].join("\n");
+    expect(parseProcLoopbackListenInodes(tcp, tcp6, 25000)).toEqual(["44001", "44004"]);
+  });
+
+  test("Linux maps the exact loopback inode through the expected PID's fd without a tool", async () => {
+    const tcp = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n"
+      + "0: 0100007F:61A8 00000000:0000 0A 00000000:00000000 00:00000000 00000000 501 0 44001 1\n";
+    const tcp6 = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n"
+      + "0: 00000000000000000000000001000000:61A8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 501 0 44002 1\n";
+    const paths: string[] = [];
+    const io = {
+      platform: "linux" as const,
+      readProc: async (path: string) => path.endsWith("tcp6") ? tcp6 : tcp,
+      listFds: async (path: string) => { paths.push(path); return ["3", "4"]; },
+      readFdLink: async (path: string) => path.endsWith("/4") ? "socket:[44001]" : "anon_inode:[eventpoll]",
+      run: async () => { throw new Error("external process lookup must not run on Linux"); },
+    };
+    expect(await ownsIpv4LoopbackListener(25000, 42, io)).toBe(true);
+    expect(paths).toEqual(["/proc/42/fd"]);
+    expect(await ownsIpv4LoopbackListener(25000, 43, { ...io,
+      readFdLink: async () => "socket:[44002]" })).toBe(false);
+  });
+
+  test("Windows netstat ignores a foreign IPv6 listener on the same numeric port", () => {
+    const rows = [
+      "  TCP    127.0.0.1:25000        0.0.0.0:0              LISTENING       42",
+      "  TCP    [::1]:25000            [::]:0                 LISTENING       99",
+    ].join("\n");
+    expect(parseIpv4LoopbackListenPidsFromNetstat(rows, 25000)).toEqual([42]);
+  });
+
+  test.skipIf(process.platform !== "darwin")("a foreign ::1 listener does not veto the owned IPv4 socket", async () => {
+    const ipv4 = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("v4") });
+    const port = ipv4.port!;
+    const child = Bun.spawn([process.execPath, "--eval",
+      'Bun.serve({ hostname: "::1", port: Number(process.env.OCX_TEST_PORT), fetch: () => new Response("v6") }); await new Promise(() => {});',
+    ], { env: { ...process.env, OCX_TEST_PORT: String(port) }, stdout: "ignore", stderr: "pipe" });
+    try {
+      let ready = false;
+      for (let attempt = 0; attempt < 30 && !ready; attempt += 1) {
+        if (child.exitCode !== null) throw new Error("IPv6 listener exited before binding");
+        ready = await fetch(`http://[::1]:${port}/`).then(response => response.status === 200).catch(() => false);
+        if (!ready) await Bun.sleep(30);
+      }
+      expect(ready).toBe(true);
+      expect(await ownsIpv4LoopbackListener(port, process.pid)).toBe(true);
+      expect(await ownsIpv4LoopbackListener(port, child.pid)).toBe(false);
+    } finally {
+      child.kill("SIGTERM");
+      await child.exited;
+      ipv4.stop(true);
+    }
+  });
+
+  test.skipIf(process.platform !== "linux")("finds its own LISTEN inode with lsof and netstat absent from PATH", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = "/no-lsof-or-netstat";
+      expect(await ownsIpv4LoopbackListener(server.port!, process.pid)).toBe(true);
+    } finally {
+      server.stop(true);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
   });
 });
 

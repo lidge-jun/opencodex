@@ -180,6 +180,14 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 ## Windows service wrapper and incomplete updates
 
+The scheduler wrapper retries child exits, including zero, after five seconds. Only the
+opt-in CLI stay-out code ends it successfully; missing Bun/CLI paths still exit with
+installation error 3. Explicit service stop terminates the wrapper itself.
+`src/service/windows-wrapper-exit.ts` defines the opt-in contract: new wrappers set
+`OCX_WINDOWS_WRAPPER_PROTOCOL=1`, and all three CLI live-owner exits return 42 in that
+service context. The wrapper translates 42 into a successful exit; legacy service
+contexts retain exit 0.
+
 > Decision record: [ADR-0082](../decisions/ADR-0082-windows-service-wrapper-and-incomplete-updates.md)
 
 ## GitHub workflow map

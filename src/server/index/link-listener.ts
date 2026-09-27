@@ -29,6 +29,10 @@ export type LinkListenerStatus = {
   reason: string | null;
 };
 
+export function linkListenerOwnsTarget(status: LinkListenerStatus): boolean {
+  return status.state === "listening" && status.port !== null;
+}
+
 export interface LinkListenerLifecycle<T> {
   ownsListener(server: Server<T>): boolean;
   start(ctx: LinkListenerStartContext<T>): void;
@@ -93,6 +97,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       bound = serve({
         hostname: "127.0.0.1",
         port: requestedPort,
+        // The public listener's idle limit (serve-options.ts). Bun's 10 s default would cut a
+        // relayed turn that the Home holds or that streams with a long gap.
+        idleTimeout: 255,
         maxRequestBodySize: startContext.maxRequestBodySize,
         fetch: (req: Request, server: Server<unknown>) => startContext!.dispatch(req, server as Server<T>),
       } as Parameters<typeof Bun.serve>[0]);

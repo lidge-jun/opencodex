@@ -184,6 +184,8 @@ working. OpenCodex only writes two variables into the `env` block of `~/.claude/
 
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels.
 
+Subagents on routed (non-Claude) models do not use Claude Code's server-side message threads, because only Anthropic stores that state. OpenCodex declines a threaded request for such a model, and Claude Code resends that turn, and the turns after it, with the full conversation.
+
 Mode is persisted as `claudeCode.desktopMode`. Installs that already applied either mode retain it,
 including first-party installs from before the mode was persisted. An explicit mode takes priority;
 otherwise an owned selected gateway row, an applied gateway fingerprint, or owned first-party

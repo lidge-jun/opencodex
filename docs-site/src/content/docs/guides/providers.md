@@ -201,7 +201,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
@@ -284,8 +284,10 @@ desktop and the wrong one in two common cases: you need a different browser prof
 identity, a second account), or the dashboard is open against a proxy running somewhere else.
 
 Every login surface shows the authorization URL with a copy button, the device code when the
-provider issues one, and a field to paste the redirect URL or authorization code back. So you can
-always finish a login by hand.
+provider issues one, and the current instructions. Browser callback flows also show a field to
+paste the redirect URL or authorization code back. During device approval that field is hidden:
+enter the displayed code on the provider's verification page instead. If the provider switches
+to manual input, the dashboard replaces the old code and instructions on its next status poll.
 
 To stop the proxy from opening a browser at all, tick **Don't open a browser on the proxy machine**
 beside the login button, or set it permanently:
@@ -302,7 +304,7 @@ Two cases behave differently, and it is worth knowing which you are in:
 
 - **A different browser profile on the same machine** works with the copied link alone. The
   loopback callback on `127.0.0.1` still completes the flow.
-- **A browser on a different machine** also needs the paste fallback, because the redirect URI is
+- **A browser callback flow on a different machine** also needs the paste fallback, because the redirect URI is
   still `http://127.0.0.1:<port>/callback` on the proxy's host. Finish the login there, then paste
   the redirect URL (or just the code) back into the dashboard or `ocx account code`.
 
@@ -402,9 +404,18 @@ those providers, but `ocx login codex --reauth` routes to their account-pool rea
 the dashboard Codex account pool also performs. See
 [`ocx status` / `ocx doctor`](/reference/cli/) in the CLI reference.
 
+### Kiro request credits
+
+When Kiro emits credit metering, request logs preserve the reported spend as
+`usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
+token counts may still be estimated, and the credit value does not replace USD cost estimates.
+Completion fallback requests add their reported credits. An absent value means Kiro did not
+report credit usage; an explicit zero means it reported no spend.
+
 ### Kiro credential import
 
-Kiro login expects the Kiro CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
+The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
+The Kiro CLI choice and `ocx login kiro` import path use the CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
 on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then sign in with `kiro-cli login`.
 Without a `kiro-cli` session, `ocx login kiro` falls
 back to a pasted access token or the `KIRO_ACCESS_TOKEN` environment variable.
@@ -429,17 +440,19 @@ After a successful import, opencodex persists the imported credential to
 Keep these variables and the selected database private. Do not attach database files or raw login
 diagnostics to bug reports.
 
-**Add account** is a separate write workflow: it snapshots the current session, logs `kiro-cli` out,
+For the **Kiro CLI** choice, **Add account** is a separate write workflow: it snapshots the current session, logs `kiro-cli` out,
 and imports the fresh browser login. If the login is cancelled or fails, including while OpenCodex
 persists the credential, rollback replaces the Kiro CLI database and removes its current WAL, SHM,
 and journal sidecars before publishing the previous session snapshot.
 
-Because that rollback is only possible from a snapshot, **Add account** refuses to sign `kiro-cli`
+Because that rollback is only possible from a snapshot, the Kiro CLI **Add account** choice refuses to sign `kiro-cli`
 out when a session store is present but cannot be captured (unreadable file, mismatched schema, or
 an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redirect import reads away
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review.
+The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ## 3. API-key catalog
 
@@ -766,6 +779,9 @@ including add-account and reauthentication. A raw admin token or forged GUI head
 `403 oauth_consent_required` before a credential is read or a grant starts. This gate uses
 the server-resolved session principal, not a separately recorded warning-checkbox receipt.
 Direct `ocx login meta-muse` and other OAuth providers keep their existing login policies.
+The management OAuth provider list therefore omits Meta Muse for raw-admin-token dashboards;
+open a session-authenticated dashboard to use that login flow. This changes discovery only,
+not the admission checks on login start or manual continuation.
 
 Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use
@@ -889,10 +905,12 @@ OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code C
   - Global: [CodeBuddy Global API Keys](https://www.codebuddy.ai/profile/keys)
   - CN: [CodeBuddy CN API Keys](https://copilot.tencent.com/profile/keys)
 - **Region Isolation:** `codebuddy` and `codebuddy-cn` use separate canonical endpoints (`https://www.codebuddy.ai` and `https://www.codebuddy.cn`) and isolated child environments (`CODEBUDDY_INTERNET_ENVIRONMENT=public` vs `internal`). Credentials are strictly region-scoped and never exchanged across environments. Overriding the canonical base URL fails closed.
+- **Model Discovery:** the proxy requests the CodeBuddy product configuration (`GET {baseUrl}/v3/config`) with the configured key as the `X-API-Key` header, and the roster in that answer is the authoritative roster of discovered models: it is the key's own account configuration, so it is proven to belong to the key — a different or wrong key answers the anonymous envelope with no roster instead of another account's models. The authenticated roster is the same list the CLI prints for `--model` (the "Currently supported" line of a signed-in CLI), can differ from the static manifest bundled with the CLI, and the vendor default selectors (`default` for CN, `default-model` for Global) never appear in it but remain callable: the catalog retains them during live discovery and on every fallback path. On start/sync the proxy binds the cached roster to an irreversible fingerprint of the configured key, so a key switch never observes a roster cached for the previous key, and degrades to the stale provider/key-fingerprint-scoped cache, then to the static seed in `src/providers/codebuddy-models.ts`, when the key does not authenticate or the request fails. Discovery failure logs contain only a category and HTTP status, without the gateway's message or a raw transport exception.
+  The credentialed discovery request does not follow redirects; a 3xx response degrades the roster without forwarding the key to another origin.
 - **Tool Ownership and the Tool Bridge:** The CLI is always spawned with `--tools ""` and `--strict-mcp-config`, so it has no built-in or user-configured tools of its own. When a request carries a Codex tool catalog, the provider arms a capture-only MCP bridge: the validated catalog and MCP config are written to a private temp dir, the CLI is launched with `--mcp-config` and an exact `--allowedTools` list, and the `system/init` frame must report exactly that bridge server as connected or the turn fails closed. The bridge advertises the Codex tools and captures proposed calls but never executes anything: a completed tool-call batch is returned as `function_call` items (names mapped back to the request's wire names, at most 16 calls per assistant message), the process tree is terminated at `message_stop`, and the external Codex client alone performs approval, sandboxing, and execution. Tool results come back as the next request's input, and the conversation continues. Requests without tools keep the plain text-and-reasoning shape. If the CLI writes an unquoted DSML `calls` control line followed by a `functions.*` invoke control line into text or reasoning, OpenCodex refuses the turn instead of forwarding the scaffold or interpreting it as an executable call. DSML discussed or quoted in prose, inline code, fenced code, or source examples remains ordinary answer text.
-- **Entitlements and Billing:** The provider uses the same vendor-documented CodeBuddy account/CLI authentication surface. Availability and billing of free, promotional, trial, or subscription credits remain determined by the user's CodeBuddy account entitlement.
 - **Tool Choice Enforcement:** When a request specifies `tool_choice: "required"` or selects a specific named tool, the bridge expects a tool call from the model. If the CLI completes the turn with plain text instead of capturing a tool call, OpenCodex fails closed with a 502 `tool_call_required` error rather than returning an invalid text completion.
 - **Governance Status:** Whether routing this vendor automation surface behind a proxy for a third-party agent satisfies CodeBuddy's acceptable-use terms is an open question flagged for maintainer security review (see the governance note in the provider registry entry). Treat this provider as pending that review, and keep the tool bridge's ownership boundary in mind: the nested CLI advertises tools but never executes them, and approval, sandboxing, and execution remain with the external Codex client.
+- **Entitlements and Billing:** The provider uses the same vendor-documented CodeBuddy account/CLI authentication surface. Availability and billing of free, promotional, trial, or subscription credits remain determined by the user's CodeBuddy account entitlement.
 
 ### Official Qoder CLI (Global & CN)
 

@@ -19,12 +19,13 @@ pub fn selected(settings: &Value, row: &Value) -> bool {
     let provider = text(row, "provider");
     let model = text(row, "model");
     !hidden(settings, provider)
-        && settings["models"].as_array().map_or(true, |models| {
-            models.iter().any(|item| {
+        && match settings["models"].as_array() {
+            None => true,
+            Some(models) => models.iter().any(|item| {
                 item.as_str()
                     .is_some_and(|item| item == model || item == format!("{provider}/{model}"))
-            })
-        })
+            }),
+        }
 }
 
 const TOTAL_KEYS: [&str; 9] = [

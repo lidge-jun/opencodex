@@ -44,6 +44,7 @@ import {
 } from "../../responses/namespace-tool-compat";
 import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
+import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-responses/muse-tool-choice";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
 import {
@@ -138,7 +139,6 @@ import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -194,6 +194,7 @@ export async function preparePassthroughExchange(
     | "refreshResolvedOAuthSelection"
     | "replayOAuthCredentialSnapshot"
     | "genericFailovers"
+    | "genericFailoverLimit"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend"
     | "selectionIsCurrent"
@@ -337,6 +338,7 @@ export async function preparePassthroughExchange(
         error instanceof NamespaceToolCollisionError
         || error instanceof XaiToolSchemaCompatibilityError
         || error instanceof RoutedCustomToolCompatError
+        || error instanceof MuseToolChoiceCompatibilityError
       ) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
       }
@@ -1319,7 +1321,7 @@ export async function preparePassthroughExchange(
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
      && transportState.genericFailoverAccountId
-      && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && transportState.genericFailovers < transportState.genericFailoverLimit
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
       // The roster cap above is one half of the bound; the request's shared budget is the

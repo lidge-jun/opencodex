@@ -61,6 +61,30 @@ embedded dashboard and your normal browser. The tray also provides update checks
 
 On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
 
+## Keeping the proxy running
+
+The app keeps the proxy it started running. When that proxy restarts itself — after
+**Connect as Child**, a memory restart from the dashboard, or disconnecting a Child — the app
+starts the new proxy on the same port, usually within about a second (a few seconds when the proxy
+already restarted in the last two minutes), and reloads the open dashboard, so the
+tray's Stop still reaches it and Quit still ends it. If the proxy exits without being asked (a
+crash, or `ocx stop` from a terminal), the app starts it again after a short delay that grows from
+3 to 30 seconds while the proxy keeps failing. If the proxy stops answering on its port, the app
+notices within about 15 seconds and recovers the same way; for a proxy it did not start (a
+background service, or one you started yourself), it first waits about a minute for that proxy to
+come back. While recovering, it never stops or replaces a proxy that something else already runs on
+that port; it attaches to that one instead, without asking to take it over. That includes a Child's
+proxy that a background service restarted after **Connect as Child**: the app attaches to it and
+shows the Child's dashboard. If the port is held by something the app cannot use, such as a proxy
+bound to an address other than `127.0.0.1`, the app stops retrying and waits for that to change. A
+recovery that finishes while the update page is open leaves that page on screen.
+
+The tray's **Stop proxy** and **Quit** keep the proxy stopped. The dashboard's own **Stop** button
+does not stop a proxy the app runs, because the app would start it again: it says so and changes
+nothing. What the app decided and why is
+recorded in `runtime-supervisor.log` in the app's log directory (`~/Library/Logs/com.opencodex.desktop`
+on macOS).
+
 ## Usage in the tray
 
 On macOS and Windows, click the tray icon to open a compact usage window. The tray's
@@ -103,7 +127,8 @@ When the Tauri updater finds a newer app version, a blue dot appears on the macO
 In the desktop app, choose the dashboard's update button to open the app's update page.
 There you can check again, install a pending signed update, or return to the dashboard.
 The same install action is available from the tray menu. If installation fails, the
-pending update remains available for retry. This page also works on Linux when the
+pending update remains available for retry. The app also brings back the proxy it stopped for
+the install, so a failed update does not leave Codex without one. This page also works on Linux when the
 desktop has no tray icon. A normal browser dashboard manages the package installation
 on that proxy instead.
 

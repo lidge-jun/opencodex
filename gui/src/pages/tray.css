@@ -25,6 +25,8 @@ html.tray-document {
   --tray-fill: rgba(235, 235, 245, 0.11);
   --tray-fill-strong: rgba(235, 235, 245, 0.18);
   --tray-accent: #32d74b;
+  --tray-warn: #ffd60a;
+  --tray-critical: #ff453a;
   --tray-alert: #ff9f8f;
   --tray-radius: 12px;
   --tray-numerals: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -147,7 +149,10 @@ html.tray-document[data-tray-vibrancy='on'] {
 }
 
 .tray-provider + .tray-provider { margin-top: 12px; }
-.tray-provider h2 { margin-bottom: 4px; }
+.tray-provider h2 { margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+/* The dashboard's own provider mark, shrunk to the heading; the native panel shows the same file. */
+.tray-provider-icon.provider-icon { width: 18px; height: 18px; border-radius: 4px; }
+.tray-provider-icon img, .tray-provider-icon .provider-icon-mask { width: 12px; height: 12px; }
 .tray-account { padding-left: 10px; border-left: 1px solid var(--tray-separator); margin-top: 7px; }
 .tray-account-name {
   display: flex;
@@ -161,6 +166,15 @@ html.tray-document[data-tray-vibrancy='on'] {
   margin-bottom: 4px;
 }
 .tray-account-meta { flex-shrink: 0; color: var(--tray-label-tertiary); font-size: 10px; }
+.tray-account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tray-active { color: var(--tray-accent); }
+.tray-exhausted { color: var(--tray-warn); }
+/* "Use" appears on hover or keyboard focus, as in the native panel, and keeps its space so the
+   row never shifts; screens without hover always show it. */
+.tray-page .tray-use { opacity: 0; margin-right: 6px; padding: 0 5px; font-size: 10px; text-decoration: none; border: 1px solid var(--tray-separator); color: var(--tray-label-secondary); }
+.tray-account:hover .tray-use, .tray-page .tray-use:focus-visible { opacity: 1; }
+.tray-page .tray-use:disabled { cursor: default; }
+@media (hover: none) { .tray-page .tray-use { opacity: 1; } }
 .tray-account-email { color: var(--tray-label-tertiary); font-size: 10px; margin: -2px 0 4px; }
 
 .tray-quota { display: grid; grid-template-columns: 94px 32px minmax(35px, 1fr) 78px; align-items: center; gap: 7px; margin-top: 4px; font-size: 10px; }
@@ -169,6 +183,9 @@ html.tray-document[data-tray-vibrancy='on'] {
 .tray-quota time { text-align: right; white-space: nowrap; color: var(--tray-label-tertiary); overflow: hidden; text-overflow: ellipsis; }
 .tray-bar { height: 4px; background: var(--tray-fill-strong); overflow: hidden; border-radius: 2px; }
 .tray-bar i { display: block; height: 100%; background: var(--tray-accent); border-radius: inherit; }
+/* The dashboard strip's thresholds: 70% warns, 90% is critical. */
+.tray-bar--warn i { background: var(--tray-warn); }
+.tray-bar--critical i { background: var(--tray-critical); }
 
 .tray-missing { color: var(--tray-label-tertiary); font-size: 11px; }
 .tray-error { color: var(--tray-alert); font-size: 11px; }

@@ -45,7 +45,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|alias|main> [--json]
   ocx account resume <provider> <id|alias|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <id|alias|main> --yes [--json]
   ocx account clear-cooldown <provider> <id|alias|main> [--json]
@@ -961,7 +961,9 @@ async function poolSetting(
       console.log(JSON.stringify(payload, null, 2));
     } else {
       if (field === "strategy" && autoSwitchThreshold !== undefined) {
-        const thresholdSummary = strategy === "round-robin"
+        const thresholdSummary = strategy === "least-loaded"
+          ? "fewest active requests"
+          : strategy === "round-robin"
           ? "threshold not used"
           : autoSwitchThreshold > 0
           ? (strategy === "fill-first"

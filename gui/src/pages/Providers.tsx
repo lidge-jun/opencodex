@@ -25,6 +25,7 @@ import { useProviderModelsNotice } from "./use-provider-models-notice";
 import { navigateHash } from "../hash-routing";
 import { JEV_AUTO_CREATE_HASH } from "../app-routing";
 import { useProviderSettingsDeepLink } from "./providers-deep-link";
+import { subscribeKiroDeviceFinal } from "../kiro-device-login-finalizer";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
 // oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
@@ -470,12 +471,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth } = useProvidersOAuth({
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
     onLoginSettled: onProviderLoginSettled,
   });
+  const nativeSettledRef = useRef(onNativeLoginSettled);
+  useEffect(() => { nativeSettledRef.current = onNativeLoginSettled; }, [onNativeLoginSettled]);
+  useEffect(() => subscribeKiroDeviceFinal(apiBase, outcome => {
+    void nativeSettledRef.current("kiro", outcome).catch(() => {
+      // The handler owns the outcome notice and catches expected roster errors;
+      // an unexpected callback failure must not become an unhandled rejection.
+    });
+  }), [apiBase]);
 
   const { removeProvider, confirmRemoveProvider, setProviderDisabled, setDefaultProvider, updateProvider } = useProvidersCrud({
     apiBase, t, removeBusyRef, workspaceSelected, setWorkspaceSelected, setRemoveConfirmName,
@@ -643,6 +652,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             loginHint={loginInfo}
             authHandlers={{
               onLogin: requestLoginOAuth,
+              onNativeLoginSettled,
               onCancelLogin: cancelLoginOAuth,
               onLogout: logoutOAuth,
               onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),

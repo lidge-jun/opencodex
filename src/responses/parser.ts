@@ -27,6 +27,7 @@ import { isObj, inputContentParts, outputTextOf, outputToToolResultContent, tool
 import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools";
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
+import { normalizeVisualizationContext } from "./visualization-directives";
 
 /**
  * Wrap a remembered proxy-side signature as provider metadata for a replayed tool call.
@@ -644,7 +645,9 @@ export function parseRequest(
   return {
     modelId: data.model,
     ...(data.previous_response_id ? { previousResponseId: data.previous_response_id } : {}),
-    context,
+    // Codex App visualization references in the private-use form are invisible to some models;
+    // hand every model the app's ASCII directive instead (visualization-directives.ts).
+    context: normalizeVisualizationContext(context),
     stream: data.stream === true,
     options,
     _rawBody: body,

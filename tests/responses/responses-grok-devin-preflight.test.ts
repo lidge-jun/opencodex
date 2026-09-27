@@ -1,15 +1,18 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { saveCredential } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../src/lib/errors";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome } from "../helpers/temp-home";
 
 const resolver = await import("../../src/server/adapter-resolve");
 const originalResolve = resolver.resolveAdapter;
+// A snapshot, not the live namespace: mock.module rewrites that namespace in place.
+const originalResolverModule = { ...resolver };
 let events: AdapterEvent[] = [];
 let calls = 0;
 let blockedRun: ProviderAdapter["runTurn"];
@@ -40,6 +43,7 @@ let release: (() => void) | undefined;
 beforeEach(async () => {
   home = createTempHome("ocx-grok-devin-preflight-");
   release = acquireOwnedSpendHome();
+  clearGenericFailoverHealth();
   calls = 0;
   events = [limit];
   blockedRun = undefined;
@@ -48,10 +52,16 @@ beforeEach(async () => {
     expires: Date.now() + 3_600_000, accountId: "fixture",
   });
 });
+// Bun keeps a module mock for the rest of the process. Without this, every later file in a
+// non-isolated run resolves Devin through the synthetic rate-limited adapter above.
+afterAll(() => {
+  mock.module("../../src/server/adapter-resolve", () => originalResolverModule);
+});
 afterEach(() => {
   try {
     release?.();
   } finally {
+    clearGenericFailoverHealth();
     home.remove();
   }
 });
@@ -115,19 +125,119 @@ test.each([true, false])("pre-output 429 preserves metered usage (stream=%s)", a
   expect(requestLog.usage).toEqual(usage);
 });
 
-test.each([true, false])("pre-output 429 settles durable spend in usage.jsonl (stream=%s)", async stream => {
+test.each([true, false])("pre-output 429 persists bound usage in the usage journal (stream=%s)", async stream => {
   const usage = { inputTokens: 23, outputTokens: 5, totalTokens: 28 };
   events = [{ ...limit, usage }];
   expect((await run({ stream })).status).toBe(429);
-  // handleResponses only populates the log context; the route layer's addFinalRequestLog is the
-  // seam that settles the spend tracker and appends usage.jsonl. Drive it with this request's
-  // context so the durable row proves the bound usage survives finalization.
+  // Exercise usage-journal finalization with this request's bound metering context.
+  // The durable row proves usage survives logging, not that a separate API-key budget
+  // reservation was settled. This preflight refusal returns HTTP before starting SSE.
   addFinalRequestLog(`preflight-usage-${stream}`, Date.now(), requestLog, 429, { closeReason: "non_stream" });
   const journalPath = join(home.root, "usage.jsonl");
   expect(existsSync(journalPath)).toBe(true);
   const rows = readFileSync(journalPath, "utf8").trim().split("\n").filter(Boolean)
     .map(line => JSON.parse(line) as { usage?: typeof usage });
   expect(rows.at(-1)?.usage).toMatchObject({ inputTokens: 23, outputTokens: 5 });
+});
+
+test("buffered cooldown heartbeat keeps a final refusal as HTTP 429", async () => {
+  events = [{ type: "heartbeat", preflightReady: true }, limit];
+
+  const response = await run({ stream: false });
+
+  expect(response.status).toBe(429);
+  expect(response.headers.get("retry-after")).toBe("60");
+  expect(calls).toBe(1);
+});
+
+test.each(["codex", "grok"] as const)("%s cooldown starts SSE before a later 429 rotates to a second account", async surface => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  const started = Promise.withResolvers<void>();
+  const continueTurn = Promise.withResolvers<void>();
+  blockedRun = async (_parsed, _incoming, emit) => {
+    if (calls === 1) {
+      emit({ type: "heartbeat", preflightReady: true });
+      started.resolve();
+      await continueTurn.promise;
+      emit(limit);
+      return;
+    }
+    emit({ type: "text_delta", text: "alternate answer" });
+    emit({ type: "done" });
+  };
+
+  const response = await waitForPreflightResponse(
+    run({ surface, oauthFailoverEnabled: true }), started.promise, () => continueTurn.resolve(),
+  );
+  const body = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(body).toContain("alternate answer");
+  expect(body).not.toContain("rate_limit_exceeded");
+  expect(body).toContain("response.completed");
+});
+
+test("a final cooldown refusal after SSE starts remains an in-stream error", async () => {
+  events = [{ type: "heartbeat", preflightReady: true }, limit];
+
+  const response = await run();
+  const body = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(body).toContain("response.failed");
+  expect(calls).toBe(1);
+});
+
+test("a replay-unsafe heartbeat after cooldown readiness forbids account rotation", async () => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  events = [
+    { type: "heartbeat", preflightReady: true },
+    { type: "heartbeat", replayUnsafe: true },
+    limit,
+  ];
+
+  const response = await run({ surface: "codex", oauthFailoverEnabled: true });
+
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("response.failed");
+  expect(calls).toBe(1);
+});
+
+test("a timed-out preflight can rotate a later pre-output 429", async () => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  const started = Promise.withResolvers<void>();
+  const continueTurn = Promise.withResolvers<void>();
+  blockedRun = async (_parsed, _incoming, emit) => {
+    if (calls === 1) {
+      started.resolve();
+      await continueTurn.promise;
+      emit(limit);
+      return;
+    }
+    emit({ type: "text_delta", text: "after timeout" });
+    emit({ type: "done" });
+  };
+
+  const response = await waitForPreflightResponse(
+    run({ stallTimeoutSec: 1, oauthFailoverEnabled: true }), started.promise, () => continueTurn.resolve(),
+  );
+  const body = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(body).toContain("after timeout");
+  expect(body).toContain("response.completed");
 });
 
 test.each([false, true])("first text is replayed once and later errors stay SSE (failure=%s)", async failure => {

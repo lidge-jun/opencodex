@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { runWebSearch as runOpenAiWebSearch } from "../../src/web-search/executor";
 import { listOpenAiForwardSidecarCandidates } from "../../src/providers/openai-sidecar";
 import type { OcxConfig } from "../../src/types";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
+afterAll(() => { globalThis.fetch = originalFetch; });
 
 function testConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return {

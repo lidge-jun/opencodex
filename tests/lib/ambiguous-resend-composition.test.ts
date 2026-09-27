@@ -327,7 +327,9 @@ describe("one resend budget across composed recovery legs", () => {
     let callSites = 0;
     for await (const relative of new Bun.Glob("**/*.ts").scan({ cwd: srcDir })) {
       const source = readFileSync(join(srcDir, relative), "utf8");
-      for (const match of source.matchAll(/refetchAfterProtocolSafeReset\(/g)) {
+      // The zero-output wrapper forwards its caller's options to the helper, so its own call
+      // sites are post-header replacements too and must carry the gate themselves.
+      for (const match of source.matchAll(/(?:refetchAfterProtocolSafeReset|wrapWithZeroOutputRefetch)\(/g)) {
         const start = match.index ?? 0;
         // The declaration itself is not a call site, and the import names it without one.
         if (/\bfunction\s+$/.test(source.slice(Math.max(0, start - 24), start))) continue;

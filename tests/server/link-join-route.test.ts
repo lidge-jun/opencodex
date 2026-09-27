@@ -1,10 +1,22 @@
 import { describe, expect, test, spyOn } from "bun:test";
-import { ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { chooseJoinTunnelPort, ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../../src/link/ports";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { SshRunner } from "../../src/link/ssh-runner";
+import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 
 const LINK_ID = "lnk_0123456789abcdef";
+const REVOKE_COMMAND = quoteRemote(remoteOcxArgv(["link", "revoke", "--link-id", LINK_ID]));
+
+/** The issue command up to its variable arguments, wrapped in the remote PATH prelude. */
+function isWrappedIssue(argv: readonly string[]): boolean {
+  return (argv.at(-1) ?? "").startsWith(`${quoteRemote(remoteOcxArgv(["link", "issue", "--alias"]))} `);
+}
+
+function revokeCalls(calls: readonly string[][]): string[][] {
+  return calls.filter(argv => argv.at(-1) === REVOKE_COMMAND);
+}
 const API_KEY_ID = "link-key-1";
 const KEY = `ocx_data_${"a".repeat(40)}`;
 const FINGERPRINT = `SHA256:${"a".repeat(32)}`;
@@ -13,7 +25,7 @@ function runnerFor(calls: string[][], issueResult = true): SshRunner {
   return {
     run: async argv => {
       calls.push([...argv]);
-      if (argv.some(value => value.includes("issue"))) {
+      if (isWrappedIssue(argv)) {
         return issueResult
           ? { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" }
           : { code: 1, stdout: "", stderr: "failed" };
@@ -64,11 +76,16 @@ function routeState(confirmed = true): LinkRouteState {
   };
 }
 
+const CONFIG_PORT = 10100;
+
 function context(options: {
   role?: "standalone" | "hub" | "client";
   principal?: ManagementContext["principal"];
   paired?: boolean;
+  current?: boolean;
   issuance?: ManagementContext["guiSessionIssuance"];
+  trustedLoopback?: boolean;
+  livePort?: number;
   body?: unknown;
   deps?: Record<string, unknown>;
 } = {}): ManagementContext {
@@ -81,12 +98,12 @@ function context(options: {
   return {
     req,
     url: new URL(req.url),
-    config: { runtimeRole: options.role ?? "standalone" } as ManagementContext["config"],
-    deps: options.deps ?? {},
+    config: { runtimeRole: options.role ?? "standalone", port: CONFIG_PORT } as ManagementContext["config"],
+    deps: { liveListenPort: () => options.livePort ?? CONFIG_PORT, ...options.deps },
     version: "test",
     principal: options.principal,
-    sessionControl: { isPaired: () => options.paired === true },
-    trustedLoopbackIngress: true,
+    sessionControl: { isPaired: () => options.paired === true, isCurrent: () => options.current ?? true, revokeCurrent: () => true },
+    trustedLoopbackIngress: options.trustedLoopback ?? true,
     guiSessionIssuance: options.issuance ?? null,
     convergeCodexCatalog: async () => ({ status: "unchanged" } as never),
     syncClaudeAgentDefsBestEffort: async () => {},
@@ -108,6 +125,89 @@ describe("client initiated link join", () => {
       expect(response?.status).toBe(409);
       expect(await response?.json()).toMatchObject({ error: { code: "standalone_required" } });
     }
+  });
+
+  test("admits the current loopback dashboard session of a standalone on trusted loopback ingress", async () => {
+    // Turning a Child on from its own dashboard: the local session joins, while stale sessions,
+    // untrusted ingress and other runtime roles are refused before a join starts.
+    let joins = 0;
+    const deps = { joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; } };
+    const loopback = { principal: "gui-session" as const, issuance: "loopback" as const, deps };
+    const joined = await handleLinkRoutes(context({ ...loopback, trustedLoopback: true }), routeState());
+    expect(joined?.status).toBe(202);
+    expect(await joined?.json()).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
+    expect(joins).toBe(1);
+
+    for (const options of [
+      { role: "standalone" as const, trustedLoopback: true, current: false },
+      { role: "standalone" as const, trustedLoopback: false },
+      { role: "hub" as const, trustedLoopback: true },
+      { role: "client" as const, trustedLoopback: true },
+    ]) {
+      const response = await handleLinkRoutes(context({ ...loopback, ...options }), routeState());
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toMatchObject({ error: { code: "forbidden" } });
+    }
+    const tailscale = await handleLinkRoutes(context({ ...loopback, issuance: "tailscale-identity" }), routeState());
+    expect(tailscale?.status).toBe(403);
+    expect(await tailscale?.json()).toMatchObject({ error: { code: "tailscale_session_refused" } });
+    expect(joins).toBe(1);
+
+    const paired = await handleLinkRoutes(context({ principal: "gui-session", issuance: "pairing", paired: true, deps }), routeState());
+    expect(paired?.status).toBe(202);
+    expect(joins).toBe(2);
+  });
+
+  test("refuses a join whose restart could not bind the configured port, before any SSH", async () => {
+    const calls: string[][] = [];
+    let joins = 0;
+    const deps = {
+      sshRunner: runnerFor(calls),
+      joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; },
+    };
+    for (const livePort of [CONFIG_PORT + 1, undefined]) {
+      const response = await handleLinkRoutes({
+        ...context({ principal: "gui-session", issuance: "loopback", deps }),
+        deps: { ...deps, liveListenPort: () => livePort },
+      }, routeState());
+      expect(response?.status).toBe(409);
+      expect(await response?.json()).toMatchObject({ error: { code: "join_port_mismatch" } });
+    }
+    expect(joins).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  test("maps a missing ocx on Home to remote_ocx_missing with a redacted stderr hint", async () => {
+    const calls: string[][] = [];
+    const runner: SshRunner = {
+      run: async argv => {
+        calls.push([...argv]);
+        return isWrappedIssue(argv)
+          ? { code: 127, stdout: "", stderr: `sh: 1: exec: ocx: not found ${KEY}\n` }
+          : { code: 0, stdout: "", stderr: "" };
+      },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill: () => {} }),
+    };
+    const response = await handleLinkRoutes(context({
+      principal: "gui-session",
+      paired: true,
+      deps: {
+        sshRunner: runner,
+        linkKnownHostsPath: () => "/tmp/ocx-known-hosts",
+        joinHome: (async (deps, input) => joinHome({
+          ...deps,
+          choosePort: async () => 23456,
+          now: () => 1,
+          readSidecar: () => null,
+          readConnectionState: () => ({ kind: "disconnected" }),
+        }, input)) as typeof import("../../src/client/link-join").joinHome,
+      },
+    }), routeState());
+    expect(response?.status).toBe(502);
+    expect(await response?.json()).toEqual({
+      error: { code: "remote_ocx_missing", message: "ocx was not found on the home.", hint: "sh: 1: exec: ocx: not found ocx_data_[redacted]" },
+    });
+    expect(calls.filter(isWrappedIssue)).toHaveLength(1);
   });
 
   test("requires the exact body and a confirmed host", async () => {
@@ -172,8 +272,8 @@ describe("client initiated link join", () => {
     expect(responseBody).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
     expect(sidecar).toMatchObject({ linkId: LINK_ID, tunnelPort: 23456, peerListenerPort: 45678 });
     expect(order).toEqual(["write-state", "spawn-tunnel", "readyz:key", "connect", "stop-tunnel", "restart"]);
-    expect(calls[0]?.some(value => value.includes("issue"))).toBe(true);
-    expect(calls[0]?.some(value => value.includes("--json"))).toBe(true);
+    expect(isWrappedIssue(calls[0] ?? [])).toBe(true);
+    expect(calls[0]?.at(-1)?.endsWith(" '--json'")).toBe(true);
   });
 
   test("rolls back sidecar and remote issue when sidecar write fails", async () => {
@@ -185,8 +285,37 @@ describe("client initiated link join", () => {
       clearState: () => { cleared = true; },
       spawnTunnel: () => { throw new Error("must not start"); },
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
     expect(cleared).toBe(true);
+  });
+
+  test("picks the join tunnel port from 20000-29999, outside the OS ephemeral ranges", async () => {
+    const calls: string[][] = [];
+    let sidecarPort = 0;
+    await joinHome(joinDeps({
+      runner: runnerFor(calls),
+      choosePort: undefined,
+      writeState: state => { sidecarPort = state.tunnelPort; },
+      spawnTunnel: () => tunnelFor([]),
+      fetchImpl: async () => new Response(null, { status: 200 }),
+      connect: (async () => {}) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => {},
+    }), { alias: "home" });
+    const issue = calls.find(isWrappedIssue)?.at(-1) ?? "";
+    const port = Number(/'--tunnel-port' '(\d+)'/.exec(issue)?.[1]);
+    expect(port).toBe(sidecarPort);
+    expect(port).toBeGreaterThanOrEqual(JOIN_TUNNEL_PORT_MIN);
+    expect(port).toBeLessThanOrEqual(JOIN_TUNNEL_PORT_MAX);
+    expect(isLinkPort(port)).toBe(true);
+
+    const tried: number[] = [];
+    const picked = await chooseJoinTunnelPort({
+      isAvailable: async candidate => { tried.push(candidate); return tried.length === 3; },
+      random: () => 0.999_999_9,
+    });
+    expect(picked).toBe(JOIN_TUNNEL_PORT_MAX);
+    expect(tried).toHaveLength(3);
+    await expect(chooseJoinTunnelPort({ isAvailable: async () => false })).rejects.toThrow("join tunnel range");
   });
 
   test("rolls back on readiness timeout and admission rejection", async () => {
@@ -207,7 +336,7 @@ describe("client initiated link join", () => {
       await expect(joinHome(deps, { alias: "home" })).rejects.toMatchObject({
         code: readiness === "timeout" ? "join_tunnel_failed" : "admission_failed",
       });
-      expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
       expect(stopped).toBe(1);
       expect(cleared).toBe(1);
     }
@@ -228,7 +357,7 @@ describe("client initiated link join", () => {
     } finally {
       logs.mockRestore();
     }
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
   });
 
@@ -245,11 +374,11 @@ describe("client initiated link join", () => {
     const order: string[] = [];
     const runner: SshRunner = {
       run: async argv => {
-        if (argv.some(value => value.includes("issue"))) {
+        if (isWrappedIssue(argv)) {
           order.push("issue");
           return { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" };
         }
-        if (argv.some(value => value.includes("revoke"))) {
+        if (argv.at(-1) === REVOKE_COMMAND) {
           revokeCount += 1;
           order.push(`revoke-${revokeCount}`);
           return { code: revokeCount === 1 ? 1 : 0, stdout: "", stderr: "failed" };

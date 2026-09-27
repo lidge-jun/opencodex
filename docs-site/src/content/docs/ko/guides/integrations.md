@@ -35,6 +35,8 @@ modelProfile:
 
 일반 `gjc` 시작 시 적용할 `modelProfile.default`는 원하는 값으로 유지하세요. 관리형 연동은 `models.yml`의 `providers.opencodex`만 소유합니다. 이 프로바이더를 새로 고치거나 비활성화해도 프리셋 선택은 다시 쓰지 않습니다. 내보낼 모델 선택을 바꾼 뒤 연동을 새로 고치세요.
 
+지원되는 추론 강도 단계가 있는 GJC 모델은 `reasoning: true`, `thinking.levels`, `compat.supportsReasoningEffort`를 내보내 GJC에서 강도를 선택할 수 있게 합니다. 네이티브 Codex 모델은 카탈로그에 단계가 없어도 표준 단계를 내보냅니다. 알려진 단계가 없는 모델은 이 필드들을 생략합니다. `none`은 강도를 보내지 않고 `ultra`는 전송 시 `max`로 바뀌므로 선택지에서 제외합니다. 모델 옵션을 갱신하려면 연동을 새로 고치세요.
+
 관리형 OpenCode 연동은 `provider.opencodex`(opencode V1)와 `providers.opencodex`(opencode V2) 두 조각을 소유합니다. 모델별 추론 강도 변형은 V2 블록에만 있으므로 둘 다 기록하고 동기화합니다. 두 블록은 같은 프로바이더와 모델 ID를 가리키고 opencode V2는 이를 프로바이더 항목 하나로 병합합니다. Apply, Refresh, Disable, Restore는 두 조각 모두에 작용하며 다른 프로바이더, 에이전트, 단축키, MCP 항목은 유지됩니다.
 
 관리형 DSH 지원의 최저 호환 버전은 **DSH 0.1.0-rc.6**입니다. opencodex는 `llm-pi-ai.providers.opencodex`만 소유합니다. Apply와 Refresh는 해당 조각을 교체하고, Disable은 그 조각만 제거하며, Restore는 기록된 스냅샷을 되돌립니다. DSH는 프로바이더 변경을 즉시 다시 읽습니다. 이 작업은 사용자의 기본 모델이나 네이티브 `deepseek-official` 프로바이더를 바꾸지 않습니다. 관리형 DSH 연동은 현재 루프백 전용이며 실제 자격 증명을 기록하지 않습니다.

@@ -158,6 +158,10 @@ pub enum LiveVerdict {
     NotLive,
     /// It is a proxy, on an address this shell can reach. Attach as a guest.
     Attach,
+    /// A Child's client runtime, on loopback. It serves Codex through its Home and the Child's own
+    /// dashboard, not the management plane, and it is never taken over: the shell attaches to it as
+    /// a guest and asks nothing. When it is the child this app started, that attach is ownership.
+    Client,
     /// Something is listening and this shell cannot use it. Never a reason to start a second one.
     Unusable(String),
 }
@@ -178,10 +182,12 @@ pub fn loopback_reachable(hostname: Option<&str>) -> bool {
 /// Read a live verdict.
 ///
 /// Liveness answers "is something there", and core's predicate accepts a connected client's
-/// listener on purpose so duplicate-start avoidance can see it. This shell needs the management
-/// plane, so it has to discriminate on the role the CLI carried: a client listener serves machine
-/// routes, not `/api/*`, and attaching to it would report Ready against an endpoint the dashboard
-/// and the tray cannot use.
+/// listener on purpose so duplicate-start avoidance can see it. The shell discriminates on the role
+/// the CLI carried: a client listener serves machine routes and the Child's dashboard, not `/api/*`,
+/// and the takeover a proxy can be offered does not apply to it. It is also what a Child runs,
+/// including this app's own sidecar after Connect as Child, so it is attached to
+/// ([`LiveVerdict::Client`]) rather than refused. Refusing it failed every recovery on a Child whose
+/// runtime restarted outside the app, and each failure scheduled the next.
 pub fn live_verdict(resolution: &Resolution) -> LiveVerdict {
     let Some(resolved) = resolution.resolved() else {
         return LiveVerdict::NotLive;
@@ -189,11 +195,7 @@ pub fn live_verdict(resolution: &Resolution) -> LiveVerdict {
     if resolved.liveness.status != Status::Live {
         return LiveVerdict::NotLive;
     }
-    if resolved.liveness.role.as_deref() == Some("client") {
-        return LiveVerdict::Unusable(
-            "a connected client is listening on this port, not a proxy this app can manage".into(),
-        );
-    }
+    let client = resolved.liveness.role.as_deref() == Some("client");
     if !loopback_reachable(resolved.liveness.hostname.as_deref()) {
         return LiveVerdict::Unusable(format!(
             "the runtime is bound to {} and this app only speaks to loopback",
@@ -203,6 +205,9 @@ pub fn live_verdict(resolution: &Resolution) -> LiveVerdict {
                 .as_deref()
                 .unwrap_or("an unknown address")
         ));
+    }
+    if client {
+        return LiveVerdict::Client;
     }
     LiveVerdict::Attach
 }
@@ -302,17 +307,23 @@ mod tests {
     }
 
     #[test]
-    fn a_connected_client_is_live_but_not_a_runtime_to_attach_to() {
+    fn a_connected_client_is_attached_to_and_never_started_beside() {
         let client = LIVE.replace(
             r#""version":"2.61.0""#,
             r#""version":"2.61.0","role":"client""#,
         );
         let resolution = read(Some(0), client.as_bytes(), b"");
+        // A Child's runtime: attached to as a guest, never taken over and never refused.
+        assert_eq!(live_verdict(&resolution), LiveVerdict::Client);
+        // Live is still live: it is never a reason to start a second one.
+        assert!(!may_start(&resolution));
+        // Off loopback it is as unusable as any other listener there.
+        let elsewhere = client.replace(r#""pid":42"#, r#""pid":42,"hostname":"::1""#);
+        let resolution = read(Some(0), elsewhere.as_bytes(), b"");
         assert!(matches!(
             live_verdict(&resolution),
             LiveVerdict::Unusable(_)
         ));
-        // Live and unusable is still live: it is never a reason to start a second one.
         assert!(!may_start(&resolution));
     }
 

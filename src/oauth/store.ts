@@ -58,6 +58,12 @@ export function reconcileOAuthReauthState(context: GenerationContext): number {
   return 0;
 }
 
+/** Test-only isolation for suites that exercise generation reconciliation. */
+export function resetOAuthReauthReconcileStateForTests(): void {
+  lastReconciledGeneration = 0;
+  liveOAuthAccountKeys = new Set();
+}
+
 /** Providers whose account set is pinned to a single slot (see module doc). */
 const SINGLE_SLOT_PROVIDERS = new Set(["chatgpt"]);
 
@@ -505,6 +511,12 @@ function isCredentialSource(value: unknown): value is OAuthCredentialSource {
   return value === "oauth" || value === "local-cli" || value === "credential-file" || value === "environment" || value === "manual";
 }
 
+/** Registration values must survive store normalization unchanged. */
+export function isStorableKiroClientPart(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 4096
+    && value === value.trim() && !/[\x00-\x1f\x7f]/.test(value);
+}
+
 function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (!cred || typeof cred !== "object") return null;
   const candidate = cred as Partial<OAuthCredentials>;
@@ -539,8 +551,8 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
     const profileArn = clean(kiro.profileArn, 1024);
     const ssoRegion = clean(kiro.ssoRegion, 64);
     const apiRegion = clean(kiro.apiRegion, 64);
-    const clientId = clean(kiro.clientId, 4096);
-    const clientSecret = clean(kiro.clientSecret, 4096);
+    const clientId = isStorableKiroClientPart(kiro.clientId) ? kiro.clientId : undefined;
+    const clientSecret = isStorableKiroClientPart(kiro.clientSecret) ? kiro.clientSecret : undefined;
     if (profileArn || ssoRegion || apiRegion || clientId || clientSecret) {
       normalized.kiro = {
         ...(profileArn ? { profileArn } : {}),
@@ -614,6 +626,11 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   if (typeof candidate.alias === "string" && candidate.alias.trim()) account.alias = candidate.alias.trim();
   if (candidate.needsReauth === true) account.needsReauth = true;
   if (typeof candidate.addedAt === "number") account.addedAt = candidate.addedAt;
+  if (typeof candidate.loginId === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.loginId)) {
+    account.loginId = candidate.loginId;
+  }
+  if (candidate.loginOrigin === "kiro-device") account.loginOrigin = candidate.loginOrigin;
   return account;
 }
 
@@ -895,6 +912,8 @@ export async function saveCredentialWithReceipt(
         accountId = id;
       }
     }
+    // Every explicit login, including an in-place legacy slot upgrade, starts new evidence.
+    store[provider]!.accounts.find(account => account.id === accountId)!.loginId = randomUUID();
     return {
       provider,
       accountId,
@@ -918,6 +937,38 @@ export async function saveCredential(
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
 ): Promise<void> {
   await saveCredentialWithReceipt(provider, cred, opts);
+}
+
+/** Native device approval always gets a new slot; no unverified identity can replace one. */
+export async function appendKiroAccountFromDeviceLogin(
+  cred: OAuthCredentials,
+  opts: { assertBeforePersist?: () => void } = {},
+): Promise<{ receipt: OAuthCredentialWriteReceipt; warning?: "duplicate_profile_arn" }> {
+  const safe = normalizeCredential(cred);
+  if (!safe || !safe.access || !safe.refresh) throw new Error("Invalid Kiro device credential");
+  if (safe.kiro?.clientId || safe.kiro?.clientSecret) {
+    if (!isStorableKiroClientPart(cred.kiro?.clientId) || !isStorableKiroClientPart(cred.kiro?.clientSecret)) {
+      throw new Error("Invalid Kiro client registration");
+    }
+  }
+  return await mutateStore(store => {
+    const set = store.kiro;
+    const id = distinctAccountId(safe, set?.accounts ?? []);
+    const warning = safe.kiro?.profileArn && set?.accounts.some(a => a.credential.kiro?.profileArn === safe.kiro?.profileArn)
+      ? "duplicate_profile_arn" as const : undefined;
+    const account: ProviderAccount = { id, credential: safe, addedAt: Date.now(), loginId: randomUUID(), loginOrigin: "kiro-device" };
+    if (set) set.accounts.push(account);
+    else store.kiro = { activeAccountId: id, accounts: [account] };
+    const receipt: OAuthCredentialWriteReceipt = {
+      provider: "kiro", accountId: id, credentialGeneration: credentialGeneration(safe),
+      selectionRevision: store.kiro.selectionRevision,
+      previousActiveAccountId: set?.activeAccountId, previousAccount: undefined,
+    };
+    return { receipt, ...(warning ? { warning } : {}) };
+  }, [safe], {
+    assertBeforePersist: opts.assertBeforePersist,
+    finalizeResult: (result, store) => { result.receipt.selectionRevision = store.kiro?.selectionRevision; },
+  });
 }
 
 /** Compensate one owned login write without deleting or selecting over concurrent work. */
@@ -1066,7 +1117,7 @@ export async function saveAccountCredential(
   provider: string,
   accountId: string,
   cred: OAuthCredentials,
-  opts: { assertBeforePersist?: () => void } = {},
+  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean } = {},
 ): Promise<void> {
   const safe = normalizeCredential(cred);
   if (!safe) return;
@@ -1074,6 +1125,7 @@ export async function saveAccountCredential(
     const account = store[provider]?.accounts.find(a => a.id === accountId);
     if (!account) return;
     account.credential = safe;
+    if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
   }, [provider, accountId, safe], { assertBeforePersist: opts.assertBeforePersist });
 }
@@ -1187,6 +1239,7 @@ export async function replaceProviderAccountSet(
         ...(account.alias ? { alias: account.alias } : {}),
         ...(account.needsReauth ? { needsReauth: true } : {}),
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
+        ...(account.loginId ? { loginId: account.loginId } : {}),
       })),
     };
     return false;

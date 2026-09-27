@@ -114,7 +114,11 @@ afterAll(() => {
   mock.restore();
 });
 
-test("Kiro continuation 429 keeps the rotated bearer and routing metadata together", async () => {
+test.each([
+  [429, { error: { message: "rate limited" } }],
+  [400, { reason: "MONTHLY_REQUEST_COUNT" }],
+  [403, { reason: "TEMPORARILY_SUSPENDED" }],
+] as const)("Kiro continuation %i keeps the rotated bearer and routing metadata together", async (refusalStatus, refusalBody) => {
   const profiles = [
     "arn:aws:codewhisperer:us-east-1:123456789012:profile/account-a",
     "arn:aws:codewhisperer:eu-west-1:123456789012:profile/account-b",
@@ -154,10 +158,8 @@ test("Kiro continuation 429 keeps the rotated bearer and routing metadata togeth
   globalThis.fetch = (async () => {
     const phase = phases.shift();
     if (phase === "rate-limit") {
-      return Response.json(
-        { error: { message: "rate limited" } },
-        { status: 429, headers: { "retry-after": "30" } },
-      );
+      return Response.json(refusalBody, { status: refusalStatus,
+        ...(refusalStatus === 429 ? { headers: { "retry-after": "30" } } : {}) });
     }
     if (!phase) throw new Error("unexpected extra request");
     return new Response("", { status: 200, headers: { "x-test-phase": phase } });

@@ -362,6 +362,29 @@ describe("unicode property-escape pattern stripping", () => {
     expect(stripUnicodePropertyPatterns(before)).toBe(before);
   });
 
+  test("`\\0` is rewritten to the equivalent `\\x00`, octal and escaped backslashes untouched", () => {
+    // Claude Code's Artifact tool ships `^[^\0]*$` on its file-path parameters; Meta's
+    // Responses API rejects `\0` inside a character class but accepts `\x00`.
+    const artifactPathPattern = "^[^\\0]*$";
+    const before = {
+      type: "object",
+      properties: {
+        path: { type: "string", pattern: artifactPathPattern, maxLength: 1024 },
+        octal: { type: "string", pattern: "^\\012$" },
+        literal: { type: "string", pattern: "^\\\\0$" },
+      },
+    };
+    const out = stripUnicodePropertyPatterns(before) as typeof before;
+    expect(out.properties.path.pattern).toBe("^[^\\x00]*$");
+    expect(out.properties.path.maxLength).toBe(1024);
+    expect(out.properties.octal).toBe(before.properties.octal);
+    expect(out.properties.literal).toBe(before.properties.literal);
+    expect(before.properties.path.pattern).toBe(artifactPathPattern);
+    for (const s of ["\u0000", "a", "\u0000/b"]) {
+      expect(new RegExp(out.properties.path.pattern).test(s)).toBe(new RegExp(artifactPathPattern).test(s));
+    }
+  });
+
   test("`\\P{…}` is dropped as well as `\\p{…}`", () => {
     const stripped = stripUnicodePropertyPatterns({ type: "string", pattern: "^\\P{L}+$" }) as Record<string, unknown>;
     expect(stripped.pattern).toBeUndefined();

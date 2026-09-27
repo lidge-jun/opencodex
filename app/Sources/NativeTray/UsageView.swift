@@ -4,7 +4,31 @@ import SwiftUI
 final class NativeTrayStore: ObservableObject {
     @Published var snapshot: NativeTraySnapshot?
     @Published var decodeFailed = false
+    /// The account row whose switch is in flight, until a settled snapshot arrives.
+    @Published var pendingSwitch: String?
     var action: (Int32) -> Void = { _ in }
+    var switchAccount: (String, String) -> Void = { _, _ in }
+    private var pendingToken = 0
+
+    func requestSwitch(provider: NativeTrayProvider, account: NativeTrayProvider.Account) {
+        guard pendingSwitch == nil, let request = NativeTraySwitch.request(provider: provider, account: account) else { return }
+        pendingSwitch = account.id
+        pendingToken += 1
+        let token = pendingToken
+        // A switch whose answer never arrives (host gone, panel reopened) must not spin forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self, self.pendingToken == token else { return }
+            self.pendingSwitch = nil
+        }
+        switchAccount(request.provider, request.accountId)
+    }
+
+    func settlePendingSwitch() {
+        guard let pending = pendingSwitch, let snapshot,
+              NativeTraySwitch.settles(snapshot: snapshot, pendingRow: pending) else { return }
+        pendingSwitch = nil
+        pendingToken += 1
+    }
 }
 
 struct NativeTrayUsageView: View {
@@ -56,7 +80,9 @@ struct NativeTrayUsageView: View {
                         if snapshot.settings.showAccounts {
                             Divider()
                             ForEach(snapshot.providers) { provider in
-                                NativeTrayProviderView(provider: provider)
+                                NativeTrayProviderView(provider: provider, pendingSwitch: store.pendingSwitch) { account in
+                                    store.requestSwitch(provider: provider, account: account)
+                                }
                             }
                         }
                         ForEach(Array(snapshot.errors.enumerated()), id: \.offset) { _, error in

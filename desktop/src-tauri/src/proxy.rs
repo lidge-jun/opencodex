@@ -14,6 +14,36 @@ use std::{
 use tokio::time::{timeout_at, Instant};
 
 const DESKTOP_SNAPSHOT_PATH: &str = "/api/update/desktop-snapshot";
+#[cfg(target_os = "macos")]
+const ACCOUNT_SWITCH_BODY_LIMIT: usize = 1024;
+#[cfg(target_os = "macos")]
+const ACCOUNT_SWITCH_DIGEST_HEADER: &str = "x-opencodex-account-switch-sha256";
+const SNAPSHOT_DIGEST_HEADER: &str = "x-opencodex-desktop-snapshot-sha256";
+
+/// Only the macOS native panel switches accounts; other builds carry none of this.
+#[cfg(target_os = "macos")]
+/// Which "set active account" route a native panel switch targets. The host chooses it from its
+/// own provider sources; the panel only names a provider and an account, never a path or body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountSwitchKind {
+    /// `PUT /api/codex-auth/active` with `{accountId}`.
+    Codex,
+    /// `PUT /api/oauth/accounts/active` with `{provider, accountId}`.
+    OAuth,
+    /// `PUT /api/providers/keys/active` with `{name, id}`.
+    ApiKey,
+}
+
+#[cfg(target_os = "macos")]
+impl AccountSwitchKind {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Codex => "/api/codex-auth/active",
+            Self::OAuth => "/api/oauth/accounts/active",
+            Self::ApiKey => "/api/providers/keys/active",
+        }
+    }
+}
 
 /// Which instance answered, taken from the unauthenticated health body.
 ///
@@ -220,6 +250,36 @@ impl ProxyClient {
         decode(response).await
     }
 
+    #[cfg(target_os = "macos")]
+    /// Switch a provider's active account through its existing management route, signed by a
+    /// single-use grant bound to this exact body. The grant cannot authorize any other request.
+    pub async fn put_account_switch(
+        &self,
+        kind: AccountSwitchKind,
+        body: &Value,
+    ) -> Result<Value, ProxyError> {
+        let body =
+            serde_json::to_vec(body).map_err(|_| ProxyError::Http(StatusCode::BAD_REQUEST))?;
+        if body.len() > ACCOUNT_SWITCH_BODY_LIMIT {
+            return Err(ProxyError::Http(StatusCode::PAYLOAD_TOO_LARGE));
+        }
+        let recorded = self.authorised_runtime()?;
+        let headers = CapabilityHeaders::mint_account_switch(&recorded, kind, &body)
+            .ok_or(ProxyError::Unauthorized)?;
+        // Serialize once: the bytes hashed by mint_account_switch are the bytes reqwest sends.
+        let request = self
+            .client
+            .put(self.endpoint.url(kind.path()))
+            .header("content-type", "application/json")
+            .body(body);
+        let response = headers
+            .apply(request)
+            .send()
+            .await
+            .map_err(map_request_error)?;
+        decode(response).await
+    }
+
     /// Mint one read grant, preserving the existing v1 method/path/query contract.
     fn authorised_capability(
         &self,
@@ -275,7 +335,7 @@ struct CapabilityHeaders {
     nonce: String,
     expires_at: String,
     capability: String,
-    body_digest: Option<String>,
+    body_digest: Option<(&'static str, String)>,
 }
 
 impl CapabilityHeaders {
@@ -306,7 +366,34 @@ impl CapabilityHeaders {
             capability: snapshot_capability_mac(recorded, &nonce, expires_at, &body_digest)?,
             nonce,
             expires_at: expires_at.to_string(),
-            body_digest: Some(body_digest),
+            body_digest: Some((SNAPSHOT_DIGEST_HEADER, body_digest)),
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    /// Mint only one account-switch PUT; its domain is distinct from read and snapshot grants.
+    fn mint_account_switch(
+        recorded: &RecordedRuntime,
+        kind: AccountSwitchKind,
+        body: &[u8],
+    ) -> Option<Self> {
+        if body.len() > ACCOUNT_SWITCH_BODY_LIMIT {
+            return None;
+        }
+        let (nonce, expires_at) = fresh_capability_fields()?;
+        let body_digest = URL_SAFE_NO_PAD.encode(Sha256::digest(body));
+        Some(Self {
+            expected_pid: recorded.pid.to_string(),
+            capability: account_switch_capability_mac(
+                recorded,
+                kind,
+                &nonce,
+                expires_at,
+                &body_digest,
+            )?,
+            nonce,
+            expires_at: expires_at.to_string(),
+            body_digest: Some((ACCOUNT_SWITCH_DIGEST_HEADER, body_digest)),
         })
     }
 
@@ -317,8 +404,8 @@ impl CapabilityHeaders {
             .header("x-opencodex-local-nonce", self.nonce)
             .header("x-opencodex-local-expires-at", self.expires_at)
             .header("x-opencodex-local-capability", self.capability);
-        if let Some(digest) = self.body_digest {
-            request = request.header("x-opencodex-desktop-snapshot-sha256", digest);
+        if let Some((header, digest)) = self.body_digest {
+            request = request.header(header, digest);
         }
         request
     }
@@ -378,6 +465,29 @@ fn snapshot_capability_mac(
     Some(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 
+#[cfg(target_os = "macos")]
+/// The account-switch wire contract binds the method, one of three constant paths, and the exact
+/// body's SHA-256 digest (`src/lib/local-account-switch-capability.ts`).
+fn account_switch_capability_mac(
+    recorded: &RecordedRuntime,
+    kind: AccountSwitchKind,
+    nonce: &str,
+    expires_at: u64,
+    body_digest: &str,
+) -> Option<String> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(recorded.attestation_secret.as_bytes()).ok()?;
+    mac.update(
+        format!(
+            "opencodex-local-account-switch-v1\n{nonce}\nPUT\n{}\n{}\n{}\n{expires_at}\n{body_digest}",
+            kind.path(),
+            recorded.pid,
+            recorded.port
+        )
+        .as_bytes(),
+    );
+    Some(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
 fn map_request_error(error: reqwest::Error) -> ProxyError {
     if error.is_connect() {
         ProxyError::Unreachable
@@ -409,6 +519,8 @@ async fn decode(response: reqwest::Response) -> Result<Value, ProxyError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::{account_switch_capability_mac, AccountSwitchKind};
     use super::{
         capability_mac, identity_from, signed_target, snapshot_capability_mac, CapabilityHeaders,
         RuntimeIdentity,
@@ -468,7 +580,13 @@ mod tests {
         let body = br#"{"sessionId":"test"}"#;
         let headers = CapabilityHeaders::mint_snapshot(&recorded_runtime(), body).unwrap();
         let digest = "5pREWDDMbj42QHj3DvVNrC54yVF7Vpd8cNj5c-z3rQ4";
-        assert_eq!(headers.body_digest.as_deref(), Some(digest));
+        assert_eq!(
+            headers
+                .body_digest
+                .as_ref()
+                .map(|(_, digest)| digest.as_str()),
+            Some(digest)
+        );
         assert_eq!(headers.expected_pid, "4242");
         assert_eq!(
             snapshot_capability_mac(
@@ -494,6 +612,93 @@ mod tests {
             request.headers()["x-opencodex-desktop-snapshot-sha256"],
             digest
         );
+        assert_eq!(request.body().unwrap().as_bytes(), Some(body.as_slice()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_account_switch_grant_binds_route_and_body_and_matches_the_server_contract() {
+        // Same fixed inputs as the TypeScript vectors in
+        // tests/server/local-account-switch-capability.test.ts.
+        let nonce = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let vectors = [
+            (
+                AccountSwitchKind::Codex,
+                r#"{"accountId":"acct-1"}"#,
+                "TAvg-9rOZVklyLUY6FQ1afEc-hJ80OLD8qSKdKSrjh4",
+                "oaJMrRckk98viNXA3nUO6y7nHDkehgcPIGjbEhgDX4M",
+            ),
+            (
+                AccountSwitchKind::OAuth,
+                r#"{"provider":"anthropic","accountId":"acct-1"}"#,
+                "AkfVPiY6XR2cClHqqApykOKZcdiTqwpkeVuBQDg3u5A",
+                "5_u4nzIUGl32US-V7eftK1r4iV90gS4WSdtEgimYtFQ",
+            ),
+            (
+                AccountSwitchKind::ApiKey,
+                r#"{"name":"xai","id":"key-1"}"#,
+                "TwpvGp8TFleVkY5xRWSl_UMujQUbQMsk-P2oFvMvjjg",
+                "kdKDBHHEYD9E56oKxS2NHSU5DIuhdLEHv5XLDh9KM9Q",
+            ),
+        ];
+        for (kind, body, digest, mac) in vectors {
+            let headers =
+                CapabilityHeaders::mint_account_switch(&recorded_runtime(), kind, body.as_bytes())
+                    .unwrap();
+            assert_eq!(
+                headers.body_digest,
+                Some(("x-opencodex-account-switch-sha256", digest.to_owned()))
+            );
+            assert_eq!(
+                account_switch_capability_mac(
+                    &recorded_runtime(),
+                    kind,
+                    nonce,
+                    1_700_000_010_000,
+                    digest
+                )
+                .as_deref(),
+                Some(mac)
+            );
+        }
+        // The switch domain never reproduces a snapshot proof over the same inputs.
+        assert_ne!(
+            account_switch_capability_mac(
+                &recorded_runtime(),
+                AccountSwitchKind::Codex,
+                nonce,
+                1_700_000_010_000,
+                "5pREWDDMbj42QHj3DvVNrC54yVF7Vpd8cNj5c-z3rQ4"
+            ),
+            snapshot_capability_mac(
+                &recorded_runtime(),
+                nonce,
+                1_700_000_010_000,
+                "5pREWDDMbj42QHj3DvVNrC54yVF7Vpd8cNj5c-z3rQ4"
+            )
+        );
+        assert!(CapabilityHeaders::mint_account_switch(
+            &recorded_runtime(),
+            AccountSwitchKind::Codex,
+            &[b' '; 1025]
+        )
+        .is_none());
+        let body = br#"{"accountId":"acct-1"}"#;
+        let request = CapabilityHeaders::mint_account_switch(
+            &recorded_runtime(),
+            AccountSwitchKind::Codex,
+            body,
+        )
+        .unwrap()
+        .apply(reqwest::Client::new().put("http://127.0.0.1:10100/api/codex-auth/active"))
+        .body(body.to_vec())
+        .build()
+        .unwrap();
+        assert!(!request.headers().contains_key("x-opencodex-api-key"));
+        assert!(!request.headers().contains_key("authorization"));
+        assert!(!request
+            .headers()
+            .contains_key("x-opencodex-desktop-snapshot-sha256"));
         assert_eq!(request.body().unwrap().as_bytes(), Some(body.as_slice()));
     }
 

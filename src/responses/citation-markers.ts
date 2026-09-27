@@ -16,6 +16,12 @@
  * Strip, do not translate. The `turnNviewN` ids are turn-scoped and opaque, and the
  * response carries no mapping from them to a URL, so there is nothing to convert them
  * into. Structured `url_citation` annotations are a separate path and are untouched.
+ *
+ * Only citation spans are stripped. The same delimiters carry other inline directives
+ * that the Codex App renders, such as `\uE200visualize\uE202{"path":…}\uE201` from the
+ * bundled visualize plugin (#6039). A span is a citation only when the keyword between
+ * START and its first SEPARATOR or END is one of `CITATION_KEYWORDS`; any other span
+ * passes through byte for byte.
  */
 
 /** Opens a citation span. */
@@ -25,6 +31,12 @@ export const CITATION_MARKER_SEPARATOR = "\uE202";
 /** Closes a citation span. */
 export const CITATION_MARKER_END = "\uE201";
 
+/**
+ * Keywords that mark a span as a ChatGPT citation. `filecite` is the uploaded-file variant
+ * of `cite` and uses the same `turnN…` reference grammar.
+ */
+const CITATION_KEYWORDS: readonly string[] = ["cite", "filecite"];
+
 /** True when the text contains any of the three delimiters. Cheap pre-check. */
 export function hasCitationMarker(text: string): boolean {
   return text.includes(CITATION_MARKER_START)
@@ -33,34 +45,15 @@ export function hasCitationMarker(text: string): boolean {
 }
 
 /**
- * Remove every complete `START … END` span from a whole string.
+ * Upper bound on the length of a span (START through END inclusive).
  *
- * A START with no END is left alone rather than truncating the remainder: an unterminated
- * marker is malformed input, and dropping everything after it would delete real answer
- * text. A stray SEPARATOR or END outside a span is also left alone for the same reason —
- * this function only removes what it can prove is a citation span.
+ * A real citation is `cite` plus a few turn-scoped ids, so it is far under this. Without a
+ * bound, a backend that emits a START and never terminates it makes the streaming filter
+ * withhold the rest of the response. A non-citation directive keeps later STARTs literal
+ * only within the same bound, so one unterminated directive cannot hide a real citation for
+ * the rest of the message.
  */
-export function stripCitationMarkers(text: string): string {
-  if (!text.includes(CITATION_MARKER_START)) return text;
-  // Walk START-delimited segments exactly like the streaming filter below: a START whose
-  // own segment (up to the next START) contains an END within the span bound is a span and
-  // is removed; a START that is superseded by another START before any END, or whose span
-  // exceeds MAX_CITATION_SPAN_LENGTH, is malformed text and stays verbatim. Pairing an
-  // earlier malformed START with a later span's END would delete real answer text and,
-  // worse, disagree with what the streaming deltas already emitted (#3843). The bound is
-  // shared with the streaming filter for the same reason: a span it has already released
-  // as over-bound must not be swallowed here when the END finally arrives.
-  let start = text.indexOf(CITATION_MARKER_START);
-  let out = text.slice(0, start);
-  while (start !== -1) {
-    const nextStart = text.indexOf(CITATION_MARKER_START, start + 1);
-    const segment = text.slice(start, nextStart === -1 ? text.length : nextStart);
-    const end = segment.indexOf(CITATION_MARKER_END, 1);
-    out += end === -1 || end + 1 > MAX_CITATION_SPAN_LENGTH ? segment : segment.slice(end + 1);
-    start = nextStart;
-  }
-  return out;
-}
+const MAX_CITATION_SPAN_LENGTH = 4_096;
 
 export interface CitationMarkerFilter {
   /** Feed one streaming delta; returns the portion safe to emit now. */
@@ -70,63 +63,137 @@ export interface CitationMarkerFilter {
 }
 
 /**
- * Upper bound on the length of a citation span (START through END inclusive), and therefore
- * on the text the streaming filter withholds for one unterminated START.
+ * Remove every complete citation span from a whole string.
  *
- * A real span is `cite` plus a few turn-scoped ids, so it is far under this. Without a
- * bound, a backend that emits a START and never terminates it makes `held` grow for the
- * whole response, and every later delta re-scans that accumulated prefix. The whole-string
- * strip applies the same bound so both paths classify a span identically regardless of how
- * the text was chunked.
+ * This runs the streaming filter over the whole text, so the bridge's re-stripped
+ * `output_text.done` always equals the concatenated deltas it already emitted (#3843).
+ * Anything that is not a complete citation span stays verbatim: an unterminated START, a
+ * stray SEPARATOR or END, and every non-citation directive.
  */
-const MAX_CITATION_SPAN_LENGTH = 4_096;
+export function stripCitationMarkers(text: string): string {
+  if (!text.includes(CITATION_MARKER_START)) return text;
+  const filter = createCitationMarkerFilter();
+  return filter.push(text) + filter.flush();
+}
 
 /**
- * Streaming filter.
+ * Streaming filter, as a per-character state machine so the result never depends on how the
+ * text was split into deltas.
  *
- * A marker can straddle a delta boundary — `\uE200cite` in one chunk and the rest in the
- * next — so a stateless per-delta strip would emit the tail of a span it never recognized.
- * This holds back the text from an unterminated START and releases it once the END arrives
- * (removed) or the stream ends (verbatim, so nothing the model actually said is lost).
+ * - `text`: ordinary text, emitted at once. A START opens `keyword`.
+ * - `keyword`: the START and keyword so far are withheld while the keyword can still become
+ *   a citation keyword. A SEPARATOR after a citation keyword enters `citation`; an END right
+ *   after one removes the span. Any other keyword releases the text and enters `other`.
+ * - `citation`: withheld until its END, then removed. A new START means this one was
+ *   malformed, so it is released verbatim; so is a span that reaches the length bound.
+ * - `other`: the keyword of a non-citation span, emitted at once. A START here means the
+ *   earlier one was malformed and opens a new span; a SEPARATOR enters `opaque`.
+ * - `opaque`: the body of a non-citation directive such as `visualize` (#6039), emitted at
+ *   once. STARTs inside it are payload, not new spans, until its END or the length bound.
  *
- * A span that grows past `MAX_CITATION_SPAN_LENGTH` is malformed ordinary text, so
- * it is released verbatim instead of withheld; a later START can still open a valid span.
+ * A stream that ends while text is withheld releases it verbatim, so nothing the model
+ * actually said is lost.
  */
 export function createCitationMarkerFilter(): CitationMarkerFilter {
-  // Text from an open START that has not been terminated yet.
+  let mode: "text" | "keyword" | "citation" | "other" | "opaque" = "text";
+  // The withheld START, keyword, and body in `keyword` and `citation` modes.
   let held = "";
+  // Characters from START so far in `other` and `opaque` modes.
+  let spanLength = 0;
+  const isKeywordPrefix = (keyword: string): boolean => CITATION_KEYWORDS.some(k => k.startsWith(keyword));
+
   return {
     push(delta: string): string {
-      const combined = held + delta;
-      held = "";
-      let start = combined.indexOf(CITATION_MARKER_START);
-      if (start === -1) return combined;
-      let out = combined.slice(0, start);
-      // Walk START-delimited segments independently so an earlier malformed START is never
-      // paired with a later span's END (the whole-string strip would do exactly that).
-      while (start !== -1) {
-        const nextStart = combined.indexOf(CITATION_MARKER_START, start + 1);
-        const segment = combined.slice(start, nextStart === -1 ? combined.length : nextStart);
-        const end = segment.indexOf(CITATION_MARKER_END, 1);
-        if (end !== -1 && end + 1 <= MAX_CITATION_SPAN_LENGTH) {
-          // A complete span: drop it, keep whatever trails it inside this segment.
-          out += segment.slice(end + 1);
-        } else if (end === -1 && nextStart === -1 && segment.length <= MAX_CITATION_SPAN_LENGTH) {
-          // Only a bounded trailing span can still be completed by a later delta.
-          held = segment;
-        } else {
-          // Superseded by a later START, or over the bound (with or without a late END):
-          // ordinary text, emitted verbatim so neither the retained text nor the per-delta
-          // rescan grows without limit.
-          out += segment;
+      let out = "";
+      let i = 0;
+      while (i < delta.length) {
+        if (mode === "text") {
+          const next = delta.indexOf(CITATION_MARKER_START, i);
+          if (next === -1) {
+            out += delta.slice(i);
+            break;
+          }
+          out += delta.slice(i, next);
+          held = CITATION_MARKER_START;
+          mode = "keyword";
+          i = next + 1;
+          continue;
         }
-        start = nextStart;
+        const ch = delta[i]!;
+        if (mode === "other" || mode === "opaque") {
+          if (spanLength + 1 > MAX_CITATION_SPAN_LENGTH) {
+            // Past the bound this is ordinary text again; handle the character in `text`.
+            mode = "text";
+            continue;
+          }
+          if (ch === CITATION_MARKER_START && mode === "other") {
+            held = CITATION_MARKER_START;
+            mode = "keyword";
+          } else {
+            out += ch;
+            spanLength += 1;
+            if (ch === CITATION_MARKER_END) mode = "text";
+            else if (ch === CITATION_MARKER_SEPARATOR) mode = "opaque";
+          }
+          i += 1;
+          continue;
+        }
+        i += 1;
+        if (ch === CITATION_MARKER_START) {
+          // The withheld START was malformed: release it and open a new span here.
+          out += held;
+          held = CITATION_MARKER_START;
+          mode = "keyword";
+          continue;
+        }
+        if (mode === "citation") {
+          if (ch === CITATION_MARKER_END) {
+            held = "";
+            mode = "text";
+            continue;
+          }
+          held += ch;
+          // One more character plus an END would exceed the bound, so this is not a span.
+          if (held.length >= MAX_CITATION_SPAN_LENGTH) {
+            out += held;
+            held = "";
+            mode = "text";
+          }
+          continue;
+        }
+        // mode === "keyword"
+        if (ch === CITATION_MARKER_SEPARATOR || ch === CITATION_MARKER_END) {
+          if (CITATION_KEYWORDS.includes(held.slice(1))) {
+            if (ch === CITATION_MARKER_END) {
+              held = "";
+              mode = "text";
+            } else {
+              held += ch;
+              mode = "citation";
+            }
+          } else {
+            out += held + ch;
+            spanLength = held.length + 1;
+            held = "";
+            mode = ch === CITATION_MARKER_END ? "text" : "opaque";
+          }
+          continue;
+        }
+        held += ch;
+        if (!isKeywordPrefix(held.slice(1))) {
+          out += held;
+          spanLength = held.length;
+          held = "";
+          mode = "other";
+        }
       }
       return out;
     },
     flush(): string {
       const rest = held;
       held = "";
+      spanLength = 0;
+      mode = "text";
       return rest;
     },
   };

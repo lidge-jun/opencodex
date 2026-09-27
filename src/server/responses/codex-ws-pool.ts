@@ -1,13 +1,13 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
-import { CODEX_RESPONSES_HTTP_URL } from "./codex-ws-request";
+import { CODEX_RESPONSES_HTTP_URL, CODEX_WS_FRAME_HEADERS } from "./codex-ws-request";
 import { CODEX_WS_ID_MAX_BYTES } from "./codex-ws-correlation";
 import { CodexWsSession } from "./codex-ws-session";
 
 export const CODEX_WS_POOL_MAX_SESSIONS = 32;
 export const CODEX_WS_POOL_IDLE_MS = 30_000;
 export const CODEX_WS_POOL_MAX_AGE_MS = 5 * 60_000;
-const MUTABLE_HEADERS = new Set(["x-codex-turn-state", "x-codex-turn-metadata"]);
+const MUTABLE_HEADERS = new Set<string>(CODEX_WS_FRAME_HEADERS);
 let processKey: Buffer | undefined;
 let poolSequence = 0;
 
@@ -25,7 +25,7 @@ function digest(input: unknown): string {
 }
 
 /** Identity comes from the selected outgoing request, never a model label or caller hint. */
-export function codexWsReuseIdentity(url: string, headers: Record<string, string>, frameText: string, proxy?: string): CodexWsReuseIdentity | null {
+export function codexWsReuseIdentity(url: string, headers: Record<string, string>, frameText: string, proxy?: string, dialUrl?: string): CodexWsReuseIdentity | null {
   if (url !== CODEX_RESPONSES_HTTP_URL) return null;
   let body: unknown;
   try { body = JSON.parse(frameText); } catch { return null; }
@@ -52,7 +52,8 @@ export function codexWsReuseIdentity(url: string, headers: Record<string, string
   const scope = digest([url, account, thread, turn]);
   const lite = metadata.ws_request_header_x_openai_internal_codex_responses_lite;
   if (lite !== undefined && lite !== "true" && lite !== "false") return null;
-  return { scope, key: digest([scope, authorization, body.model, body.service_tier ?? null, lite ?? null, immutable, proxy ?? null]) };
+  // `dialUrl` is the socket destination after plugin rewrites; absent means the canonical one.
+  return { scope, key: digest([scope, authorization, body.model, body.service_tier ?? null, lite ?? null, immutable, proxy ?? null, dialUrl ?? null]) };
 }
 
 interface Entry { identity: CodexWsReuseIdentity; session: CodexWsSession; createdAt: number; idleAt: number; retired: boolean }

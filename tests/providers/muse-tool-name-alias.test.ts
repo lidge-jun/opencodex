@@ -124,7 +124,7 @@ describe("#4410 Meta Muse 64-char tool-name aliasing", () => {
     expect(aliases?.size).toBe(20);
   });
 
-  test("history function_call and tool_choice are aliased on api.meta.ai", () => {
+  test("history function_call is aliased while auto tool_choice remains unchanged", () => {
     const longName = LONG_ISSUE_NAMES[0]!;
     const wire = hashedName(longName);
     const { body, aliases } = buildForProvider(META_PROVIDER, "muse-spark-1.3-contributor", {
@@ -133,7 +133,7 @@ describe("#4410 Meta Muse 64-char tool-name aliasing", () => {
         { type: "function_call", name: longName, call_id: "c1", arguments: "{\"q\":\"hub\"}" },
         { type: "function_call_output", call_id: "c1", output: "ok" },
       ],
-      tool_choice: { type: "function", name: longName },
+      tool_choice: "auto",
     });
     expect((body.tools as Array<{ name: string }>)[0]!.name).toBe(wire);
     expect((body.input as Array<Record<string, unknown>>)[0]).toMatchObject({
@@ -141,7 +141,7 @@ describe("#4410 Meta Muse 64-char tool-name aliasing", () => {
       name: wire,
       arguments: "{\"q\":\"hub\"}",
     });
-    expect((body.tool_choice as { name: string }).name).toBe(wire);
+    expect(body.tool_choice).toBe("auto");
     expect(aliases?.get(wire)).toBe(longName);
   });
 
