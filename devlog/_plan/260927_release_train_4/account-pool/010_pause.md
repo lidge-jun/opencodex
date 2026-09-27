@@ -53,6 +53,7 @@ The carry landed as `6550f66ac9`, byte-identical to the donor trio outside `devl
 | The CLI account list dropped the `paused` flag and Kiro's `paused` skip reason | `244c9e8513` | `tests/cli/cli-kiro-auto-selection.test.ts` |
 | The Meta Muse key-mint quota read and xAI/Gemini web-search eligibility ignored pause | `459ef4cb9a` | `provider-account-quota`, `xai-web-search`, `gemini-web-search` tests |
 | (Codex review on #6106) A pause committed while a refresh waited for its lock still let the IdP refresh run; a paused Kiro account's model evidence stayed in the catalog and context limits | `146456c088` | `oauth-refresh-lock-multiprocess` (kimi, xai) and `kiro-model-catalog` tests |
+| (CodeRabbit on #6106) Reauthenticating the only other account left a paused active account selected, so requests kept answering 403; ocx surface, Kiro `skipReason` docs and the de/zh-TW hints were imprecise | follow-up commit on #6106 | `oauth-store-multi` reauth hand-off test |
 
 The donor also left `skills/ocx/references/01_management_surface.md` stale for the new route (regenerated) and `structure/data-planes/images.md` saying 503 where the code returns 403 (`d672516003`). A shared-toast `role="alert"` suggestion was deferred because `ToastNotice` serves every dashboard error and belongs to a GUI lane.
 
