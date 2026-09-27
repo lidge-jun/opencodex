@@ -18,3 +18,12 @@ After checking the issue states again, post one English comment on #4878 with th
 ## Verification
 
 Read the posted comment URLs and issue/PR states back through GitHub. Record the comment links and the absence of a production diff in `000_plan.md`. A passing proxy unit test cannot prove the Desktop composer gate; do not claim it does.
+
+## Outcome (2026-09-28)
+
+No production diff was made for these items. The English comments are posted, and every item stays open:
+
+- #4878 (P1): the four-state evidence matrix, why #5879 is not closure evidence, and why usage reaching 100% alone does not show a hard-lock bypass (traffic outside OpenCodex, an admission at 97% finishing above 98%): https://github.com/lidge-jun/opencodex/issues/4878#issuecomment-5858134108
+- #5879: five redesign conditions (desired vs applied state, fresh credential-bound recovery, manual override ownership, Reserve coupling, failure-path tests): https://github.com/lidge-jun/opencodex/pull/5879#issuecomment-5858134423
+- #4961: a separate Reserve capability with migration and a shared catalog/request predicate: https://github.com/lidge-jun/opencodex/issues/4961#issuecomment-5858134763
+- #4869: still waiting on ingress evidence; owned by client integration: https://github.com/lidge-jun/opencodex/issues/4869#issuecomment-5858135029
