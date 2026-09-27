@@ -176,6 +176,13 @@ describe("provider compatibility call guidance", () => {
     const guidance = rewrite(shellAdded());
     expect(guidance).toHaveLength(5);
     expect(JSON.stringify(parseData(guidance[4]!))).toContain("declared but cannot be executed");
+    const differentOutput = frame("response.function_call_arguments.delta", {
+      output_index: 3, delta: "unrelated",
+    });
+    expect(rewrite(differentOutput)).toEqual([differentOutput]);
+    expect(rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 2, delta: "orphaned",
+    }))).toEqual([]);
     expect(rewrite(frame("response.function_call_arguments.delta", {
       output_index: 2, item_id: "fc_1", delta: "{}",
     }))).toEqual([]);
@@ -193,6 +200,86 @@ describe("provider compatibility call guidance", () => {
     const response = parseData(terminal[0]!).response as { output: Array<{ type: string; content?: unknown }> };
     expect(response.output[0]?.type).toBe("message");
     expect(JSON.stringify(response.output[0]?.content)).toContain("declared but cannot be executed");
+  });
+
+  test("an explicit caller tool owns reused call identifiers", () => {
+    const redirect = providerCompatibilityFunctionCallRedirect(
+      { ...provider(), adapter: "openai-responses" },
+      { providerId: "opencode-free" },
+      new Set(["exec"]),
+    )!;
+    const rewrite = createCompatibilityCallRedirectBlockRewrite(redirect);
+    expect(rewrite(shellAdded())).toHaveLength(5);
+
+    const callerStart = frame("response.output_item.added", {
+      output_index: 3,
+      item: { id: "fc_1", type: "function_call", name: "exec", call_id: "call_1", arguments: "" },
+    });
+    expect(rewrite(callerStart)).toEqual([callerStart]);
+    const callerArguments = frame("response.function_call_arguments.delta", {
+      output_index: 3, item_id: "fc_1", delta: "{}",
+    });
+    expect(rewrite(callerArguments)).toEqual([callerArguments]);
+
+    const terminal = rewrite(frame("response.completed", {
+      response: {
+        status: "completed",
+        output: [{ id: "fc_1", type: "function_call", name: "exec", call_id: "call_1", arguments: "{}" }],
+      },
+    }));
+    expect((parseData(terminal[0]!).response as { output: Array<{ name?: string }> }).output[0]?.name).toBe("exec");
+  });
+
+  test("missing call identifiers stay suppressed only until an explicit caller tool", () => {
+    const redirect = providerCompatibilityFunctionCallRedirect(
+      { ...provider(), adapter: "openai-responses" },
+      { providerId: "opencode-free" },
+      new Set(["exec"]),
+    )!;
+    const rewrite = createCompatibilityCallRedirectBlockRewrite(redirect);
+    expect(rewrite(frame("response.output_item.added", {
+      output_index: 1,
+      item: { type: "function_call", name: "read", arguments: "" },
+    }))).toHaveLength(5);
+    expect(rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 1, delta: "hidden",
+    }))).toEqual([]);
+
+    const callerStart = frame("response.output_item.added", {
+      output_index: 2,
+      item: { type: "function_call", name: "exec", arguments: "" },
+    });
+    expect(rewrite(callerStart)).toEqual([callerStart]);
+    const callerArguments = frame("response.function_call_arguments.delta", {
+      output_index: 2, delta: "visible",
+    });
+    expect(rewrite(callerArguments)).toEqual([callerArguments]);
+  });
+
+  test("a caller tool resolves conflicting remembered item and call IDs", () => {
+    const redirect = providerCompatibilityFunctionCallRedirect(
+      { ...provider(), adapter: "openai-responses" },
+      { providerId: "opencode-free" },
+      new Set(["exec"]),
+    )!;
+    const rewrite = createCompatibilityCallRedirectBlockRewrite(redirect);
+    expect(rewrite(shellAdded())).toHaveLength(5);
+    expect(rewrite(frame("response.output_item.added", {
+      output_index: 3,
+      item: { id: "fc_2", type: "function_call", name: "read", call_id: "call_2", arguments: "" },
+    }))).toHaveLength(5);
+
+    const callerStart = frame("response.output_item.added", {
+      output_index: 4,
+      item: { id: "fc_1", type: "function_call", name: "exec", call_id: "call_2", arguments: "" },
+    });
+    expect(rewrite(callerStart)).toEqual([callerStart]);
+    for (const itemId of ["fc_1", "fc_2"]) {
+      const argumentsFrame = frame("response.function_call_arguments.delta", {
+        output_index: 4, item_id: itemId, delta: "{}",
+      });
+      expect(rewrite(argumentsFrame)).toEqual([argumentsFrame]);
+    }
   });
 
   test("unrelated undeclared calls still fail closed", () => {

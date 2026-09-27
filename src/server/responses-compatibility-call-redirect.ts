@@ -46,6 +46,9 @@ interface CallIdentity {
 interface RedirectedCall {
   ref: string;
   text: string;
+  itemId?: string;
+  callId?: string;
+  outputIndex?: unknown;
 }
 
 function callIdentity(payload: Rec): CallIdentity | undefined {
@@ -80,16 +83,59 @@ function createCompatibilityStreamRedirect(
 ): CompatibilityStreamRedirect {
   const byItemId = new Map<string, RedirectedCall>();
   const byCallId = new Map<string, RedirectedCall>();
+  const byOutputIndex = new Map<unknown, RedirectedCall>();
+  // ID-less argument frames belong to the active call; the next named call clears it.
+  let activeCall: RedirectedCall | undefined;
   const redirectedCall = (identity: CallIdentity | undefined): RedirectedCall | undefined => {
     if (!identity) return undefined;
-    return (identity.itemId ? byItemId.get(identity.itemId) : undefined)
-      ?? (identity.callId ? byCallId.get(identity.callId) : undefined);
+    const itemCall = identity.itemId ? byItemId.get(identity.itemId) : undefined;
+    const wireCall = identity.callId ? byCallId.get(identity.callId) : undefined;
+    if (identity.itemId && identity.callId) {
+      // Both IDs must identify the same call. A stale half cannot borrow the other half.
+      return itemCall !== undefined && itemCall === wireCall ? itemCall : undefined;
+    }
+    if (identity.itemId || identity.callId) return itemCall ?? wireCall;
+    if (Object.hasOwn(identity, "outputIndex")) return byOutputIndex.get(identity.outputIndex);
+    return activeCall;
+  };
+  const forget = (identity: CallIdentity | undefined) => {
+    // A current named call reclaims reused IDs and removes each old pair atomically.
+    const calls = new Set<RedirectedCall>();
+    if (identity?.itemId) {
+      const call = byItemId.get(identity.itemId);
+      if (call) calls.add(call);
+    }
+    if (identity?.callId) {
+      const call = byCallId.get(identity.callId);
+      if (call) calls.add(call);
+    }
+    if (identity && Object.hasOwn(identity, "outputIndex")) {
+      const call = byOutputIndex.get(identity.outputIndex);
+      if (call) calls.add(call);
+    }
+    for (const call of calls) {
+      if (call.itemId && byItemId.get(call.itemId) === call) byItemId.delete(call.itemId);
+      if (call.callId && byCallId.get(call.callId) === call) byCallId.delete(call.callId);
+      if (Object.hasOwn(call, "outputIndex") && byOutputIndex.get(call.outputIndex) === call) {
+        byOutputIndex.delete(call.outputIndex);
+      }
+    }
+    activeCall = undefined;
   };
   const remember = (identity: CallIdentity | undefined, name: string): RedirectedCall => {
+    forget(identity);
     const ref = identity?.callId ?? identity?.itemId ?? name;
-    const call = { ref, text: redirect.message(name) };
+    const call = {
+      ref,
+      text: redirect.message(name),
+      ...(identity?.itemId ? { itemId: identity.itemId } : {}),
+      ...(identity?.callId ? { callId: identity.callId } : {}),
+      ...(identity && Object.hasOwn(identity, "outputIndex") ? { outputIndex: identity.outputIndex } : {}),
+    };
     if (identity?.itemId !== undefined) byItemId.set(identity.itemId, call);
     if (identity?.callId !== undefined) byCallId.set(identity.callId, call);
+    if (identity && Object.hasOwn(identity, "outputIndex")) byOutputIndex.set(identity.outputIndex, call);
+    activeCall = call;
     return call;
   };
 
@@ -104,13 +150,10 @@ function createCompatibilityStreamRedirect(
             ...(typeof item.id === "string" ? { itemId: item.id } : {}),
             ...(typeof item.call_id === "string" ? { callId: item.call_id } : {}),
           };
-          const known = redirectedCall(identity);
-          if (known) {
-            changed = true;
-            return guidanceItem(`compat_${known.ref}`, known.text);
-          }
           if (typeof item.name !== "string" || !redirect.names.has(item.name)) return item;
           changed = true;
+          const known = redirectedCall(identity);
+          if (known) return guidanceItem(`compat_${known.ref}`, known.text);
           const call = remember(identity, item.name);
           return guidanceItem(`compat_${call.ref}`, call.text);
         });
@@ -121,7 +164,6 @@ function createCompatibilityStreamRedirect(
         }))];
       }
       const identity = callIdentity(payload);
-      if (redirectedCall(identity)) return [];
       const itemName = (payload.type === "response.output_item.added" || payload.type === "response.output_item.done")
         && isRecord(payload.item)
         && (payload.item.type === "function_call" || payload.item.type === "custom_tool_call")
@@ -133,11 +175,18 @@ function createCompatibilityStreamRedirect(
         ? payload.name
         : undefined;
       const name = itemName ?? sparseName;
-      if (name !== undefined && redirect.names.has(name)) {
+      if (name !== undefined) {
+        if (!redirect.names.has(name)) {
+          // An explicit current name is authoritative if an upstream reuses an old ID.
+          forget(identity);
+          return undefined;
+        }
+        if (redirectedCall(identity)) return [];
         const call = remember(identity, name);
         const newline = block.includes("\r\n") ? "\r\n" : "\n";
         return guidanceBlocks(identity?.outputIndex, call.ref, call.text, newline);
       }
+      if (redirectedCall(identity)) return [];
       return undefined;
     },
   };
