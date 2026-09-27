@@ -1,0 +1,38 @@
+# Release train 4: provider and API compatibility
+
+At `origin/dev` `24b2f39b77` (2026-09-27), carry only the managed Pool Images admission fix from #5927 and the response-tier evidence fix from #5497, each as a separate PR rebased on the then-current `dev`. The other candidates need permission, contract, safety, or performance evidence before they change a user path. The P1 Codex App report #4213 remains open until a sanitized failed call identifies the actual route and auth context; the Images route already exists, but can return a configuration error when no capable upstream is available.
+
+## Loop spec
+
+- **Archetype / trigger:** Satisfy-spec HOTL release lane, authorized by the train-4 provider-compat packet.
+- **Goal / stop:** Record all 7 PR and 6 issue verdicts, merge each safe carried fix after exact-head required CI, comment and close only resolved items, and confirm post-merge `dev` CI. A blocked upstream contract or missing live reproduction is a documented deferral, not a reason to widen scope.
+- **Non-goals:** No main/preview, release, deployment, version, GUI, client integration, account-pool redesign, keyless admission bypass, TLS fingerprint change, or logging of request bodies, credentials or account identifiers. Qoder client work belongs to clients-proxy.
+- **Verifier:** Focused adapter/server fixtures prove credential substitution and tier observation. `bun run typecheck`, `bun run test:changed`, `bun run structure:check`, `bun run privacy:scan`, `git diff --check`, exact-head required CI and post-merge `dev` CI prove their stated scopes. Seven simultaneous lanes make the local full suite disproportionately expensive; record every focused command and leave broad suite coverage to CI. Conditional cases and what must be observed are in the decade docs. `package.json` defines all named scripts; the six staged roadmap docs were checked with `git diff --cached --check` (exit 0), which reads the staged diff. Use `git diff --check` for later unstaged implementation edits. Run each other verifier before claiming it passed.
+- **Memory / terminal outcomes:** This numbered unit is the plan and evidence record. DONE means all criteria above have current evidence. NOOP means an item already has verified coverage. UNSAFE means a proposed contract cannot be safely admitted. NEEDS_HUMAN means a missing external decision or sanitized reproduction blocks a specific item. BLOCKED follows the host threshold, not a single delayed CI check. No user-imposed token or wall-clock bound exists; use the current GitHub credentials only for this repository and the dedicated worktree only for source changes.
+- **Escalation:** A discovered credential-destination change, live admission bypass, inability to obtain exact-head required CI, or current `dev` union break triggers replanning or maintainer security review before merge.
+
+## Work phases and dependencies
+
+| Phase | Depends on | Deliverable |
+| --- | --- | --- |
+| `wp0` | — | Docs-only candidate inventory and executable decade docs (`001`, `010`, `020`, `030`, `040`). No production patch. |
+| `wp1` | `wp0` | Carry #5927 on latest `dev`, security review, test, PR, merge, then post the initial #4213 diagnostic comment using the Images result; see `010_images.md`. |
+| `wp2` | `wp1` | Carry #5497 on latest `dev`, test, PR, merge; see `020_response_tier.md`. |
+| `wp3` | `wp2` | Recheck #4213 after the initial Images comment, diagnose #4143 with current code, and triage the remaining issues; see `030_issues.md`. |
+| `wp4` | `wp3` | Post candidate dispositions, close carried originals and verified-resolved issues, check post-merge `dev` CI; see `040_integration.md`. |
+
+`wp1` and `wp2` each make one cohesive code contract reviewable. Later phase P must recheck this plan against the latest `origin/dev` and amend stale line/path assumptions before implementation. Each phase gets P→A→B→C→D and a factual D entry here. The docs-only `wp0` locks this roadmap before code changes.
+
+## Files and source of truth
+
+Only `devlog/_plan/260927_release_train_4/provider-compat/` is this lane's planning write scope. `src/AGENTS.md` and `structure/INDEX.md` map the eventual runtime changes to `structure/data-planes/images.md`, `structure/providers-and-adapters.md`, `structure/transports/responses.md`, `structure/config.md`, `structure/runtime.md`, and `structure/gui-and-management-api.md`; update each relevant owner with its code change. `docs-site/src/content/docs/guides/codex-integration.md` and the provider configuration reference own user-facing text. No new top-level document convention is introduced.
+
+## Architect consultation and audit
+
+Architect handle `01a0e33e-0d4f-7331-9a06-9676194d930e` proposed T4-D0 (docs first), T4-C1 (Pool Images), T4-C2 (tier authority), and T4-I1 (issue-only diagnostics) against `24b2f39b77`. Accept D0, C1, C2 and I1. Amend C1's test location: `tests/server/server-images.test.ts` is exactly at its 2,755-line ratchet cap (`tests/fixtures/file-size-baseline.json:61`), so new cases go into a registered sibling file. Amend D0: general structure docs change with the owning code phase, while this phase records the planned before/after diff. Keep the architect's two code contracts separate so the pricing observation and tier policy land atomically. Same-handle reflection returned **ALIGNED** for all four IDs. Its three refinements were folded into the latest decade docs: name the negative Pool guard fixture in the sibling, name concrete cost/config test paths, and post the #4213 diagnostic after the Images result instead of waiting for the tier PR.
+
+Independent reviewer handle `01a0e348-c775-7a50-b2e5-25d11a5efb92` first returned FAIL on outbound header ownership and the #4213 comment timing/auth context. Both blockers were folded into `010_images.md`, `000_plan.md` and `030_issues.md`; the same reviewer re-audited and returned **PASS**. Its two nonblocking refinements were applied: split the safe-send and pre-fetch refusal fixture assertions, and name the staged-diff check accurately. The validator alone does not enforce the planned strict final Authorization shape; implementation must add it and trigger its negative fixture.
+
+## Phase results
+
+Pending. Append the exact branch/PR, source and CI SHA, commands/results, issue disposition, and D conclusion for each phase without claiming an unrun suite.
