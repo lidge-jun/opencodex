@@ -1,3 +1,4 @@
+import { serviceApiTokenFingerprint } from "../../lib/service-secrets";
 import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
 import {
@@ -81,7 +82,16 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     linkSupervisor: () => supervisor,
     start(ctx) {
       activeConfig = ctx.config;
-      linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize });
+      linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize,
+        keyFingerprints: apiKeyId => {
+          const entry = activeConfig?.apiKeys?.find(candidate => candidate.id === apiKeyId);
+          if (!entry?.key) return [];
+          const fingerprints = [serviceApiTokenFingerprint(entry.key)];
+          const pending = entry.pendingRotation;
+          if (pending && Date.parse(pending.expiresAt) > Date.now()) fingerprints.push(serviceApiTokenFingerprint(pending.key));
+          return fingerprints;
+        },
+      });
       unregisterSupervisorAdmission ??= linkListener.onAuthenticatedCatalog(apiKeyId => supervisor.notifyAuthenticatedRequest?.(apiKeyId));
       if (linkListenerOwnsTarget(linkListener.status())) {
         supervisor.start();

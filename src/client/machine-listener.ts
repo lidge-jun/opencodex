@@ -116,6 +116,8 @@ export function startMachineListener(
   const linkIngress: LinkIngress | null = linkMode
     ? {
       tunnelPort: connection.link!.tunnelPort,
+      linkId: connection.link!.linkId,
+      apiKeyId: connection.apiKeyId,
       policy: requestPolicyView(config, "127.0.0.1"),
       linkKey: deps.linkKeySource ?? createLinkKeySource(connection.tokenFingerprint, deps.linkKey),
       relay: { fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, tunnel: deps.linkTunnel, ...deps.linkRelay },

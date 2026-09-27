@@ -88,3 +88,9 @@ ocx link revoke --link-id <id> [--json]
 
 - [Remote Hub Deployment](/guides/remote-hub/)
 - [Remote Workspace](/guides/remote-workspace/)
+
+### Relay authentication compatibility
+
+Update both the Home and Child when upgrading to connection-bound relay authentication. Before sending a relayed request's link credential or body, the Child verifies the Home on the same connection it will use for that request. A closed connection is not silently replaced. A Home without this protocol causes a retryable authentication error; upgrade the Home and Child, and re-link when the stored link is no longer recognized. There is no insecure fallback switch. An unexpired pending API-key rotation remains valid until it expires or the rotation is committed or aborted.
+
+Removing the final Home link drains pending authenticated relay requests before releasing its listener. Stopping the process still cancels active connections. This does not change which caller credentials are stripped or which routes can be relayed, and it does not replace SSH's host-key verification.

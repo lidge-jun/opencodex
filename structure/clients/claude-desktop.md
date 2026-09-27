@@ -416,3 +416,5 @@ The [compaction routing override](../transports/responses-failover.md#compaction
 ## Native passthrough tool-call ids
 
 Native Anthropic passthrough in `src/server/claude-messages.ts` forwards the caller's body except for tool-call ids: `sanitizePassthroughToolCallIds` runs the request-scoped allocator from `src/adapters/tool-call-id.ts` over every `*tool_use` id and `*tool_result` `tool_use_id`. Conforming ids are reserved first and stay byte-identical, a non-conforming or overlength id is rewritten to a conforming id of at most 64 characters with call/result pairing kept, and an empty id throws `AnthropicRequestError`, so the request fails with a local 400 before the upstream fetch. `tests/claude-integration/claude-native-passthrough.test.ts` covers rewriting, pairing, the empty id, the overlength id and collision with an existing valid id.
+
+Linked-machine data uses the [connection-bound relay contract](../remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.
