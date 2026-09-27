@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as bounded from "../../src/codex/inject/bounded-config-reader";
-import { collectProjectCodexConfigWarnings, discoverProjectCodexConfigPaths, isGlobalOpencodexRoutingActive } from "../../src/codex/project-config-warnings";
+import { collectProjectCodexConfigWarnings, discoverProjectCodexConfigPaths, formatProjectCodexConfigWarningsForConsole, isGlobalOpencodexRoutingActive } from "../../src/codex/project-config-warnings";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 for (const kind of ["present", "absent", "unreadable"] as const) {
@@ -39,4 +39,19 @@ test("explicit absent snapshots never become fresh global reads", () => {
     expect(discoverProjectCodexConfigPaths({ cwd: root, codexConfigPath: global, maxWalkParents: 1, globalContent: null })).toEqual([]);
     expect(read).not.toHaveBeenCalled();
   } finally { read.mockRestore(); removeTreeWithRetry(root); }
+});
+
+test("console diagnostics do not describe an unreadable global config as a project bypass", () => {
+  const global = { path: "/fixture/global/config.toml", code: "global_config_unreadable" as const,
+    detail: "unreadable", message: "Global ownership could not be determined" };
+  const project = { path: "/fixture/project/.codex/config.toml", code: "model_provider_root" as const,
+    detail: "external", message: "Project selects an external provider" };
+  for (const warnings of [[global], [global, project]]) {
+    const lines = formatProjectCodexConfigWarningsForConsole(warnings);
+    expect(lines[0]).toBe("⚠️  Codex configuration warnings:");
+    expect(lines.join("\n")).toContain("readable regular file");
+  }
+  expect(formatProjectCodexConfigWarningsForConsole([project])[0])
+    .toBe("⚠️  Project Codex config bypasses OpenCodex:");
+  expect(formatProjectCodexConfigWarningsForConsole([])).toEqual([]);
 });

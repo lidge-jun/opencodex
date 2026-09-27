@@ -577,7 +577,9 @@ export function formatProjectCodexConfigWarningsForDoctor(warnings: ProjectCodex
 export function formatProjectCodexConfigWarningsForConsole(warnings: ProjectCodexConfigWarning[]): string[] {
   const grouped = groupProjectCodexConfigWarningsByPath(warnings);
   if (grouped.length === 0) return [];
-  const lines = ["⚠️  Project Codex config bypasses OpenCodex:"];
+  const lines = [grouped.some(entry => entry.globalUnreadable)
+    ? "⚠️  Codex configuration warnings:"
+    : "⚠️  Project Codex config bypasses OpenCodex:"];
   let hasBypassEntries = false;
   for (const { path, issues, bypass, globalUnreadable } of grouped) {
     lines.push(`    ${relPath(path)} — ${issues.join(", ")}`);
