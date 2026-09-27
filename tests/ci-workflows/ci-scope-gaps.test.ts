@@ -1,10 +1,9 @@
 /**
  * Paths the ci filter leaves out still reach a job that exercises them.
  *
- * The `ci` path filter omits `.github/actions/**`, `native/**`, and `deploy/**`, so a pull request
- * that changed only the composite Bun setup action, the Rust remote-workspace helper, or the
- * Cloudflare Workers package ran nothing that used what it changed while the aggregate check
- * reported success over skips. Each now has a
+ * The `ci` path filter omits `.github/actions/**` and `native/**`, so a pull request that changed
+ * only the composite Bun setup action, or only the Rust remote-workspace helper, ran nothing that
+ * used what it changed while the aggregate check reported success over skips. Each now has a
  * narrow filter and a small job, in the shape `structure-gate` set: pull-request scope, no full
  * suite, and an arm in the aggregate gate.
  */
@@ -34,7 +33,6 @@ const scriptOf = (job: Job): string => (job.steps ?? []).map(step => step.run ??
 
 const ACTION_PATH = ".github/actions/setup-project-bun/action.yml";
 const HELPER_PATH = "native/remote-workspace-helper/src/main.rs";
-const WORKER_PATH = "deploy/cloudflare/src/index.ts";
 
 describe("an edit to the setup action alone", () => {
   test("selects a job that runs the action and checks what it installed", () => {
@@ -59,27 +57,9 @@ describe("an edit to the remote-workspace helper alone", () => {
   });
 });
 
-describe("an edit to the Cloudflare deploy package alone", () => {
-  test("selects a job that installs its frozen lockfile, typechecks it, and runs its test", () => {
-    const selected = jobsSelectedBy(filtersMatching(WORKER_PATH))
-      .filter(([, job]) => (job.steps ?? []).some(step => (step as { "working-directory"?: string })["working-directory"] === "deploy/cloudflare"));
-    expect(selected.map(([name]) => name)).toEqual(["cloudflare-deploy"]);
-    const steps = selected[0]![1].steps ?? [];
-    const inWorker = steps.filter(step => (step as { "working-directory"?: string })["working-directory"] === "deploy/cloudflare").map(step => step.run);
-    expect(inWorker).toEqual(["bun install --frozen-lockfile", "bun run typecheck"]);
-    expect(scriptOf(selected[0]![1])).toContain("bun test tests/service/cloudflare-deploy.test.ts");
-  });
-
-  test("the supervisor and the test it runs select it too", () => {
-    for (const path of ["docker/cloudflare-supervisor.ts", "tests/service/cloudflare-deploy.test.ts"]) {
-      expect(`${path}:${filtersMatching(path).includes("deploy")}`).toBe(`${path}:true`);
-    }
-  });
-});
-
 describe("the narrow checks stay narrow", () => {
   test("neither path starts the full suite or the native macOS jobs", () => {
-    for (const path of [ACTION_PATH, HELPER_PATH, WORKER_PATH]) {
+    for (const path of [ACTION_PATH, HELPER_PATH]) {
       expect(`${path}:ci=${matches(filters.ci, path)}`).toBe(`${path}:ci=false`);
       expect(`${path}:native=${matches(filters.native, path)}`).toBe(`${path}:native=false`);
     }
@@ -87,7 +67,7 @@ describe("the narrow checks stay narrow", () => {
 
   test("an ordinary source change selects neither job", () => {
     for (const path of ["src/router.ts", "tests/lab/core-lab-boundary.test.ts", "package.json"]) {
-      expect(`${path}:${filtersMatching(path).filter(name => name === "setup_action" || name === "remote_helper" || name === "deploy")}`).toBe(`${path}:`);
+      expect(`${path}:${filtersMatching(path).filter(name => name === "setup_action" || name === "remote_helper")}`).toBe(`${path}:`);
     }
   });
 
@@ -97,8 +77,6 @@ describe("the narrow checks stay narrow", () => {
     expect(changes?.outputs?.remote_helper).toBe("${{ steps.narrow.outputs.remote_helper }}");
     expect(narrow?.env?.SETUP_ACTION).toBe("${{ steps.filter.outputs.setup_action }}");
     expect(narrow?.env?.REMOTE_HELPER).toBe("${{ steps.filter.outputs.remote_helper }}");
-    expect(changes?.outputs?.deploy).toBe("${{ steps.narrow.outputs.deploy }}");
-    expect(narrow?.env?.DEPLOY).toBe("${{ steps.filter.outputs.deploy }}");
     expect(narrow?.run).toContain("exit 1");
   });
 });
@@ -117,7 +95,7 @@ function gateExpectation(job: string, env: Record<string, string>): string {
 describe.skipIf(process.platform === "win32")("the aggregate gate", () => {
   test("requires each narrow job exactly when its filter selected it", () => {
     const needs = Array.isArray(jobs.ci?.needs) ? jobs.ci!.needs : [];
-    for (const [job, variable] of [["setup-action", "CHANGES_SETUP_ACTION"], ["remote-helper", "CHANGES_REMOTE_HELPER"], ["cloudflare-deploy", "CHANGES_DEPLOY"]] as const) {
+    for (const [job, variable] of [["setup-action", "CHANGES_SETUP_ACTION"], ["remote-helper", "CHANGES_REMOTE_HELPER"]] as const) {
       expect(needs).toContain(job);
       expect(gateExpectation(job, { [variable]: "true" })).toStartWith("requested\n");
       expect(gateExpectation(job, { [variable]: "false" })).toStartWith("not-requested\n");
@@ -126,6 +104,5 @@ describe.skipIf(process.platform === "win32")("the aggregate gate", () => {
     const step = (jobs.ci?.steps ?? []).find(candidate => (candidate.run ?? "").includes("scoped=requested"));
     expect(step?.env?.CHANGES_SETUP_ACTION).toBe("${{ needs.changes.outputs.setup_action }}");
     expect(step?.env?.CHANGES_REMOTE_HELPER).toBe("${{ needs.changes.outputs.remote_helper }}");
-    expect(step?.env?.CHANGES_DEPLOY).toBe("${{ needs.changes.outputs.deploy }}");
   });
 });
