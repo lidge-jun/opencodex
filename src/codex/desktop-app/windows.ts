@@ -153,7 +153,7 @@ function parseProcessLine(line: string, root: string): DesktopProcess | null {
   // that test is a string prefix and is how a sibling install would sneak in.
   if (!isMemberExecutable(executable, root)) return null;
   return { pid, parentPid, createdAt, executable,
-    ...(encoded ? { commandLine: Buffer.from(encoded, "base64").toString("utf8") } : {}) };
+    ...(encoded !== undefined ? { commandLine: Buffer.from(encoded, "base64").toString("utf8") } : {}) };
 }
 
 /**

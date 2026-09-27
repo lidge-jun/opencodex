@@ -959,7 +959,7 @@ reviewed; reinstalling the certificate does not make an unassessed build support
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
 compatibility PAC argument and launches Codex through Windows package activation. It checks the
-package identity and routing argument after launch; conflicting main-app routing arguments cause
+package identity and routing argument after launch; unreadable or conflicting main-app routing arguments cause
 a refusal before the restart. This does not enable a compatibility mode, install a certificate,
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.

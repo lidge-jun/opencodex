@@ -46,6 +46,17 @@ describe("Codex Desktop compatibility package launch", () => {
     expect(io.calls.at(-1)).toContain(pac);
   });
 
+  test("an explicitly unreadable root command line survives parsing and refuses context capture", () => {
+    for (const commandLine of ["", "   "]) {
+      const io = executor({ running: `100 50 2026-01-01T00:00:00Z ${install.root}\\app\\ChatGPT.exe\t${Buffer.from(commandLine).toString("base64")}` });
+      const processes = windowsDesktopAppAdapter.listProcesses(io.exec, install)!;
+      expect(processes).toHaveLength(1);
+      expect(processes[0]?.commandLine).toBe(commandLine);
+      expect(() => windowsDesktopAppAdapter.captureRelaunchContext(io.exec, install, processes))
+        .toThrow("desktop_compatibility_launch_context_unavailable");
+    }
+  });
+
   test("helper arguments cannot override the main app and conflicting roots refuse before a stop", () => {
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` };
     const other = pac.replace(":10102", ":10103");
@@ -54,6 +65,8 @@ describe("Codex Desktop compatibility package launch", () => {
     expect(() => captureWindowsCompatibilityContext([root, { ...root, pid: 200, commandLine: `ChatGPT.exe --proxy-pac-url=${other}` }]))
       .toThrow("desktop_compatibility_conflicting_launch_context");
     expect(captureWindowsCompatibilityContext([{ ...root, commandLine: "ChatGPT.exe" }])).toEqual({});
+    expect(captureWindowsCompatibilityContext([root, { ...root, pid: 101, parentPid: 100, commandLine: "" }]))
+      .toEqual({ codexCompatibilityPacUrl: pac });
   });
 
   test("accepts only canonical owned-shape loopback PAC URLs", () => {

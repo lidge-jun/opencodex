@@ -45,6 +45,9 @@ export function captureWindowsCompatibilityContext(processes: readonly DesktopPr
   const members = new Set(processes.map(entry => entry.pid));
   const urls = new Set<string>();
   for (const entry of processes.filter(value => !members.has(value.parentPid))) {
+    if (entry.commandLine !== undefined && entry.commandLine.trim() === "") {
+      throw new Error("desktop_compatibility_launch_context_unavailable");
+    }
     for (const match of (entry.commandLine ?? "").matchAll(/(?:^|\s)"?--proxy-pac-url=([^"\s]+)"?/g)) {
       const url = match[1]!;
       if (url.startsWith("http://127.0.0.1:")) urls.add(validatedCompatibilityPacUrl(url));

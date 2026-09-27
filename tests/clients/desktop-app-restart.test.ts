@@ -171,6 +171,17 @@ describe("the test-runner guard follows the test preload, not NODE_ENV", () => {
 });
 
 describe("Codex desktop app restart (#2292)", () => {
+  test("an unreadable Windows root command line refuses before stop and leaves the restart lock reusable", () => {
+    const calls: Call[] = [];
+    const io = scriptedIo({ discovery: DISCOVERY, processes: `1000 900 2026-01-01T00:00:00Z ${INSTALL}\\app\\ChatGPT.exe\t`, calls });
+    withTrustedExes(() => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(restartCodexDesktopApp(io)).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "relaunch_context_failed" });
+      }
+    });
+    expect(calls.some(call => call.file === TASKKILL || /CloseMainWindow|Start-Process|OpenCodexPackageActivation/.test(call.args.join(" ")))).toBe(false);
+  });
+
   test("a relaunch-context failure refuses before any process is signalled and releases the lock", () => {
     const calls: Call[] = [];
     const io = scriptedIo({ discovery: DISCOVERY, processes: `1000 900 2026-01-01T00:00:00Z ${INSTALL}\\app\\ChatGPT.exe`, calls });

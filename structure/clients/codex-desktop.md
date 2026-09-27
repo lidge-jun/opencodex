@@ -19,6 +19,7 @@ PAC from the main package process. Helpers cannot override it and conflicting ma
 processes refuse before termination. No other process arguments are carried forward.
 Captured command lines stay internal, outside restart results and diagnostic logs.
 Capture failures return `relaunch_context_failed` and release the restart lock before any process is signalled; the CLI reports that the app was not stopped.
+An explicitly empty or whitespace-only root command line remains unknown after CIM parsing and refuses context capture; an unreadable helper cannot erase a known root PAC.
 
 `src/codex/desktop-compatibility/windows-package-command.ts` validates the canonical
 loopback URL shape, rechecks the discovered package manifest, activates with
