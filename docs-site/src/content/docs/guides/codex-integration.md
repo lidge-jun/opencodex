@@ -949,6 +949,12 @@ If prerequisites are missing, observation stays off and the model proxy continue
 Saving this preference does not start or stop the current service. Use its separate service
 controls for immediate changes. If a save cannot be confirmed, refresh its status before retrying.
 
+A running service does not establish that Codex is connected through it. A normal app launch or
+an app updater can omit the managed connection argument. Save drafts, close Codex, then use
+**Open Codex** in this panel to restore that connection. This control never closes the app for you.
+After a Codex update, an unassessed app version refuses correction until its compatibility is
+reviewed; reinstalling the certificate does not make an unassessed build supported.
+
 ## Routed models during Codex reserve mode
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback

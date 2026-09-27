@@ -87,6 +87,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       {snapshot.certificate.renewalDue && <p className="notice-warn">{t("desktopCompat.renewalDue")}</p>}
       {snapshot.runtime.usage?.mode === "apply" && <p className="notice-warn">{t("desktopCompat.trialRisk")}</p>}
       {snapshot.runtime.contextFailure && <p className="notice-warn" role="status">{t(errorLabel[snapshot.runtime.contextFailure])}</p>}
+      {running && <p className="muted text-control">{t("desktopCompat.reconnectHint")}</p>}
     </>}
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--space-2)" }}>
       {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh}
