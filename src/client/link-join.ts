@@ -392,8 +392,10 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   } catch (error) {
     // connectClient has drained its local rollback before rejecting. Only then can
     // the tunnel and the remote key be compensated without racing a late writer.
+    const tunnelAborted = enrollmentAbort.signal.aborted;
+    enrollmentFinished = true;
     await rollback(deps, issued.linkId, tunnel);
-    throw new ClientLinkJoinError(enrollmentAbort.signal.aborted ? "join_tunnel_failed"
+    throw new ClientLinkJoinError(tunnelAborted ? "join_tunnel_failed"
       : error instanceof ClientLinkJoinError ? error.code : "join_connect_failed");
   } finally {
     enrollmentFinished = true;

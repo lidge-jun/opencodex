@@ -654,6 +654,28 @@ describe("client initiated link join", () => {
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
   });
 
+  for (const code of ["join_connect_failed", "admission_failed"] as const) {
+    test(`rollback tunnel exit preserves the original ${code} cause`, async () => {
+      const calls: string[][] = [];
+      let exit!: (code: number) => void;
+      const exited = new Promise<number>(resolve => { exit = resolve; });
+      let stopped = 0, cleared = 0;
+      await expect(joinHome(joinDeps({
+        runner: runnerFor(calls), writeState: () => {},
+        clearState: () => { cleared += 1; },
+        spawnTunnel: () => ({ pid: 123, exited, stop: async () => { stopped += 1; exit(0); } }),
+        fetchImpl: challengedFetch(),
+        connect: (async () => {
+          if (code === "admission_failed") throw new ClientLinkJoinError(code);
+          throw new Error("catalog validation failed");
+        }) as typeof import("../../src/client/connect").connectClient,
+      }), { alias: "home" })).rejects.toMatchObject({ code });
+      expect(stopped).toBe(1);
+      expect(cleared).toBe(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
+    });
+  }
+
   test("keeps the sidecar and reports the link id when rollback revoke fails, then compensates before the next join", async () => {
     const sidecar = {
       linkId: LINK_ID,
