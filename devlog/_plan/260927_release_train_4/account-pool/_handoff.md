@@ -1,0 +1,11 @@
+# Account-pool lane handoff — 2026-09-28
+
+Stopped on coordinator instruction. Worktree: `/Users/jun/.codex/worktrees/t4-account-pool/opencodex`; branch: `codex/t4-account-pool-roadmap`. Last observed base was `origin/dev` `24b2f39b77a29711c5064987de169ecf4a97c58b`. This handoff and the six numbered roadmap files are preserved in a local WIP commit; nothing was pushed.
+
+No lane PR was opened, merged or closed. No GitHub issue/PR comment was posted. At last read, candidate PRs #6087, #5956, #5879, #5099 and #3738 were open; #6087 had advanced to `480083070ac4cb27863cee91452e3f65e8aa5dd0`. Refresh all remote states before action.
+
+This session's host goal remains active and its `cxc` FSM reached **A** for docs-only wp0. First independent audit returned FAIL with five blockers and one test-scope finding. The staged plan was amended for the third #6087 commit, existing 401 refresh precedence, a structured 403 normalization seam, explicit 4 KiB/2 s body bounds, primary-inference-only sidecar scope, and path-specific tests. The same architect's recheck was interrupted by the stop order; **no re-audit or A→B transition occurred**. A successor should independently review this current plan before implementation and should not treat the interrupted recheck as approval.
+
+Local environment work: `bun install --frozen-lockfile` succeeded; the second baseline `bun run typecheck` passed after an initial missing-`bun-types` attempt; `bun run privacy:scan` and staged `git diff --check` passed on the roadmap. No behavior tests, browser QA, security review, PR CI or `dev` CI ran. No proxy was started and no real user home/client files were intentionally touched.
+
+Next: refresh `origin/dev` and donor PR heads; finish architect reflection and independent roadmap audit; close the docs-only PABCD cycle; then carry #6087 with GUI/security/isolation QA and implement the narrower #5099 primary-inference slice only if fresh tests support it. For local proxy QA, isolate `HOME`, `OPENCODEX_HOME` and `CODEX_HOME` and disable client sync. Run `test:changed`/full from a same-commit verification checkout at `/private/tmp/t4-account-pool-verify`, never bypassing test-home protections. The roadmap records all PR/issue dispositions and required comments.
