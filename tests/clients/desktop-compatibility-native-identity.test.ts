@@ -21,40 +21,62 @@ function fixture() {
 const usage = { account_id: "fixture-A", user_id: "fixture-user", plan_type: "pro",
   rate_limit: { allowed: false, limit_reached: true, primary_window: { used_percent: 100 } },
   spend_control: { reached: false }, credits: { has_credits: false, unlimited: false } };
-const upstream = (async () => Response.json(usage)) as typeof fetch;
+function upstreamFixture(beforeResponse?: () => Promise<void>) {
+  const requests: Request[] = [];
+  return {
+    fetch: (async (input, init) => {
+      requests.push(new Request(input, init)); await beforeResponse?.(); return Response.json(usage);
+    }) as typeof fetch,
+    verify(tokens: string[]) {
+      // Assert outside the production reader's catch: a bad request must not look
+      // like the expected null result of a negative identity test.
+      expect(requests).toHaveLength(tokens.length);
+      requests.forEach((request, index) => {
+        expect(request.url).toBe("https://chatgpt.com/backend-api/wham/usage");
+        expect(request.method).toBe("GET"); expect(request.redirect).toBe("manual");
+        expect(request.headers.get("authorization")).toBe(`Bearer ${tokens[index]}`);
+        expect(request.headers.get("ChatGPT-Account-ID")).toBe("fixture-A");
+      });
+    },
+  };
+}
 const exchange = { method: "GET", pathname: "/backend-api/wham/usage", status: 200 };
 const consent = { scope: "account-ui-compatibility" as const, accountWideConsent: true };
 
 test("unchanged native credentials keep one opaque generation and verify without exposing tokens", async () => {
-  const io = fixture(), reader = createNativeIdentityReader(io.path, upstream);
+  const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch);
   const first = await reader.readCurrentIdentity();
   expect(first?.credentialGeneration).toBeDefined();
   expect(await reader.readCurrentIdentity()).toEqual(first);
   expect(await reader.verifyFreshIdentity()).toEqual(first);
   expect(JSON.stringify(first)).not.toContain("synthetic-access");
   expect(JSON.stringify(first)).not.toContain("id_token");
+  upstream.verify(["synthetic-access-A"]);
 });
 
 for (const change of ["token rotation", "A to B to A"] as const) test(`a delayed identity response cannot cross ${change}`, async () => {
   const io = fixture(); let entered!: () => void, release!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const pending = new Promise<void>(resolve => { release = resolve; });
-  const reader = createNativeIdentityReader(io.path, (async () => { entered(); await pending; return Response.json(usage); }) as typeof fetch);
+  const upstream = upstreamFixture(async () => { entered(); await pending; });
+  const reader = createNativeIdentityReader(io.path, upstream.fetch);
   const before = await reader.readCurrentIdentity(), verifying = reader.verifyFreshIdentity(); await started;
   if (change === "token rotation") io.write("fixture-A", "synthetic-access-new");
   else { io.write("fixture-B", "synthetic-access-B"); io.write(); }
   release(); expect(await verifying).toBeNull();
   expect((await reader.readCurrentIdentity())?.credentialGeneration).not.toBe(before?.credentialGeneration);
+  upstream.verify(["synthetic-access-A"]);
 });
 
 test("an unreadable intermediate login cannot recover an old credential generation", async () => {
-  const io = fixture(), reader = createNativeIdentityReader(io.path, upstream), before = await reader.readCurrentIdentity();
+  const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch), before = await reader.readCurrentIdentity();
   writeFileSync(io.path, "{}"); expect(await reader.readCurrentIdentity()).toBeNull(); io.write();
   expect((await reader.readCurrentIdentity())?.credentialGeneration).not.toBe(before?.credentialGeneration);
+  upstream.verify([]);
 });
 
 test("a trial disarms on native credential replacement and a fresh runtime can bind the replacement", async () => {
-  const io = fixture(), reader = createNativeIdentityReader(io.path, upstream), account = (await reader.verifyFreshIdentity())!;
+  const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch), account = (await reader.verifyFreshIdentity())!;
   const controller = new UsageRelayController(account, reader.readCurrentIdentity, reader.verifyFreshIdentity, Date.now, Date.now() + 600000);
   await controller.rewriteJson(JSON.stringify(usage), exchange); expect((await controller.activate(consent)).accepted).toBe(true);
   io.write("fixture-A", "synthetic-access-new");
@@ -62,10 +84,11 @@ test("a trial disarms on native credential replacement and a fresh runtime can b
   expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().outputs).toBe(0);
   const replacement = new UsageRelayController((await reader.verifyFreshIdentity())!, reader.readCurrentIdentity, reader.verifyFreshIdentity, Date.now, Date.now() + 600000);
   await replacement.rewriteJson(JSON.stringify(usage), exchange); expect((await replacement.activate(consent)).accepted).toBe(true);
+  upstream.verify(["synthetic-access-A", "synthetic-access-A", "synthetic-access-new", "synthetic-access-new"]);
 });
 
 test("A to B to A during the async build check cannot publish a corrected old response", async () => {
-  const io = fixture(), reader = createNativeIdentityReader(io.path, upstream); let waiting = false, entered!: () => void, release!: (value: boolean) => void;
+  const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch); let waiting = false, entered!: () => void, release!: (value: boolean) => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const controller = new UsageRelayController((await reader.verifyFreshIdentity())!, reader.readCurrentIdentity, reader.verifyFreshIdentity, Date.now, Date.now() + 600000, 180000,
     () => waiting ? (entered(), new Promise<boolean>(resolve => { release = resolve; })) : true);
@@ -73,4 +96,5 @@ test("A to B to A during the async build check cannot publish a corrected old re
   waiting = true; const correcting = controller.rewriteJson(JSON.stringify(usage), exchange); await started;
   io.write("fixture-B", "synthetic-access-B"); io.write(); release(true);
   expect(await correcting).toBeNull(); expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().outputs).toBe(0);
+  upstream.verify(["synthetic-access-A", "synthetic-access-A"]);
 });
