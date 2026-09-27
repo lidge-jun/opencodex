@@ -30,3 +30,24 @@ Read back every posted comment/state and record links. If a source author materi
 ## Final report
 
 Give merged PR numbers and `dev` merge SHAs; for each candidate state as-is/cherry-pick/squash/batch/reimplementation/hold; link closed source PRs/issues and hold comments; list local commands/results and exact-head/merge CI run URLs; name residual client, security or provider behavior that was not proven and files likely to collide with other lanes.
+
+## Outcome (2026-09-28)
+
+| Item | Disposition | Link |
+| --- | --- | --- |
+| #6087 | Squash carry with review fixes, merged as #6106 (`555ef68ac6`); closed with thanks | https://github.com/lidge-jun/opencodex/pull/6106 |
+| #5099 | Narrow 401 slice reimplemented in #6132 (`ae6b0ba913`); left open for 403 rotation and the health proposal | https://github.com/lidge-jun/opencodex/pull/5099#issuecomment-5859390311 |
+| #5956 | Hold | https://github.com/lidge-jun/opencodex/pull/5956#issuecomment-5858444723 |
+| #5879 | Hold | https://github.com/lidge-jun/opencodex/pull/5879#issuecomment-5858134423 |
+| #3738 | Hold / split | https://github.com/lidge-jun/opencodex/pull/3738#issuecomment-5858443616 |
+| #6013 | Open: Anthropic pause and threshold | https://github.com/lidge-jun/opencodex/issues/6013#issuecomment-5859358304 |
+| #5649 | Open | https://github.com/lidge-jun/opencodex/issues/5649#issuecomment-5858444444 |
+| #5616 | Open | https://github.com/lidge-jun/opencodex/issues/5616#issuecomment-5858444200 |
+| #5561 | Open | https://github.com/lidge-jun/opencodex/issues/5561#issuecomment-5858443864 |
+| #4878 (P1) | Open, needs-info matrix | https://github.com/lidge-jun/opencodex/issues/4878#issuecomment-5858134108 |
+| #4961 | Open | https://github.com/lidge-jun/opencodex/issues/4961#issuecomment-5858134763 |
+| #4869 | Open | https://github.com/lidge-jun/opencodex/issues/4869#issuecomment-5858135029 |
+| #3375 | Open umbrella, progress noted | https://github.com/lidge-jun/opencodex/issues/3375#issuecomment-5859390458 |
+| #3376 | Open for initial activation | https://github.com/lidge-jun/opencodex/issues/3376#issuecomment-5858443335 |
+
+The coordinator changed the merge gate mid-train. Per-PR hosted CI was replaced by local union verification, and the single Cross-platform CI run on the final `dev` belongs to the coordinator. #6106's earlier head `2c7aa23bf4` had every hosted check green before the last rebases. No issue was closed, because none is fully resolved by these changes.
