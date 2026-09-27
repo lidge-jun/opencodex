@@ -639,6 +639,15 @@ async function accountCredentialSnapshot(
   }
 }
 
+const AVAILABILITY_MESSAGE_MAX_CODE_UNITS = 2_000;
+// Codex parses the catalog with a strict JSON reader that rejects a lone surrogate escape.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Trim and cap a prompt without leaving half of a surrogate pair at the cut or anywhere else. */
+function boundedAvailabilityMessage(message: string): string {
+  return message.trim().slice(0, AVAILABILITY_MESSAGE_MAX_CODE_UNITS).replace(LONE_SURROGATE, "").trim();
+}
+
 /** Keep valid roster slugs while dropping malformed program and availability metadata. */
 function parseAccountModels(text: string): {
   models: ReadonlySet<string>;
@@ -657,9 +666,8 @@ function parseAccountModels(text: string): {
       const nux = row.availability_nux;
       if (nux && typeof nux === "object" && !Array.isArray(nux)) {
         const message = (nux as { message?: unknown }).message;
-        if (typeof message === "string" && message.trim()) {
-          availabilityNuxByModel.set(row.slug, { message: message.trim().slice(0, 2_000) });
-        }
+        const bounded = typeof message === "string" ? boundedAvailabilityMessage(message) : "";
+        if (bounded) availabilityNuxByModel.set(row.slug, { message: bounded });
       }
       const programs = row.available_access_programs;
       if (programs === null) accessProgramsByModel.set(row.slug, null);

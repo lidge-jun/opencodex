@@ -165,7 +165,7 @@ grants neither. The same snapshot gates Pool selection, so catalog and runtime u
 The roster's per-model `available_access_programs` is projected separately: bare native rows use only confirmed main-account
 metadata, and selector-qualified rows use only their mapped account. An object requires a valid `cyber` string array; malformed values under other program keys are omitted without losing that grant. Explicit `null` stays null; omission stays omitted.
 Failed discovery or credential replacement removes stale access-program metadata. It changes presentation, not routing grants.
-The roster's `availability_nux.message` is trimmed, capped at 2,000 characters, and projected only onto bare native rows from a confirmed main-account roster that lists the slug. Missing or unconfirmed main metadata writes `null` to clear stale prompts; account-qualified, combo, and native alias rows carry no availability prompt. Pool-account prompts never reach the bare row.
+The roster's `availability_nux.message` is trimmed, capped at 2,000 UTF-16 units without leaving a lone surrogate, and projected only onto bare native rows from a confirmed main-account roster that lists the slug. Missing or unconfirmed main metadata writes `null` to clear stale prompts; account-qualified, combo, and native alias rows carry no availability prompt. Pool-account prompts never reach the bare row.
 
 `client_version` arrives on the inbound request and is part of that cache identity, so
 `src/codex/model-entitlements.ts` bounds the work as well as the state: stored versions per account, concurrent

@@ -86,6 +86,21 @@ test.each([undefined, null, "bad", [], {}, { message: "  " }, { message: 42 }])(
   },
 );
 
+test("the cap never splits a surrogate pair and lone surrogates are dropped", async () => {
+  // 1,999 ASCII units then an emoji: the 2,000-unit cut lands between its two halves.
+  const straddling = `${"a".repeat(1_999)}\u{1F600}tail`;
+  const cut = await snapshot([rosterRow(MODEL, { message: straddling })]);
+  const cutMessage = cut.availabilityNuxByAccount?.get(MAIN_CODEX_ACCOUNT_ID)?.get(MODEL)?.message ?? "";
+  expect(cutMessage).toBe("a".repeat(1_999));
+  expect(cutMessage.isWellFormed()).toBe(true);
+  resetCodexModelEntitlementCacheForTests();
+  const lone = await snapshot([rosterRow(MODEL, { message: "Try \uD83D it \u{1F600}" })]);
+  const loneMessage = lone.availabilityNuxByAccount?.get(MAIN_CODEX_ACCOUNT_ID)?.get(MODEL)?.message ?? "";
+  expect(loneMessage).toBe("Try  it \u{1F600}");
+  expect(loneMessage.isWellFormed()).toBe(true);
+  expect(JSON.stringify({ message: loneMessage })).not.toMatch(/\\ud[89ab]/i);
+});
+
 test("hidden rows and failed or unlisted main rosters cannot retain a prompt", async () => {
   const hidden = await snapshot([{ ...rosterRow(MODEL, { message: "Hidden" }), visibility: "hide" }]);
   expect(hidden.availabilityNuxByAccount?.get(MAIN_CODEX_ACCOUNT_ID)).toBeUndefined();
