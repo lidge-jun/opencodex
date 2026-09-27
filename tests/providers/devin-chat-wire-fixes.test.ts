@@ -149,6 +149,18 @@ describe("Gemini tool schema type arrays", () => {
     });
   });
 
+  test("a type union disjoint from the existing anyOf keeps both constraints", () => {
+    const out = normalizeDevinToolParameters("gemini-x", {
+      type: ["string", "null"], minLength: 2, anyOf: [{ type: "integer" }],
+    }) as any;
+    expect(out).toEqual({
+      allOf: [
+        { anyOf: [{ minLength: 2, type: "string" }, { type: "null" }] },
+        { anyOf: [{ type: "integer" }] },
+      ],
+    });
+  });
+
   test("an existing anyOf that agrees with the outer keywords is folded in, not nested under allOf", () => {
     const out = normalizeDevinToolParameters("MODEL_GOOGLE_GEMINI_2_5_PRO", {
       type: ["object", "null"], anyOf: [{ required: ["a"] }, { required: ["b"] }],

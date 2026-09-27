@@ -74,8 +74,9 @@ function splitTypeArray(node: Schema, types: unknown[]): Schema {
     }
   }
   if (nullReachable) branches.push({ type: 'null' });
-  // Nothing satisfies both unions; keep the existing anyOf rather than emit an empty one.
-  if (branches.length === 0) return { ...annotations, ...rest, anyOf: existing };
+  // The two unions are disjoint. Keep both constraints rather than drop the type union,
+  // which would let the anyOf branches admit types the node never allowed.
+  if (branches.length === 0) return { ...annotations, allOf: [splitTypeArray({ ...rest, type: types }, types), { anyOf: existing }] };
   if (branches.length === 1 && isSchema(branches[0])) return { ...annotations, ...branches[0] };
   return { ...annotations, anyOf: branches };
 }
