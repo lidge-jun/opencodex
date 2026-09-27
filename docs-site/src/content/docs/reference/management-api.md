@@ -557,8 +557,10 @@ outcome fields from an older server do not establish successful recovery.
 | `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
+| `GET /api/oauth/accounts` | List masked accounts; generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
+| `DELETE /api/oauth/accounts` | Remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; 404 account missing; 409 account paused; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | Pause or resume one generic OAuth account. Body `{ provider, accountId, paused }`; pausing the active account selects the next usable account when available | 400 unsupported provider or invalid body; 404 account missing; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |

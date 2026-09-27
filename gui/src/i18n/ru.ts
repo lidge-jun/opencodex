@@ -1635,6 +1635,7 @@ export const ru: Record<TKey, string> = {
   "pws.cockpitImportComplete": "Импорт завершён: импортировано — {imported}, обновлено — {updated}, ошибок — {failed}, неподдерживаемых — {unsupported}.",
   "pws.accountSwitching": "Переключение…",
   "pws.accountCurrent": "Текущий аккаунт",
+  "pws.accountPausedHint": "До возобновления исключён из автоматического выбора, повторов, восстановления после задержки, ручного выбора и проактивного обновления токена.",
   "pws.defaultModelNone": "Нет (использовать значение провайдера)",
   "pws.discardSettings": "Не сохранять",
   "pws.jsonEditorDesc": "Редактируйте исходную JSON-конфигурацию провайдера. Изменения сохраняются сразу.",

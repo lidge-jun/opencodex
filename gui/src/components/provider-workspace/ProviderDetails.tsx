@@ -54,6 +54,7 @@ export default function ProviderDetails({
   settingsFocusToken = 0,
   settingsFocusProvider = null,
   switchingAccountId,
+  pausingAccountId,
   keys,
   busyProvider,
   loginHint,
@@ -98,6 +99,7 @@ export default function ProviderDetails({
   settingsFocusToken?: number;
   settingsFocusProvider?: string | null;
   switchingAccountId?: string | null;
+  pausingAccountId?: string | null;
   keys?: ApiKeyRow[];
   busyProvider?: string | null;
   loginHint?: LoginHint | null;
@@ -357,6 +359,7 @@ export default function ProviderDetails({
             keys={keys}
             accountLoadState={accountLoadState}
             switchingAccountId={switchingAccountId}
+            pausingAccountId={pausingAccountId}
             busy={busyProvider === item.name}
             loginHint={loginHint}
             authHandlers={authHandlers}

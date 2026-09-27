@@ -1638,6 +1638,7 @@ export const vi: Record<TKey, string> = {
   "pws.cockpitImportComplete": "Đã nhập xong: {imported} được nhập, {updated} được cập nhật, {failed} thất bại, {unsupported} không được hỗ trợ.",
   "pws.accountSwitching": "Đang chuyển…",
   "pws.accountCurrent": "Tài khoản hiện tại",
+  "pws.accountPausedHint": "Được loại trừ khỏi chọn tài khoản tự động, thử lại, hồi phục sau thời gian chờ, lựa chọn thủ công và làm mới token chủ động cho đến khi tiếp tục.",
   "pws.defaultModelNone": "Không có (sử dụng mặc định của provider)",
   "pws.discardSettings": "Huỷ bỏ",
   "pws.jsonEditorDesc": "Chỉnh sửa config dạng JSON thô của provider. Các thay đổi sẽ được lưu ngay lập tức.",

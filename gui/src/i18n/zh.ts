@@ -2653,6 +2653,7 @@ export const zh: Record<TKey, string> = {
   "pws.cockpitImportComplete": "导入完成：已导入 {imported}，已更新 {updated}，失败 {failed}，不支持 {unsupported}。",
   "pws.accountSwitching": "切换中…",
   "pws.accountCurrent": "当前账户",
+  "pws.accountPausedHint": "恢复前不会参与自动切换、重试、冷却恢复、手动选择或主动令牌刷新。",
   "pws.defaultModelNone": "无（使用提供商默认值）",
   "pws.discardSettings": "放弃",
   "pws.jsonEditorDesc": "直接编辑提供商 JSON 配置。更改将立即保存。",

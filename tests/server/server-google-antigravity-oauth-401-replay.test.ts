@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -274,6 +274,87 @@ function installOAuthFetch(
 }
 
 describe("Google Antigravity OAuth upstream 401 replay", () => {
+  test("paused OAuth account returns a non-retryable permission error for CCA image generation", async () => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+    await setAccountPaused("google-antigravity", accountId, true);
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([]);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/images/generations", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+      });
+      const body = await response.text();
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(body)).toMatchObject({ error: {
+        type: "permission_error",
+        message: "OAuth account is paused. Resume it in account settings and retry.",
+      } });
+      expect(body).toContain("OAuth account is paused");
+      expect(body).not.toContain("login required");
+      expect(observed.counts.refresh).toBe(0);
+      expect(observed.requestPaths).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("paused OAuth account returns a non-retryable permission error without refresh or upstream dispatch", async () => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+    await setAccountPaused("google-antigravity", accountId, true);
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(body)).toMatchObject({ error: {
+        type: "permission_error",
+        message: "OAuth account is paused. Resume it in account settings and retry.",
+      } });
+      expect(body).toContain("OAuth account is paused");
+      expect(body).not.toContain("login google-antigravity");
+      expect(observed.counts.refresh).toBe(0);
+      expect(observed.requestPaths).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an account paused before OAuth 401 replay returns a non-retryable permission error and does not refresh", async () => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401], {
+      beforeFirstUnauthorized: async () => {
+        await setAccountPaused("google-antigravity", accountId, true);
+      },
+    });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(body)).toMatchObject({ error: {
+        type: "permission_error",
+        message: "OAuth account is paused. Resume it in account settings and retry.",
+      } });
+      expect(body).toContain("OAuth account is paused");
+      expect(observed.counts.refresh).toBe(0);
+      expect(observed.requestPaths).toEqual(["/v1internal:generateContent"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test.each([200, 401])("native passthrough replays once and returns the second HTTP %i", async secondStatus => {
     await seedOAuth();
     saveConfig(antigravityPassthroughConfig());

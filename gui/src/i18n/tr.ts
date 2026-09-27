@@ -1654,6 +1654,7 @@ export const tr: Record<TKey, string> = {
   "pws.cockpitImportComplete": "İçe aktarma tamamlandı: {imported} içe aktarıldı, {updated} güncellendi, {failed} başarısız, {unsupported} desteklenmiyor.",
   "pws.accountSwitching": "Değiştiriliyor…",
   "pws.accountCurrent": "Mevcut hesap",
+  "pws.accountPausedHint": "Devam ettirilene kadar otomatik seçim, yeniden deneme, bekleme süresinden kurtarma, manuel seçim ve proaktif belirteç yenilemesinden hariç tutulur.",
   "pws.defaultModelNone": "Yok (sağlayıcı varsayılanını kullan)",
   "pws.discardSettings": "Vazgeç",
   "pws.jsonEditorDesc": "Ham sağlayıcı JSON konfigürasyonunu düzenleyin.",

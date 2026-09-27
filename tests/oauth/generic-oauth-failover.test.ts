@@ -15,8 +15,10 @@ import {
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, markAccountNeedsReauth, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
+import { getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { subscribeAccountSelections } from "../../src/lib/account-selection-events";
 import { resolveCopilotApiBaseUrl } from "../../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -35,6 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   clearGenericFailoverHealth();
   clearAccountQuotaCache("xai");
+  clearAccountQuotaCache("google-antigravity");
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(home);
@@ -61,16 +64,20 @@ function config(enabled?: boolean, perProvider?: boolean): OcxConfig {
   } as unknown as OcxConfig;
 }
 
-async function seed(count: number, offset = 0): Promise<string[]> {
+async function seedProvider(provider: string, count: number, offset = 0): Promise<string[]> {
   for (let i = offset; i < offset + count; i++) {
-    await saveCredential("xai", {
+    await saveCredential(provider, {
       access: `access-${i}`,
       refresh: `refresh-${i}`,
       expires: Date.now() + 3_600_000,
       accountId: `uuid-${i}`,
     } as never, { addAccount: true });
   }
-  return getAccountSet("xai")?.accounts.map(a => a.id) ?? [];
+  return getAccountSet(provider)?.accounts.map(a => a.id) ?? [];
+}
+
+async function seed(count: number, offset = 0): Promise<string[]> {
+  return seedProvider("xai", count, offset);
 }
 
 describe("#2568 generic OAuth account failover", () => {
@@ -200,6 +207,16 @@ describe("#2568 generic OAuth account failover", () => {
     expect(hasFailoverAccountQuorum("xai")).toBe(true);
     await markAccountNeedsReauth("xai", ids[1]!, true);
     clearGenericFailoverHealth();
+    expect(hasFailoverAccountQuorum("xai")).toBe(false);
+    expect(isGenericOAuthFailoverEnabled(config(), "xai")).toBe(false);
+  });
+
+  test("pausing an account invalidates the cached failover quorum immediately", async () => {
+    const ids = await seed(2);
+    expect(hasFailoverAccountQuorum("xai")).toBe(true);
+
+    await setAccountPaused("xai", ids[1]!, true);
+
     expect(hasFailoverAccountQuorum("xai")).toBe(false);
     expect(isGenericOAuthFailoverEnabled(config(), "xai")).toBe(false);
   });
@@ -635,6 +652,96 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
       noteGenericPoolSelection(cfg, "xai", account);
     }
     expect(new Set(served).size).toBeGreaterThan(1);
+  });
+
+  test("paused generic OAuth accounts are excluded from failover and cannot resolve directly", async () => {
+    const provider = "google-antigravity";
+    const ids = await seedProvider(provider, 3);
+    await setAccountPaused(provider, ids[1]!, true);
+
+    expect(eligibleFailoverAccounts(provider)).toEqual([ids[0]!, ids[2]!]);
+    await expect(getValidAccessSnapshotForAccount(provider, ids[1]!)).rejects.toBeInstanceOf(OAuthAccountPausedError);
+  });
+
+  test("quota-based proactive preference never selects a paused account", async () => {
+    const provider = "google-antigravity";
+    const model = "gemini-3.8-flash";
+    const ids = await seedProvider(provider, 3);
+    await setActiveAccount(provider, ids[0]!);
+    await setAccountPaused(provider, ids[1]!, true);
+    const cfg = {
+      pool: { kernel: true },
+      providers: {
+        [provider]: {
+          ...OAUTH_PROVIDER,
+          oauthAccountFailover: { enabled: true },
+        },
+      },
+    } as unknown as OcxConfig;
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests(provider, ids[0]!, {
+      customWindows: [{ label: "Gem", percent: 100 }], updatedAt: now,
+    });
+    setCachedProviderAccountQuotaForTests(provider, ids[1]!, {
+      customWindows: [{ label: "Gem", percent: 10 }], updatedAt: now,
+    });
+    setCachedProviderAccountQuotaForTests(provider, ids[2]!, {
+      customWindows: [{ label: "Gem", percent: 20 }], updatedAt: now,
+    });
+
+    expect(preferredInitialAccount(cfg, provider, now, model)).toBe(ids[2]!);
+  });
+
+  test("an active paused OAuth account is replaced even when quota preference is disabled", async () => {
+    const provider = "google-antigravity";
+    const ids = await seedProvider(provider, 2);
+    await setActiveAccount(provider, ids[0]!);
+    await setAccountPaused(provider, ids[0]!, true);
+
+    // Pausing the active credential atomically commits the next usable account.
+    expect(getAccountSet(provider)?.activeAccountId).toBe(ids[1]!);
+  });
+
+  test("resuming an account restores it as active when the current account remains paused", async () => {
+    const provider = "google-antigravity";
+    const ids = await seedProvider(provider, 2);
+    await setActiveAccount(provider, ids[0]!);
+    await setAccountPaused(provider, ids[0]!, true);
+    await setAccountPaused(provider, ids[1]!, true);
+
+    await setAccountPaused(provider, ids[0]!, false);
+
+    expect(getAccountSet(provider)?.activeAccountId).toBe(ids[0]!);
+    expect(eligibleFailoverAccounts(provider)).toEqual([ids[0]!]);
+  });
+
+  test("provider account-set replacement preserves operator pause state", async () => {
+    const provider = "google-antigravity";
+    const ids = await seedProvider(provider, 2);
+    await setAccountPaused(provider, ids[1]!, true);
+    const accountSet = getAccountSet(provider)!;
+
+    await replaceProviderAccountSet(provider, accountSet);
+
+    expect(getAccountSet(provider)?.accounts.find(account => account.id === ids[1]!)?.paused).toBe(true);
+    expect(eligibleFailoverAccounts(provider)).not.toContain(ids[1]!);
+  });
+
+  test("pausing a non-active OAuth account publishes a roster invalidation after persistence", async () => {
+    const provider = "google-antigravity";
+    const ids = await seedProvider(provider, 2);
+    await setActiveAccount(provider, ids[0]!);
+    const events: Array<{ provider: string; kind: string }> = [];
+    const unsubscribe = subscribeAccountSelections(event => events.push(event));
+    try {
+      await setAccountPaused(provider, ids[1]!, true);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ provider, kind: "oauth" });
+    expect(getAccountSet(provider)?.accounts.find(account => account.id === ids[1]!)?.paused).toBe(true);
   });
 
   test("round-robin is a no-op while pool.kernel is off", async () => {

@@ -80,10 +80,14 @@ probe keeps the same-login last-good display bar. The protected OAuth store rota
 `ProviderAccount.loginId` on every explicit login, preserves it across credential refresh,
 and uses `addedAt` for legacy rows without one.
 
-For Kiro, `src/oauth/generic-account-failover.ts` filters confirmed monthly exhaustion
-and process-local suspension by the live account identity before picking a replacement.
-Its `kiroAutoSelection` projection also supplies the account-list exclusion reason;
-cached plan credit amounts share the same identity and expiry fence.
+For Kiro, `src/oauth/generic-account-failover.ts` filters operator-paused accounts,
+confirmed monthly exhaustion and process-local suspension by the live account identity
+before picking a replacement. Its `kiroAutoSelection` projection also supplies the
+account-list exclusion reason; cached plan credit amounts share the same identity and
+expiry fence.
+Across generic OAuth providers, pause also excludes that account from Token Guardian's
+proactive refresh. The stored credential remains available for resume, while requests with no
+unpaused account fail as temporarily unavailable rather than as a login failure.
 The account actually sent supplies the generation fence; a rotated bearer always travels
 with its own profile ARN and region. Reactive rotation follows the stored two-account
 quorum, while refusal-aware first admission follows the proactive preference setting.

@@ -45,12 +45,13 @@ const originalKimiRefresh = OAUTH_PROVIDERS.kimi!.refresh;
 let root: string;
 let opencodexHome: string;
 
-function authStoreBytes(expires: number): Buffer {
+function authStoreBytes(expires: number, paused = false): Buffer {
   return Buffer.from(JSON.stringify({
     kimi: {
       activeAccountId: "active",
       accounts: [{
         id: "active",
+        ...(paused ? { paused: true } : {}),
         credential: {
           access: "fixture-a",
           refresh: "fixture-r",
@@ -155,6 +156,19 @@ afterEach(() => {
 });
 
 describe("catalog gather OAuth observation", () => {
+  test("a paused active OAuth account is not exposed to catalog discovery", async () => {
+    const now = Date.now();
+    const observedBuffer = authStoreBytes(now + 3_600_000, true);
+    let outboundCalls = 0;
+
+    expect(observeActiveOAuthAccessToken("kimi", observedBuffer, now).kind).toBe("paused");
+    const { rows, outcomes } = await runCatalogGather(observedBuffer, () => { outboundCalls += 1; });
+
+    expect(outboundCalls).toBe(0);
+    expect(rows.map(row => row.id)).toEqual(["k3"]);
+    expect(outcomes).toEqual([{ provider: "kimi", state: "paused" }]);
+  });
+
   test("refreshing Copilot gather binds the new bearer to the refreshed origin", async () => {
     await saveCredential("github-copilot", {
       access: "fixture-old-token", refresh: "fixture-refresh", expires: Date.now() - 1,

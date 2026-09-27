@@ -1641,6 +1641,7 @@ export const fr: Record<TKey, string> = {
   "pws.cockpitImportComplete": "Importation terminée : {imported} importés, {updated} mis à jour, {failed} en échec, {unsupported} non pris en charge.",
   "pws.accountSwitching": "Changement…",
   "pws.accountCurrent": "Compte actuel",
+  "pws.accountPausedHint": "Exclu du choix automatique, des nouvelles tentatives, de la récupération après délai, de la sélection manuelle et du renouvellement proactif du jeton jusqu’à sa réactivation.",
   "pws.defaultModelNone": "Aucun (utiliser la valeur par défaut du fournisseur)",
   "pws.discardSettings": "Abandonner les modifications",
   "pws.jsonEditorDesc": "Modifiez la configuration JSON brute du fournisseur. Les modifications sont enregistrées immédiatement.",

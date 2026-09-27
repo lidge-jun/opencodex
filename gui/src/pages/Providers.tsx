@@ -384,9 +384,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   });
   const {
-    accountSets, setAccountSets, accountLoadStates, switchingAccount, keyPools, fetchAccountSets, fetchKeyPools,
+    accountSets, setAccountSets, accountLoadStates, switchingAccount, pausingAccount, keyPools, fetchAccountSets, fetchKeyPools,
     refreshAccountRosters, oauthCardProviders, keyCardProviders,
-    switchAccount, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
+    switchAccount, pauseAccount, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
   } = pools;
   const refreshSelection = useCallback((target?: AccountSelectionTarget) => {
@@ -648,6 +648,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             settingsFocusToken={settingsFocus.token}
             settingsFocusProvider={settingsFocus.provider}
             switchingAccountId={switchingAccount?.provider === item.name ? switchingAccount.accountId : null}
+            pausingAccountId={pausingAccount?.provider === item.name ? pausingAccount.accountId : null}
             busyProvider={busy}
             loginHint={loginInfo}
             authHandlers={{
@@ -657,6 +658,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onLogout: logoutOAuth,
               onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
               onSwitchAccount: switchAccount,
+              onPauseAccount: pauseAccount,
               onRemoveAccount: removeAccount,
               onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
               onAddApiKey: addApiKeyValue,

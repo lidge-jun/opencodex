@@ -21,7 +21,8 @@ export interface OAuthAccount extends AccountQuotaReading {
   active: boolean;
   needsReauth?: boolean;
   autoSelectable?: boolean;
-  skipReason?: "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
+  skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
+  paused?: boolean;
   expiresAt?: number;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
@@ -122,6 +123,7 @@ export function useProviderAccountPools(deps: {
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
   const [accountLoadStates, setAccountLoadStates] = useState<Record<string, AccountLoadState>>({});
   const [switchingAccount, setSwitchingAccount] = useState<{ provider: string; accountId: string } | null>(null);
+  const [pausingAccount, setPausingAccount] = useState<{ provider: string; accountId: string; paused: boolean } | null>(null);
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
@@ -131,6 +133,7 @@ export function useProviderAccountPools(deps: {
   const quotaGenerationRef = useRef<Record<string, number>>({});
   const selectionMutationsRef = useRef(new Map<string, symbol>());
   const requestsRef = useRef(new Set<AbortController>());
+  const pausingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
   const mountedRef = useRef(true);
   const serverRef = useRef(apiBase);
   useEffect(() => {
@@ -145,6 +148,7 @@ export function useProviderAccountPools(deps: {
     if (serverChanged) void Promise.resolve().then(() => {
       if (!mountedRef.current || serverRef.current !== apiBase) return;
       setAccountSets({});
+      setPausingAccount(null);
       setKeyPools({});
       setAccountLoadStates({});
     });
@@ -154,6 +158,7 @@ export function useProviderAccountPools(deps: {
       for (const key of Object.keys(rosterGenerations)) rosterGenerations[key] += 1;
       for (const key of Object.keys(quotaGenerations)) quotaGenerations[key] += 1;
       mutations.clear();
+      pausingAccountRef.current = null;
       for (const controller of requests) controller.abort();
       requests.clear();
     };
@@ -358,7 +363,7 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchAccount = async (provider: string, account: OAuthAccount) => {
-    if (account.active || account.needsReauth || switchingAccountRef.current) return;
+    if (account.active || account.needsReauth || account.paused || switchingAccountRef.current || pausingAccountRef.current) return;
     const target = { provider, accountId: account.id };
     switchingAccountRef.current = target;
     setSwitchingAccount(target);
@@ -394,6 +399,60 @@ export function useProviderAccountPools(deps: {
       if (switchingAccountRef.current?.provider === target.provider && switchingAccountRef.current.accountId === target.accountId) {
         switchingAccountRef.current = null;
         if (aliveRef.current) setSwitchingAccount(null);
+      }
+    }
+  };
+
+  const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean) => {
+    if (switchingAccountRef.current || pausingAccountRef.current) return;
+    const target = { provider, accountId: account.id };
+    pausingAccountRef.current = target;
+    setPausingAccount({ ...target, paused });
+    const key = invalidateSelectionReads(provider, "oauth");
+    const mutation = Symbol();
+    selectionMutationsRef.current.set(key, mutation);
+    const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
+      && selectionMutationsRef.current.get(key) === mutation;
+    const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/accounts/pause`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, accountId: account.id, paused }),
+      });
+      if (!currentMutation()) return;
+      if (!res.ok) {
+        notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);
+        return;
+      }
+      const result = await res.json().catch(() => ({})) as { activeAccountId?: string | null; activeAccountChanged?: boolean };
+      if (!currentMutation()) return;
+      invalidateSelectionReads(provider, "oauth");
+      const selected = result.activeAccountId === undefined
+        ? accountSets[provider]?.activeAccountId ?? null
+        : result.activeAccountId;
+      setAccountSets(current => {
+        const existing = current[provider];
+        if (!existing) return current;
+        const accounts = existing.accounts.map(row => row.id === account.id ? { ...row, paused } : row);
+        return { ...current, [provider]: { activeAccountId: selected, accounts: selectionRows(accounts, selected) } };
+      });
+      selectionMutationsRef.current.delete(key);
+      const refreshed = await refreshAccountRosters({ provider, kind: "oauth" });
+      if (result.activeAccountChanged) await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
+      if (!refreshed) { notify(t("pws.accountsLoadFailed"), false); return; }
+      notify(t(paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded", { email: label }), true);
+    } catch {
+      if (currentMutation()) notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);
+    } finally {
+      if (currentMutation()) {
+        invalidateSelectionReads(provider, "oauth");
+        selectionMutationsRef.current.delete(key);
+        void refreshAccountRosters({ provider, kind: "oauth" });
+      }
+      if (pausingAccountRef.current?.provider === target.provider && pausingAccountRef.current.accountId === target.accountId) {
+        pausingAccountRef.current = null;
+        if (aliveRef.current) setPausingAccount(null);
       }
     }
   };
@@ -552,9 +611,9 @@ export function useProviderAccountPools(deps: {
   );
 
   return {
-    accountSets, accountLoadStates, switchingAccount, openAccounts, keyPools, addingKeyFor, newKeyValue,
+    accountSets, accountLoadStates, switchingAccount, pausingAccount, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
-    fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
+    fetchAccountSets, fetchKeyPools, refreshAccountRosters, switchAccount, pauseAccount, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,
   };
 }

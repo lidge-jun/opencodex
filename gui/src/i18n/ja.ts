@@ -1544,6 +1544,7 @@ export const ja: Record<TKey, string> = {
   "pws.cockpitImportComplete": "インポート完了: インポート {imported}、更新 {updated}、失敗 {failed}、未対応 {unsupported}。",
   "pws.accountSwitching": "切り替え中…",
   "pws.accountCurrent": "現在のアカウント",
+  "pws.accountPausedHint": "再開するまで、自動選択、再試行、クールダウン復旧、手動選択、トークンの事前更新の対象外です。",
   "pws.defaultModelNone": "なし(プロバイダーのデフォルトを使用)",
   "pws.discardSettings": "破棄",
   "pws.jsonEditorDesc": "生のプロバイダー JSON 設定を編集します。変更はすぐに保存されます。",

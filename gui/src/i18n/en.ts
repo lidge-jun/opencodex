@@ -1668,6 +1668,7 @@ export const en = {
   "pws.cockpitImportComplete": "Import complete: {imported} imported, {updated} updated, {failed} failed, {unsupported} unsupported.",
   "pws.accountSwitching": "Switching…",
   "pws.accountCurrent": "Current account",
+  "pws.accountPausedHint": "Excluded from automatic selection, retries, cooldown recovery, manual selection, and proactive token refresh until resumed.",
   "pws.defaultModelNone": "None (use provider default)",
   "pws.discardSettings": "Discard",
   "pws.jsonEditorDesc": "Edit the raw provider JSON config. Changes are saved immediately.",

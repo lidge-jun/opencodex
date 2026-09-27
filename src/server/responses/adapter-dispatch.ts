@@ -42,7 +42,7 @@ import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
@@ -650,6 +650,9 @@ export async function prepareAdapterExchange(
             }
           }
           cleanupUpstreamAbort();
+          if (err instanceof OAuthAccountPausedError) {
+            return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));
+          }
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
         }
         if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {

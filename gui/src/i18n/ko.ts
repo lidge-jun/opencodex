@@ -2672,6 +2672,7 @@ export const ko: Record<TKey, string> = {
   "pws.cockpitImportComplete": "가져오기 완료: 가져옴 {imported}, 업데이트 {updated}, 실패 {failed}, 지원되지 않음 {unsupported}.",
   "pws.accountSwitching": "전환 중…",
   "pws.accountCurrent": "현재 계정",
+  "pws.accountPausedHint": "재개할 때까지 자동 선택, 재시도, 쿨다운 복구, 수동 선택 및 사전 토큰 갱신에서 제외됩니다.",
   "pws.defaultModelNone": "없음 (프로바이더 기본값 사용)",
   "pws.discardSettings": "되돌리기",
   "pws.jsonEditorDesc": "프로바이더 JSON 설정을 직접 편집합니다. 저장 즉시 반영됩니다.",

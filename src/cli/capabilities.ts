@@ -541,21 +541,28 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["account", "pause"],
-    summary: "Stop routing new requests to one account in the Codex pool.",
-    // One route, both directions: `resume` is the same PUT with `paused: false`.
-    routes: [{ method: "PUT", path: "/api/codex-auth/accounts/pause" }],
+    summary: "Stop routing new requests to one account in a Codex or supported generic OAuth pool.",
+    // Resume uses the same endpoints with `paused: false`.
+    routes: [
+      { method: "PUT", path: "/api/codex-auth/accounts/pause" },
+      { method: "GET", path: "/api/oauth/accounts" },
+      { method: "PUT", path: "/api/oauth/accounts/pause" },
+    ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the pause result as JSON." }],
     mutates: true,
     json: "envelope",
     details: [
-      "Pausing also unbinds threads pinned to the account and selects a fallback if it was active -- side effects of the route, not of the word `pause`.",
-      "The issue that requested this reported the route as POST; it is PUT.",
+      "Codex pause unbinds pinned threads and selects a fallback when possible. Generic OAuth pause excludes that account from new requests and failover; Anthropic is unsupported.",
     ],
   },
   {
     command: ["account", "resume"],
-    summary: "Return a paused account to the Codex pool.",
-    routes: [{ method: "PUT", path: "/api/codex-auth/accounts/pause" }],
+    summary: "Return a paused account to a Codex or supported generic OAuth pool.",
+    routes: [
+      { method: "PUT", path: "/api/codex-auth/accounts/pause" },
+      { method: "GET", path: "/api/oauth/accounts" },
+      { method: "PUT", path: "/api/oauth/accounts/pause" },
+    ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the resume result as JSON." }],
     mutates: true,
     json: "envelope",

@@ -2633,6 +2633,7 @@ export const de: Record<TKey, string> = {
   "pws.cockpitImportComplete": "Import abgeschlossen: {imported} importiert, {updated} aktualisiert, {failed} fehlgeschlagen, {unsupported} nicht unterstützt.",
   "pws.accountSwitching": "Wechsel läuft…",
   "pws.accountCurrent": "Aktuelles Konto",
+  "pws.accountPausedHint": "Bis zur Wiederaufnahme von automatischer Auswahl, Wiederholungen, Cooldown-Wiederherstellung, manueller Auswahl und proaktiver Token-Erneuerung ausgeschlossen.",
   "pws.defaultModelNone": "Keins (Standard des Anbieters verwenden)",
   "pws.discardSettings": "Verwerfen",
   "pws.jsonEditorDesc": "Bearbeiten Sie die JSON-Konfiguration des Anbieters. Änderungen werden sofort gespeichert.",

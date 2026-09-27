@@ -42,6 +42,7 @@ import { kiroEvidenceIdentity } from "../providers/kiro-account-state-disk";
 import { kiroAccountSupportsModel } from "../providers/kiro-model-catalog";
 import { ACCOUNT_QUOTA_TTL_MS } from "../providers/quota-wire";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
+import { subscribeOAuthAccountPauseChanges } from "../lib/account-selection-events";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 /** Cap same-request rotations so a short Retry-After cannot spin. Mirrors the Anthropic bound. */
@@ -98,6 +99,8 @@ const health = new Map<string, AccountHealth>();
 /** Provider -> recent eligible-account count. TTL-bounded; never holds credential material. */
 const presence = new Map<string, PresenceEntry>();
 
+subscribeOAuthAccountPauseChanges(provider => presence.delete(provider));
+
 const healthKey = (provider: string, accountId: string, family?: QuotaModelFamily) =>
   family ? `${provider}\u0000${accountId}\u0000${family}` : `${provider}\u0000${accountId}`;
 
@@ -128,12 +131,13 @@ function isCooled(provider: string, accountId: string, now: number, family?: Quo
   return true;
 }
 
-export type KiroSkipReason = "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
+export type KiroSkipReason = "paused" | "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
 
 /** Eligibility for automatic alternatives; an active singleton can still send. */
 export function kiroAutoSelection(
   account: ProviderAccount, now = Date.now(),
 ): { autoSelectable: boolean; skipReason?: KiroSkipReason } {
+  if (account.paused === true) return { autoSelectable: false, skipReason: "paused" };
   if (account.needsReauth === true) return { autoSelectable: false, skipReason: "needs_reauth" };
   const cooled = isCooled("kiro", account.id, now);
   if (cooled && health.get(healthKey("kiro", account.id))?.cooldownSource === "kiro-suspension")
@@ -163,8 +167,10 @@ function eligibleAccountCount(providerName: string, now: number): number {
   const set = getAccountSet(providerName);
   // Kiro terminal refresh marks the just-refused account needsReauth before the alternate
   // selector runs. Both stored logins still express consent to recover through the survivor.
-  const eligible = set ? (providerName === "kiro" ? set.accounts.length
-    : set.accounts.filter(account => account.needsReauth !== true).length) : 0;
+  const eligible = set
+    ? set.accounts.filter(account => account.paused !== true
+      && (providerName === "kiro" || account.needsReauth !== true)).length
+    : 0;
   presence.set(providerName, { eligible, readAt: now });
   return eligible;
 }
@@ -260,8 +266,9 @@ function eligibleIdsIn(
 ): string[] {
   if (!set) return [];
   return set.accounts
-    .filter(account => providerName === "kiro" ? kiroAutoSelection(account, now).autoSelectable
-      : account.needsReauth !== true && !isCooled(providerName, account.id, now, family))
+    .filter(account => account.paused !== true
+      && (providerName === "kiro" ? kiroAutoSelection(account, now).autoSelectable
+        : account.needsReauth !== true && !isCooled(providerName, account.id, now, family)))
     .map(account => account.id);
 }
 
@@ -579,7 +586,9 @@ export function preferredInitialAccount(
   if (!selected) return null;
   const active = selected.activeAccountId;
   const accountRows = new Map(selected.accounts.map(account => [account.id, account]));
-  const order = selected.accounts.filter(account => account.needsReauth !== true).map(account => account.id);
+  const order = selected.accounts
+    .filter(account => account.paused !== true && account.needsReauth !== true)
+    .map(account => account.id);
   if (order.length < 2) return null;
 
   const modelEligible = preferKiroModelSupport(providerName,
@@ -629,7 +638,7 @@ export function preferredInitialAccount(
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
-  if (activeRow && activeRow.needsReauth !== true
+  if (activeRow && activeRow.paused !== true && activeRow.needsReauth !== true
     && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
     && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId, activeRow)) return null;
 
