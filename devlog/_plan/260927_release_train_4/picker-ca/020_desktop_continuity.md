@@ -23,6 +23,14 @@ Depends on: `010_ca_publication.md`. Work phase `wp2`, class C4. Only the picker
 
 The chosen blind relay leaves Claude Code traffic from Desktop on its normal upstream route during recovery; it never selects the main intercept listener on this egress port. The separate main intercept port retains its existing policy. This is deliberately narrower than enabling picker MITM while a predecessor may remain trusted.
 
+## Results
+
+Startup now drains the public pending-untrust journal before rotation and again after rotation. Each removal uses a private temporary copy of the recorded public PEM; a failed removal, live published owner, corrupt record, or failed acknowledgement keeps the picker disarmed. An applied profile then receives a blind-only CONNECT relay on its validated, recorded egress port. Bind refusal leaves the row and retry record intact. Normal startup constructs the picker only after both cleanup passes finish. The wp1 follow-up repairs a missing owner record under the CA lock on a cached ensure, and acknowledgement now requires a successful untrust result.
+
+**R1 design choice.** Keep the applied row and bind a blind relay at its actual port. Restoring the original profile after an ownership check would change Desktop's selected row and its previous-selection history during a temporary CA cleanup failure. The relay preserves that durable choice and gives Desktop an opaque upstream path until a later startup can safely arm the picker.
+
+Verification: isolated `bun test tests/claude-integration/*picker*.test.ts tests/test-layout*.test.ts tests/ci-workflows/file-size-ratchet.test.ts` passed 129/129; isolated `bun run typecheck` and `bun run privacy:scan` passed. The recovery test uses separate Bun processes and fake keychain runners; the runtime test sends a real CONNECT through the profile URL and verifies bytes through a fake upstream. No live keychain or Desktop installation was touched.
+
 ## Proof before closing this phase
 
 Run the affected picker runtime/recovery files under isolated `HOME`, `OPENCODEX_HOME`, `TMPDIR`, plus typecheck. Read the actual CONNECT response and journal state, not merely a mocked `startProxy` call. Do not invoke the user's keychain or installed Desktop.

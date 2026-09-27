@@ -38,8 +38,8 @@ export function pickerCaFingerprints(certPem: string): { sha1: string; sha256: s
 /** Atomically publish a public certificate; these files carry no key material. */
 function publishPem(path: string, pem: string): void {
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(tmp, pem, { flag: "wx", mode: 0o644 });
   try {
+    writeFileSync(tmp, pem, { flag: "wx", mode: 0o644 });
     try { chmodSync(tmp, 0o644); } catch { /* best-effort on platforms without POSIX modes */ }
     renameSync(tmp, path);
   } finally {
@@ -54,11 +54,23 @@ function publishPem(path: string, pem: string): void {
  */
 function publishAuthority(configDir: string, ca: PickerCa): void {
   publishPem(pickerCaCertPath(configDir), ca.certPem);
+  publishOwner(configDir, ca);
+}
+
+function publishOwner(configDir: string, ca: PickerCa): void {
   publishPem(pickerCaOwnerPath(configDir), JSON.stringify({
     pid: process.pid,
     startTime: processStartIdentity(process.pid),
     sha256: ca.fingerprint,
   }) + "\n");
+}
+
+function currentProcessOwnsPublishedCa(configDir: string, ca: PickerCa): boolean {
+  try {
+    const owner = JSON.parse(readFileSync(pickerCaOwnerPath(configDir), "utf8")) as Record<string, unknown>;
+    return owner.pid === process.pid && owner.sha256 === ca.fingerprint
+      && owner.startTime === processStartIdentity(process.pid);
+  } catch { return false; }
 }
 
 /** The OS process start identity prevents a recycled PID from impersonating the recorded owner. */
@@ -164,8 +176,8 @@ export function readPendingPickerCaUntrust(configDir: string): PendingPickerCaUn
 function writePendingPickerCaUntrust(configDir: string, pending: PendingPickerCaUntrust): void {
   const path = pickerCaPendingUntrustPath(configDir);
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(pending) + "\n", { flag: "wx", mode: 0o600 });
   try {
+    writeFileSync(temporary, JSON.stringify(pending) + "\n", { flag: "wx", mode: 0o600 });
     try { chmodSync(temporary, 0o600); } catch { /* best-effort on platforms without POSIX modes */ }
     renameSync(temporary, path);
   } finally {
@@ -222,7 +234,12 @@ export function pendingPickerCaHasLivePublishedOwner(configDir: string, pending:
 }
 
 /** Acknowledgement never clears an entry another process created or replaced. */
-export function acknowledgePendingPickerCaUntrust(configDir: string, pending: PendingPickerCaUntrust): boolean {
+export function acknowledgePendingPickerCaUntrust(
+  configDir: string,
+  pending: PendingPickerCaUntrust,
+  confirmedUntrust: { ok: boolean },
+): boolean {
+  if (confirmedUntrust?.ok !== true) return false;
   return lockedPickerCa(configDir, () => {
     const current = readPendingPickerCaUntrust(configDir);
     if (!current || current.certPem !== pending.certPem
@@ -256,7 +273,12 @@ export function ensurePickerCa(configDir: string, options: { rotation?: "startup
   lockedPickerCa(configDir, () => {
     if (readPendingPickerCaUntrust(configDir)) throw new Error("picker_ca_pending_untrust");
     const published = publishedPickerCa(configDir);
-    if (published === pickerCa.certPem) return;
+    if (published === pickerCa.certPem) {
+      // The signing key is still in this process. A missing/stale owner file must not let a
+      // second process rotate this live authority after an otherwise harmless cached ensure.
+      if (!currentProcessOwnsPublishedCa(configDir, pickerCa)) publishOwner(configDir, pickerCa);
+      return;
+    }
     if (published !== null && livePublishedOwner(configDir, published)) {
       throw new Error("picker_ca_live_owner");
     }

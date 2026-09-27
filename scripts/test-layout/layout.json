@@ -468,6 +468,7 @@
     "claude-picker-ca.test.ts": "claude-integration",
     "claude-picker-listener.test.ts": "claude-integration",
     "claude-picker-models.test.ts": "claude-integration",
+    "claude-picker-recovery.test.ts": "claude-integration",
     "claude-picker-runtime.test.ts": "claude-integration",
     "claude-picker-trust.test.ts": "claude-integration",
     "claude-desktop-remote-hub.test.ts": "claude-integration",

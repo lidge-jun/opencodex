@@ -210,6 +210,18 @@ still cover the rule, which is a judgement only review makes.
   there is none, no icon is claimed, the window is shown on launch whatever the launch origin, and
   closing it quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-tray-availability.test.ts`.
+- **INV-PICKER-01** — The Claude Desktop picker never terminates `claude.ai` TLS while a replaced
+  picker certificate may still be trusted. When predecessor untrust fails, is deferred, or its
+  record is unreadable, startup builds no picker and adds no trust; if a picker profile is applied,
+  a blind-only CONNECT relay serves the profile's recorded egress port so Desktop stays connected,
+  and the profile row, previous selection and retry intent are left in place; see
+  [`claude-desktop.md`](clients/claude-desktop.md).
+  Enforced by `tests/claude-integration/claude-picker-runtime.test.ts`.
+- **INV-PICKER-02** — A startup rotation records the outgoing picker certificate's public PEM and
+  fingerprints (no key material) before replacing `ca.pem`, and removes that record only after a
+  confirmed keychain untrust, so a later process retries it; a controller enable refuses while it
+  exists; see [`claude-desktop.md`](clients/claude-desktop.md).
+  Enforced by `tests/claude-integration/claude-picker-recovery.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

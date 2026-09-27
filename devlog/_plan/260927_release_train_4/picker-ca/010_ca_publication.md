@@ -30,3 +30,12 @@ wp1 P stale check: `origin/dev` remains `24b2f39b77` and `picker-ca.ts` is uncha
 ## Proof before closing this phase
 
 Run isolated `bun test tests/claude-integration/claude-picker-ca.test.ts`, `bun run typecheck`, and the relevant source-as-data/process tests explicitly. Inspect the final CA/owner pair and journal bytes, and verify no `ca.key` or signing key appears anywhere under the fixture state root. Record exact commands and outcomes in the phase D note.
+
+## Results (2026-09-28)
+
+Implemented as planned in `picker-ca.ts`, with startup draining in the new `picker-ca-cleanup.ts`. Independent `gpt-6-sol` assessments of the committed WIP found two further gaps that are now fixed: a cached ensure did not restore a missing `ca-owner.json` for this process's own published CA (now rewritten under the lock), and pending acknowledgement did not require a confirmed untrust result (it now takes the `untrustPickerCa` result and returns false unless `ok`; a failed removal leaves the record byte-identical). Temporary public files are created inside their cleanup `try`, so a partial write leaves nothing behind.
+
+**Owner record absent while the owner is alive (accepted limitation).** The second assessment showed that if `ca-owner.json` is deleted while its process is live, a second process may rotate that CA, and a pending record matching the still-published PEM is then drained. No code path deletes the owner record, and `publishAuthority` writes the PEM before the owner, so a crash in between leaves a dead owner, for which rotation is correct. The state is therefore reachable only when another same-user process edits `<OPENCODEX_HOME>/claude-picker/`, which AGENTS.md already places outside what an in-process check can prevent. The suggested strict refusal ("no verifiable owner means defer") was rejected because every upgrade from the current `main` release starts with a published `ca.pem` and no owner record: startup rotation would be refused permanently, and after an interrupted publication the pending drain would defer forever, leaving the picker off for good. Running two proxies on one `OPENCODEX_HOME` is separately refused by the start lifecycle.
+
+Evidence: isolated focused runs from the leaves — `claude-picker-ca`, `claude-picker-runtime`, `claude-picker-recovery`, test-layout and file-size ratchet tests: 129 pass / 0 fail; `bun run typecheck` and `bun run privacy:scan` passed; the assessor observed pending-file mode `0600` and refusal of a symlinked record and found no new private-key write path.
+

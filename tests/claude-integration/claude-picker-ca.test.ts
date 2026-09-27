@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { connect, createServer } from "node:tls";
 import { createCertificateAuthority, createLocalInterceptCa, issueServerLeaf } from "../../src/claude/intercept/local-ca";
+import { drainPendingPickerCaUntrust } from "../../src/claude/intercept/picker-ca-cleanup";
 import {
   acknowledgePendingPickerCaUntrust, ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
   pickerCaOwnerPath, pickerCaPendingUntrustPath, pickerLeafCertPath, pickerStateDir,
@@ -362,11 +363,73 @@ test("pending untrust contains one canonical public PEM and clears only on an ex
   expect(pending).toEqual({ certPem: old.certPem, ...pickerCaFingerprints(old.certPem) });
   expect(readFileSync(pickerCaPendingUntrustPath(dir), "utf8")).not.toContain("PRIVATE KEY");
   expect(() => ensurePickerCa(dir)).toThrow("picker_ca_pending_untrust");
-  expect(acknowledgePendingPickerCaUntrust(dir, { ...pending, sha1: "0".repeat(40) })).toBe(false);
+  expect(acknowledgePendingPickerCaUntrust(dir, { ...pending, sha1: "0".repeat(40) }, { ok: true })).toBe(false);
   expect(readPendingPickerCaUntrust(dir)).toEqual(pending);
-  expect(acknowledgePendingPickerCaUntrust(dir, pending)).toBe(true);
+  expect(acknowledgePendingPickerCaUntrust(dir, pending, { ok: false })).toBe(false);
+  expect(readPendingPickerCaUntrust(dir)).toEqual(pending);
+  expect(acknowledgePendingPickerCaUntrust(dir, pending, { ok: true })).toBe(true);
   expect(readPendingPickerCaUntrust(dir)).toBeNull();
   expect(ensurePickerCa(dir).fingerprint).toBe(ours.fingerprint);
+});
+
+test("failed untrust leaves the pending record byte-for-byte intact", async () => {
+  const dir = tempDir();
+  ensurePickerCa(dir);
+  const old = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  writeFileSync(pickerCaCertPath(dir), old.certPem);
+  ensurePickerCa(dir, { rotation: "startup" });
+  const path = pickerCaPendingUntrustPath(dir);
+  const before = readFileSync(path);
+  const sha1 = pickerCaFingerprints(old.certPem).sha1;
+  const calls: string[] = [];
+  const drained = await drainPendingPickerCaUntrust(dir, async args => {
+    calls.push(args[0]!);
+    return args[0] === "find-certificate"
+      ? { code: 0, stdout: `SHA-1 hash: ${sha1}\n`, stderr: "" }
+      : { code: 1, stdout: "", stderr: "" };
+  }, "darwin");
+  expect(drained).toBe(false);
+  expect(calls).toContain("remove-trusted-cert");
+  expect(readFileSync(path)).toEqual(before);
+});
+
+test("cached ensure repairs a missing owner so a peer cannot rotate a live CA", async () => {
+  const dir = tempDir();
+  const ready = join(dir, "ready");
+  const release = join(dir, "release");
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e",
+      `import { existsSync, unlinkSync, writeFileSync } from "node:fs";\n` +
+      `import { ensurePickerCa, pickerCaOwnerPath } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `ensurePickerCa(${JSON.stringify(dir)});\n` +
+      `unlinkSync(pickerCaOwnerPath(${JSON.stringify(dir)}));\n` +
+      `ensurePickerCa(${JSON.stringify(dir)});\n` +
+      `writeFileSync(${JSON.stringify(ready)}, "ready");\n` +
+      `while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(5);`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe", stderr: "pipe",
+  });
+  try {
+    await waitForFile(ready);
+    expect(existsSync(pickerCaOwnerPath(dir))).toBe(true);
+    const published = readFileSync(pickerCaCertPath(dir), "utf8");
+    const peer = Bun.spawnSync({
+      cmd: [process.execPath, "-e",
+        `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+        `try { ensurePickerCa(${JSON.stringify(dir)}, { rotation: "startup" }); process.stdout.write("rotated"); }\n` +
+        `catch (error) { process.stdout.write(String(error)); }`],
+      cwd: dir,
+      env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(peer.exitCode).toBe(0);
+    expect(peer.stdout.toString()).toContain("picker_ca_live_owner");
+    expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(published);
+  } finally {
+    writeFileSync(release, "release");
+    await child.exited;
+  }
 });
 
 test("a failed certificate replacement retains the public predecessor record and published PEM", () => {

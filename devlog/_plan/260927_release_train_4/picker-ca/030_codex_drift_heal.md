@@ -27,3 +27,18 @@ No new persisted field or enum is introduced; creation, serialization, deseriali
 ## Proof before closing this phase
 
 Run isolated `bun test tests/codex-integration/catalog-auto-refresh-scheduler.test.ts`, relevant direct-inject/cancellation regressions, and `bun run typecheck`. Document whether any full-sync call remains reachable from the drift branch. Keep any broader stale-model race found in the catalog-only path out of this lane's source edits and report it separately.
+
+## Results
+
+The defect was present. The drift branch passed a captured config to `syncModelsToCodex` without a cancellation or lock-wait option (`src/codex/catalog-auto-refresh.ts`, formerly lines 58–77). Full sync can await provider discovery and write catalog/cache before injection (`src/codex/sync.ts:245–283`), while its injector calls carried neither guard nor tick deadline. A stop/restart or persisted settings edit during that await could therefore publish stale work. The plan's direct-inject approach remains the smallest correction within this lane: the drift branch now has no full-sync call (`src/codex/catalog-auto-refresh.ts:115–150`). The separate catalog-only convergence path remains unchanged and is outside this phase.
+
+The repair selects the last journaled catalog path through a bounded read-only version-1 journal read, validates a regular catalog JSON file, and falls back to a separately validated default or `null` (`src/codex/catalog-auto-refresh.ts:51–113`). It calls `injectCodexConfig` with `lockTimeoutMs: 1000` and a synchronous generation-plus-persisted-config guard (`:126–149`). The injector evaluates that guard at its commit boundary (`src/codex/inject.ts:574–584`). The tick suppresses stale-generation reporting, and a successful heal is reported only after the missing root keys are observed on disk (`src/codex/catalog-auto-refresh.ts:149–150,205–211`). This deadline bounds lock acquisition, not all injection preparation, as the plan already specified.
+
+Verification used a fresh isolated `HOME`, `OPENCODEX_HOME`, `CODEX_HOME`, and `TMPDIR` for each Bun command:
+
+- `bun test tests/codex-integration/catalog-auto-refresh-scheduler.test.ts`: 16 pass, 0 fail on the final run. The tests cover stopped/restarted generations, changed ON/OFF settings during a deferred injector, the 1000 ms option, a child-process check that the injector receives the journaled non-default catalog, invalid journal byte preservation, and on-disk heal observation. The direct-inject assertions and full-sync refusal would fail against the old branch. An intermediate run had 15 pass / 1 fail because the test expected `/var` while the Codex-home resolver canonicalized the macOS temp path to `/private/var`; the assertion now compares canonical paths.
+- `bun test tests/codex-integration/catalog-auto-refresh-scheduler.test.ts tests/codex-integration/codex-config-drift-heal.test.ts tests/codex-integration/codex-inject-write-lock.test.ts tests/codex-integration/codex-sync-api.test.ts tests/codex-integration/codex-sync-response.test.ts tests/codex-integration/client-injection-guard.test.ts`: 75 pass, 0 fail. This run preceded the final on-disk assertion refinement; the focused suite was rerun afterward.
+- `bun test tests/codex-integration/codex-inject.test.ts tests/codex-integration/codex-inject-integration.test.ts`: 160 pass, 0 fail.
+- `bun run typecheck`: exit 0, rerun after the final test edit.
+
+The source-ownership map lists `structure/config.md` for `src/codex/` (`structure/INDEX.md:121`), and its scheduler paragraph at `structure/config.md:584` should be updated by the coordinator; that file is outside this lane's write scope.
