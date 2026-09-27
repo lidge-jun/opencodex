@@ -4,27 +4,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { saveCredential } from "../../src/oauth/store";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { clearProviderQuotaCache, fetchProviderQuotaReports, QUOTA_RESPONSE_MAX_BYTES } from "../../src/providers/quota";
 import { decodeDevinUserStatus, devinQuotaFromStatus, fetchDevinQuota } from "../../src/providers/quota/devin";
 import { AUTHORITATIVE_EMPTY_QUOTA, TERMINAL_QUOTA_FAILURE } from "../../src/providers/quota/report-cache";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const KEY = "devin-session-token$synthetic.fixture.key";
-const PLAN_END = 1_792_000_000;
-const DAILY_RESET = 1_790_500_000;
-const WEEKLY_RESET = 1_791_000_000;
+// Far enough ahead that the fetch-path tests, which use the real clock, see live windows.
+const PLAN_END = 4_000_000_000;
+const DAILY_RESET = 3_990_000_000;
+const WEEKLY_RESET = 3_995_000_000;
 
 /** Signed ints ride the wire as 64-bit two's complement, exactly like the server sends -1. */
 const int = (num: number, value: number) => encodeVarintField(num, BigInt.asUintN(64, BigInt(value)));
 
-function planInfo(p: { tier: number; name: string; billing: number; hideDaily?: boolean; monthlyFlow?: number }): Buffer {
+function planInfo(p: { tier: number; name: string; billing: number; hideDaily?: boolean; hideWeekly?: boolean; monthlyFlow?: number }): Buffer {
   return Buffer.concat([
     int(1, p.tier),
     encodeString(2, p.name),
     ...(p.monthlyFlow ? [int(13, p.monthlyFlow)] : []),
     int(35, p.billing),
     ...(p.hideDaily ? [int(36, 1)] : []),
+    ...(p.hideWeekly ? [int(37, 1)] : []),
   ]);
 }
 
@@ -48,6 +50,12 @@ const quotaPlan = () => userStatusResponse(
 /** Credit-billed plan: the percent fields sit at their zero default and carry no reset date. */
 const creditPlan = (status: Record<number, number>) => userStatusResponse(
   planInfo({ tier: 16, name: "Pro", billing: 1 }),
+  status,
+  false,
+);
+
+const creditPlanWithFlow = (monthlyFlow: number, status: Record<number, number>) => userStatusResponse(
+  planInfo({ tier: 16, name: "Pro", billing: 1, monthlyFlow }),
   status,
   false,
 );
@@ -85,6 +93,48 @@ describe("Devin GetUserStatus decode and mapping", () => {
     expect(spent.monthlyPercent).toBe(100);
   });
 
+  test("a quota-billed plan with a zero credit balance is not credit-exhausted", () => {
+    const buf = userStatusResponse(planInfo({ tier: 17, name: "Max", billing: 2 }), { 6: 10, 8: 0, 14: 100, 15: 90 });
+    const quota = devinQuotaFromStatus(decodeDevinUserStatus(buf)!, 1);
+    expect(quota.weeklyPercent).toBe(10);
+    expect(quota.monthlyPercent).toBeUndefined();
+  });
+
+  test("an unknown billing strategy uses credits only when no window is dated", () => {
+    const undated = userStatusResponse(planInfo({ tier: 16, name: "Pro", billing: 0 }), { 6: 50, 8: 50 }, false);
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(undated)!, 1).monthlyPercent).toBe(50);
+    const dated = userStatusResponse(planInfo({ tier: 16, name: "Pro", billing: 0 }), { 6: 50, 8: 50, 14: 100, 15: 100 });
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(dated)!, 1).monthlyPercent).toBeUndefined();
+  });
+
+  test("a window whose reset has already passed is dropped rather than read as spent", () => {
+    const buf = userStatusResponse(planInfo({ tier: 17, name: "Max", billing: 2 }), { 8: -1, 14: 0, 15: 0 });
+    const status = decodeDevinUserStatus(buf)!;
+    expect(devinQuotaFromStatus(status, WEEKLY_RESET * 1000 + 1)).toEqual({ updatedAt: WEEKLY_RESET * 1000 + 1 });
+    expect(devinQuotaFromStatus(status, DAILY_RESET * 1000 + 1)).toEqual({
+      updatedAt: DAILY_RESET * 1000 + 1,
+      weeklyPercent: 100,
+      weeklyResetAt: WEEKLY_RESET * 1000,
+    });
+  });
+
+  test("hide_weekly_quota (#37) suppresses the weekly window", () => {
+    const buf = userStatusResponse(planInfo({ tier: 17, name: "Max", billing: 2, hideWeekly: true }), { 8: -1, 14: 70, 15: 10 });
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(buf)!, 1)).toEqual({
+      updatedAt: 1,
+      customWindows: [{ label: "Daily", percent: 30, resetAt: DAILY_RESET * 1000 }],
+    });
+  });
+
+  test("flow credits read used #5 against available #9 only when the plan grants them (#13)", () => {
+    const granted = creditPlanWithFlow(100, { 5: 30, 9: 70 });
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(granted)!, 1).customWindows).toEqual([
+      { label: "Flow credits", percent: 30, resetAt: PLAN_END * 1000 },
+    ]);
+    const ungranted = creditPlanWithFlow(0, { 5: 30, 9: 70 });
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(ungranted)!, 1).customWindows).toBeUndefined();
+  });
+
   test("a response without PlanStatus is not a usable status", () => {
     expect(decodeDevinUserStatus(encodeMessage(1, encodeString(3, "Fixture User")))).toBeNull();
     expect(decodeDevinUserStatus(Buffer.alloc(0))).toBeNull();
@@ -112,12 +162,24 @@ describe("fetchDevinQuota transport", () => {
     expect(([...iterFields(metadata)].find(f => f.num === 3)?.value as Buffer).toString()).toBe(KEY);
   });
 
-  test("401 is terminal, 5xx and network faults keep the last-good row", async () => {
-    globalThis.fetch = (async () => new Response("unauthenticated: " + KEY, { status: 401 })) as unknown as typeof fetch;
-    expect(await fetchDevinQuota("devin", KEY, undefined)).toBe(TERMINAL_QUOTA_FAILURE);
-    globalThis.fetch = (async () => new Response("", { status: 503 })) as unknown as typeof fetch;
-    expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+  test("401/403/404 are terminal; 408/409/429/499, 5xx and network faults keep the last-good row", async () => {
+    for (const status of [401, 403, 404]) {
+      globalThis.fetch = (async () => new Response("unauthenticated: " + KEY, { status })) as unknown as typeof fetch;
+      expect(await fetchDevinQuota("devin", KEY, undefined)).toBe(TERMINAL_QUOTA_FAILURE);
+    }
+    for (const status of [408, 409, 429, 499, 503]) {
+      globalThis.fetch = (async () => new Response("", { status })) as unknown as typeof fetch;
+      expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+    }
     globalThis.fetch = (async () => { throw new TypeError("network down"); }) as unknown as typeof fetch;
+    expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+  });
+
+  test("a truncated or oversized body keeps the last-good row instead of throwing", async () => {
+    // Tag for field 1 varint, then a continuation byte with nothing after it.
+    globalThis.fetch = (async () => new Response(new Uint8Array([0x08, 0x80]), { status: 200 })) as unknown as typeof fetch;
+    expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+    globalThis.fetch = (async () => new Response(new Uint8Array(QUOTA_RESPONSE_MAX_BYTES + 1), { status: 200 })) as unknown as typeof fetch;
     expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
   });
 

@@ -75,11 +75,14 @@ video quota rows are unrelated and omitted.
 
 Devin account quota in `src/providers/quota/devin.ts` reads Cognition's unary
 `SeatManagementService/GetUserStatus` with the default cloud-direct Metadata, against the
-credential's allowlisted api-server host with redirects refused. It publishes only dated daily
-and weekly windows the plan does not hide, because a credit-billed plan leaves those percents at
-a zero default that would read as exhausted. Prompt plus flex credits form one monthly pool
-measured against the server balance, and a negative balance is the unlimited sentinel. A 4xx
-other than 408/429 is terminal; a decoded status with nothing measurable is authoritative-empty.
+credential's allowlisted api-server host with redirects refused and a bounded body read. It
+publishes only daily and weekly windows the plan does not hide whose reset is still ahead,
+because a credit-billed plan leaves those percents at a zero default and a past reset describes a
+rolled-over window; both would read as exhausted. Prompt plus flex credits form one monthly pool
+measured against the server balance, published only for a credit-billed plan (or an unknown
+strategy with no dated window); a negative balance is the unlimited sentinel. A 4xx other than
+408/409/429/499 is terminal; a malformed body keeps last-good; a decoded status with nothing
+measurable is authoritative-empty.
 
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one
 opaque account key and a non-secret login identity. Hydration admits only matching live
