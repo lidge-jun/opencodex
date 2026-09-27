@@ -562,7 +562,9 @@ summary choices remain intact. Raw display and hidden-envelope replay follow
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
 active effort and omits summary; explicit `summary: "none"` still hides it.
 The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only —
-openai-chat `reasoning_content`, kiro tags, Gemini thought parts — while `thinking_delta`
+openai-chat `reasoning_content`, kiro tags, and Gemini thought parts on routes that do not return
+thought summaries (direct and Vertex Gemini; a `cloud-code-assist` Gemini route emits its thought
+parts as `thinking_delta` instead, so the switch leaves them visible) — while `thinking_delta`
 summaries keep streaming; the hidden text still round-trips in a txt-only envelope, and a fallback
 route without the option shows raw reasoning again. A native passthrough route relays the
 upstream's own frames and ignores the option.
