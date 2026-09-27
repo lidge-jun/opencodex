@@ -60,8 +60,9 @@ curl -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
 The Worker answers `401` to any request that carries no `x-opencodex-api-key`, `Authorization`, or
 `x-api-key` header (or, for the audio WebSocket, a key subprotocol), without starting the container,
 so scanners cannot keep it running. `OPTIONS` requests are answered by the Worker without CORS
-headers, so browser-based clients cannot call this deployment. `ocx` still checks every key it
-receives. Because `/healthz` needs a key too, an uptime monitor must be given one; prefer a
+headers, so cross-origin browser requests that need an authentication header fail. The audio
+WebSocket still works from a browser, because it carries its key as a subprotocol. `ocx` still
+checks every key it receives. Because `/healthz` needs a key too, an uptime monitor must be given one; prefer a
 dedicated client key over the data token.
 
 The first request starts the container, which takes a few seconds. Requests that arrive while it is
@@ -102,12 +103,12 @@ the configuration after that:
 - **Keep the saved state.** Open the management API for the change, as described under
   [Security](#security), and use it like any other hub. Close it again afterwards.
 - **Start over from the bootstrap secret.** Store the new `OCX_BOOTSTRAP_CONFIG_JSON`, then set
-  `OCX_DISCARD_SAVED_STATE` to a value it has not had before. This discards the saved state:
+  `OCX_DISCARD_SAVED_STATE` to a value it has never had; a random one is safest. This discards the saved state:
   OAuth logins, client keys, and usage history go with it.
 
   ```bash
   npx wrangler secret put OCX_BOOTSTRAP_CONFIG_JSON < config.json
-  date +%s | npx wrangler secret put OCX_DISCARD_SAVED_STATE
+  openssl rand -hex 8 | npx wrangler secret put OCX_DISCARD_SAVED_STATE
   ```
 
 ## Connect Codex

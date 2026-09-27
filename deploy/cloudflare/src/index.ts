@@ -24,6 +24,9 @@ const STOP_WAIT_MS = 5 * 60_000;
 const HANDOFF_WINDOW_MS = 30_000;
 const PROXY_FAILURE = "Error proxying request to container";
 const NOT_LISTENING = /not listening/i;
+// The library's answer when a connection drops mid-request: the request may already have run.
+const DISCONNECTED = "Container suddenly disconnected";
+const REPLAYABLE_METHODS = new Set(["GET", "HEAD"]);
 
 export class OpencodexHub extends Container<Env> {
   defaultPort = 10100;
@@ -36,6 +39,7 @@ export class OpencodexHub extends Container<Env> {
   private readonly leases = new LeaseState(this.ctx.storage);
 
   private startedAt = 0;
+  private resetInFlight: Promise<void> | undefined;
 
   override async onStart(): Promise<void> {
     this.startedAt = Date.now();
@@ -50,16 +54,21 @@ export class OpencodexHub extends Container<Env> {
     await this.restartIfEnvChanged();
     // This request may itself start the container, which sets startedAt only once it is up, so
     // the window runs from whichever is later: the last start or this request's arrival.
-    const windowStart = (await this.getState()).status !== "healthy" ? Date.now() : this.startedAt;
+    // startedAt is 0 in a recreated object even when the persisted state says healthy; the
+    // container may be stopped and restarted by this very request, so that counts as a new start.
+    const windowStart = (await this.getState()).status !== "healthy" || this.startedAt === 0 ? Date.now() : this.startedAt;
     const inWindow = () => Date.now() - Math.max(windowStart, this.startedAt) <= HANDOFF_WINDOW_MS;
     if (!inWindow()) return super.fetch(req);
     // Only inside the handoff window is the request cloned, so a refused connection can be replayed.
-    // Only a refused connection is retried; any other failure returns at once.
+    // A refused connection never reached ocx, so any request replays. A dropped one may have run,
+    // so only reads replay. Every other failure returns at once.
     for (let attempt = 0; ; attempt++) {
       const response = await super.fetch(req.clone());
       if (response.status !== 500 || attempt >= 10 || !inWindow()) return response;
       const text = await response.text();
-      if (!text.startsWith(PROXY_FAILURE) || !NOT_LISTENING.test(text)) return new Response(text, response);
+      const refused = text.startsWith(PROXY_FAILURE) && NOT_LISTENING.test(text);
+      const droppedRead = text.startsWith(DISCONNECTED) && REPLAYABLE_METHODS.has(req.method);
+      if (!refused && !droppedRead) return new Response(text, response);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
@@ -68,8 +77,18 @@ export class OpencodexHub extends Container<Env> {
   // pointer whose object was deleted): the admin API is closed and the bootstrap secret applies only
   // when nothing is saved. Honored once per distinct value, so leaving it set cannot wipe every boot.
   private async applyPendingReset(): Promise<void> {
+    // stopAndWait() awaits timers, which reopen the input gate. Without this chain a second request
+    // could read the old nonce mid-reset and later discard the replacement container's fresh state.
+    while (this.resetInFlight) await this.resetInFlight;
     const nonce = this.env.OCX_DISCARD_SAVED_STATE?.trim();
-    if (!nonce || (await this.ctx.storage.get<string>(HONORED_RESET_KEY)) === nonce) return;
+    if (!nonce) return;
+    // Assigned before the first await, so the nonce read is inside the serialized section.
+    this.resetInFlight = this.discardSavedStateOnce(nonce).finally(() => { this.resetInFlight = undefined; });
+    await this.resetInFlight;
+  }
+
+  private async discardSavedStateOnce(nonce: string): Promise<void> {
+    if ((await this.ctx.storage.get<string>(HONORED_RESET_KEY)) === nonce) return;
     console.log("OCX_DISCARD_SAVED_STATE changed; discarding the saved state.");
     // Stop first: a running container uploads a final snapshot on the way out, which would
     // otherwise re-commit the state being discarded.

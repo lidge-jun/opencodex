@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decideLease, isHolder, LEASE_STALE_MS, LeaseState, type LeaseStorage } from "../../deploy/cloudflare/src/lease";
@@ -92,6 +92,17 @@ describe("cloudflare supervisor snapshots", () => {
     expect(readFileSync(join(restored, "ocx", "nested", "note.txt"), "utf8")).toBe("kept");
     expect(readFileSync(join(restored, "ocx", "link.json"), "utf8")).toBe("{\"port\":10100}\n");
     expect(statSync(join(restored, "codex", "auth.json")).mode & 0o777).toBe(0o600);
+  });
+
+  test("an empty or re-permissioned directory changes the digest", async () => {
+    const dir = scratch();
+    const roots = [{ prefix: "opencodex", dir }];
+    const before = await stageSnapshot(roots, join(scratch(), "a"));
+    mkdirSync(join(dir, "sessions"), { mode: 0o700 });
+    const withDir = await stageSnapshot(roots, join(scratch(), "b"));
+    expect(withDir).not.toBe(before);
+    chmodSync(join(dir, "sessions"), 0o755);
+    expect(await stageSnapshot(roots, join(scratch(), "c"))).not.toBe(withDir);
   });
 
   test("a changed file changes the digest so the next interval uploads", async () => {

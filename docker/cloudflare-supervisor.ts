@@ -1,7 +1,6 @@
 // Entrypoint for the Cloudflare Container deployment (deploy/cloudflare). The container disk is
 // wiped whenever the instance sleeps or rolls out, so this process restores both state homes from
 // R2 before starting ocx and uploads them again while it runs and on SIGTERM.
-import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { copyFile, cp, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, symlink } from "node:fs/promises";
@@ -29,6 +28,11 @@ export function classifyFile(name: string, header: string): FileClass {
   return "copy";
 }
 
+function ignoreVanished(error: unknown): undefined {
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+  throw error;
+}
+
 async function readHeader(path: string): Promise<string> {
   const handle = await open(path, "r");
   try {
@@ -40,15 +44,20 @@ async function readHeader(path: string): Promise<string> {
   }
 }
 
-// One synchronous call per database; the walk yields between files so the lease heartbeat runs.
-function copySqlite(source: string, target: string): void {
-  const database = new Database(source, { readonly: true });
-  try {
-    database.exec("PRAGMA busy_timeout = 5000");
-    database.query("VACUUM INTO ?").run(target);
-  } finally {
-    database.close();
-  }
+// VACUUM INTO is one synchronous call that can run for minutes on a large database. In a child
+// process it cannot block this event loop, where the lease heartbeat has to keep firing.
+const VACUUM_INTO = `
+const { Database } = require("bun:sqlite");
+const database = new Database(process.env.OCX_SQLITE_SOURCE, { readonly: true });
+try {
+  database.exec("PRAGMA busy_timeout = 5000");
+  database.query("VACUUM INTO ?").run(process.env.OCX_SQLITE_TARGET);
+} finally {
+  database.close();
+}`;
+
+function copySqlite(source: string, target: string): Promise<void> {
+  return run([process.execPath, "-e", VACUUM_INTO], { OCX_SQLITE_SOURCE: source, OCX_SQLITE_TARGET: target });
 }
 
 /**
@@ -62,12 +71,18 @@ export async function stageSnapshot(roots: StateRoot[], staging: string): Promis
     if (!existsSync(root.dir)) continue;
     const walk = async (dir: string): Promise<void> => {
       for (const name of (await readdir(dir)).sort()) {
+        // Skipped by name before any stat: SQLite deletes and recreates these while we walk.
+        if (SQLITE_SIDECAR.test(name)) continue;
         const source = join(dir, name);
         const rel = join(root.prefix, relative(root.dir, source));
         const target = join(staging, rel);
-        const stat = await lstat(source);
+        const stat = await lstat(source).catch(ignoreVanished);
+        // Deleted between readdir and now (a temp file, a rotated log): not state to save.
+        if (!stat) continue;
         if (stat.isDirectory()) {
           await mkdir(target, { recursive: true, mode: stat.mode & 0o777 });
+          // An empty or re-permissioned directory is state too; without this it never triggers an upload.
+          hasher.update(`dir\0${rel}\0${stat.mode & 0o777}\0`);
           await walk(source);
         } else if (stat.isSymbolicLink()) {
           const link = await readlink(source);
@@ -75,11 +90,13 @@ export async function stageSnapshot(roots: StateRoot[], staging: string): Promis
           await symlink(link, target);
           hasher.update(`link\0${rel}\0${link}\0`);
         } else if (stat.isFile()) {
-          const kind = classifyFile(name, await readHeader(source));
+          const header = await readHeader(source).catch(ignoreVanished);
+          if (header === undefined) continue;
+          const kind = classifyFile(name, header);
           if (kind === "skip") continue;
           await mkdir(dirname(target), { recursive: true });
-          if (kind === "sqlite") copySqlite(source, target);
-          else await copyFile(source, target);
+          if (kind === "sqlite") await copySqlite(source, target);
+          else if ((await copyFile(source, target).then(() => true, ignoreVanished)) === undefined) continue;
           hasher.update(`file\0${rel}\0${stat.mode & 0o777}\0`);
           for await (const chunk of Bun.file(target).stream()) hasher.update(chunk);
         }
@@ -101,8 +118,8 @@ export async function applySnapshot(roots: StateRoot[], staging: string): Promis
   }
 }
 
-async function run(cmd: string[]): Promise<void> {
-  const child = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe" });
+async function run(cmd: string[], env?: Record<string, string>): Promise<void> {
+  const child = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe", env: env ? { ...process.env, ...env } : undefined });
   const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
   if (exitCode !== 0) throw new Error(`${cmd[0]} exited ${exitCode}: ${stderr.trim()}`);
 }
