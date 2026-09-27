@@ -263,14 +263,38 @@ export async function loginDevin(
   return loginDevinBrowser(ctrl, DEFAULT_REGION);
 }
 
+/**
+ * A CLI-imported account follows the CLI: after `devin auth login` rewrites the
+ * credential file, the copy stored at import time is stale while the file holds
+ * a live key. The session JWT carries no expiry, so the upstream 401 is the only
+ * signal, and this re-read runs only on that forced refresh.
+ *
+ * Nothing is adopted that could belong to someone else: the host must pass the
+ * allowlist before the key is paired with it, a key another stored account
+ * already owns stays with that account, and a key whose identity contradicts the
+ * stored one is refused.
+ */
+function rereadDevinCliCredential(stored: OAuthCredentials): OAuthCredentials | undefined {
+  const outcome = readDevinCliCredentialOutcome();
+  if (outcome.kind !== "ok" || outcome.file.apiKey === stored.access) return undefined;
+  const apiBaseUrl = validateDevinApiBaseUrl(outcome.file.apiServerUrl);
+  if (apiBaseUrl === undefined) return undefined;
+  if (findDevinCredentialOwner("devin", outcome.file.apiKey) !== undefined) return undefined;
+  const fresh = credentialsFromApiKey(outcome.file.apiKey, apiBaseUrl, "local-cli");
+  if (stored.accountId && fresh.accountId && stored.accountId !== fresh.accountId) return undefined;
+  return fresh;
+}
+
 export async function refreshDevinToken(
   _refreshToken: string,
   _signal?: AbortSignal,
-  _credential?: OAuthCredentials,
+  credential?: OAuthCredentials,
 ): Promise<OAuthCredentials> {
+  const reread = credential?.source === "local-cli" ? rereadDevinCliCredential(credential) : undefined;
+  if (reread) return reread;
   // Cognition has no refresh endpoint. Extending the stored expiry here is what
   // the carried implementation did, and it makes a revoked key look valid
-  // forever. Throwing lets the request path mark the account needsReauth the
-  // first time a forced refresh happens.
+  // forever. Throwing on the upstream-401 forced refresh is what marks the
+  // account needsReauth.
   throw new Error("invalid_grant: Devin API keys do not refresh. Run ocx login devin again.");
 }
