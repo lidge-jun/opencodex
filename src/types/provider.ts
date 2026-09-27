@@ -963,6 +963,12 @@ export interface OcxProviderConfig {
    */
   showThinkingSummary?: boolean;
   /**
+   * Keep raw content-channel reasoning out of client frames for this provider. Provider-authored
+   * summaries (thinking_delta) stay visible, so an opted-in operator loses no summary; an explicit
+   * wire summary:"none" still hides both. The suppressed text round-trips in the replay envelope.
+   */
+  hideRawReasoning?: boolean;
+  /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays
    * the identical request on the same key before any failover. Pre-stream only: a 429 arrives

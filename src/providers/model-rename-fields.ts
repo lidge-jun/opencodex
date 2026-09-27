@@ -120,6 +120,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   preserveReasoningContentModels: "list",
   requiresReasoningPlaceholderModels: "list",
   showThinkingSummary: "none",
+  hideRawReasoning: "none",
   retryOn429: "none",
   transientRetryOn5xx: "none",
   retryOnReset: "none",

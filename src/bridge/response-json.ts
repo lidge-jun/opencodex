@@ -83,6 +83,8 @@ function buildResponseJSONWithBudget(
   modelId: string,
   options?: {
     hideThinkingSummary?: boolean;
+    /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
+    hideRawReasoning?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
     /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
@@ -284,7 +286,7 @@ function buildResponseJSONWithBudget(
     const rawText = joinChunks(currentRawReasoning);
     if (!rawText) return;
     rawReasoningForNextToolCall = rawText;
-    if (options?.hideThinkingSummary === true) {
+    if (options?.hideThinkingSummary === true || options?.hideRawReasoning === true) {
       // Same contract as the streaming path: no visible reasoning, txt-only envelope round-trip.
       pushOutput({
         type: "reasoning", id: `rs_${uuid()}`, summary: [],

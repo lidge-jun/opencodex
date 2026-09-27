@@ -153,6 +153,7 @@ export async function deliverAdapterResponse(
         fold: {
           replayCacheScope: parsed._reasoningReplayScope,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
+          hideRawReasoning: parsed.options.hideRawReasoning,
           toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames,
         },
         stallTimeoutSec: config.stallTimeoutSec,
@@ -175,6 +176,7 @@ export async function deliverAdapterResponse(
         stallTimeoutSec: config.stallTimeoutSec,
         localUpstream,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
+        hideRawReasoning: parsed.options.hideRawReasoning,
         declaredToolNames,
         bareCustomToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
@@ -243,6 +245,7 @@ export async function deliverAdapterResponse(
       translatorBudget,
       replayCacheScope: parsed._reasoningReplayScope,
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      hideRawReasoning: parsed.options.hideRawReasoning,
       toolNsMap,
       declaredToolNames,
       bareCustomToolNames,

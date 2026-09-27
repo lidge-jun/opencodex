@@ -478,7 +478,7 @@ advances the observation clock, so a retained older row cannot defer evaluation 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
 
-The provider editor field policy exposes `showThinkingSummary` as a boolean provider option; it controls Responses summary defaults without a dashboard rendering change. See [Google provider](providers/google.md).
+The provider editor field policy exposes `showThinkingSummary` as a boolean provider option; it controls Responses summary defaults without a dashboard rendering change. See [Google provider](providers/google.md). It also exposes `hideRawReasoning` as a boolean option, which suppresses only the raw reasoning channel and leaves provider-authored summaries visible; that contract is owned by [Chat compatibility](providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 
 The same editor policy accepts the per-model `inlineThinkTagModels` string list. Its opt-in
 format contract is owned by [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
