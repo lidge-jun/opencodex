@@ -270,10 +270,7 @@ missing on disk (presence only; a present key with another value is left alone).
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
 leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
-The unattended service-home admission refusal, which `src/codex/sync.ts` checks before that
-preflight, is the exception: its message can name private home and service-definition paths, so
-the sync logs one path-free line naming the authority. Startup still marks `/readyz` failed, and
-an authenticated `POST /api/sync` returns the concrete reason in its 409 body.
+The earlier service-home admission refusal logs one path-free line; `POST /api/sync` returns its reason.
 Exactly one conversation-history refusal scopes the relabel unit instead of vetoing the apply
 transition, and only because it is permanent. Codex allocates paginated rollout ordinals inside
 its own writer, so `history_paginated_requires_native_writer` is not retryable: when the admitted
