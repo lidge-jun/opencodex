@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeString, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { saveConfig } from "../../src/config";
 import { saveCredential } from "../../src/oauth/store";
 import { MODEL_NOT_ALLOWED_FOR_KEY, UNNAMED_DESTINATION_MODEL } from "../../src/server/admission-model-scope";
@@ -66,6 +66,17 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
+
+/** Decode the request Metadata.api_key field, not an incidental token substring. */
+function metadataApiKey(body: Buffer): string {
+  const metadata = [...iterFields(body)].filter(field => field.num === 1 && field.wire === 2);
+  expect(metadata).toHaveLength(1);
+  if (!Buffer.isBuffer(metadata[0]?.value)) throw new Error("Missing request Metadata");
+  const credentials = [...iterFields(metadata[0].value)].filter(field => field.num === 3 && field.wire === 2);
+  expect(credentials).toHaveLength(1);
+  if (!Buffer.isBuffer(credentials[0]?.value)) throw new Error("Missing Metadata.api_key");
+  return credentials[0].value.toString("utf8");
+}
 
 type Scope = { allowedProviders?: string[]; allowedModels?: string[] };
 
@@ -245,8 +256,8 @@ test("a scoped custom Devin route spends only that provider's OAuth credential",
   expect(upstreamCalls).toEqual([
     "https://server.codeium.com/exa.api_server_pb.ApiServerService/GetWebSearchResults",
   ]);
-  expect(requestBody.includes(Buffer.from(customToken))).toBe(true);
-  expect(requestBody.includes(Buffer.from("canonical-devin-token"))).toBe(false);
+  expect(metadataApiKey(requestBody)).toBe(customToken);
+  expect(metadataApiKey(requestBody)).not.toBe("canonical-devin-token");
 });
 
 test("a custom Devin route searches the tenant its credential names", async () => {
@@ -293,8 +304,8 @@ test("a custom Devin route searches the tenant its credential names", async () =
   expect(upstreamCalls).toEqual([
     "https://eu.windsurf.com/_route/api_server/exa.api_server_pb.ApiServerService/GetWebSearchResults",
   ]);
-  expect(requestBody.includes(Buffer.from(customToken))).toBe(true);
-  expect(requestBody.includes(Buffer.from("canonical-devin-token"))).toBe(false);
+  expect(metadataApiKey(requestBody)).toBe(customToken);
+  expect(metadataApiKey(requestBody)).not.toBe("canonical-devin-token");
 });
 
 test("the sidecar fallback refuses the backend it would have spent", async () => {
