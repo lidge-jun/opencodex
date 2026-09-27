@@ -945,13 +945,17 @@ describe("headless GUI parity CLI", () => {
 
   test("remote connect status is headless and revoke refuses disconnected state before hub traffic", async () => {
     let requests = 0;
+    const lockRoot = mkdtempSync(join(tmpdir(), "ocx-connect-parity-lock-"));
+    const lifecycleLockDeps = { lockPath: join(lockRoot, "client-lifecycle.sqlite") };
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(await handleConnectCommand(["status", "--json"], {
+        lifecycleLockDeps,
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(0);
       expect(await handleConnectCommand(["revoke", "--admin-token-stdin", "--json"], {
+        lifecycleLockDeps,
         stdinImpl: Readable.from(["ocx_admin_test\n"]),
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(1);
@@ -959,6 +963,7 @@ describe("headless GUI parity CLI", () => {
     } finally {
       logSpy.mockRestore();
       errorSpy.mockRestore();
+      removeTreeWithRetry(lockRoot);
     }
   });
 
