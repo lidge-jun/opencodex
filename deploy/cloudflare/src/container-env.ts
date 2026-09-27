@@ -49,8 +49,9 @@ export function edgeDecision(req: Request, env: SecretSource & { OCX_EXPOSE_MANA
       return { forward: false, status: 404, message: "The management API is not exposed on this deployment." };
     }
   }
-  // ocx answers CORS preflights without credentials; browsers never attach them to one.
-  if (req.method === "OPTIONS" && req.headers.has("access-control-request-method")) return { forward: true };
+  // Browsers never attach credentials to a preflight, so forwarding one would let anyone wake a
+  // billed container. Browser clients are out of scope here: refuse without granting CORS.
+  if (req.method === "OPTIONS") return { forward: false, status: 204, message: "" };
   const presented = ["x-opencodex-api-key", "authorization", "x-api-key"].some(name => req.headers.get(name)?.trim())
     // Browser WebSockets cannot set headers; the audio stream carries its key as a subprotocol
     // (KEY_PROTOCOL_PREFIX in src/server/audio-client.ts).

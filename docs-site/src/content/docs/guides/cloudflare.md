@@ -58,7 +58,8 @@ curl -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
 
 The Worker answers `401` to any request that carries no `x-opencodex-api-key`, `Authorization`, or
 `x-api-key` header (or, for the audio WebSocket, a key subprotocol), without starting the container,
-so scanners cannot keep it running. CORS preflights pass through. `ocx` still checks every key it
+so scanners cannot keep it running. `OPTIONS` requests are answered by the Worker without CORS
+headers, so browser-based clients cannot call this deployment. `ocx` still checks every key it
 receives. Because `/healthz` needs a key too, an uptime monitor must be given one; prefer a
 dedicated client key over the data token.
 
@@ -154,9 +155,10 @@ Set `OCX_SNAPSHOT_INTERVAL_SECONDS` (5–60) to change the upload interval, and 
 | Update to a new release | `git pull`, then `npx wrangler deploy` |
 | Rotate the data token | Repeat the two token lines from [Deploy](#deploy), save the new value, and update your clients |
 
-A running container keeps the secrets it started with. When any secret it receives changes, the
-next request stops the container, which saves its state, and starts a new one with the new values.
-The old token stops working at that point.
+A running container keeps the secrets it started with; changed secrets reach it the next time it
+starts, for example after it has slept. The Worker also tries to restart the container as soon as it
+sees a changed secret, but that path has not yet been verified on a production account, so after a
+rotation check that a request with the old token gets `401`.
 
 ## Limits
 

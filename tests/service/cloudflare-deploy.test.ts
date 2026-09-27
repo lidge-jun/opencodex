@@ -53,7 +53,7 @@ describe("cloudflare supervisor snapshots", () => {
     expect(classifyFile("admin-api-token", "0123")).toBe("skip");
   });
 
-  test("round-trips a live WAL database, files, modes, and symlinks, skipping locks", () => {
+  test("round-trips a live WAL database, files, modes, and symlinks, skipping locks", async () => {
     const home = scratch();
     const ocx = join(home, "ocx");
     const codex = join(home, "codex");
@@ -72,8 +72,8 @@ describe("cloudflare supervisor snapshots", () => {
 
     const roots: StateRoot[] = [{ prefix: "opencodex", dir: ocx }, { prefix: "codex", dir: codex }];
     const staging = join(scratch(), "tree");
-    const digest = stageSnapshot(roots, staging);
-    expect(stageSnapshot(roots, join(scratch(), "again"))).toBe(digest);
+    const digest = await stageSnapshot(roots, staging);
+    expect(await stageSnapshot(roots, join(scratch(), "again"))).toBe(digest);
     live.close();
     lock.close();
 
@@ -85,7 +85,7 @@ describe("cloudflare supervisor snapshots", () => {
       { prefix: "opencodex", dir: join(restored, "ocx") },
       { prefix: "codex", dir: join(restored, "codex") },
     ];
-    applySnapshot(target, staging);
+    await applySnapshot(target, staging);
     const copy = new Database(join(restored, "ocx", "usage.sqlite"), { readonly: true });
     expect(copy.query("SELECT v FROM t").get()).toEqual({ v: "row" });
     copy.close();
@@ -94,13 +94,13 @@ describe("cloudflare supervisor snapshots", () => {
     expect(statSync(join(restored, "codex", "auth.json")).mode & 0o777).toBe(0o600);
   });
 
-  test("a changed file changes the digest so the next interval uploads", () => {
+  test("a changed file changes the digest so the next interval uploads", async () => {
     const dir = scratch();
     writeFileSync(join(dir, "config.json"), "{}");
     const roots = [{ prefix: "opencodex", dir }];
-    const before = stageSnapshot(roots, join(scratch(), "a"));
+    const before = await stageSnapshot(roots, join(scratch(), "a"));
     writeFileSync(join(dir, "config.json"), "{\"x\":1}");
-    expect(stageSnapshot(roots, join(scratch(), "b"))).not.toBe(before);
+    expect(await stageSnapshot(roots, join(scratch(), "b"))).not.toBe(before);
   });
 
   test("seeds the bootstrap config only from a JSON object", () => {
@@ -244,9 +244,9 @@ describe("cloudflare worker edge", () => {
     expect(edgeDecision(request("/v1/audio/transcriptions/stream", {
       "sec-websocket-protocol": "opencodex-audio.v1, opencodex-key.aw", upgrade: "websocket",
     }), token)).toEqual({ forward: true });
-    const preflight = new Request("https://hub.example/v1/responses", { method: "OPTIONS", headers: { "access-control-request-method": "POST" } });
-    expect(edgeDecision(preflight, token)).toEqual({ forward: true });
-    expect(edgeDecision(new Request("https://hub.example/v1/responses", { method: "OPTIONS" }), token)).toMatchObject({ status: 401 });
+    // Preflights never reach the container, and the Worker grants no CORS.
+    const preflight = new Request("https://hub.example/v1/responses", { method: "OPTIONS", headers: { "access-control-request-method": "POST", authorization: "Bearer x" } });
+    expect(edgeDecision(preflight, token)).toEqual({ forward: false, status: 204, message: "" });
   });
 
   test("keeps the management API closed unless the operator opts in with their own admin token", () => {

@@ -3,10 +3,8 @@
 // R2 before starting ocx and uploads them again while it runs and on SIGTERM.
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import {
-  closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync,
-  readdirSync, readFileSync, readlinkSync, readSync, rmSync, symlinkSync, writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFile, cp, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
@@ -29,17 +27,18 @@ export function classifyFile(name: string, header: string): FileClass {
   return "copy";
 }
 
-function readHeader(path: string): string {
-  const fd = openSync(path, "r");
+async function readHeader(path: string): Promise<string> {
+  const handle = await open(path, "r");
   try {
     const buffer = Buffer.alloc(SQLITE_HEADER.length);
-    const read = readSync(fd, buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, read).toString("latin1");
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("latin1");
   } finally {
-    closeSync(fd);
+    await handle.close();
   }
 }
 
+// One synchronous call per database; the walk yields between files so the lease heartbeat runs.
 function copySqlite(source: string, target: string): void {
   const database = new Database(source, { readonly: true });
   try {
@@ -50,54 +49,60 @@ function copySqlite(source: string, target: string): void {
   }
 }
 
-/** Copies a consistent view of each root into staging/<prefix>; returns a digest of what it staged. */
-export function stageSnapshot(roots: StateRoot[], staging: string): string {
+/**
+ * Copies a consistent view of each root into staging/<prefix>; returns a digest of what it staged.
+ * Asynchronous on purpose: a synchronous walk of a large home would starve the lease heartbeat
+ * past LEASE_STALE_MS and let a second container take over while this one still serves.
+ */
+export async function stageSnapshot(roots: StateRoot[], staging: string): Promise<string> {
   const hasher = new Bun.CryptoHasher("sha256");
   for (const root of roots) {
     if (!existsSync(root.dir)) continue;
-    const walk = (dir: string): void => {
-      for (const name of readdirSync(dir).sort()) {
+    const walk = async (dir: string): Promise<void> => {
+      for (const name of (await readdir(dir)).sort()) {
         const source = join(dir, name);
         const rel = join(root.prefix, relative(root.dir, source));
         const target = join(staging, rel);
-        const stat = lstatSync(source);
+        const stat = await lstat(source);
         if (stat.isDirectory()) {
-          mkdirSync(target, { recursive: true, mode: stat.mode & 0o777 });
-          walk(source);
+          await mkdir(target, { recursive: true, mode: stat.mode & 0o777 });
+          await walk(source);
         } else if (stat.isSymbolicLink()) {
-          mkdirSync(dirname(target), { recursive: true });
-          symlinkSync(readlinkSync(source), target);
-          hasher.update(`link\0${rel}\0${readlinkSync(source)}\0`);
+          const link = await readlink(source);
+          await mkdir(dirname(target), { recursive: true });
+          await symlink(link, target);
+          hasher.update(`link\0${rel}\0${link}\0`);
         } else if (stat.isFile()) {
-          const kind = classifyFile(name, readHeader(source));
+          const kind = classifyFile(name, await readHeader(source));
           if (kind === "skip") continue;
-          mkdirSync(dirname(target), { recursive: true });
+          await mkdir(dirname(target), { recursive: true });
           if (kind === "sqlite") copySqlite(source, target);
-          else copyFileSync(source, target);
+          else await copyFile(source, target);
           hasher.update(`file\0${rel}\0${stat.mode & 0o777}\0`);
-          hasher.update(readFileSync(target));
+          for await (const chunk of Bun.file(target).stream()) hasher.update(chunk);
         }
       }
     };
-    mkdirSync(join(staging, root.prefix), { recursive: true });
-    walk(root.dir);
+    await mkdir(join(staging, root.prefix), { recursive: true });
+    await walk(root.dir);
   }
   return hasher.digest("hex");
 }
 
 /** Copies staging/<prefix> over each root; files absent from the snapshot are left alone. */
-export function applySnapshot(roots: StateRoot[], staging: string): void {
+export async function applySnapshot(roots: StateRoot[], staging: string): Promise<void> {
   for (const root of roots) {
     const source = join(staging, root.prefix);
     if (!existsSync(source)) continue;
-    mkdirSync(root.dir, { recursive: true, mode: 0o700 });
-    cpSync(source, root.dir, { recursive: true, force: true, verbatimSymlinks: true });
+    await mkdir(root.dir, { recursive: true, mode: 0o700 });
+    await cp(source, root.dir, { recursive: true, force: true, verbatimSymlinks: true });
   }
 }
 
-function run(cmd: string[]): void {
-  const result = Bun.spawnSync(cmd, { stdout: "ignore", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error(`${cmd[0]} exited ${result.exitCode}: ${result.stderr.toString().trim()}`);
+async function run(cmd: string[]): Promise<void> {
+  const child = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe" });
+  const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (exitCode !== 0) throw new Error(`${cmd[0]} exited ${exitCode}: ${stderr.trim()}`);
 }
 
 class LeaseLostError extends Error {}
@@ -179,19 +184,19 @@ class Supervisor {
     const response = await this.state("/snapshot", {}, 10 * 60_000);
     if (response.status === 404) return false;
     if (!response.ok) throw new Error(`snapshot download failed: ${response.status}`);
-    const work = mkdtempSync(join(tmpdir(), "ocx-restore-"));
+    const work = await mkdtemp(join(tmpdir(), "ocx-restore-"));
     try {
       const archive = join(work, "snapshot.tar.gz");
       await Bun.write(archive, response);
       const staging = join(work, "tree");
-      mkdirSync(staging);
-      run(["tar", "-xzf", archive, "-C", staging, "--no-same-owner"]);
-      applySnapshot(this.roots, staging);
-      this.lastDigest = stageSnapshot(this.roots, join(work, "digest"));
+      await mkdir(staging);
+      await run(["tar", "-xzf", archive, "-C", staging, "--no-same-owner"]);
+      await applySnapshot(this.roots, staging);
+      this.lastDigest = await stageSnapshot(this.roots, join(work, "digest"));
       console.log(`Restored state snapshot (${Bun.file(archive).size} bytes).`);
       return true;
     } finally {
-      rmSync(work, { recursive: true, force: true });
+      await rm(work, { recursive: true, force: true });
     }
   }
 
@@ -202,14 +207,14 @@ class Supervisor {
   }
 
   private async uploadNow(): Promise<void> {
-    const work = mkdtempSync(join(tmpdir(), "ocx-snapshot-"));
+    const work = await mkdtemp(join(tmpdir(), "ocx-snapshot-"));
     try {
       const staging = join(work, "tree");
-      mkdirSync(staging);
-      const digest = stageSnapshot(this.roots, staging);
+      await mkdir(staging);
+      const digest = await stageSnapshot(this.roots, staging);
       if (digest === this.lastDigest) return;
       const archive = join(work, "snapshot.tar.gz");
-      run(["tar", "-czf", archive, "-C", staging, "."]);
+      await run(["tar", "-czf", archive, "-C", staging, "."]);
       const file = Bun.file(archive);
       const response = await this.state("/snapshot", {
         method: "PUT",
@@ -221,7 +226,7 @@ class Supervisor {
       this.lastDigest = digest;
       console.log(`Uploaded state snapshot (${file.size} bytes).`);
     } finally {
-      rmSync(work, { recursive: true, force: true });
+      await rm(work, { recursive: true, force: true });
     }
   }
 
@@ -278,6 +283,15 @@ class Supervisor {
     for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => void this.shutdown(signal));
     this.openPlaceholder();
     await this.acquireLease();
+    // The heartbeat has its own timer from here on, so neither a slow restore nor a slow upload
+    // can let the lease go stale.
+    const heartbeat = setInterval(() => {
+      if (this.releasing) return;
+      this.renewLease().catch(error => {
+        if (error instanceof LeaseLostError) this.fence(error);
+        console.error(`Lease renewal failed: ${errorText(error)}`);
+      });
+    }, Math.min(this.intervalMs, 30_000));
     try {
       if (!(await this.restore())) seedBootstrapConfig(this.roots[0]!.dir);
     } catch (error) {
@@ -289,15 +303,6 @@ class Supervisor {
     await this.closePlaceholder();
     this.child = Bun.spawn(command, { stdio: ["inherit", "inherit", "inherit"] });
     void this.child.exited.then(() => this.shutdown("SIGTERM"));
-
-    // The heartbeat has its own timer so a slow upload cannot let the lease go stale.
-    const heartbeat = setInterval(() => {
-      if (this.releasing) return;
-      this.renewLease().catch(error => {
-        if (error instanceof LeaseLostError) this.fence(error);
-        console.error(`Lease renewal failed: ${errorText(error)}`);
-      });
-    }, Math.min(this.intervalMs, 30_000));
 
     while (!this.stopping) {
       await Bun.sleep(this.intervalMs);

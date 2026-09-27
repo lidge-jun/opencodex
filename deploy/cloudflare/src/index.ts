@@ -39,14 +39,19 @@ export class OpencodexHub extends Container<Env> {
   }
 
   override async fetch(req: Request): Promise<Response> {
+    // Rebuilt per request: bindings can change under a live object, and a stale copy would both
+    // hide a rotated secret from the check below and start the replacement with the old value.
+    this.envVars = containerEnv(this.env);
     await this.restartIfEnvChanged();
-    // This request may itself start the container, which sets startedAt only once it is up.
-    const starting = (await this.getState()).status !== "healthy";
-    if (!starting && Date.now() - this.startedAt > HANDOFF_WINDOW_MS) return super.fetch(req);
+    // This request may itself start the container, which sets startedAt only once it is up, so
+    // the window runs from whichever is later: the last start or this request's arrival.
+    const windowStart = (await this.getState()).status !== "healthy" ? Date.now() : this.startedAt;
+    const inWindow = () => Date.now() - Math.max(windowStart, this.startedAt) <= HANDOFF_WINDOW_MS;
+    if (!inWindow()) return super.fetch(req);
     // Only inside the handoff window is the request cloned, so a refused connection can be replayed.
     for (let attempt = 0; ; attempt++) {
       const response = await super.fetch(req.clone());
-      if (response.status !== 500 || attempt >= 20 || Date.now() - this.startedAt > HANDOFF_WINDOW_MS) return response;
+      if (response.status !== 500 || attempt >= 20 || !inWindow()) return response;
       const text = await response.text();
       if (!text.startsWith(PROXY_FAILURE)) return new Response(text, response);
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -94,6 +99,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const decision = edgeDecision(req, env);
     if (!decision.forward) {
+      if (decision.status === 204) return new Response(null, { status: 204 });
       return Response.json({ error: { message: decision.message, type: "invalid_request_error" } }, { status: decision.status });
     }
     return getContainer(env.HUB, HUB_NAME).fetch(req);
