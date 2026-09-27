@@ -46,18 +46,36 @@ async function readHeader(path: string): Promise<string> {
 
 // VACUUM INTO is one synchronous call that can run for minutes on a large database. In a child
 // process it cannot block this event loop, where the lease heartbeat has to keep firing.
+// `bun -e` exits 0 even when the script throws (seen on Bun 1.3.14), so the child reports failure
+// itself and the caller also checks that the copy exists.
 const VACUUM_INTO = `
 const { Database } = require("bun:sqlite");
-const database = new Database(process.env.OCX_SQLITE_SOURCE, { readonly: true });
 try {
-  database.exec("PRAGMA busy_timeout = 5000");
-  database.query("VACUUM INTO ?").run(process.env.OCX_SQLITE_TARGET);
-} finally {
-  database.close();
+  const database = new Database(process.env.OCX_SQLITE_SOURCE, { readonly: true });
+  try {
+    database.exec("PRAGMA busy_timeout = 5000");
+    database.query("VACUUM INTO ?").run(process.env.OCX_SQLITE_TARGET);
+  } finally {
+    database.close();
+  }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
 }`;
 
-function copySqlite(source: string, target: string): Promise<void> {
-  return run([process.execPath, "-e", VACUUM_INTO], { OCX_SQLITE_SOURCE: source, OCX_SQLITE_TARGET: target });
+/** Copies a consistent view of one database; false when the source vanished before the copy opened it. */
+export async function copySqlite(source: string, target: string): Promise<boolean> {
+  try {
+    await run([process.execPath, "-e", VACUUM_INTO], { OCX_SQLITE_SOURCE: source, OCX_SQLITE_TARGET: target });
+    if (!existsSync(target)) throw new Error(`VACUUM INTO produced no copy of ${source}`);
+    return true;
+  } catch (error) {
+    // The child only reports a message, so check the source itself. Any other failure (a busy or
+    // corrupt database) still aborts this snapshot, and the next interval retries.
+    if (existsSync(source)) throw error;
+    await rm(target, { force: true });
+    return false;
+  }
 }
 
 /**
@@ -95,8 +113,9 @@ export async function stageSnapshot(roots: StateRoot[], staging: string): Promis
           const kind = classifyFile(name, header);
           if (kind === "skip") continue;
           await mkdir(dirname(target), { recursive: true });
-          if (kind === "sqlite") await copySqlite(source, target);
-          else if ((await copyFile(source, target).then(() => true, ignoreVanished)) === undefined) continue;
+          if (kind === "sqlite") {
+            if (!(await copySqlite(source, target))) continue;
+          } else if ((await copyFile(source, target).then(() => true, ignoreVanished)) === undefined) continue;
           hasher.update(`file\0${rel}\0${stat.mode & 0o777}\0`);
           for await (const chunk of Bun.file(target).stream()) hasher.update(chunk);
         }

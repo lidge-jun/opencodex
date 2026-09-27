@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { decideLease, isHolder, LEASE_STALE_MS, LeaseState, type LeaseStorage } from "../../deploy/cloudflare/src/lease";
 import { handleStateRequest, sweepOrphans, type StateBucket } from "../../deploy/cloudflare/src/state-routes";
 import { containerEnv, edgeDecision, envFingerprint } from "../../deploy/cloudflare/src/container-env";
-import { applySnapshot, classifyFile, seedBootstrapConfig, stageSnapshot, Supervisor, type StateRoot } from "../../docker/cloudflare-supervisor";
+import { applySnapshot, classifyFile, copySqlite, seedBootstrapConfig, stageSnapshot, Supervisor, type StateRoot } from "../../docker/cloudflare-supervisor";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const SQLITE = "SQLite format 3\0";
@@ -92,6 +92,14 @@ describe("cloudflare supervisor snapshots", () => {
     expect(readFileSync(join(restored, "ocx", "nested", "note.txt"), "utf8")).toBe("kept");
     expect(readFileSync(join(restored, "ocx", "link.json"), "utf8")).toBe("{\"port\":10100}\n");
     expect(statSync(join(restored, "codex", "auth.json")).mode & 0o777).toBe(0o600);
+  });
+
+  test("a database that vanished before its copy is skipped; a broken one still fails the snapshot", async () => {
+    const dir = scratch();
+    expect(await copySqlite(join(dir, "gone.sqlite"), join(dir, "copy.sqlite"))).toBe(false);
+    expect(existsSync(join(dir, "copy.sqlite"))).toBe(false);
+    writeFileSync(join(dir, "corrupt.sqlite"), `${SQLITE}${"x".repeat(200)}`);
+    await expect(copySqlite(join(dir, "corrupt.sqlite"), join(dir, "copy.sqlite"))).rejects.toThrow();
   });
 
   test("an empty or re-permissioned directory changes the digest", async () => {
