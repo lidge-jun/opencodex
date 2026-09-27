@@ -223,4 +223,9 @@ No fetch is introduced: resolving the reference server-side would add an outboun
 request on a request path. The marker carries a count and no URL, because a remote
 image URL can carry a signed token.
 
+Malformed `data:` image URLs that lack a comma or image bytes also cannot be
+inlined. `kiroImageOmissionMarker` reports those separately from remote references,
+without echoing the URL or its bytes. The payload builder carries that marker in
+both user turns and tool results, including grouped adjacent tool outputs.
+
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.

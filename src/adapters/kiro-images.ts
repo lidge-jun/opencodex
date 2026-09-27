@@ -65,6 +65,20 @@ export function kiroUninlinableImageMarker(count: number): string {
   return "[" + String(count) + " images omitted: remote image references are not supported by this provider]";
 }
 
+/** Report malformed inline references separately from remote URLs. */
+export function kiroImageOmissionMarker(content: string | OcxContentPart[]): string {
+  if (typeof content === "string") return "";
+  const remote = kiroUninlinableImageMarker(countKiroUninlinableImages(content));
+  let malformed = 0;
+  for (const part of content) {
+    if (part.type === "image" && part.imageUrl.startsWith("data:") && !parseDataUrlImage(part.imageUrl)) malformed++;
+  }
+  const inline = malformed === 1
+    ? "[image omitted: malformed inline image data URL]"
+    : malformed > 1 ? `[${malformed} images omitted: malformed inline image data URLs]` : "";
+  return [remote, inline].filter(Boolean).join("\n");
+}
+
 /**
  * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload.
  * The 100-image request cap comes from Kiro's IMAGE_COUNT_EXCEEDED error
