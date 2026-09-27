@@ -92,7 +92,7 @@ export const retryOn429PolicySchema = z.object({
  * both retry layers, so the ceiling is deliberately lower than `retryOn429`'s: 10 total sends
  * against an already-failing provider is already generous.
  */
-const transientRetryOn5xxPolicySchema = z.object({
+export const transientRetryOn5xxPolicySchema = z.object({
   enabled: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),
 }).strict();

@@ -1,5 +1,25 @@
 import { nonBlankStringArrayConfigError, normalizeNonBlankStringArray } from "../../config/provider-validation";
+import {
+  retryOn429PolicyConfigError,
+  retryOnResetPolicyConfigError,
+  transientRetryOn5xxPolicyConfigError,
+} from "../../config/load-degrade";
 import type { OcxProviderConfig } from "../../types";
+
+/**
+ * The retry policies. They are the one carried group the PATCH field mask did not know, and they
+ * are `"editor"` fields, so before this a save that dropped one left no API path to put it back.
+ * Each validator is the same strict check the loader's schema applies, so the mask cannot store a
+ * block that a later load would reject.
+ */
+const RETRY_POLICY_FIELDS = ["retryOn429", "transientRetryOn5xx", "retryOnReset"] as const satisfies
+  readonly (keyof OcxProviderConfig)[];
+
+const RETRY_POLICY_VALIDATORS = {
+  retryOn429: retryOn429PolicyConfigError,
+  transientRetryOn5xx: transientRetryOn5xxPolicyConfigError,
+  retryOnReset: retryOnResetPolicyConfigError,
+} as const satisfies Record<typeof RETRY_POLICY_FIELDS[number], (policy: unknown) => string | null>;
 
 /**
  * What a provider save keeps (#5563).
@@ -11,13 +31,20 @@ import type { OcxProviderConfig } from "../../types";
  * them afterwards: the disk row equals its baseline, so the three-way merge keeps the value the
  * save wrote.
  *
- * These five settings record how one upstream behaves. An overwrite that keeps the destination
+ * These settings record how one upstream behaves. An overwrite that keeps the destination
  * carries each one the request omits, including an explicit `[]` or `false`. An overwrite that
  * moves the provider to another destination carries none of them: they describe the previous
  * upstream, and registry enrichment already fills what is known about the new one. The same
  * destination rule gates the stored `apiKeyPool`, whose keys were issued for the previous
  * destination. A value the request sends always wins, and the rest of the old row is never merged
  * into the candidate.
+ *
+ * The three retry policies join them on the same terms, and for a sharper reason: they are
+ * `"editor"` fields that had no branch in the PATCH field mask, so a save that dropped one left no
+ * API path to put it back. The mask branch below restores that path, and validates each policy
+ * against the loader's own schema — PATCH never runs the schema, and a malformed block would not
+ * degrade to "absent": the load would fail and the default config would take the whole provider
+ * table.
  */
 export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "preserveReasoningContentModels",
@@ -25,6 +52,7 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   "foldDeveloperRoleToSystem",
   "reasoningWireFormat",
   "omitReasoningEffortWithToolsModels",
+  ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
@@ -95,7 +123,13 @@ export function carryProviderCompatFields(
     if (sample.submitted.has(field)) continue;
     const stored = live[field];
     if (stored === undefined) continue;
-    target[field] = Array.isArray(stored) ? [...stored] : stored;
+    // Arrays and the retry-policy objects are copied rather than aliased, like `requestPacing`
+    // in the route: a later edit of one row must not reach the other through a shared value.
+    target[field] = Array.isArray(stored)
+      ? [...stored]
+      : stored !== null && typeof stored === "object"
+        ? structuredClone(stored)
+        : stored;
   }
 }
 
@@ -157,6 +191,24 @@ export function applyProviderCompatPatchFields(
       const format = PROVIDER_REASONING_WIRE_FORMATS.find(candidate => candidate === value);
       if (!format) return { error: `reasoningWireFormat must be one of: ${PROVIDER_REASONING_WIRE_FORMATS.join(", ")}` };
       next.reasoningWireFormat = format;
+    }
+    touched = true;
+  }
+  // The retry policies. They are validated here, like `requestPacing` and `upstreamHttpVersion`,
+  // because PATCH does not run the config schema: only POST does, through
+  // `validateConfigCandidate`. A malformed block that reached disk would fail the load and take
+  // the whole provider table to the default config with it, so the mask refuses it rather than
+  // storing something the loader will reject. `null` leaves the row entirely: the schema reads an
+  // absent block as "off", so deleting the key is what disables one, not storing `{enabled:false}`.
+  for (const field of RETRY_POLICY_FIELDS) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) {
+      delete next[field];
+    } else {
+      const error = RETRY_POLICY_VALIDATORS[field](value);
+      if (error) return { error };
+      next[field] = structuredClone(value) as OcxProviderConfig[typeof field];
     }
     touched = true;
   }
