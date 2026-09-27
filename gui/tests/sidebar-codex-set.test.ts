@@ -32,7 +32,7 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
    * written to catch. The entry's identity is its id and its label key.
    */
   expect(src).toContain('{ id: "codex-set", tkey: "nav.codexSet", Icon:');
-  expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} />}');
+  expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}');
 });
 
 test("the shipped #codex-auth bookmark still resolves", async () => {

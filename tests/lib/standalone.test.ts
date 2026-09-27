@@ -14,6 +14,11 @@ test("source Bun processes are not identified as compiled binaries", () => {
 test("compiled module URL markers are recognized on POSIX and Windows", () => {
   expect(isStandaloneModuleUrl("file:///$bunfs/root/src/cli/index.ts")).toBe(true);
   expect(isStandaloneModuleUrl("file:///B:/~BUN/root/src/cli/index.ts")).toBe(true);
+  expect(isStandaloneModuleUrl("file:///B:/%7EBUN/root/ocx.exe")).toBe(true);
+  expect(isStandaloneModuleUrl("file:///B:/%7eBUN/root/ocx.exe")).toBe(true);
+  expect(isStandaloneModuleUrl("file:///B:/%257EBUN/root/ocx.exe")).toBe(false);
+  expect(isStandaloneModuleUrl("https://example.test/$bunfs/root/index.ts")).toBe(false);
+  expect(isStandaloneModuleUrl("file:///B:/%XXBUN/root/index.ts")).toBe(false);
   expect(isStandaloneModuleUrl("file:///Users/x/src/lib/standalone.ts")).toBe(false);
 });
 
