@@ -259,7 +259,7 @@ By design a single upstream 401 on an `oauth`-source Devin account marks it need
 no refresh endpoint and there is no confirming probe. A `local-cli` account instead re-reads the CLI
 file and adopts a different key only if its host passes `validateDevinApiBaseUrl`, the key mints a
 user_jwt (its auth_uid/email are the identity; the session token has none), that identity does not
-contradict the slot's, and no other slot owns the key or identity; the adopted identity is recorded.
+contradict the slot's, and no other slot owns the key or identity; the adopted identity is recorded. An unreadable or half-written file, or a mint failing other than 401/403, fails the refresh unflagged.
 Test: `tests/responses/responses-devin-401-replay.test.ts`.
 
 ## Optional client transport hints

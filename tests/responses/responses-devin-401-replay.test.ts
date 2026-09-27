@@ -280,6 +280,24 @@ test.each([
   expect(cliAccount()?.credential.access).toBe(ROTATED);
 });
 
+test("a credential file caught mid-write does not flag the account", async () => {
+  await saveCliImport(DEAD);
+  // Half-written by `devin auth login`: the key line is there, the server line is not yet.
+  writeFileSync(home.path("devin-credentials.toml"), `windsurf_api_key = "${ROTATED}"\n`);
+
+  const body = await (await run()).json() as { error: { type: string; message: string } };
+
+  expect(body.error.type).toBe("authentication_error");
+  expect(body.error.message).not.toContain("ocx login devin");
+  expect(cliAccount()?.needsReauth).not.toBe(true);
+  expect(mintCalls).toBe(0);
+
+  // Once the write completes, the next 401 adopts the rotated key.
+  writeCliFile(ROTATED);
+  expect(await (await run()).text()).toContain("served by rotated");
+  expect(cliAccount()?.credential.access).toBe(ROTATED);
+});
+
 test("a slot recorded from the key's `sub` claim still matches the minted identity", async () => {
   mintedIdentity = { [ROTATED]: { auth_uid: "uid-rotated", sub: "sub-rotated", email: "rotated@example.com" } };
   await saveCliImport(DEAD, { accountId: "sub-rotated" });

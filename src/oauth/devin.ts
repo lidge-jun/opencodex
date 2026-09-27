@@ -304,6 +304,9 @@ async function rereadDevinCliCredential(
   currentAccountId: string | undefined,
 ): Promise<OAuthCredentials | undefined> {
   const outcome = readDevinCliCredentialOutcome();
+  // A file that exists but cannot be read or parsed may be mid-write by `devin auth login`
+  // or briefly locked; like a failed identity mint, that says nothing about the key.
+  if (outcome.kind === "unreadable" || outcome.kind === "incomplete") throw new DevinIdentityProbeUnavailableError();
   if (outcome.kind !== "ok" || outcome.file.apiKey === stored.access) return undefined;
   const apiBaseUrl = validateDevinApiBaseUrl(outcome.file.apiServerUrl);
   if (apiBaseUrl === undefined) return undefined;
