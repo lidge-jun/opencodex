@@ -110,7 +110,6 @@ describe("CI review lanes", () => {
       "bin/**",
       "bun.lock",
       "compose.yaml",
-      "deploy/**",
       "desktop/**",
       "docker/**",
       "gui/**",
