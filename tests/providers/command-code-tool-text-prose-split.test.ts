@@ -88,16 +88,51 @@ describe("Command Code markup after prose in one text block", () => {
   const PROSE = "Running it now.\n";
   const proseMarkup = PROSE + MARKUP;
 
-  test("preserves the markup when the native call carries the same input", async () => {
+  test("strips the markup when the native call carries the same input", async () => {
     const events = await adapterEvents([
       { type: "tool-input-start", id: "call_c1", toolName: "exec" },
       ...textBlock(proseMarkup),
       { type: "tool-call", toolCallId: "call_c1", toolName: "exec", input: JS, dynamic: true, invalid: true },
       { type: "finish", rawFinishReason: "tool_calls" },
     ]);
-    expect(texts(events)).toBe(proseMarkup);
+    // The separate native call carries the execution, so the post-prose echo leaves the screen.
+    expect(texts(events)).toBe(PROSE);
     expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
     expect(done(events)?.stopReason).toBe("tool_calls");
+  });
+
+  test("keeps markup after prose as text when the native call is for another tool", () => {
+    const { budget, filter } = twoToolFilter();
+    const args = JSON.stringify({ path: "src/a.ts" });
+    filter.toolInputStart("call_r1", "read");
+    expect(filter.textDelta("t", PROSE)).toEqual([{ type: "text_delta", text: PROSE }]);
+    // The tail is held for the dedup check, then released: a read call proves nothing about exec markup.
+    expect(filter.textDelta("t", MARKUP)).toEqual([]);
+    const events = [...filter.nativeCall("call_r1", "read", args), ...filter.releaseAll()];
+    expect(texts(events)).toBe(MARKUP);
+    expect(calls(events)).toEqual([{ id: "call_r1", name: "read", args }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("a native call matching a post-prose marker strips the echo", () => {
+    const { budget, filter } = execFilter();
+    filter.toolInputStart("call_c1", "exec");
+    expect(filter.textDelta("t", PROSE)).toEqual([{ type: "text_delta", text: PROSE }]);
+    expect(filter.textDelta("t", MARKUP)).toEqual([]);
+    const events = [...filter.nativeCall("call_c1", "exec", JS), ...filter.releaseAll()];
+    expect(texts(events)).toBe("");
+    expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("splits a prose-prefixed marker inside a single delta", () => {
+    const { budget, filter } = execFilter();
+    expect(filter.textDelta("t", PROSE + MARKUP)).toEqual([{ type: "text_delta", text: PROSE }]);
+    const finished = filter.finish();
+    expect(finished.salvaged).toBe(false);
+    expect(texts(finished.events)).toBe(MARKUP);
+    expect(calls(finished.events)).toEqual([]);
+    expect(budget.snapshot().currentBytes).toBe(0);
   });
 
   test("preserves a quoted trailing envelope on a clean finish", async () => {
@@ -108,14 +143,15 @@ describe("Command Code markup after prose in one text block", () => {
     expect(done(events)?.stopReason).toBe("stop");
   });
 
-  test("streams a marker that follows already streamed prose", () => {
+  test("a marker that follows already streamed prose is held, not executed", () => {
     const { budget, filter } = execFilter();
     expect(filter.textDelta("t", "Running it now.")).toEqual([{ type: "text_delta", text: "Running it now." }]);
-    expect(filter.textDelta("t", MARKUP)).toEqual([{ type: "text_delta", text: MARKUP }]);
+    // The echo is held for the dedup check, not streamed; with no matching call it is released.
+    expect(filter.textDelta("t", MARKUP)).toEqual([]);
     const finished = filter.finish();
     expect(finished.salvaged).toBe(false);
-    expect(finished.events).toEqual([]);
-    expect(texts(finished.events)).toBe("");
+    expect(finished.events).toEqual([{ type: "text_delta", text: MARKUP }]);
+    expect(texts(finished.events)).toBe(MARKUP);
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
