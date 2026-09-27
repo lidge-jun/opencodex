@@ -8,3 +8,5 @@ OCX_BOOTSTRAP_CONFIG_JSON=
 OCX_PASSTHROUGH_SECRETS=
 # Set to 1 to forward /api/* to ocx. Also requires OPENCODEX_ADMIN_AUTH_TOKEN. Optional.
 OCX_EXPOSE_MANAGEMENT_API=
+# Any new value discards the saved state once, so the next boot starts from OCX_BOOTSTRAP_CONFIG_JSON. Optional.
+OCX_DISCARD_SAVED_STATE=

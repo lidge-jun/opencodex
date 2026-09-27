@@ -14,6 +14,23 @@ export interface StateBucket {
   get(key: string): Promise<ReadableStream | null>;
   put(key: string, body: ReadableStream, length: number): Promise<void>;
   delete(key: string): Promise<void>;
+  /** Keys under `prefix`, at most `limit` of them. */
+  list(prefix: string, limit: number): Promise<string[]>;
+}
+
+const SNAPSHOT_PREFIX = "snapshots/";
+const SWEEP_LIMIT = 1000;
+
+/**
+ * Deletes every snapshot object except the committed one. Safe only right after a boot acquires the
+ * lease: nobody else can commit from then on, so any other object is an orphan from an upload that
+ * died between put and commit, or from a failed delete of a replaced snapshot.
+ */
+export async function sweepOrphans(hub: Pick<StateHub, "currentSnapshot">, bucket: StateBucket): Promise<number> {
+  const keep = await hub.currentSnapshot();
+  const orphans = (await bucket.list(SNAPSHOT_PREFIX, SWEEP_LIMIT)).filter(key => key !== keep);
+  for (const key of orphans) await bucket.delete(key);
+  return orphans.length;
 }
 
 export async function handleStateRequest(req: Request, hub: StateHub, bucket: StateBucket): Promise<Response> {
@@ -23,9 +40,16 @@ export async function handleStateRequest(req: Request, hub: StateHub, bucket: St
 
   if (path === "/lease" && req.method === "POST") {
     const result = await hub.acquireLease(bootId);
-    return result.granted
-      ? new Response(null, { status: 204 })
-      : new Response("lease held", { status: 409, headers: { "retry-after": String(result.retryAfterSeconds) } });
+    if (!result.granted) {
+      return new Response("lease held", { status: 409, headers: { "retry-after": String(result.retryAfterSeconds) } });
+    }
+    try {
+      await sweepOrphans(hub, bucket);
+    } catch (error) {
+      // Cleanup only; never let it block a boot.
+      console.error(`Snapshot orphan sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return new Response(null, { status: 204 });
   }
   if (path === "/lease" && req.method === "PUT") {
     return (await hub.renewLease(bootId)) ? new Response(null, { status: 204 }) : new Response("lease lost", { status: 409 });
@@ -50,7 +74,7 @@ export async function handleStateRequest(req: Request, hub: StateHub, bucket: St
     if (!(await hub.holdsLease(bootId))) return new Response("lease lost", { status: 409 });
     // A key per upload, never per boot: a fenced container's late upload must not overwrite the
     // object the current holder restored from, and its cleanup must delete only its own object.
-    const key = `snapshots/${bootId}/${crypto.randomUUID()}.tar.gz`;
+    const key = `${SNAPSHOT_PREFIX}${bootId}/${crypto.randomUUID()}.tar.gz`;
     await bucket.put(key, req.body, length);
     const commit = await hub.commitSnapshot(bootId, key);
     if (!commit) {

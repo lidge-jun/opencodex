@@ -5,9 +5,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decideLease, isHolder, LEASE_STALE_MS, LeaseState, type LeaseStorage } from "../../deploy/cloudflare/src/lease";
-import { handleStateRequest, type StateBucket } from "../../deploy/cloudflare/src/state-routes";
+import { handleStateRequest, sweepOrphans, type StateBucket } from "../../deploy/cloudflare/src/state-routes";
 import { containerEnv, edgeDecision, envFingerprint } from "../../deploy/cloudflare/src/container-env";
-import { applySnapshot, classifyFile, seedBootstrapConfig, stageSnapshot, type StateRoot } from "../../docker/cloudflare-supervisor";
+import { applySnapshot, classifyFile, seedBootstrapConfig, stageSnapshot, Supervisor, type StateRoot } from "../../docker/cloudflare-supervisor";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const SQLITE = "SQLite format 3\0";
@@ -103,13 +103,16 @@ describe("cloudflare supervisor snapshots", () => {
     expect(await stageSnapshot(roots, join(scratch(), "b"))).not.toBe(before);
   });
 
-  test("seeds the bootstrap config only from a JSON object", () => {
+  test("seeds the bootstrap config only from a JSON object, bound where the Worker can reach it", () => {
     const home = scratch();
     expect(seedBootstrapConfig(home, {})).toBe(false);
     expect(() => seedBootstrapConfig(home, { OCX_BOOTSTRAP_CONFIG_JSON: "[1]" })).toThrow("JSON object");
-    expect(seedBootstrapConfig(home, { OCX_BOOTSTRAP_CONFIG_JSON: "{\"port\":10100}" })).toBe(true);
-    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8"))).toEqual({ port: 10100 });
+    // ocx defaults to 127.0.0.1, which the Worker cannot reach: an omitted bind address is filled in.
+    expect(seedBootstrapConfig(home, { OCX_BOOTSTRAP_CONFIG_JSON: "{\"defaultProvider\":\"demo\"}" })).toBe(true);
+    expect(JSON.parse(readFileSync(join(home, "config.json"), "utf8"))).toEqual({ defaultProvider: "demo", hostname: "0.0.0.0", port: 10100 });
     expect(statSync(join(home, "config.json")).mode & 0o777).toBe(0o600);
+    expect(() => seedBootstrapConfig(home, { OCX_BOOTSTRAP_CONFIG_JSON: "{\"hostname\":\"127.0.0.1\"}" })).toThrow("0.0.0.0");
+    expect(() => seedBootstrapConfig(home, { OCX_BOOTSTRAP_CONFIG_JSON: "{\"port\":10200}" })).toThrow("10100");
   });
 });
 
@@ -132,6 +135,7 @@ function memoryBucket(onPut?: () => Promise<void>): StateBucket & { objects: Map
       objects.set(key, await new Response(body).text());
     },
     delete: async key => { objects.delete(key); },
+    list: async (prefix, limit) => [...objects.keys()].filter(key => key.startsWith(prefix)).slice(0, limit),
   };
 }
 
@@ -277,5 +281,184 @@ describe("cloudflare lease renewal", () => {
     await handleStateRequest(stateRequest("POST", "/lease", b), hub, bucket);
     await handleStateRequest(stateRequest("DELETE", "/lease", b), hub, bucket);
     expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket)).status).toBe(409);
+  });
+});
+
+describe("cloudflare state reset and cleanup", () => {
+  const holder = "1".repeat(32);
+
+  test("a boot that takes the lease sweeps orphaned snapshot objects but keeps the committed one", async () => {
+    const hub = new LeaseState(memoryStorage(), () => 0);
+    const bucket = memoryBucket();
+    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "kept"), hub, bucket);
+    bucket.objects.set("snapshots/dead/orphan.tar.gz", "orphan");
+    await handleStateRequest(stateRequest("DELETE", "/lease", holder), hub, bucket);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket)).status).toBe(204);
+    expect([...bucket.objects.values()]).toEqual(["kept"]);
+    expect(await sweepOrphans(hub, bucket)).toBe(0);
+  });
+
+  test("discarding the saved state makes the next boot a first boot", async () => {
+    const hub = new LeaseState(memoryStorage(), () => 0);
+    const bucket = memoryBucket();
+    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "unbootable"), hub, bucket);
+    const discarded = await hub.discardSnapshot();
+    expect(discarded).toStartWith("snapshots/");
+    expect(await hub.holdsLease(holder)).toBe(false);
+    const next = "2".repeat(32);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", next), hub, bucket)).status).toBe(204);
+    expect((await handleStateRequest(stateRequest("GET", "/snapshot", next), hub, bucket)).status).toBe(404);
+  });
+});
+
+type FakeState = {
+  origin: string;
+  events: string[];
+  snapshot: () => Uint8Array | null;
+  maxConcurrentUploads: () => number;
+  stop: () => void;
+};
+
+function fakeStateServer(overrides: Record<string, (req: Request) => Response | Promise<Response>> = {}, uploadDelayMs = 0): FakeState {
+  const events: string[] = [];
+  let snapshot: Uint8Array | null = null;
+  let uploading = 0;
+  let maxUploading = 0;
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const key = `${req.method} ${new URL(req.url).pathname}`;
+      events.push(key);
+      const override = overrides[key];
+      if (override) return override(req);
+      if (key === "GET /snapshot") return snapshot ? new Response(snapshot) : new Response("none", { status: 404 });
+      if (key === "PUT /snapshot") {
+        uploading++;
+        maxUploading = Math.max(maxUploading, uploading);
+        const body = new Uint8Array(await req.arrayBuffer());
+        if (uploadDelayMs) await Bun.sleep(uploadDelayMs);
+        snapshot = body;
+        uploading--;
+      }
+      return new Response(null, { status: 204 });
+    },
+  });
+  return {
+    origin: `http://127.0.0.1:${server.port}`,
+    events,
+    snapshot: () => snapshot,
+    maxConcurrentUploads: () => maxUploading,
+    stop: () => server.stop(true),
+  };
+}
+
+function recordingExit() {
+  let resolve!: (code: number) => void;
+  const code = new Promise<number>(r => { resolve = r; });
+  // Parks the caller the way process.exit would end it.
+  const exit = (value: number) => { resolve(value); return new Promise<never>(() => {}); };
+  return { code, exit };
+}
+
+async function until(check: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("condition not reached");
+    await Bun.sleep(20);
+  }
+}
+
+async function readArchive(bytes: Uint8Array, file: string): Promise<string> {
+  const dir = scratch();
+  writeFileSync(join(dir, "s.tar.gz"), bytes);
+  mkdirSync(join(dir, "x"));
+  expect(Bun.spawnSync(["tar", "-xzf", join(dir, "s.tar.gz"), "-C", join(dir, "x")]).exitCode).toBe(0);
+  return readFileSync(join(dir, "x", file), "utf8");
+}
+
+// Stands in for ocx: runs until signalled.
+const IDLE_CHILD = ["bun", "-e", "setInterval(() => {}, 1000)"];
+
+describe("cloudflare supervisor lifecycle", () => {
+  test("a clean shutdown stops ocx, uploads the final state, then releases the lease", async () => {
+    const state = fakeStateServer();
+    const home = scratch();
+    writeFileSync(join(home, "config.json"), "{}");
+    const { code, exit } = recordingExit();
+    const supervisor = new Supervisor({ roots: [{ prefix: "opencodex", dir: home }], intervalMs: 60_000, port: 0, stateOrigin: state.origin, exit, handleSignals: false });
+    void supervisor.main(IDLE_CHILD);
+    try {
+      await until(() => state.events.includes("GET /snapshot"));
+      await Bun.sleep(200);
+      writeFileSync(join(home, "config.json"), "{\"final\":true}");
+      void supervisor.shutdown("SIGTERM");
+      expect(await code).toBe(0);
+      const upload = state.events.lastIndexOf("PUT /snapshot");
+      expect(upload).toBeGreaterThan(-1);
+      // Released exactly once, and only after the final upload: releasing earlier would let a new
+      // boot restore the state from before this shutdown.
+      expect(state.events.filter(event => event === "DELETE /lease")).toHaveLength(1);
+      expect(state.events.indexOf("DELETE /lease")).toBeGreaterThan(upload);
+      expect(await readArchive(state.snapshot()!, "opencodex/config.json")).toBe("{\"final\":true}");
+    } finally {
+      state.stop();
+    }
+  });
+
+  test("a lost lease fences: nothing is uploaded after the renewal is refused", async () => {
+    const state = fakeStateServer({ "PUT /lease": () => new Response("lost", { status: 409 }) });
+    const home = scratch();
+    writeFileSync(join(home, "config.json"), "{}");
+    const { code, exit } = recordingExit();
+    const supervisor = new Supervisor({ roots: [{ prefix: "opencodex", dir: home }], intervalMs: 150, port: 0, stateOrigin: state.origin, exit, handleSignals: false });
+    void supervisor.main(IDLE_CHILD);
+    try {
+      expect(await code).toBe(1);
+      const atFence = state.events.length;
+      await Bun.sleep(500);
+      // Anything already in flight is aborted; nothing new starts, and a fenced boot never releases.
+      expect(state.events.slice(atFence).filter(event => event === "PUT /snapshot")).toEqual([]);
+      expect(state.events).not.toContain("DELETE /lease");
+    } finally {
+      state.stop();
+    }
+  });
+
+  test("a failed restore releases the lease and never starts ocx", async () => {
+    const state = fakeStateServer({ "GET /snapshot": () => new Response("object missing", { status: 500 }) });
+    const home = scratch();
+    const marker = join(home, "started");
+    const { exit } = recordingExit();
+    const supervisor = new Supervisor({ roots: [{ prefix: "opencodex", dir: home }], intervalMs: 60_000, port: 0, stateOrigin: state.origin, exit, handleSignals: false });
+    try {
+      await expect(supervisor.main(["bun", "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "")`])).rejects.toThrow("state restore failed");
+      expect(state.events).toContain("DELETE /lease");
+      await Bun.sleep(300);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      state.stop();
+    }
+  });
+
+  test("uploads never overlap, and the final one carries the latest state", async () => {
+    const state = fakeStateServer({}, 400);
+    const home = scratch();
+    writeFileSync(join(home, "config.json"), "{\"v\":1}");
+    const { code, exit } = recordingExit();
+    const supervisor = new Supervisor({ roots: [{ prefix: "opencodex", dir: home }], intervalMs: 100, port: 0, stateOrigin: state.origin, exit, handleSignals: false });
+    void supervisor.main(IDLE_CHILD);
+    try {
+      await until(() => state.events.includes("PUT /snapshot"));
+      writeFileSync(join(home, "config.json"), "{\"v\":2}");
+      void supervisor.shutdown("SIGTERM");
+      expect(await code).toBe(0);
+      expect(state.maxConcurrentUploads()).toBe(1);
+      expect(await readArchive(state.snapshot()!, "opencodex/config.json")).toBe("{\"v\":2}");
+    } finally {
+      state.stop();
+    }
   });
 });

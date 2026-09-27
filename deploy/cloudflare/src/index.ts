@@ -10,16 +10,20 @@ export interface Env extends SecretSource {
   STATE: R2Bucket;
   OCX_SLEEP_AFTER?: string;
   OCX_EXPOSE_MANAGEMENT_API?: string;
+  /** Any new value discards the saved state once; see `applyPendingReset`. */
+  OCX_DISCARD_SAVED_STATE?: string;
 }
 
 // Must match STATE_ORIGIN in docker/cloudflare-supervisor.ts.
 const STATE_HOST = "state.ocx.internal";
 const HUB_NAME = "hub";
 const STARTED_ENV_KEY = "ocx:started-env";
+const HONORED_RESET_KEY = "ocx:honored-reset";
 const STOP_WAIT_MS = 5 * 60_000;
 // The supervisor closes its 503 placeholder a moment before ocx binds the port.
 const HANDOFF_WINDOW_MS = 30_000;
 const PROXY_FAILURE = "Error proxying request to container";
+const NOT_LISTENING = /not listening/i;
 
 export class OpencodexHub extends Container<Env> {
   defaultPort = 10100;
@@ -42,6 +46,7 @@ export class OpencodexHub extends Container<Env> {
     // Rebuilt per request: bindings can change under a live object, and a stale copy would both
     // hide a rotated secret from the check below and start the replacement with the old value.
     this.envVars = containerEnv(this.env);
+    await this.applyPendingReset();
     await this.restartIfEnvChanged();
     // This request may itself start the container, which sets startedAt only once it is up, so
     // the window runs from whichever is later: the last start or this request's arrival.
@@ -49,13 +54,29 @@ export class OpencodexHub extends Container<Env> {
     const inWindow = () => Date.now() - Math.max(windowStart, this.startedAt) <= HANDOFF_WINDOW_MS;
     if (!inWindow()) return super.fetch(req);
     // Only inside the handoff window is the request cloned, so a refused connection can be replayed.
+    // Only a refused connection is retried; any other failure returns at once.
     for (let attempt = 0; ; attempt++) {
       const response = await super.fetch(req.clone());
-      if (response.status !== 500 || attempt >= 20 || !inWindow()) return response;
+      if (response.status !== 500 || attempt >= 10 || !inWindow()) return response;
       const text = await response.text();
-      if (!text.startsWith(PROXY_FAILURE)) return new Response(text, response);
+      if (!text.startsWith(PROXY_FAILURE) || !NOT_LISTENING.test(text)) return new Response(text, response);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
+  }
+
+  // The only way out of a saved state that cannot start (a config that binds loopback, a committed
+  // pointer whose object was deleted): the admin API is closed and the bootstrap secret applies only
+  // when nothing is saved. Honored once per distinct value, so leaving it set cannot wipe every boot.
+  private async applyPendingReset(): Promise<void> {
+    const nonce = this.env.OCX_DISCARD_SAVED_STATE?.trim();
+    if (!nonce || (await this.ctx.storage.get<string>(HONORED_RESET_KEY)) === nonce) return;
+    console.log("OCX_DISCARD_SAVED_STATE changed; discarding the saved state.");
+    // Stop first: a running container uploads a final snapshot on the way out, which would
+    // otherwise re-commit the state being discarded.
+    await this.stopAndWait();
+    const discarded = await this.leases.discardSnapshot();
+    if (discarded) await this.env.STATE.delete(discarded);
+    await this.ctx.storage.put(HONORED_RESET_KEY, nonce);
   }
 
   // A running container keeps the environment it started with, and every request renews its idle
@@ -65,6 +86,11 @@ export class OpencodexHub extends Container<Env> {
     const started = await this.ctx.storage.get<string>(STARTED_ENV_KEY);
     if (!started || started === (await envFingerprint(this.envVars))) return;
     console.log("Container secrets changed; restarting the container.");
+    await this.stopAndWait();
+  }
+
+  private async stopAndWait(): Promise<void> {
+    if (!["running", "healthy"].includes((await this.getState()).status)) return;
     const stoppedAt = Date.now();
     await this.stop("SIGTERM");
     // Done once the state moves after our stop: the old process exited, or another request
@@ -90,6 +116,16 @@ async function handleState(req: Request, env: Env): Promise<Response> {
     get: async key => (await env.STATE.get(key))?.body ?? null,
     put: async (key, body, length) => { await env.STATE.put(key, body.pipeThrough(new FixedLengthStream(length))); },
     delete: key => env.STATE.delete(key),
+    list: async (prefix, limit) => {
+      const keys: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await env.STATE.list({ prefix, cursor, limit: Math.min(1000, limit - keys.length) });
+        keys.push(...page.objects.map(object => object.key));
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor && keys.length < limit);
+      return keys;
+    },
   });
 }
 

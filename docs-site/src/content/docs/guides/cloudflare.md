@@ -76,9 +76,11 @@ your own `config.json` instead, store it as a secret before the first request:
 npx wrangler secret put OCX_BOOTSTRAP_CONFIG_JSON < config.json
 ```
 
-Keep `"hostname": "0.0.0.0"` and `"port": 10100` in that file; the Worker reaches `ocx` on that
-port. Worker secrets have a size limit, so keep the file small. The secret is read only when no saved
-state exists. After that, the saved configuration wins.
+The hub must listen on `0.0.0.0:10100`, the only address the Worker reaches. Leave `hostname` and
+`port` out of the file and they are filled in; any other value stops the first boot with an error,
+before an unreachable configuration can be saved. Worker secrets have a size limit, so keep the file
+small. The secret is read only when no saved state exists. After that, the saved configuration wins;
+see [Change configuration later](#change-configuration-later).
 
 Keep provider API keys and `apiKeys` entries out of the file, because the configuration is saved to
 R2. Reference provider keys as `${NAME}` in the provider's `apiKey`, as in
@@ -91,6 +93,22 @@ printf 'ANTHROPIC_API_KEY' | npx wrangler secret put OCX_PASSTHROUGH_SECRETS
 ```
 
 Only names listed there reach the container.
+
+## Change configuration later
+
+Once a snapshot exists, a new `OCX_BOOTSTRAP_CONFIG_JSON` is ignored. There are two ways to change
+the configuration after that:
+
+- **Keep the saved state.** Open the management API for the change, as described under
+  [Security](#security), and use it like any other hub. Close it again afterwards.
+- **Start over from the bootstrap secret.** Store the new `OCX_BOOTSTRAP_CONFIG_JSON`, then set
+  `OCX_DISCARD_SAVED_STATE` to a value it has not had before. This discards the saved state:
+  OAuth logins, client keys, and usage history go with it.
+
+  ```bash
+  npx wrangler secret put OCX_BOOTSTRAP_CONFIG_JSON < config.json
+  date +%s | npx wrangler secret put OCX_DISCARD_SAVED_STATE
+  ```
 
 ## Connect Codex
 
@@ -132,9 +150,26 @@ container waits up to two minutes for the dead one's lease to expire. A containe
 lease stops without uploading, and its late uploads are discarded, so it cannot overwrite newer
 state.
 
-Set `OCX_SNAPSHOT_INTERVAL_SECONDS` (5–60) to change the upload interval, and `OCX_SLEEP_AFTER`
-(for example `"2h"`) to change how long the container stays up without requests. The default is
-`30m`.
+Two settings tune this. Neither is secret, but store them with `npx wrangler secret put` like the
+others, so that deploying the repository's `wrangler.jsonc` does not reset them:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `OCX_SNAPSHOT_INTERVAL_SECONDS` | `30` | Upload interval, clamped to 5–60 seconds |
+| `OCX_SLEEP_AFTER` | `30m` | How long the container stays up without requests, for example `2h` |
+
+Changing any value the container receives (`OCX_SNAPSHOT_INTERVAL_SECONDS`, `OCX_BOOTSTRAP_CONFIG_JSON`,
+the tokens, or a passthrough secret) restarts the container on the next request, as described
+under [Operate](#operate).
+
+## Recover a hub that will not start
+
+If the hub answers `503` indefinitely, the saved state may be unusable: for example, the snapshot
+object was deleted from R2 while the Durable Object still points at it. The supervisor refuses to
+start `ocx` on an empty home in that case, so it cannot overwrite what was saved. To start over
+from `OCX_BOOTSTRAP_CONFIG_JSON`, set `OCX_DISCARD_SAVED_STATE` to a new value as shown in
+[Change configuration later](#change-configuration-later). Each distinct value is honored once, so
+leaving it set does not wipe later boots.
 
 ## Security
 
@@ -165,6 +200,8 @@ old token gets `401`.
 
 - One container serves every request (`max_instances: 1`), because the hub's stores assume a
   single writer.
+- Each deployment needs its own Worker `name` and R2 `bucket_name` in `wrangler.jsonc`; two
+  deployments with the same names in one account overwrite each other.
 - The Worker and container are billed separately from the $5 Workers Paid base; see
   [Containers pricing](https://developers.cloudflare.com/containers/pricing/).
 - Cloudflare's Deploy to Cloudflare button does not document support for Containers, so deploy with

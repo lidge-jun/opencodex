@@ -61,6 +61,17 @@ export class LeaseState {
     return this.storage.get<string>(SNAPSHOT_KEY);
   }
 
+  /**
+   * Forgets the saved state so the next boot starts from the bootstrap config. Also drops the lease:
+   * a reset runs only after the container has stopped, so any holder is a dead one.
+   */
+  async discardSnapshot(): Promise<string | undefined> {
+    const discarded = await this.storage.get<string>(SNAPSHOT_KEY);
+    await this.storage.delete(SNAPSHOT_KEY);
+    await this.storage.delete(LEASE_KEY);
+    return discarded;
+  }
+
   /** Returns the key the new snapshot replaced, or null when the caller lost the lease. */
   async commitSnapshot(bootId: string, key: string): Promise<{ replaced: string | undefined } | null> {
     if (!(await this.holdsLease(bootId))) return null;

@@ -3,6 +3,9 @@
   "name": "opencodex",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-27",
+  // A second deployment in the same account needs its own "name" and "bucket_name" below.
+  "workers_dev": true,
+  "preview_urls": false,
   "observability": { "enabled": true },
   "containers": [
     {
