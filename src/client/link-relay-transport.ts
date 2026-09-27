@@ -28,6 +28,16 @@ export class LinkRelayAuthenticationError extends Error {
 class SingleConnectionAgent extends Agent {
   socket: Socket | undefined;
   private opened = false;
+  private closeFlight?: Promise<void>;
+  /** Drain the socket close event before the request reports a terminal outcome. */
+  close(): Promise<void> {
+    if (this.closeFlight) return this.closeFlight;
+    const socket = this.socket;
+    this.closeFlight = !socket || socket.closed ? Promise.resolve()
+      : new Promise<void>(resolve => { socket.once("close", () => resolve()); });
+    this.destroy();
+    return this.closeFlight;
+  }
   override createConnection(...[options, callback]: Parameters<Agent["createConnection"]>): ReturnType<Agent["createConnection"]> {
     if (this.opened) {
       if (!callback) throw new LinkRelayAuthenticationError();
@@ -96,12 +106,12 @@ function responseHeaders(incoming: IncomingMessage): Headers {
 }
 
 /** Node HTTP compatibility is confined here; the relay continues to expose a Web Response/stream. */
-function responseOnConnection(incoming: IncomingMessage, agent: SingleConnectionAgent, method: string): Response {
+async function responseOnConnection(incoming: IncomingMessage, agent: SingleConnectionAgent, method: string): Promise<Response> {
   const headers = responseHeaders(incoming);
   const status = incoming.statusCode ?? 502;
   if (method === "HEAD" || status === 204 || status === 205 || status === 304) {
-    incoming.once("end", () => agent.destroy());
-    incoming.resume();
+    for await (const _chunk of incoming) { /* drain a header-only response */ }
+    await agent.close();
     return new Response(null, { status, headers });
   }
   let source: Readable = incoming;
@@ -109,7 +119,6 @@ function responseOnConnection(incoming: IncomingMessage, agent: SingleConnection
   const decoder = encoding === "gzip" ? createGunzip() : encoding === "deflate" ? createInflate()
     : encoding === "br" ? createBrotliDecompress() : undefined;
   if (encoding && encoding !== "identity" && !decoder) {
-    incoming.destroy();
     throw new Error("unsupported link response encoding");
   }
   if (decoder) {
@@ -118,23 +127,23 @@ function responseOnConnection(incoming: IncomingMessage, agent: SingleConnection
   }
   const reader = (Readable.toWeb(source) as unknown as ReadableStream<Uint8Array>).getReader();
   let finished = false;
-  const finish = () => {
-    if (finished) return;
+  const finish = async () => {
+    if (finished) return agent.close();
     finished = true;
-    agent.destroy();
-    source.destroy();
+    if (source !== incoming) source.destroy();
+    await agent.close();
     try { reader.releaseLock(); } catch { /* a cancelled read may still be settling */ }
   };
   return new Response(new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const next = await reader.read();
-        if (next.done) { finish(); controller.close(); }
+        if (next.done) { await finish(); controller.close(); }
         else controller.enqueue(next.value);
-      } catch (error) { finish(); controller.error(error); }
+      } catch (error) { await finish(); controller.error(error); }
     },
     async cancel(reason) {
-      try { await reader.cancel(reason); } finally { finish(); }
+      try { await reader.cancel(reason); } finally { await finish(); }
     },
   }, { highWaterMark: 0 }), { status, headers });
 }
@@ -155,7 +164,6 @@ export async function fetchBoundLinkRelay(target: BoundLinkRelayTarget, destinat
     const socket = agent.socket;
     const proof = response.headers["x-opencodex-link-proof"];
     if (response.statusCode !== 204 || typeof proof !== "string" || !linkRelayProofMatches(proof, challenge.expected)) {
-      response.destroy();
       throw new LinkRelayAuthenticationError(response.statusCode === 404);
     }
     // Drain the credential-free response before the Agent can reuse its socket.
@@ -168,9 +176,9 @@ export async function fetchBoundLinkRelay(target: BoundLinkRelayTarget, destinat
     const headers = new Headers(init.headers);
     headers.set(LINK_RELAY_SESSION_HEADER, challenge.nonce);
     const incoming = await requestOnConnection(url, { ...init, headers }, agent, socket);
-    return responseOnConnection(incoming, agent, init.method ?? "GET");
+    return await responseOnConnection(incoming, agent, init.method ?? "GET");
   } catch (error) {
-    agent.destroy();
+    await agent.close();
     throw error;
   } finally { deadline.clear(); }
 }
