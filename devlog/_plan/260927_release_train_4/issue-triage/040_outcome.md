@@ -17,7 +17,7 @@ At finalization, replace this section with a table of exact issue comment URLs, 
 
 1. Compare `gh issue list --limit 300 --json number` with the exclusion set in `000_plan.md`; every owned open issue must appear in `010_issue_actions.md` or be newly appended with a decision.
 2. Compare `gh pr list --limit 300 --json number,headRefOid` with the 21 requested PR IDs, then check `020_pr_actions.md` and the posted comment receipts; all must be present exactly once.
-3. Confirm no `gui/` asset or screenshot entered the branch, no version/tag changed, no other lane worktree or excluded item was modified, and the only non-devlog code delta is the isolated standalone fix and its owning doc/test.
+3. Confirm no `gui/` asset or screenshot entered the branch, no version/tag changed, no other lane worktree or excluded item was modified, and the carry PR contains only the isolated standalone helper, regression and owning structure files, while the separate final docs PR has no non-devlog delta.
 4. Run privacy and structure gates on the final report, then confirm required CI on the actual head after push and on `dev` after merge.
 
 ## wp1 issue comment receipts
