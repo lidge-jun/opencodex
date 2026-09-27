@@ -246,6 +246,19 @@ surface the pre-output 429 immediately, because the outer response cannot forwar
 heartbeats while it is choosing a target. An earlier replay-unsafe heartbeat or meaningful output keeps
 the failure on the current target.
 
+## runTurn pre-output 401 replay
+
+`src/server/responses/run-turn-execution.ts` runs the `adapter-dispatch.ts` OAuth 401 replay on the
+runTurn first-event preflight for `isOAuth401ReplayProvider` routes (Devin is the runTurn member): a
+structured 401 before output or a replay-unsafe heartbeat force-refreshes the sent credential once
+per request under an `auth-recovery` hop and replays the turn. A terminal refresh has already marked
+the account needsReauth; the turn moves to a surviving stored account via
+`tryAlternateAfterTerminalRefresh`, else the 401 carries the login instruction. Devin quota
+`permission_denied` maps to 429 and plain `permission_denied` to 403, so neither refreshes.
+`refreshDevinToken` throws `invalid_grant` except for a `local-cli` account, which adopts a different
+key from the Devin CLI file only when its host passes `validateDevinApiBaseUrl`, no other stored
+account owns the key, and identities agree. Test: `tests/responses/responses-devin-401-replay.test.ts`.
+
 ## Optional client transport hints
 
 `dropCodexSafetyBuffering` defaults to false. Canonical OpenAI forward Responses can remove only
