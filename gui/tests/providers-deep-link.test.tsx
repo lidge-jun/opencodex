@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useEffect, useState } from "react";
+import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import { useProviderSettingsDeepLink } from "../src/pages/providers-deep-link";
 
@@ -31,7 +31,7 @@ async function mount(names: string[] | null, onAccounts?: (name: string, choose:
   let choose!: (name: string | null) => void;
   function Harness({ providerNames }: { providerNames: string[] | null }) {
     const [selected, setSelected] = useState<string | null>(null);
-    useEffect(() => { choose = setSelected; }, []);
+    choose = setSelected;
     const focus = useProviderSettingsDeepLink(
       providerNames,
       selected,

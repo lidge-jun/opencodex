@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useEffect, useState } from "react";
+import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { ClaudeCodeSettingsCard } from "../src/pages/claude-code-sections";
@@ -65,7 +65,7 @@ async function mountSettings(
   let latest = initial;
   function Harness() {
     const [state, setState] = useState(initial);
-    useEffect(() => { latest = state; }, [state]);
+    latest = state;
     return (
       <LanguageProvider>
         <ClaudeCodeSettingsCard
