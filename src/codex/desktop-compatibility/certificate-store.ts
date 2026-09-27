@@ -14,7 +14,7 @@ const DAY = 86_400_000;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 export class DesktopAuthorityError extends Error {
-  constructor(readonly code: "unsafe_path" | "unreadable" | "expired" | "protection_failed") {
+  constructor(readonly code: "unsafe_path" | "unreadable" | "expired" | "protection_failed" | "fingerprint_changed") {
     super(`desktop_compatibility_authority_${code}`); this.name = "DesktopAuthorityError";
   }
 }
@@ -131,6 +131,16 @@ export async function loadDesktopCompatibilityAuthority(options: DesktopAuthorit
 
 /** Reuses one user-protected root across restarts; never installs, rotates or removes trust. */
 export async function ensureDesktopCompatibilityAuthority(options: DesktopAuthorityStoreOptions): Promise<StoredDesktopAuthority> {
+  return publishAuthority(options);
+}
+
+/** Deliberate replacement after the caller has removed OS trust and stopped consumers. */
+export async function renewDesktopCompatibilityAuthority(options: DesktopAuthorityStoreOptions, expectedFingerprint: string): Promise<StoredDesktopAuthority> {
+  if (!/^[A-F0-9]{64}$/.test(expectedFingerprint)) throw new DesktopAuthorityError("fingerprint_changed");
+  return publishAuthority(options, expectedFingerprint);
+}
+
+async function publishAuthority(options: DesktopAuthorityStoreOptions, expectedFingerprint?: string): Promise<StoredDesktopAuthority> {
   if (!isAbsolute(options.directory)) throw new DesktopAuthorityError("unsafe_path");
   if (!options.protection && process.platform !== "win32") throw new Error("desktop_compatibility_windows_required");
   const now = options.now?.() ?? Date.now();
@@ -142,7 +152,13 @@ export async function ensureDesktopCompatibilityAuthority(options: DesktopAuthor
   return withClientLifecycle(async () => {
     assertPath(options.directory, true);
     const path = join(options.directory, FILE);
-    if (pathPresent(path)) return readAuthority(path, protection, now);
+    let original: string | undefined;
+    if (expectedFingerprint !== undefined) {
+      if (!pathPresent(path)) throw new DesktopAuthorityError("fingerprint_changed");
+      const previous = await readAuthority(path, protection, now, true);
+      if (previous.fingerprint !== expectedFingerprint) throw new DesktopAuthorityError("fingerprint_changed");
+      original = readFileSync(path, "utf8");
+    } else if (pathPresent(path)) return readAuthority(path, protection, now);
     const commonName = `OpenCodex Codex Desktop ${randomUUID()}`;
     const authority = createCertificateAuthority({ commonName, validityDays: VALIDITY_DAYS,
       permittedDnsNames: ["chatgpt.com"], excludeAllIpAddresses: true });
@@ -161,7 +177,12 @@ export async function ensureDesktopCompatibilityAuthority(options: DesktopAuthor
       try { writeFileSync(fd, contents); fsyncSync(fd); } finally { closeSync(fd); }
       await hardenSecretPathAsync(temporary, { required: true });
       assertPath(temporary, false); assertPath(options.directory, true);
-      if (pathPresent(path)) throw new DesktopAuthorityError("unsafe_path");
+      // Verify the new encrypted envelope before replacing the only recovery source.
+      await readAuthority(temporary, protection, now);
+      if (original !== undefined) {
+        assertPath(path, false);
+        if (readFileSync(path, "utf8") !== original) throw new DesktopAuthorityError("fingerprint_changed");
+      } else if (pathPresent(path)) throw new DesktopAuthorityError("unsafe_path");
       renameSync(temporary, path); created = false;
       // Read back the actual persisted pair before reporting a successful setup.
       const persisted = await readAuthority(path, protection, now);

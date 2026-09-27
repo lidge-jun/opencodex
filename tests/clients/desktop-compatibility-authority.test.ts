@@ -3,7 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
+import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, renewDesktopCompatibilityAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
 import { windowsAuthorityKeyProtection, type AuthorityKeyProtection } from "../../src/codex/desktop-compatibility/windows-key-protection";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
@@ -34,6 +34,30 @@ function protector(): AuthorityKeyProtection {
 }
 
 describe("Codex Desktop compatibility authority lifecycle", () => {
+  test("deliberate renewal replaces one encrypted identity and refuses a stale fingerprint", async () => {
+    const root = directory(), protection = protector();
+    const first = await ensureDesktopCompatibilityAuthority({ directory: root, protection });
+    const second = await renewDesktopCompatibilityAuthority({ directory: root, protection }, first.fingerprint);
+    expect(second.fingerprint).not.toBe(first.fingerprint);
+    expect(second.reused).toBe(false);
+    expect((await ensureDesktopCompatibilityAuthority({ directory: root, protection })).fingerprint).toBe(second.fingerprint);
+    const contents = readFileSync(join(root, "authority.json"), "utf8");
+    await expect(renewDesktopCompatibilityAuthority({ directory: root, protection }, first.fingerprint)).rejects.toMatchObject({ code: "fingerprint_changed" });
+    expect(readFileSync(join(root, "authority.json"), "utf8")).toBe(contents);
+    expect(readdirSync(root).filter(name => /authority.*\.(json|tmp)$/.test(name))).toEqual(["authority.json"]);
+  });
+
+  test("failed renewal preserves the old removable envelope and cleans unpublished staging", async () => {
+    const root = directory(), protection = protector();
+    const first = await ensureDesktopCompatibilityAuthority({ directory: root, protection });
+    const original = readFileSync(join(root, "authority.json"), "utf8");
+    const broken = { ...protection, protect: async () => Buffer.from("unreadable replacement") };
+    await expect(renewDesktopCompatibilityAuthority({ directory: root, protection: broken }, first.fingerprint)).rejects.toMatchObject({ code: "unreadable" });
+    expect(readFileSync(join(root, "authority.json"), "utf8")).toBe(original);
+    expect((await loadDesktopCompatibilityAuthority({ directory: root, protection }, true)).fingerprint).toBe(first.fingerprint);
+    expect(readdirSync(root).some(name => name.endsWith(".tmp"))).toBe(false);
+  });
+
   test("public status neither creates missing state nor repairs a malformed envelope", async () => {
     const root = directory(), absent = join(root, "not-created");
     expect(inspectDesktopCompatibilityAuthority(absent)).toEqual({ status: "missing" }); expect(existsSync(absent)).toBe(false);

@@ -693,7 +693,7 @@ support, state, fingerprint, expiry, renewal notice, trust observation and any a
 It never generates a key, decrypts private material or registers OS trust. Certificate trust alone
 does not mean a compatibility relay is running or the private key has been verified in this process.
 
-POST accepts `action: "prepare" | "trust" | "remove-trust"` and `confirmed: true`.
+POST accepts `action: "prepare" | "trust" | "remove-trust" | "renew"` and `confirmed: true`.
 Trust actions also require the exact uppercase SHA-256 `fingerprint` returned by status.
 These mutations require a GUI-session principal from trusted loopback ingress; an admin token alone
 receives 403. They are intended for a local confirmation flow, not unattended certificate enrollment.
@@ -704,6 +704,12 @@ expired root. Removal refuses while Codex is running or process ownership cannot
 Cancellation or uncertain OS command completion is checked against the actual certificate store.
 Unknown state remains an error rather than authorizing an automatic retry. Replies contain no PEM,
 private keys, account data or subprocess output.
+
+Renewal requires the current fingerprint and an absent Codex app. It verifies removal of
+the old certificate's trust before publishing a validated encrypted replacement. Refused
+or uncertain removal preserves the old identity. The replacement is prepared but untrusted;
+register it with a separate `trust` confirmation using its new fingerprint. A stale retry
+cannot replace the new identity again. No certificate backup chain is retained.
 
 This setup API does not enable a relay, change login, alter usage, restart Codex or install a watcher.
 CurrentUser protection does not isolate secrets from other processes running as the same OS user.

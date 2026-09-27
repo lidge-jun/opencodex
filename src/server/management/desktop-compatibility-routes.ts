@@ -14,7 +14,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
   if (ctx.req.method === "POST" && (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress)) {
     return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   }
-  let action: "prepare" | "trust" | "remove-trust" | undefined, fingerprint: string | undefined;
+  let action: "prepare" | "trust" | "remove-trust" | "renew" | undefined, fingerprint: string | undefined;
   if (ctx.req.method === "POST") {
     let body: unknown;
     try { body = await readManagementJsonBody(ctx.req); }
@@ -22,7 +22,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
     if (!body || typeof body !== "object" || Array.isArray(body)) return jsonResponse({ error: "invalid_request" }, 400);
     const value = body as Record<string, unknown>;
     if (Object.keys(value).some(key => !["action", "fingerprint", "confirmed"].includes(key)) || value.confirmed !== true
-      || typeof value.action !== "string" || !["prepare", "trust", "remove-trust"].includes(value.action)) return jsonResponse({ error: "invalid_request" }, 400);
+      || typeof value.action !== "string" || !["prepare", "trust", "remove-trust", "renew"].includes(value.action)) return jsonResponse({ error: "invalid_request" }, 400);
     action = value.action as typeof action;
     if (action !== "prepare" && (typeof value.fingerprint !== "string" || !/^[A-F0-9]{64}$/.test(value.fingerprint))) {
       return jsonResponse({ error: "certificate_fingerprint_required" }, 400);
@@ -34,6 +34,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
   try {
     const status = action === "prepare" ? await controller.prepare()
       : action === "trust" ? await controller.trust(fingerprint!)
+      : action === "renew" ? await controller.renew(fingerprint!)
       : action === "remove-trust" ? await controller.removeTrust(fingerprint!) : await controller.status();
     return jsonResponse({ ok: true, certificate: status });
   } catch (error) {

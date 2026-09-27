@@ -37,8 +37,9 @@ certificate is bound to a CurrentUser-DPAPI-protected private payload.
 Reopening reuses the same key and fingerprint. Corrupt, foreign-user and expired state
 refuses instead of silently replacing a trusted identity. Renewal is reported within
 the last seven days. The store does not register certificates, start listeners, enable
-compatibility settings or change the running app. Management enable/disable and renewal
-remain a separate integration layer from certificate preparation.
+compatibility settings or change the running app. A deliberate renewal validates the
+replacement envelope before atomic publication and compares the existing identity again.
+Failure before publication preserves the original removable identity; staging is cleaned.
 
 `src/codex/desktop-compatibility/windows-key-protection.ts` uses trusted PowerShell
 and bounded stdin/stdout, never command-line secrets or plaintext fallback. CurrentUser
@@ -60,6 +61,10 @@ busy operations. Only prepare may generate a key. Trust/removal load existing va
 state, recheck its fingerprint, and never repair missing state by creating a new root.
 Removal refuses while the app is running or its process state cannot be established.
 An expired key is loadable only for removal, not for renewed trust.
+Explicit renewal first proves the app absent and verifies old trust removal, then replaces
+the encrypted envelope. Unknown or refused removal never loses the old key. The new root
+remains untrusted until a separate fingerprint-bound confirmation; renewal never creates
+an automatic trust prompt or accumulates old trusted roots.
 
 `src/codex/desktop-compatibility/windows-certificate-trust.ts` uses the CurrentUser Root
 store and exact certificate bytes. Mutations require the matching private key from the

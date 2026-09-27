@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { windowsDefaultExec, windowsDesktopAppAdapter } from "../desktop-app/windows";
-import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, type DesktopAuthorityInspection, type StoredDesktopAuthority } from "./certificate-store";
+import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, renewDesktopCompatibilityAuthority, type DesktopAuthorityInspection, type StoredDesktopAuthority } from "./certificate-store";
 import { createWindowsCertificateTrust, inspectWindowsCertificateTrust, type DesktopCertificateTrust } from "./windows-certificate-trust";
 
 export interface DesktopCertificateStatus {
@@ -11,7 +11,7 @@ export interface DesktopCertificateStatus {
   expiresAt?: number;
   renewalDue?: boolean;
   trust?: DesktopCertificateTrust;
-  busy: "prepare" | "trust" | "remove-trust" | null;
+  busy: "prepare" | "trust" | "remove-trust" | "renew" | null;
 }
 
 export interface DesktopCertificateServiceIo {
@@ -19,6 +19,7 @@ export interface DesktopCertificateServiceIo {
   inspect?: () => DesktopAuthorityInspection;
   prepare?: () => Promise<StoredDesktopAuthority>;
   load?: (allowExpiredForRemoval: boolean) => Promise<StoredDesktopAuthority>;
+  renew?: (fingerprint: string) => Promise<StoredDesktopAuthority>;
   readTrust?: (authority: Extract<DesktopAuthorityInspection, { fingerprint: string }>) => Promise<DesktopCertificateTrust>;
   changeTrust?: (authority: StoredDesktopAuthority, action: "trust" | "remove") => Promise<DesktopCertificateTrust>;
   appRunning?: () => Promise<boolean | null>;
@@ -36,6 +37,7 @@ export function createDesktopCertificateService(directory = join(getConfigDir(),
   const inspect = io.inspect ?? (() => inspectDesktopCompatibilityAuthority(directory));
   const prepare = io.prepare ?? (() => ensureDesktopCompatibilityAuthority({ directory }));
   const load = io.load ?? (allowExpired => loadDesktopCompatibilityAuthority({ directory }, allowExpired));
+  const renew = io.renew ?? (fingerprint => renewDesktopCompatibilityAuthority({ directory }, fingerprint));
   const readTrust = io.readTrust ?? (value => inspectWindowsCertificateTrust(value.certPem, value.fingerprint));
   const changeTrust = io.changeTrust ?? ((authority, action) => createWindowsCertificateTrust(authority, authority.fingerprint)[action]());
   const appRunning = io.appRunning ?? (async () => {
@@ -63,13 +65,13 @@ export function createDesktopCertificateService(directory = join(getConfigDir(),
         const before = inspect();
         if (!("fingerprint" in before)) throw new DesktopCertificateServiceError("not_prepared");
         if (before.fingerprint !== expectedFingerprint) throw new DesktopCertificateServiceError("fingerprint_changed");
-        if (kind === "remove-trust") {
+        if (kind === "remove-trust" || kind === "renew") {
           const running = await appRunning();
           if (running === null) throw new DesktopCertificateServiceError("app_state_unknown");
           if (running) throw new DesktopCertificateServiceError("app_running");
         }
       }
-      const authority = kind === "prepare" ? await prepare() : await load(kind === "remove-trust");
+      const authority = kind === "prepare" ? await prepare() : await load(kind !== "trust");
       if (kind !== "prepare") {
         if (authority.fingerprint !== expectedFingerprint) throw new DesktopCertificateServiceError("fingerprint_changed");
         const current = inspect();
@@ -77,13 +79,16 @@ export function createDesktopCertificateService(directory = join(getConfigDir(),
         const result = await changeTrust(authority, kind === "trust" ? "trust" : "remove");
         if (result === "unknown") throw new DesktopCertificateServiceError("trust_unknown");
         if (result !== (kind === "trust" ? "trusted" : "not-trusted")) throw new DesktopCertificateServiceError("trust_not_applied");
+        // Never discard the only removable old identity until OS trust removal is proven.
+        // Publication failure leaves its protected envelope intact for an explicit retry.
+        if (kind === "renew") await renew(authority.fingerprint);
       }
       busy = null;
       return status();
     } finally { busy = null; }
   }
   return { status, prepare: () => action("prepare"), trust: (fingerprint: string) => action("trust", fingerprint),
-    removeTrust: (fingerprint: string) => action("remove-trust", fingerprint) };
+    removeTrust: (fingerprint: string) => action("remove-trust", fingerprint), renew: (fingerprint: string) => action("renew", fingerprint) };
 }
 
 export type DesktopCertificateService = ReturnType<typeof createDesktopCertificateService>;

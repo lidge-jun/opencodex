@@ -11,7 +11,7 @@ function fixture(method: string, body?: object, principal: ManagementContext["pr
   const status = { supported: true, state: "prepared" as const, busy: null };
   const service: DesktopCertificateService = { status: async () => { calls.push("status"); return status; },
     prepare: async () => { calls.push("prepare"); return status; }, trust: async fp => { calls.push("trust:" + fp); return status; },
-    removeTrust: async fp => { calls.push("remove:" + fp); return status; } };
+    removeTrust: async fp => { calls.push("remove:" + fp); return status; }, renew: async fp => { calls.push("renew:" + fp); return status; } };
   const ctx = { req: new Request(url, { method, headers: { host: url.host, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) }),
     url, principal, trustedLoopbackIngress: loopback, deps: { desktopCertificateService: service } } as ManagementContext;
   return { calls, ctx };
@@ -40,6 +40,13 @@ test("unexpected errors never expose process output or credential strings", asyn
   io.ctx.deps.desktopCertificateService!.prepare = async () => { throw new Error("synthetic-private-key-output"); };
   const response = await handleDesktopCompatibilityRoutes(io.ctx); expect(response?.status).toBe(409);
   expect(await response!.json()).toEqual({ ok: false, error: "operation_failed" });
+});
+
+test("renewal requires fresh fingerprint and explicit local dashboard confirmation", async () => {
+  const invalid = fixture("POST", { action: "renew", confirmed: true });
+  expect((await handleDesktopCompatibilityRoutes(invalid.ctx))?.status).toBe(400); expect(invalid.calls).toEqual([]);
+  const valid = fixture("POST", { action: "renew", confirmed: true, fingerprint: "A".repeat(64) });
+  expect((await handleDesktopCompatibilityRoutes(valid.ctx))?.status).toBe(200); expect(valid.calls).toEqual(["renew:" + "A".repeat(64)]);
 });
 test("the real management dispatcher reaches setup with principal and ingress intact", async () => {
   const io = fixture("POST", { action: "prepare", confirmed: true });
