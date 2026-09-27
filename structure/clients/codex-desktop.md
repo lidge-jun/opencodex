@@ -119,7 +119,7 @@ a failed cleanup retains ownership and reports `cleanup-required`, never a false
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
 local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
 separate account-wide consent for apply. No setting, login, quota, automatic startup or
-dashboard preference is changed by this API. Persisted startup integration is pending.
+dashboard preference is changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.
 
 ## Dashboard controls
@@ -136,3 +136,17 @@ response; a fresh status read is required. Changing the API target remounts the 
 pending consent. `useClientResource` owns bounded, visibility-aware reads and invalidates earlier
 reads when a mutation result is published. Certificate status is not repeatedly polled; runtime
 status polls only while the tab is active. Consent copy exists in all ten locale catalogs.
+
+## Proxy startup preference
+
+`desktopCompatibility.startOnProxyStart` is opt-in and defaults absent/off. The strict schema
+rejects candidate writes containing unknown options, while invalid hand edits disable startup.
+`src/server/index/desktop-compatibility-startup.ts` gates optional imports on this intent,
+Windows, non-test execution and non-sibling/non-client ownership. It keeps `startServer`
+synchronous and does not await before the Lab activation boundary. Unsupported prerequisites
+warn without stopping the model proxy or installing trust.
+
+`service.ts` shares one runtime between startup and management. Server shutdown retains
+the asynchronous teardown, waits for in-flight startup, and prevents a late start after stop.
+The saved preference does not launch Codex, enroll or renew certificates, or resume a trial.
+Its dashboard toggle is a remaining integration item; the typed config preference is available.

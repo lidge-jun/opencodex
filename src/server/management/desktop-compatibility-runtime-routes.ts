@@ -4,7 +4,6 @@ import type { ManagementContext } from "./context";
 import type { DesktopCompatibilityRuntime } from "../../codex/desktop-compatibility/runtime";
 
 const PATH = "/api/codex/desktop-compatibility/runtime";
-let runtime: DesktopCompatibilityRuntime | undefined;
 const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stopping", "build_unverified", "egress_proxy_unsupported",
   "trust_required", "certificate_expiring", "certificate_not_prepared", "certificate_invalid", "certificate_expired",
   "native_identity_unverified", "cleanup_incomplete", "not_running", "connection_invalid", "connection_changed", "connection_cleanup_required", "connection_unavailable"]);
@@ -25,7 +24,9 @@ export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementCon
     if (value.action === "apply" ? value.accountWideConsent !== true : value.accountWideConsent !== undefined) return jsonResponse({ error: "invalid_consent_scope" }, 400);
     action = value.action as typeof action;
   }
-  const service = ctx.deps.desktopCompatibilityRuntime ?? (runtime ??= (await import("../../codex/desktop-compatibility/runtime")).createDesktopCompatibilityRuntime());
+  const module = ctx.deps.desktopCompatibilityRuntime ? null : await import("../../codex/desktop-compatibility/service");
+  const service: DesktopCompatibilityRuntime = ctx.deps.desktopCompatibilityRuntime ?? module!.getDesktopCompatibilityRuntime();
+  if (module) ctx.deps.onDesktopCompatibilityShutdown?.(module.shutdownDesktopCompatibility);
   try {
     if (action === "apply") {
       const result = await service.apply(true);

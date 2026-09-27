@@ -721,7 +721,8 @@ CurrentUser protection does not isolate secrets from other processes running as 
 local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
 `observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
 The endpoint is experimental. The dashboard exposes it under **Codex Set → Desktop compatibility**;
-a saved startup preference is not yet provided. OpenCodex managed client mode does not offer these
+the optional `desktopCompatibility.startOnProxyStart` config preference resumes observation only
+and currently has no dashboard toggle. OpenCodex managed client mode does not offer these
 local controls or forward them to the shared hub.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based

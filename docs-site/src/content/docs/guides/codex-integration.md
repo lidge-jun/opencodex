@@ -920,9 +920,16 @@ requires launching the app with a fresh managed connection.
 
 Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
 login and direct outbound connectivity. Configured outbound proxies and OpenCodex managed client
-mode are not yet supported by these controls. There is no saved automatic-start preference yet.
+mode are not yet supported by these controls.
 Unknown app builds refuse correction; the integration does not patch application files or
 switch to login-free mode.
+
+After certificate preparation and a successful manual start, the optional OpenCodex configuration
+`"desktopCompatibility": { "startOnProxyStart": true }` resumes **observation only** when the model
+proxy starts. Omission or `false` disables this automatic start. It reuses the saved endpoints
+and trusted certificate, never launches Codex or enrolls trust, and never resumes an Apply trial.
+If prerequisites are missing, observation stays off and the model proxy continues running.
+The preference currently has no dashboard toggle; the rest of the controls remain available above.
 
 ## Routed models during Codex reserve mode
 

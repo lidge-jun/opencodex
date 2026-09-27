@@ -894,7 +894,7 @@
     "desktop-app-restart.test.ts": "clients",
     "desktop-cli-contracts.test.ts": "clients",
     "desktop-compatibility-authority.test.ts": "clients",
-    "desktop-compatibility-runtime.test.ts": "clients", "desktop-compatibility-relay.test.ts": "clients", "desktop-compatibility-connection-store.test.ts": "clients", "management-desktop-compatibility-runtime-routes.test.ts": "server",
+    "desktop-compatibility-runtime.test.ts": "clients", "desktop-compatibility-relay.test.ts": "clients", "desktop-compatibility-connection-store.test.ts": "clients", "management-desktop-compatibility-runtime-routes.test.ts": "server", "server-desktop-compatibility-startup.test.ts": "server",
     "desktop-compatibility-certificate-service.test.ts": "clients",
     "desktop-compatibility-launch.test.ts": "clients",
     "management-desktop-compatibility-routes.test.ts": "server",

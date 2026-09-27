@@ -3,6 +3,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import type { OcxConfig } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { loopbackCompanionAllowed } from "../codex/loopback-target";
@@ -599,7 +600,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (compactionRouting !== undefined && !compactionRoutingSchema.safeParse(compactionRouting).success) {
     return { ok: false, error: "schema_invalid: compactionRouting: requires a nonblank model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" };
   }
-  const boundaryError = compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
+  const boundaryError = compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)

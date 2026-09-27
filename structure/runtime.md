@@ -1,6 +1,6 @@
 # Runtime
 
-The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Optional native desktop observation follows the [Codex Desktop startup gate and awaited teardown](clients/codex-desktop.md#proxy-startup-preference).
 
 ## Resolved static model policy
 

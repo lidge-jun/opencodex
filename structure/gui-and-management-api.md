@@ -5,6 +5,7 @@ raw admin-token and remote ingress mutations are refused. Its start/stop/launch 
 three-minute account-UI trial follow the [native compatibility contract](clients/codex-desktop.md#optional-compatibility-runtime).
 The lazy Codex Set desktop tab uses the machine API target and follows the
 [dashboard consent and stale-response contract](clients/codex-desktop.md#dashboard-controls).
+Runtime management and proxy startup share a single owner and register awaited shutdown.
 
 Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 

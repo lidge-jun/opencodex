@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 import { compactionRecoverySchema } from "./compaction-recovery";
+import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -158,6 +159,7 @@ export const configSchema = z.object({
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.

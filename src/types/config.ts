@@ -724,6 +724,8 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
+  desktopCompatibility?: { startOnProxyStart: boolean };
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only
