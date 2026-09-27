@@ -291,6 +291,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     sawPartialThinking: false,
     sawTerminalResult: false,
     openToolBlocks: new Map(),
+    strictToolBlockCapture: Boolean(toolBridge),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -355,6 +356,24 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         });
         break;
       }
+        if (toolBridge && (state.toolBlockStarts ?? 0) > toolCallStarts) {
+          // The parser buffers a block until its stop (or same-index replacement), so the
+          // per-turn limit must be checked when the block opens, not when its buffered
+          // tool_call_start is finally emitted. The init handshake is already gated above.
+          toolCallStarts = state.toolBlockStarts!;
+          if (toolCallStarts > toolBridge.maxTurnToolCalls) {
+            emitOnce({
+              type: "error",
+              message: `Claude Agent SDK returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_call_limit",
+              retryable: false,
+            });
+            failClosed = true;
+            break;
+          }
+        }
       for (const event of mappedEvents) {
         if (toolBridge && !initValidated && event.type === "done") {
           emitOnce({
@@ -379,19 +398,6 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
               status: 502,
               errorType: "upstream_error",
               code: "tool_bridge_init_missing",
-              retryable: false,
-            });
-            failClosed = true;
-            break;
-          }
-          toolCallStarts += 1;
-          if (toolCallStarts > toolBridge.maxTurnToolCalls) {
-            emitOnce({
-              type: "error",
-              message: `Claude Agent SDK returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
-              status: 502,
-              errorType: "upstream_error",
-              code: "tool_call_limit",
               retryable: false,
             });
             failClosed = true;

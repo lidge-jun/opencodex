@@ -637,6 +637,23 @@ describe("claude-agent-sdk serves the client's catalog through a capture-only MC
     expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "tool_call_limit", retryable: false });
   });
 
+  test("opened tool blocks beyond the turn cap fail closed before any of them closes", async () => {
+    // The parser buffers a block until its stop, so a stream that only opens blocks emits no
+    // tool_call_start at all. The cap therefore has to be enforced when the block opens: with the
+    // emission counted instead, this stream would run on and only fail at message_stop, and for a
+    // different reason.
+    const catalog = await buildClaudeAgentSdkToolBridge(withTools(["alpha"]));
+    const emitted = [...catalog!.emittedNameMap.keys()][0]!;
+    const opens = Array.from({ length: 17 }, (_value, index) => ({
+      type: "stream_event",
+      event: { type: "content_block_start", index, content_block: { type: "tool_use", id: `tu_` + index, name: emitted } },
+    }));
+    const sdk = fakeSdk([initFrame([bridgeConnected]), ...opens, messageStop]);
+    const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => sdk.module });
+    const events = await run(adapter, withTools(["alpha"]));
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "tool_call_limit", retryable: false });
+  });
+
   test("a required tool call that never happens must not look like a completion", async () => {
     const sdk = fakeSdk([
       initFrame([bridgeConnected]),
