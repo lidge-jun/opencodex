@@ -157,18 +157,22 @@ export const NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES: ReadonlySet<string> = new Set
  * Also normalizes nested helper names (`exec_command`, `shell_command`, `write_stdin`,
  * `apply_patch`, `view_image`, `create_goal`, `get_goal`, `update_goal`) and direct
  * `mcp__<server>__<tool>` calls to `exec` when code-mode `exec` is declared in the
- * request catalog.
+ * request catalog. MCP recovery additionally requires explicit custom-tool provenance;
+ * a structured function named `exec` is not a JavaScript executor.
  *
  * @param name - The tool name emitted on the wire by the provider.
  * @param declared - All wire tool names declared in the request catalog, including aliases.
  * @param declaredBare - Explicitly declared bare tool names without namespace provenance.
  *                       When omitted, falls back to `declared`.
+ * @param declaredCustom - Custom wire identities from the caller's catalog, never bare aliases
+ *                         manufactured from foreign namespaces.
  * @returns The normalized tool name to expose downstream.
  */
 export function normalizeDeclaredToolName(
   name: string,
   declared: ReadonlySet<string> | undefined,
   declaredBare?: ReadonlySet<string>,
+  declaredCustom?: ReadonlySet<string>,
 ): string {
   if (!declared) return name;
   if (declared.has(name)) return name;
@@ -191,11 +195,12 @@ export function normalizeDeclaredToolName(
       candidate = bare;
     } else if (
       // Code mode never declares bare helper names; a provider that invents `default.`
-      // for one still means the nested helper. Strip the prefix so the helper list
-      // below can rewrite it to `exec` (#4412).
+      // for one still means the nested helper. The same wrapper can surround a direct MCP
+      // name, but only a custom exec declaration authorizes that recovery.
       bare.length > 0
       && declared.has(CODE_MODE_EXEC_TOOL_NAME)
-      && (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(bare)
+      && ((CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(bare)
+        || (declaredCustom?.has(CODE_MODE_EXEC_TOOL_NAME) && isCodeModeMcpDirectName(bare)))
       && !declared.has("default." + bare)
       && !declared.has("default__" + bare)
     ) {
@@ -217,7 +222,9 @@ export function normalizeDeclaredToolName(
   // A direct `mcp__<server>__<tool>` call names a nested host tool the code-mode catalog
   // never declares; `compileCodeModeHelperInput` turns it into the `tools.<name>(...)`
   // exec body the model could have written itself.
-  return isCodeModeMcpDirectName(candidate) ? CODE_MODE_EXEC_TOOL_NAME : candidate;
+  return declaredCustom?.has(CODE_MODE_EXEC_TOOL_NAME) && isCodeModeMcpDirectName(candidate)
+    ? CODE_MODE_EXEC_TOOL_NAME
+    : candidate;
 }
 
 /**

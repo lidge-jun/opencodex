@@ -173,7 +173,7 @@ describe("bridge normalizes code-mode helper names against the declared catalog"
       undefined,
       undefined,
       50_000,
-      { declaredToolNames: new Set(["exec"]) },
+      { declaredToolNames: new Set(["exec"]), bareCustomToolNames: new Set(["exec"]) },
     ));
     expect(sse).not.toContain("undeclared client tool");
     expect(sse).toContain('"name":"exec"');
@@ -189,7 +189,7 @@ describe("bridge normalizes code-mode helper names against the declared catalog"
       undefined,
       undefined,
       50_000,
-      { declaredToolNames: new Set(["exec"]) },
+      { declaredToolNames: new Set(["exec"]), bareCustomToolNames: new Set(["exec"]) },
     ));
     expect(sse).toContain("undeclared client tool");
   });

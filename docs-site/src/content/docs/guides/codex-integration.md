@@ -653,6 +653,15 @@ code-mode `exec` has the call converted into the matching `tools.<helper>(...)` 
 `exec`. A catalog that genuinely declares the bare goal tool keeps it, and a catalog that declares
 neither the tool nor `exec` still rejects the call as undeclared.
 
+On routed conversions with a verified freeform code-mode `exec` catalog, structured calls
+sent directly to
+`mcp__<server>__<tool>` (including a provider-added `default.` prefix) are also
+wrapped as nested host-tool calls. This avoids a retry
+caused solely by a model omitting the `exec` wrapper. Explicitly declared MCP tools
+keep their normal behavior; an ordinary JSON function named `exec` does not enable
+this repair. Unknown tools still fail at the host. Tool-call records printed as
+ordinary answer text are not executed by this compatibility rule.
+
 For routed Responses turns, an explicit tool-enforcement policy also rejects client tool calls if
 the request's declared-tool catalog is unavailable. An empty declared catalog rejects every client
 tool call; Chat and Anthropic clients retain their own tool-validation responsibility.
