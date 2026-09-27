@@ -45,7 +45,6 @@ import {
   rotateGenericOAuthAccountOnRefusal,
   quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
-  rotateAntigravityAccountOnAuthRefusal,
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
@@ -130,8 +129,6 @@ export function createAdapterContinuations(
   const { routedCompaction } = sidecarState;
   const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs, localUpstream } = adapterExchange;
   const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
-  const antigravityPoolActivated = route.providerName === "google-antigravity"
-    && isGenericOAuthFailoverEnabled(config, route.providerName);
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
@@ -163,7 +160,6 @@ export function createAdapterContinuations(
     let response: Response | undefined;
     let kiroRefusalPendingReplay: Response | undefined;
     let kiroReplaySetupFailed = false;
-    let antigravity401RotationAttempted = false;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined = initialRecoveryKind;
     /**
@@ -535,13 +531,11 @@ export function createAdapterContinuations(
       }
       } else {
      if (
-       (response.status === 429 || (response.status === 401 && antigravityPoolActivated
-         && !antigravity401RotationAttempted))
+       response.status === 429
        && transportState.genericFailoverAccountId
         && !isNonReplayableResponse(response)
        && transportState.genericFailovers < transportState.genericFailoverLimit
-        && (response.status === 401 ? antigravityPoolActivated
-          : isGenericOAuthFailoverEnabled(config, route.providerName))
+        && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
         // Intersection with the shared request budget. The continuation loop re-sends the
         // turn, so without this the per-request bound could be re-armed simply by reaching a
@@ -550,20 +544,13 @@ export function createAdapterContinuations(
         // Who settles the reservation depends on who sends the replay (#4709). An adapter that
         // owns its ladder reserves once per physical send and would charge this replay twice;
         // the helper path reports it back instead, which is what `countedExternally` names.
-        const antigravity401 = response.status === 401;
-        if (antigravity401) antigravity401RotationAttempted = true;
-        const sent = transportState.replayOAuthCredentialSnapshot;
-        const nextAuthId = antigravity401 && sent
-          ? rotateAntigravityAccountOnAuthRefusal(antigravityPoolActivated,
-            sent.accountId, sent.generation, route.modelId) : null;
-        if (antigravity401 && !nextAuthId) break;
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
           "auth-recovery",
-          `${route.providerName}|${route.modelId}|continuation-oauth-${antigravity401 ? "401" : "429"}`,
+          `${route.providerName}|${route.modelId}|continuation-oauth-429`,
           !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
         );
-        const nextAccountId = antigravity401 ? (hop.allowed ? nextAuthId : null) : hop.allowed
+        const nextAccountId = hop.allowed
           ? rotateGenericOAuthAccountOn429(
             config,
             route.providerName,
@@ -580,16 +567,17 @@ export function createAdapterContinuations(
         )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
         if (!nextAccountId) hop.permit?.release();
         if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           try {
             // The FULL snapshot through the shared helper, never a bare bearer: Antigravity
             // pairs an account-matched projectId with its token and Kiro carries routing
             // metadata, so a token-only swap would mix one account's credential with another's
             // routing data.
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+                transportState.genericFailovers += 1;
             const applied = await applyFailoverSnapshot(snapshot, nextParsed);
             if (!applied) hop.permit?.release();
             if (applied) {
-              transportState.genericFailovers += 1;
               invalidateSameTargetRequest();
               transportState.activeAdapter = resolveSelectionAdapter(
                 resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -618,8 +606,7 @@ export function createAdapterContinuations(
               // take a second one for the same replay. A helper-routed replay needs no handoff:
               // its reporter settles the booking made above.
               if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
-              nextContinuationRecoveryKind = antigravity401 ? "oauth-401" : "oauth-account-429";
-              try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+              nextContinuationRecoveryKind = "oauth-account-429";
               continue;
             }
           } catch {

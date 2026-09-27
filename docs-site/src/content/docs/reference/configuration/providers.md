@@ -948,12 +948,15 @@ Rotation carries the alternate account's **full** credential snapshot, not just 
 provider that pairs routing metadata with its token — Antigravity's Cloud Code Assist project id,
 for example — cannot end up sending one account's token with another account's metadata.
 
-For primary Antigravity inference through the Google adapter, a 401 first refreshes and replays the
-same account. If that replay is still 401, or refresh fails terminally, an eligible live sibling may
-receive one budgeted attempt. Paused, reauthentication-required and cooling accounts are skipped;
+For primary Antigravity inference through the Google adapter's main dispatch, a 401 first refreshes
+and replays the same account. If that replay is still 401, or refresh fails with a terminal credential
+rejection that requires reauthentication, an eligible live sibling may receive at most one attempt
+within the existing budget. A transient refresh failure keeps the sanitized authentication error.
+Paused, reauthentication-required and cooling accounts are skipped;
 the failed credential gets a 60-second in-process cooldown only while its generation is current.
-This does not apply to native Responses passthrough, image or web-search sidecars, or output already
-sent to the client.
+Continuations, native Responses passthrough, image and web-search sidecars, and output already sent
+to the client do not use this 401 rotation. A structured validation-required 403 receives a clearer
+error message but does not rotate accounts.
 
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter
 events rather than an HTTP status, and the standalone Antigravity image endpoint has its own

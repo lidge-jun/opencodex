@@ -1,6 +1,5 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isLocationUnsupportedMessage } from "../lib/errors";
-import { readBoundedResponseBody } from "../lib/bounded-body";
 
 export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
 
@@ -13,16 +12,6 @@ function hasAntigravityValidationReason(payloadText: string): boolean {
   return Array.isArray(details) && details.some(detail =>
     detail !== null && typeof detail === "object" && !Array.isArray(detail)
     && (detail as { reason?: unknown }).reason === "VALIDATION_REQUIRED");
-}
-
-export async function isAntigravityValidationRequiredResponse(response: Response, signal?: AbortSignal): Promise<boolean> {
-  if (response.status !== 403) return false;
-  const body = await readBoundedResponseBody(response.clone(), {
-    maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
-    inactivityTimeoutMs: 2000, signal,
-  });
-  return body.displaySafe && !body.truncated
-    && body.text.startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`);
 }
 
 /** Pull the human detail out of the Google API error envelope `{error:{message,status,code}}`. */

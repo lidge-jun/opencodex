@@ -43,6 +43,7 @@ import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { getAccountSet } from "../../oauth/store";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
@@ -661,7 +662,9 @@ export async function prepareAdapterExchange(
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
         } catch (err) {
           const failed = transportState.sentOAuthSnapshot;
-          if (route.providerName === "google-antigravity" && failed) {
+          if (route.providerName === "google-antigravity" && err instanceof OAuthLoginRequiredError && failed
+            && getAccountSet(route.providerName)?.accounts.some(row =>
+              row.id === failed.accountId && row.needsReauth === true)) {
             antigravity401RotationAttempted = true;
             const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-401");
             if (rotated) { upstreamResponse = rotated; continue recovery; }

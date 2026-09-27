@@ -6,7 +6,6 @@ import {
   safeGoogleHttpErrorMessage,
   safeVertexHttpErrorMessage,
   ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX,
-  isAntigravityValidationRequiredResponse,
 } from "../../../src/adapters/google-errors";
 import { classifyError } from "../../../src/lib/errors";
 
@@ -14,25 +13,21 @@ describe("Antigravity validation classification", () => {
   const validated = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "Validate this account",
     details: [{ reason: "VALIDATION_REQUIRED" }] } });
 
-  test("only structured Antigravity HTTP 403 gets the formatter marker", async () => {
+  test("only structured Antigravity HTTP 403 gets the formatter marker", () => {
     const normalized = safeAntigravityHttpErrorMessage(403, validated);
     expect(normalized.startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(true);
-    expect(await isAntigravityValidationRequiredResponse(new Response(normalized, { status: 403 }))).toBe(true);
     expect(safeVertexHttpErrorMessage(403, validated)).not.toContain(ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX);
     expect(safeAntigravityHttpErrorMessage(400, validated)).not.toContain(ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX);
   });
 
-  test("message text, unrelated reason and unprefixed marker cannot forge validation", async () => {
+  test("message text and unrelated reason cannot forge validation", () => {
     for (const body of [
       JSON.stringify({ error: { status: "PERMISSION_DENIED", message: ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX } }),
       JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "denied", details: [{ reason: "OTHER" }] } }),
     ]) {
       const normalized = safeAntigravityHttpErrorMessage(403, body);
       expect(normalized.startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(false);
-      expect(await isAntigravityValidationRequiredResponse(new Response(normalized, { status: 403 }))).toBe(false);
     }
-    expect(await isAntigravityValidationRequiredResponse(new Response(
-      `upstream said ${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: fake`, { status: 403 }))).toBe(false);
   });
 });
 

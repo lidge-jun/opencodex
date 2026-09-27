@@ -576,7 +576,7 @@ describe("server terminal guard integration", () => {
     expect(messages.some(m => m.role === "developer" || m.role === "system")).toBe(true);
   });
 
-  test("synthetic Antigravity continuation 401 rotates before output", async () => {
+  test("synthetic Antigravity continuation 401 does not rotate accounts", async () => {
     const priorHome = process.env.OPENCODEX_HOME;
     const isolated = mkdtempSync(join(tmpdir(), "ocx-antigravity-continuation-"));
     process.env.OPENCODEX_HOME = isolated;
@@ -612,8 +612,9 @@ describe("server terminal guard integration", () => {
       }), antigravityConfig, { model: "", provider: "" });
       const body = await response.text();
       expect(response.status).toBe(200);
-      expect(body).toContain("exec_command");
-      expect(auth).toEqual(["Bearer access-a", "Bearer access-a", "Bearer access-b"]);
+      expect(body).toContain("Provider continuation error 401");
+      expect(body).not.toContain("exec_command");
+      expect(auth).toEqual(["Bearer access-a", "Bearer access-a"]);
     } finally {
       releaseInheritedSpendHome?.();
       releaseInheritedSpendHome = undefined;

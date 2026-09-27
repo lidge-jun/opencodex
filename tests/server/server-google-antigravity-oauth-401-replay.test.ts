@@ -152,6 +152,8 @@ function installOAuthFetch(
   apiStatuses: number[],
   options: {
     tokenErrorDescription?: string;
+    tokenHttpStatus?: number;
+    tokenThrow?: string;
     refreshedProjectId?: string | null;
     beforeFirstUnauthorized?: () => Promise<void>;
   } = {},
@@ -169,6 +171,10 @@ function installOAuthFetch(
     // Google OAuth refresh token endpoint
     if (url === GOOGLE_TOKEN_ENDPOINT) {
       counts.refresh += 1;
+      if (options.tokenThrow) throw new Error(options.tokenThrow);
+      if (options.tokenHttpStatus !== undefined) {
+        return Response.json({ error: "temporarily_unavailable" }, { status: options.tokenHttpStatus });
+      }
       if (options.tokenErrorDescription !== undefined) {
         return new Response(JSON.stringify({
           error: "invalid_grant",
@@ -316,16 +322,37 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
 
   test("terminal refresh failure uses the sibling while the failed row needs reauth", async () => {
     await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
     await seedSibling();
     saveConfig(antigravityConfig());
-    const observed = installOAuthFetch([401, 200], { tokenErrorDescription: "invalid grant" });
+    const observed = installOAuthFetch([401, 200], { tokenThrow: "invalid_grant" });
     const server = startServer(0);
     try {
       const response = await postResponses(server);
       expect(response.status).toBe(200);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b"]);
       expect(observed.chatProjects).toEqual(["initial-project-id", "project-b"]);
+      expect(getAccountSet("google-antigravity")!.accounts.find(row => row.id === failedId)?.needsReauth).toBe(true);
       expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("a transient refresh failure does not send on a sibling", async () => {
+    await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200], { tokenHttpStatus: 503 });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+      expect(response.status).toBe(401);
+      expect(body).toContain(PUBLIC_OAUTH_AUTHENTICATION_ERROR);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id"]);
+      expect(observed.counts.refresh).toBe(1);
+      expect(getAccountSet("google-antigravity")!.accounts.find(row => row.id === failedId)?.needsReauth).not.toBe(true);
     } finally { await server.stop(true); }
   });
 
