@@ -1,11 +1,45 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 
+/** Public inference API exposure. Responses and Chat Completions are always served. */
+export interface OcxApiSurfacesConfig {
+  /**
+   * `/v1/messages` and `/v1/messages/count_tokens`. Absent means "inherit
+   * `claudeCode.enabled !== false`"; a present non-boolean value disables the surface.
+   */
+  messages?: { enabled?: boolean };
+}
+
+/** Protocol delivery policy (devlog/_plan/260924_protocol_first_class). */
+export interface OcxProtocolsConfig {
+  /**
+   * What happens when the final upstream wire cannot express a requested feature.
+   * `legacy` (default) keeps today's behavior; `reject` refuses before any upstream send.
+   */
+  unrepresentable?: "legacy" | "reject";
+  /** Staged rollout switches. Every switch defaults off and changes no semantics while off. */
+  rollout?: {
+    /** Eligible Chat candidates inside combos and policy routes send natively. */
+    nativeChatCombos?: boolean;
+    /** Proxy-managed key-auth Anthropic targets receive `/v1/messages` natively. */
+    managedMessagesNative?: boolean;
+    /** Extends managed native Messages to Anthropic OAuth accounts. Requires the switch above. */
+    managedMessagesNativeOAuth?: boolean;
+    /** Chat and Messages clients are encoded directly from adapter events. */
+    directEncoders?: boolean;
+    /** Compare the dispatch plan with the observed path; never sends a second request. */
+    shadowPlan?: boolean;
+  };
+}
+
 /**
  * Claude Code inbound settings (devlog/260711_claude_inbound). Consumed by the
  * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
  */
 export interface OcxClaudeCodeConfig {
+  /** Route the standalone Claude Code CLI through the first-party intercept (settings.json env).
+   * Independent of Desktop's first-party mode. Absent/false = off. */
+  cliFirstParty?: boolean;
   /**
    * Opt-in relocation of supported trailing Claude harness notices from system instructions
    * to a user input message on translated routes. Changes the Desktop cache-key prefix.
@@ -397,10 +431,17 @@ export interface OcxPrivacyConfig {
   maskEmails?: boolean;
 }
 
+export interface OcxLinkTransportConfig {
+  tunnelPort: number;
+  linkId: string;
+}
+
 export interface OcxClientConnectionConfig {
   serverUrl: string;
   managementUrl: string;
   managementTransport: "direct" | "relay";
+  transport?: "hub" | "link";
+  link?: OcxLinkTransportConfig;
   selectedClients: OcxConnectedClientId[];
   tokenEnv: "OPENCODEX_API_AUTH_TOKEN";
   apiKeyId: string;
@@ -527,6 +568,14 @@ export interface OcxConfig {
   googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /**
+   * Which public inference APIs this proxy serves. Read only through
+   * `resolveApiSurfaceSettings` in `src/protocols/settings.ts`, which fails closed on a
+   * malformed value and inherits `claudeCode.enabled` while no explicit value exists.
+   */
+  apiSurfaces?: OcxApiSurfacesConfig;
+  /** Protocol delivery policy and rollout switches; see `resolveProtocolSettings`. */
+  protocols?: OcxProtocolsConfig;
   /**
    * Per-client durable intent. This phase owns only `codex`; later phases extend
    * one key at a time rather than widening a shared union.
@@ -673,6 +722,8 @@ export interface OcxConfig {
     /** Compaction triggers this override covers; omission means `["manual"]`. */
     triggers?: ("manual" | "auto")[];
   };
+  /** Opt-in failure-only recovery; never replaces the initial compaction model. */
+  compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only
@@ -691,19 +742,22 @@ export interface OcxConfig {
   /**
   * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
-  * source model: gpt-5.6-luna (Codex 0.145.0+). Clients through 0.144.x emitted
-  * gpt-5.4-mini instead; that model is retired upstream, but it stays available as an
-  * opt-in `sourceModels` prefix so an old client's helper calls can still be intercepted.
+  * source models: gpt-6-luna (Codex 0.154.0+) and gpt-5.6-luna (0.145.0-0.153.x).
+  * Clients through 0.144.x emitted gpt-5.4-mini instead; that model is retired upstream,
+  * but it stays available as an opt-in `sourceModels` prefix so an old client's helper
+  * calls can still be intercepted.
   * Opt-in; disabled by default. Matching requests preserve their configured reasoning effort.
   * All requests for configured shadow source models are intercepted regardless of request kind,
-  * except when the replacement intersects the same provider+model source set.
+  * except when the replacement intersects the same provider+model source set, and except
+  * spawned sub-agent turns (x-openai-subagent: collab_spawn / subagent_kind thread_spawn),
+  * which keep the model they were spawned with.
   */
  shadowCallIntercept?: {
    /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
    enabled?: boolean;
    /** Replacement model id (e.g. "gpt-5.5"). */
    model?: string;
-   /** Optional override of intercepted source-model prefixes (default: gpt-5.6-luna). */
+   /** Optional override of intercepted source-model prefixes (default: gpt-6-luna, gpt-5.6-luna). */
    sourceModels?: string[];
  };
   /**
@@ -742,6 +796,12 @@ export interface OcxConfig {
     timeoutMs?: number;
     /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
     cacheEntries?: number;
+    /**
+     * Extra recovery sends when ChatGPT rejects with a transient 5xx or the transport
+     * fails, sharing the same credential, deadline, and cache flight (#3661).
+     * Default: 0 (single attempt); maximum: 2.
+     */
+    retries?: number;
   };
   /**
    * Quota-reset detection and notification. Absent means off: no detection, no timer, no sink.
@@ -1136,7 +1196,7 @@ export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-fir
 
 export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
 
-export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
+export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type OcxComboDefaultEffortMode = "fallback" | "force";
 
@@ -1161,6 +1221,11 @@ export interface OcxComboTarget {
   model: string;
   /** Relative target weight for round-robin batches and random selection. Default 1; valid range 1..10000. */
   weight?: number;
+  /**
+   * Exact efforts JEV may choose for this target. Omit to allow every effort the
+   * target currently advertises; an explicit list must be non-empty.
+   */
+  reasoningEfforts?: OcxComboDefaultEffort[];
   /**
    * Marks an emergency-only target. Inert unless the combo sets
    * `cooldownWaitPolicy`, and never makes a target permanently ineligible —
@@ -1451,6 +1516,8 @@ export interface OcxWebSearchSidecarConfig {
  * explicit account selection. Only automatic rotation skips it.
  */
 export interface OcxCodexPoolConfig {
+  /** Start idle Codex windows when the pool is initialized. */
+  startIdleWindows?: boolean;
   /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.

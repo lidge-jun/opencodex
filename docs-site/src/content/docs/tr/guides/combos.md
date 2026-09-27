@@ -234,9 +234,9 @@ ikiye ayrılır.
 | Süreç içi bir bağdaştırıcının (`runTurn`) yürüttüğü Responses turunda, geçerli isteğin bildirmediği ilk araç çağrısı (herhangi bir çıktıdan ve yeniden oynatılamaz yan etkiden önce) | Hedefi bekleme süresine alır ve aynı araç kataloğuyla sonraki hedefe atlar. Görünür çıktıdan veya yeniden oynatılamaz bir yan etkiden sonra ret kesindir. Chat Completions ve Anthropic Messages istekleri değişmez. |
 | Diğer sınıflandırılmamış hatalar | Durun ve hatayı döndürün. |
 
-Atlanan bir hedef varsayılan olarak 60 saniye boyunca soğuma süresine girer.
+Atlanan bir hedef, yapılandırılmış bir `cooldownMs` yoksa şu varsayılan soğuma sürelerine girer: istek hızı sınırı kodları `1302`/`1305` için 5 saniye, tükenmiş bir kullanım penceresi (HTTP durumu ne olursa olsun, 502 dahil) veya kimlik bilgisi/faturalandırma hatası için 10 dakika, diğer tüm durumlarda 60 saniye.
 Yukarı akış yanıtı geçerli bir `Retry-After` değeri içeriyorsa opencodex bunun
-yerine onu kullanır. Sayısal saniyeler ve HTTP tarihi değerleri kabul edilir ve
+yerine onu kullanır; Codex sıfırlama başlıkları ve yapılandırılmış `cooldownMs` bu geri dönüşlerden önce gelir. Sayısal saniyeler ve HTTP tarihi değerleri kabul edilir ve
 açık `Retry-After` gecikmesi en fazla 24 saat, sıfırlama kaynaklı, yapılandırılmış ve varsayılan soğuma süreleri en fazla 10 dakika ile sınırlandırılır.
 
 Geçerli istek denenen aynı hedefi asla yeniden denemez. Daha sonraki istekler
@@ -367,7 +367,7 @@ saklanır:
 | --- | --- | --- | --- |
 | `targets` | Evet | — | Yapılandırılmış `{ provider, model, weight? }` hedeflerinin boş olmayan sıralı dizisi. Yinelenen sağlayıcı/model çiftleri reddedilir. |
 | `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. `round-robin` ve `random` tarafından kullanılır; `failover`, `least-used` ve `reset-window` tarafından yok sayılır. |
-| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`. |
+| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`, `"jev"`. JEV yalnızca ilk uygun hedefi ve effort değerini belirler; sonraki denemeleri normal Combo fallback'i yönetir. |
 | `stickyLimit` | Hayır | `1` | Yalnızca `round-robin` için geçerlidir; seçim başına 1 ile 100 arasında başarılı istek tam sayısı. |
 | `defaultEffort` | Hayır | `null` | `low`, `medium`, `high`, `xhigh`, `max` veya `ultra`; yalnızca arayan çabayı atladığında ve hedef desteği bildirdiğinde uygulanır. |
 | `reasoningEffortMode` | Hayır | `"strict"` | `strict` veya `adaptive`; karma yetenek kesişimini ve hedefe özel normalizasyonu seçer. |
@@ -389,8 +389,7 @@ yazdığını onaylayın.
 Her hedef şu anda uygun değildir: örneğin sağlayıcısı devre dışıdır,
 soğumaktadır, bu istek için zaten denenmiştir veya şifrelenmiş bir v2 görevi onu
 hariç tutmaktadır. Hedef sağlayıcı durumunu ve son yukarı akış hatalarını
-kontrol edin. Soğuma süreleri için 60 saniyelik varsayılanı veya yukarı akış
-`Retry-After` süresini (açık `Retry-After` için en fazla 24 saat, diğer soğuma süreleri için en fazla 10 dakika) bekleyin, ardından
+kontrol edin. Soğuma süreleri için önce gözlemlenen `Retry-After` değerini, sonra Codex sıfırlama başlıklarını, sonra yapılandırılmış `cooldownMs` değerini izleyin; hiçbiri yoksa yukarı akış geri dönüşü uygulanır (istek hızı kodları `1302`/`1305` için 5 saniye, tükenmiş kullanım penceresi — HTTP durumu ne olursa olsun — veya kimlik bilgisi/faturalandırma hatası için 10 dakika, diğer durumlarda 60 saniye). Açık `Retry-After` en fazla 24 saat, diğer soğuma süreleri en fazla 10 dakika ile sınırlıdır, ardından
 yeniden deneyin.
 
 ### Takma adım neden reddedildi?

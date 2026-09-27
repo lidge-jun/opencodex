@@ -47,17 +47,23 @@ describe("desktop runtime identity", () => {
   });
 
   test("the credential is never sent to an unconfirmed instance", () => {
-    const start = proxy.indexOf("async fn authorised_token(");
+    // The admin token never leaves the client: the request carries a single-use capability
+    // minted only for the recorded runtime, so a listener that took the port after the bound
+    // child exited cannot satisfy it.
+    const start = proxy.indexOf("fn authorised_capability(");
     expect(start).toBeGreaterThan(-1);
     const body = proxy.slice(start, proxy.indexOf("async fn send(", start));
     expect(body).toContain("let Some(binding) = self.binding() else");
     // Re-confirmed here, not trusted from when it was made: in between, the child can exit and
     // something else can hold the port.
-    expect(body).toContain("let identity = self.identify().await?;");
-    expect(body).toContain("if identity != binding.identity");
+    expect(body).toContain("runtime_identity()");
+    expect(body).toContain("recorded.port != self.endpoint.port");
+    expect(body).toContain("recorded.pid != binding.identity.pid");
+    expect(body).toContain("recorded.port != binding.identity.port");
     expect(body).toContain("if self.binding() != Some(binding)");
-    const token = body.indexOf("self.auth.token()");
-    expect(token).toBeGreaterThan(body.indexOf("if self.binding() != Some(binding)"));
+    // The minted proof is bound to the method and path, and the raw token is never read here.
+    expect(body).toContain("CapabilityHeaders::mint(&recorded, method, path)");
+    expect(body).not.toContain("self.auth.token()");
   });
 
   test("a request is bound to the pid, the port and the generation it was authorised under", () => {
@@ -126,16 +132,19 @@ describe("desktop runtime identity", () => {
     const window = code(WINDOW);
     const rule = window.slice(window.indexOf("fn is_app_origin("));
     const body = rule.slice(0, rule.indexOf("\n}"));
-    // The custom scheme everywhere, and the http spelling WebView2 needs on Windows.
-    expect(body).toContain('"tauri" => true');
+    // The custom scheme's app host (tauri://localhost, no port), and the http spelling WebView2
+    // needs on Windows. The update page's command guard relies on this exact app origin.
+    expect(body).toContain('"tauri" => url.host_str() == Some("localhost") && url.port().is_none()');
     expect(body).toContain('url.host_str() == Some("tauri.localhost")');
     // Not https, which is not the scheme the pinned Tauri serves the app over, and not a port,
     // which would mean something else is answering.
     expect(body).toContain("url.port().is_none()");
     expect(body).not.toContain('"https"');
     expect(window).toContain("if is_app_origin(url) {");
-    // Not localhost generally, and not a remote IPC widening.
-    expect(window).not.toContain('Some("localhost")');
+    // Not http://localhost generally (only the tauri: scheme may name that host), and not a
+    // remote IPC widening.
+    expect(body).not.toMatch(/"http" =>[^\n]*Some\("localhost"\)/);
+    expect(window.match(/Some\("localhost"\)/g) ?? []).toHaveLength(1);
     expect(readFileSync(repoPath("desktop/src-tauri/capabilities/default.json"), "utf8")).not.toContain(
       "remote",
     );

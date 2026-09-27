@@ -176,6 +176,14 @@ export type CodexWsFailureStage = {
   relayedEvents: number;
   /** Milliseconds from send to the first upstream frame; null when none arrived. */
   firstFrameMs: number | null;
+  /**
+   * Milliseconds from send to the first non-control Responses event (a
+   * `response.*` or `error` frame the relay would hand downstream); null when
+   * none arrived. `firstFrameMs` alone cannot separate "the peer answered with
+   * quota metadata and went quiet" from "the peer was still working": the
+   * first measures any frame, this one measures the turn's own start (#4191).
+   */
+  firstResponseMs: number | null;
   /** Milliseconds from send to this failure; null when the failure predates the send. */
   elapsedMs: number | null;
   /** Liveness pings the exchange sent while waiting for the first response event. */
@@ -271,7 +279,8 @@ export function codexWsFailureDetail(stage: CodexWsFailureStage): string {
   return ` [cause=${classifyCodexWsFailure(stage)} request=${stage.requestBytes}B`
     + ` sent=${stage.sent ? "yes" : "no"} frames=${stage.upstreamFrames}`
     + ` control=${stage.controlFrames} relayed=${stage.relayedEvents}`
-    + ` first-frame=${duration(stage.firstFrameMs)} elapsed=${duration(stage.elapsedMs)}`
+    + ` first-frame=${duration(stage.firstFrameMs)} first-response=${duration(stage.firstResponseMs)}`
+    + ` elapsed=${duration(stage.elapsedMs)}`
     + ` pings=${stage.pings} pongs=${stage.pongs}]`;
 }
 

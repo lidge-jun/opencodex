@@ -112,6 +112,12 @@ export interface ProviderRegistryEntry {
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   alias?: string;
   authKind: ProviderAuthKind;
+  /**
+   * Credential preset for an auxiliary service rather than a model transport.
+   * Its adapter is an identity marker and is intentionally absent from the
+   * routable adapter registry.
+   */
+  credentialOnly?: boolean;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;

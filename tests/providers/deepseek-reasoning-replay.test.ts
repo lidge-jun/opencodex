@@ -93,6 +93,73 @@ describe("sanitizeReasoningInputContent scoping", () => {
   });
 });
 
+describe("sanitizeReasoningInputContent plaintext-required replay (#5421)", () => {
+  // DeepSeek's thinking mode rejects a reasoning input item that carries no
+  // `reasoning_text` content ("The reasoning_text in the thinking mode must be
+  // passed back to the API"). Native-minted history reaches a resumed routed
+  // subagent as `content: []` plus a ciphertext blob the provider cannot read,
+  // so the stripped item must be backfilled before it reaches the wire.
+  test("an emptied item replays its summary text as reasoning_text", () => {
+    const item = {
+      type: "reasoning",
+      id: "rs_1",
+      summary: [{ type: "summary_text", text: "planned the call" }],
+      content: [],
+      encrypted_content: "native-blob",
+    };
+    const out = inputOf(sanitizeReasoningInputContent(
+      { model: "m", input: [item] },
+      { preserveRawReasoningContent: true, stripEncryptedContent: true, requirePlaintextReasoning: true },
+    ));
+    expect("encrypted_content" in out[0]!).toBe(false);
+    expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: "planned the call" }]);
+    expect(out[0]!.summary).toEqual([{ type: "summary_text", text: "planned the call" }]);
+  });
+
+  test("an emptied item with no usable summary gets a minimal placeholder", () => {
+    const item = {
+      type: "reasoning",
+      summary: [],
+      content: [],
+      encrypted_content: "native-blob",
+    };
+    const out = inputOf(sanitizeReasoningInputContent(
+      { model: "m", input: [item] },
+      { preserveRawReasoningContent: true, stripEncryptedContent: true, requirePlaintextReasoning: true },
+    ));
+    expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: " " }]);
+  });
+
+  test("an untouched empty item is backfilled too", () => {
+    // No encrypted_content, no status, a present summary — the sanitizer returns
+    // this item unchanged today, which already satisfies DeepSeek's 400 shape.
+    const item = { type: "reasoning", summary: [], content: [] };
+    const out = inputOf(sanitizeReasoningInputContent(
+      { model: "m", input: [item] },
+      { requirePlaintextReasoning: true },
+    ));
+    expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: " " }]);
+  });
+
+  test("an item that already carries reasoning_text is left alone", () => {
+    const item = reasoningItem({
+      content: [{ type: "reasoning_text", text: "real chain" }],
+      encrypted_content: "native-blob",
+    });
+    const out = inputOf(sanitizeReasoningInputContent(
+      { model: "m", input: [item] },
+      { preserveRawReasoningContent: true, stripEncryptedContent: true, requirePlaintextReasoning: true },
+    ));
+    expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: "real chain" }]);
+  });
+
+  test("the flag is off by default: emptied content stays empty for other providers", () => {
+    const item = { type: "reasoning", summary: [], content: [] };
+    const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [item] }));
+    expect(out[0]!.content).toEqual([]);
+  });
+});
+
 describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
   function buildBody(provider: OcxProviderConfig): Record<string, unknown> {
     const built = createResponsesPassthroughAdapter(provider).buildRequest({
@@ -141,7 +208,41 @@ describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
     expect(body.input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1", output: "rain" });
   });
 
-  test("a route switch never forwards foreign opaque reasoning or invents plaintext", () => {
+  test("a resumed subagent's emptied reasoning item reaches DeepSeek with reasoning_text (#5421)", () => {
+    // The reported failing shape: a resumed routed subagent replays native-minted
+    // reasoning items whose text lived only in `encrypted_content` — emptied to
+    // `content: []` on sanitize, which DeepSeek's thinking mode rejects with
+    // `The reasoning_text in the thinking mode must be passed back to the API`.
+    const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
+    enrichProviderFromRegistry("deepseek", provider);
+    const built = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "deepseek-v4-flash",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "deepseek-v4-flash",
+        input: [
+          {
+            type: "reasoning",
+            id: "rs_1",
+            summary: [{ type: "summary_text", text: "decided to check the weather" }],
+            content: [],
+            encrypted_content: "native-chatgpt-ciphertext",
+          },
+          { type: "function_call", id: "fc_1", call_id: "call_1", name: "get_weather", arguments: "{\"city\":\"Seoul\"}" },
+          { type: "function_call_output", call_id: "call_1", output: "rain" },
+        ],
+      },
+    } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], { headers: new Headers() });
+    const body = JSON.parse(String(built.body)) as { input: Record<string, unknown>[] };
+    expect(body.input[0]).not.toHaveProperty("encrypted_content");
+    expect(body.input[0]!.content).toEqual([{ type: "reasoning_text", text: "decided to check the weather" }]);
+    expect(body.input[1]).toMatchObject({ type: "function_call", call_id: "call_1" });
+    expect(body.input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1" });
+  });
+
+  test("a route switch never forwards foreign opaque reasoning and keeps a minimal reasoning_text", () => {
     const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
     enrichProviderFromRegistry("deepseek", provider);
     const built = createResponsesPassthroughAdapter(provider).buildRequest({
@@ -158,7 +259,7 @@ describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
     } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], { headers: new Headers() });
     const body = JSON.parse(String(built.body)) as { input: Record<string, unknown>[] };
     expect(body.input[0]).not.toHaveProperty("encrypted_content");
-    expect(JSON.stringify(body.input[0])).not.toContain("reasoning_text");
+    expect(body.input[0]!.content).toEqual([{ type: "reasoning_text", text: " " }]);
     expect(JSON.stringify(body.input[0])).not.toContain("foreign-provider-blob");
   });
 

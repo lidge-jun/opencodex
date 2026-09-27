@@ -1,6 +1,6 @@
 ---
 title: CLI Agents, Routing, and Integrations
-description: Multi-agent, combo, observability, access, integration, system, and config commands.
+description: Multi-agent, combo, observability, access, protocol path, integration, system, and config commands.
 ---
 
 These commands control agent policy and routing, inspect the live proxy, and connect supported clients to opencodex.
@@ -202,6 +202,39 @@ Manage OpenCodex admission API keys and inspect external endpoints and models. `
 ```bash
 ocx access key create deployment
 ```
+
+### `ocx api <protocols|explain|policy> ...`
+
+Inspect and set how requests travel between the client APIs and provider wires. See
+[Protocol paths](/guides/protocol-paths/) for the vocabulary.
+
+| Command | Route | Changes state |
+| --- | --- | --- |
+| `ocx api protocols [--provider <name>] [--json]` | `GET /api/protocols` | No |
+| `ocx api explain --model <id> --inbound <responses\|chat\|messages> [--feature <key>]... [--json]` | `POST /api/protocols/plan` | No |
+| `ocx api policy [--json]` | `GET /api/protocols` | No |
+| `ocx api policy [--messages <on\|off>] [--unrepresentable <legacy\|reject>] [--rollout <switch>=<on\|off>]... [--json]` | `PATCH /api/protocols/settings` | Yes |
+
+- `protocols` prints the contract version, whether each client API is served and why, the
+  unrepresentable policy, every rollout switch, and the policy revision. `--provider` adds the
+  upstream wire that provider receives, who decided it, and the models on another wire.
+- `explain` previews the path a model would take from one client API. `--feature` is repeatable
+  and accepts a comma-separated list; `ocx api protocols --json` lists the known feature keys. The
+  preview is computed from configuration: nothing is sent upstream, no combo rotation advances, and
+  the input is not logged.
+- `policy` without a setting flag only reads. With one it sends a single change to the running
+  proxy, which validates it, saves the configuration, and answers with the new policy.
+  `--messages off` also turns the Claude integration off, as the dashboard toggle does. Switch
+  names and combinations are validated by the proxy; for example
+  `--rollout managedMessagesNativeOAuth=on` is refused unless `managedMessagesNative` is
+  already on or turned on in the same command.
+
+```bash
+ocx api explain --model combo/main --inbound chat --feature request.seed,request.tools
+ocx api policy --rollout shadowPlan=on
+```
+
+Usage errors exit 2 before any request is sent. `--json` prints the management API body as is.
 
 ## Client integrations
 

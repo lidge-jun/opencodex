@@ -5,7 +5,7 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    ffi::c_void,
+    ffi::{c_char, c_void, CStr},
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex, OnceLock,
@@ -19,6 +19,8 @@ extern "C" {
     fn ocx_native_tray_hide();
     fn ocx_native_tray_visible() -> i32;
     fn ocx_native_tray_update(bytes: *const u8, count: isize);
+    fn ocx_native_tray_update_dot(item: *mut c_void, show: i32);
+    fn ocx_native_tray_set_switch_handler(callback: extern "C" fn(*const c_char, *const c_char));
 }
 
 static HOST: OnceLock<AppHandle> = OnceLock::new();
@@ -69,10 +71,32 @@ fn present(app: &AppHandle, toggle: bool) -> tauri::Result<()> {
         if let Some(item) = tray.ns_status_item() {
             let pointer = (&*item as *const _ as *mut c_void).cast();
             unsafe {
+                ocx_native_tray_set_switch_handler(native_switch);
                 ocx_native_tray_show(pointer, i32::from(toggle), native_event);
             }
         }
     })
+}
+
+pub fn set_update_dot(app: &AppHandle, _show: bool) {
+    let app = app.clone();
+    let target = app.clone();
+    let _ = target.run_on_main_thread(move || {
+        let Some(tray) = app.tray_by_id("main") else {
+            return;
+        };
+        let pending = app
+            .try_state::<crate::tray::TrayState>()
+            .is_some_and(|state| state.update_pending.load(Ordering::Acquire));
+        let _ = tray.with_inner_tray_icon(move |inner| {
+            if let Some(item) = inner.ns_status_item() {
+                let pointer = (&*item as *const _ as *mut c_void).cast();
+                unsafe {
+                    ocx_native_tray_update_dot(pointer, i32::from(pending));
+                }
+            }
+        });
+    });
 }
 
 pub fn hide(app: &AppHandle) {
@@ -93,12 +117,16 @@ extern "C" fn native_event(event: i32) {
                 return;
             };
             if let Some(main) = app.get_webview_window("main") {
+                let session = app
+                    .state::<crate::updater::DesktopUpdateState>()
+                    .session_id()
+                    .to_string();
                 let path = if event == 4 {
-                    "/?desktop=open#/usage/companion"
+                    format!("/?desktop=open&desktop_session={session}#/usage/companion")
                 } else {
-                    "/?desktop=open#/usage"
+                    format!("/?desktop=open&desktop_session={session}#/usage")
                 };
-                if let Ok(url) = proxy.endpoint().url(path).parse() {
+                if let Ok(url) = proxy.endpoint().url(&path).parse() {
                     let _ = main.navigate(url);
                     window::show(&main);
                 }
@@ -106,6 +134,107 @@ extern "C" fn native_event(event: i32) {
         }
         _ => {}
     }
+}
+
+/// A provider name or account id the panel sends back. Anything empty, oversized, not UTF-8 or
+/// carrying control characters did not come from a snapshot this host published.
+fn switch_argument(value: Option<&CStr>) -> Option<String> {
+    let value = value?.to_str().ok()?;
+    (!value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control))
+        .then(|| value.to_owned())
+}
+
+/// The panel's "Use" action. Swift calls this on the main thread with borrowed C strings; they are
+/// copied before returning and the switch runs on the async runtime.
+extern "C" fn native_switch(provider: *const c_char, account: *const c_char) {
+    // SAFETY: Swift passes NUL-terminated buffers that stay valid for the duration of this call.
+    let borrow =
+        |pointer: *const c_char| (!pointer.is_null()).then(|| unsafe { CStr::from_ptr(pointer) });
+    let (Some(provider), Some(account)) = (
+        switch_argument(borrow(provider)),
+        switch_argument(borrow(account)),
+    ) else {
+        return;
+    };
+    let Some(app) = HOST.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        match switch_account(&app, &provider, &account).await {
+            Ok(()) => start_refresh(&app),
+            Err(message) => report_switch_failure(&app, message),
+        }
+    });
+}
+
+/// Resolve the route from the host's own provider sources, never from the panel, then send the
+/// single-use, body-bound switch request.
+async fn switch_account(
+    app: &AppHandle,
+    provider: &str,
+    account: &str,
+) -> Result<(), &'static str> {
+    let proxy = app
+        .state::<AppState>()
+        .proxy()
+        .ok_or("The local runtime is not connected.")?;
+    let config = proxy
+        .get("/api/config")
+        .await
+        .map_err(|_| "Could not read the provider list to switch accounts.")?;
+    let sources = crate::native_tray_accounts::sources(&config)
+        .ok_or("Could not read the provider list to switch accounts.")?;
+    let source = sources
+        .iter()
+        .find(|source| source.name == provider)
+        .ok_or("That provider is no longer configured.")?;
+    let (kind, body) = crate::native_tray_accounts::switch_request(source, account)
+        .ok_or("This provider has no account to switch.")?;
+    proxy
+        .put_account_switch(kind, &body)
+        .await
+        .map(|_| ())
+        .map_err(|error| switch_error_message(&error))
+}
+
+fn switch_error_message(error: &crate::proxy::ProxyError) -> &'static str {
+    use crate::proxy::ProxyError;
+    match error {
+        ProxyError::Http(status) if status.as_u16() == 409 => {
+            "The runtime refused that account right now (paused or still validating)."
+        }
+        ProxyError::Http(status) if matches!(status.as_u16(), 400 | 404) => {
+            "That account no longer exists. Refresh and try again."
+        }
+        ProxyError::Unauthorized | ProxyError::Foreign => {
+            "The runtime did not accept the desktop app's switch request."
+        }
+        ProxyError::Unreachable => "The local runtime is not reachable.",
+        _ => "The account could not be switched. Open the dashboard to try again.",
+    }
+}
+
+/// Show a failed switch in the open panel without waiting for the next refresh.
+fn report_switch_failure(app: &AppHandle, message: &str) {
+    let Some(state) = app.try_state::<NativeTrayState>() else {
+        return;
+    };
+    let (binding, mut snapshot) = state
+        .cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    snapshot["refreshing"] = json!(false);
+    snapshot["errors"] = json!([message]);
+    // Tells the panel this publish answers its switch, so the row spinner stops even when the
+    // failure arrives immediately.
+    snapshot["switchFailed"] = json!(true);
+    publish(
+        app,
+        state.generation.load(Ordering::Acquire),
+        binding,
+        snapshot,
+    );
 }
 
 fn stop_refresh(app: &AppHandle) {
@@ -205,9 +334,19 @@ fn publish(app: &AppHandle, generation: u64, binding: Option<RuntimeBinding>, sn
             *state
                 .cache
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = (binding, snapshot);
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = (binding, cached(snapshot));
         }
     });
+}
+
+/// The cached copy every later refresh starts from. `switchFailed` answers one switch, so it is
+/// delivered once and never cached: carried forward, it would settle the next switch's spinner on
+/// that switch's first loading publish.
+fn cached(mut snapshot: Value) -> Value {
+    if let Some(fields) = snapshot.as_object_mut() {
+        fields.remove("switchFailed");
+    }
+    snapshot
 }
 
 fn display_payload(snapshot: Value) -> Option<(Value, Vec<u8>)> {
@@ -235,6 +374,32 @@ mod tests {
     use super::*;
     use crate::proxy::RuntimeIdentity;
     #[test]
+    fn switch_arguments_are_bounded_copies_of_what_the_panel_can_send() {
+        let arg = |bytes: &[u8]| switch_argument(Some(CStr::from_bytes_with_nul(bytes).unwrap()));
+        assert_eq!(arg(b"anthropic\0").as_deref(), Some("anthropic"));
+        assert_eq!(arg("계정-1\0".as_bytes()).as_deref(), Some("계정-1"));
+        assert_eq!(switch_argument(None), None);
+        assert_eq!(arg(b"\0"), None);
+        assert_eq!(arg(b"line\nbreak\0"), None);
+        assert_eq!(arg(b"\xff\xfe\0"), None);
+        let long = [vec![b'a'; 257], vec![0]].concat();
+        assert_eq!(arg(&long), None);
+        let limit = [vec![b'a'; 256], vec![0]].concat();
+        assert_eq!(arg(&limit).map(|value| value.len()), Some(256));
+    }
+    #[test]
+    fn switch_failures_name_the_cause_without_server_text() {
+        use crate::proxy::ProxyError;
+        use reqwest::StatusCode;
+        assert!(switch_error_message(&ProxyError::Http(StatusCode::CONFLICT)).contains("paused"));
+        assert!(
+            switch_error_message(&ProxyError::Http(StatusCode::NOT_FOUND))
+                .contains("no longer exists")
+        );
+        assert!(switch_error_message(&ProxyError::Unauthorized).contains("did not accept"));
+        assert!(switch_error_message(&ProxyError::Unreachable).contains("not reachable"));
+    }
+    #[test]
     fn closed_refresh_or_rebound_runtime_cannot_overwrite_visible_state() {
         let a = RuntimeBinding {
             identity: RuntimeIdentity {
@@ -251,6 +416,11 @@ mod tests {
     }
     #[test]
     fn refresh_failure_preserves_age_and_clears_busy_state() {
+        let reported = json!({"refreshing":false,"errors":["refused"],"switchFailed":true});
+        let kept = cached(reported);
+        assert!(kept.get("switchFailed").is_none());
+        assert_eq!(kept["errors"], json!(["refused"]));
+
         let before = json!({"updatedAt":12,"refreshing":true,"today":{"totalTokens":30}});
         let after = failed(before, "Unavailable");
         assert_eq!(after["updatedAt"], 12);

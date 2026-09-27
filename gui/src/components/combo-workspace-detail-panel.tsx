@@ -17,10 +17,13 @@ import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput } from "./combo-workspace-utils";
+import { JevStatsPanel } from "./jev-stats-panel";
+import { ComboProtocolPlan } from "./protocols/ComboProtocolPlan";
 
-type DetailTab = "config" | "about";
+type DetailTab = "config" | "stats" | "about";
 
 const DETAIL_TABS: readonly DetailTab[] = ["config", "about"];
+const JEV_DETAIL_TABS: readonly DetailTab[] = ["config", "stats", "about"];
 
 /*
  * A combo id can be any string, so it cannot go in a DOM id without escaping. These
@@ -31,6 +34,7 @@ const detailTabDomId = (tab: DetailTab) => `cws-detail-tab-${tab}`;
 const detailPanelDomId = (tab: DetailTab) => `cws-detail-panel-${tab}`;
 
 export function DetailPanel({
+  apiBase,
   baseline,
   isCreate = false,
   otherIds,
@@ -45,6 +49,8 @@ export function DetailPanel({
   onSave,
   onDirtyChange,
 }: {
+  /** Management API target; without it the candidate path preview is not offered and JEV stats use same-origin paths. */
+  apiBase?: string;
   baseline: ComboItem;
   isCreate?: boolean;
   /** Ids of all OTHER combos — rename collisions validate against these. */
@@ -63,6 +69,7 @@ export function DetailPanel({
 }) {
   const t = useT();
   const [tab, setTab] = useState<DetailTab>("config");
+  const detailTabs = !isCreate && baseline.strategy === "jev" ? JEV_DETAIL_TABS : DETAIL_TABS;
 
   /*
    * Arrow/Home/End traversal, matching ProviderDetails. Without it the tablist is two
@@ -70,17 +77,17 @@ export function DetailPanel({
    */
   const onDetailTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next: number;
-    if (event.key === "ArrowRight") next = (index + 1) % DETAIL_TABS.length;
-    else if (event.key === "ArrowLeft") next = (index - 1 + DETAIL_TABS.length) % DETAIL_TABS.length;
+    if (event.key === "ArrowRight") next = (index + 1) % detailTabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + detailTabs.length) % detailTabs.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = DETAIL_TABS.length - 1;
+    else if (event.key === "End") next = detailTabs.length - 1;
     else return;
     event.preventDefault();
-    setTab(DETAIL_TABS[next]!);
+    setTab(detailTabs[next]!);
     event.currentTarget.parentElement
       ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]
       ?.focus();
-  }, []);
+  }, [detailTabs]);
   const [draft, setDraft] = useState<ComboItem>(baseline);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -216,7 +223,7 @@ export function DetailPanel({
         `radiogroup` shape used by `.models-segmented` would misdescribe the widget.
       */}
       <div className="segmented combos-workspace-segmented" role="tablist" aria-label={t("cws.tabsLabel")}>
-        {DETAIL_TABS.map((candidate, index) => (
+        {detailTabs.map((candidate, index) => (
           <button
             key={candidate}
             type="button"
@@ -230,13 +237,17 @@ export function DetailPanel({
             onClick={() => setTab(candidate)}
             onKeyDown={event => onDetailTabKeyDown(event, index)}
           >
-            {t(candidate === "config" ? "cws.tab.config" : "cws.tab.about")}
+            {t(candidate === "config"
+              ? "cws.tab.config"
+              : candidate === "stats"
+                ? "cws.jev.stats.tab"
+                : "cws.tab.about")}
           </button>
         ))}
       </div>
 
       {/*
-        Both panels stay in the tree, the inactive one `hidden`. A single panel whose id
+        All panels stay in the tree, the inactive ones `hidden`. A single panel whose id
         followed the active tab left the OTHER tab's `aria-controls` pointing at an
         element that did not exist — a broken IDREF on whichever tab was not selected.
       */}
@@ -377,7 +388,20 @@ export function DetailPanel({
             />
           </div>
         )}
+        {!isCreate && apiBase !== undefined && <ComboProtocolPlan apiBase={apiBase} model={baseline.model} dirty={dirty} />}
       </div>
+
+      {!isCreate && baseline.strategy === "jev" && (
+        <div
+          className="combos-workspace-tab-content"
+          role="tabpanel"
+          id={detailPanelDomId("stats")}
+          aria-labelledby={detailTabDomId("stats")}
+          hidden={tab !== "stats"}
+        >
+          <JevStatsPanel apiBase={apiBase ?? ""} comboId={baseline.id} active={tab === "stats"} />
+        </div>
+      )}
 
       {/*
         `tabIndex={0}` because this panel holds no focusable descendants: without it,

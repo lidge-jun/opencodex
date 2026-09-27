@@ -12,7 +12,7 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
 import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, installedServiceListenPort, resolvedProxyEnv } from "./health";
-import { SERVICE_MANAGED_ENV, LABEL, cliEntry, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, LABEL, cliEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
 
@@ -26,20 +26,18 @@ function plistString(value: string): string {
 }
 
 /**
- * Render the launchd plist. Mirrors `buildUnit`: when `deps.launcher` names a stable `ocx`
- * executable, the job execs that launcher instead of the package-local Bun + CLI pair, so a
- * version-manager upgrade (mise, asdf, nvm) that replaces the package directory is picked up
- * on the next launchd start instead of leaving the old build serving (#3464 — the macOS
- * counterpart of #2898). Discovery belongs to `installLaunchd()`; the default here is the
- * legacy pair so callers and tests stay hermetic.
+ * Render the launchd plist from the package-local Bun + CLI pair. Unlike systemd, launchd
+ * must not hand the service token and proxy environment to a PATH-discovered launcher: a
+ * mutable version-manager shim could be replaced after installation and run with those
+ * secrets. The legacy `launcher` dependency remains accepted for API compatibility but is
+ * ignored.
  */
 export function buildPlist(
   proxyEnv: { name: string; value: string }[] = resolvedProxyEnv(),
-  deps: { launcher?: string | null; runtime?: DurableBunRuntime } = {},
+  deps: { runtime?: DurableBunRuntime; launcher?: string | null } = {},
 ): string {
   const runtime = deps.runtime ?? durableBunRuntime();
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
-  const launcher = deps.launcher ?? null;
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
@@ -52,16 +50,8 @@ export function buildPlist(
     // (src/cli/index.ts preserveRouting). Only the wrapper writes this second marker, so
     // the dashboard-stop refusal below can tell a real launchd job from an ordinary child.
     `    <key>${SERVICE_MANAGED_ENV}</key><string>1</string>`,
-    ...(launcher ? [] : [
-      `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
-      `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
-    ]),
-    // A launcher resolves the current package's bundled Bun after every upgrade. Preserve
-    // only a proof-bound shell override; baking a package-local path here would recreate
-    // the version-manager pin that launcher mode exists to remove (same rule as buildUnit).
-    launcher && runtime.source === "override"
-      ? `    <key>${runtime.overrideEnv}</key><string>${plistString(runtime.path)}</string>`
-      : null,
+    `    <key>${BUN_RUNTIME_SOURCE_ENV}</key><string>${bunRuntimeSource}</string>`,
+    `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
     codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome)}</string>` : null,
@@ -69,7 +59,7 @@ export function buildPlist(
     ...proxyEnv.map(({ name, value }) =>
       `    <key>${name}</key><string>${plistString(value)}</string>`),
   ].filter((line): line is string => Boolean(line)).join("\n");
-  const command = launchdServiceCommand(launcher, runtime);
+  const command = launchdServiceCommand(runtime);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -135,18 +125,16 @@ export function reusePreviousPlistPathVariable(previous: string, rendered: strin
 }
 
 /**
- * The exec line {@link buildPlist} bakes, for the launcher and runtime a single install
- * already resolved. Shared so `installLaunchd` can verify the live job against the exact
- * string it just wrote instead of re-deriving it from install state that has not been
- * written yet (a fresh install has no state, so `expectedLaunchdCommand` would hand back
- * the Bun + CLI pair and call a correctly loaded launcher job stale).
+ * The exec line {@link buildPlist} bakes, for the runtime a single install already
+ * resolved. Shared so `installLaunchd` can verify the live job against the exact string it
+ * just wrote instead of re-deriving it from install state that has not been written yet
+ * (a fresh install has no state, so `expectedLaunchdCommand` falls back to the package
+ * pair — identical here, but only by accident of the fresh state).
  */
 function launchdServiceCommand(
-  launcher: string | null,
   runtime: DurableBunRuntime = durableBunRuntime(),
   port: number = resolveServiceListenPort(),
 ): string {
-  if (launcher) return buildServiceLauncherShellCommand(launcher, port);
   const { bun, cli } = cliEntry(runtime);
   return buildServiceShellCommand(bun, cli, port);
 }
@@ -496,13 +484,14 @@ export function installLaunchd(deps: {
   // The previous definition, kept for rollback. An eviction whose bootstrap fails used to
   // end with the new plist on disk, nothing in launchd, and nothing listening.
   const previousPlist = wasInstalled ? readTextOrNull(p) : null;
-  // Resolve the launcher ONCE and hand the same value to the plist and to install state,
-  // so the staleness diagnostic judges exactly what launchd runs.
-  const launcher = stableLauncherEntry();
+  // Keep launchd bound to the package paths selected by this trusted invocation. A PATH
+  // launcher can be replaced later and would inherit the service token and proxy
+  // environment.
   // The command THIS install bakes, not the one install state remembers: on a fresh
   // install there is no state yet, and after a lost state file `expectedLaunchdCommand`
-  // falls back to the Bun + CLI pair and would call a correct launcher job stale (#3464).
-  const expectedCommand = launchdServiceCommand(launcher);
+  // falls back to the Bun + CLI pair, which happens to be the same answer only by accident
+  // of the empty state.
+  const expectedCommand = launchdServiceCommand();
   const uid = process.getuid?.() ?? 0;
   const guiDomain = launchdGuiDomain();
   const guiTarget = `${guiDomain}/${LABEL}`;
@@ -523,7 +512,7 @@ export function installLaunchd(deps: {
     );
   }
 
-  let rendered = buildPlist(resolvedProxyEnv(), { launcher });
+  let rendered = buildPlist(resolvedProxyEnv());
   if (previousPlist !== null && previousPlist !== rendered && verdict.state === "loaded-current") {
     // The live job runs exactly the exec line this install baked, so the definition on disk
     // IS the one launchd is running: keep the PATH it already carries instead of replacing
@@ -553,7 +542,7 @@ export function installLaunchd(deps: {
     try { chmodSync(p, 0o600); } catch { /* best-effort */ }
     // Install state is refreshed because it is what `expectedLaunchdCommand` reads, and
     // a repair that leaves it stale re-creates the false "OLDER plist" report.
-    writeServiceInstallState("scheduler", launcher);
+    writeServiceInstallState("scheduler");
     console.log("ℹ️  service is already loaded from the current plist; nothing to do.");
     // The ONLY `reloaded: false` exit: the process launchd was running when this command
     // started is still running, same pid. `ocx service restart` turns that into a kickstart.
@@ -652,7 +641,7 @@ export function installLaunchd(deps: {
       `⚠️  launchctl accepted the bootstrap but the job state could not be verified — ${
         verdict.detail ?? "launchctl could not be asked"}. Check: launchctl print ${guiTarget}`,
     );
-    writeServiceInstallState("scheduler", launcher);
+    writeServiceInstallState("scheduler");
     return { reloaded: true };
   }
 
@@ -691,7 +680,7 @@ export function installLaunchd(deps: {
       + `then re-run '${wasInstalled ? "ocx service repair" : "ocx service install"}'.`,
     );
   }
-  writeServiceInstallState("scheduler", launcher);
+  writeServiceInstallState("scheduler");
   // The rollback copy has done its job: the new definition is verified loaded. Leaving it
   // behind makes the NEXT repair's backup ambiguous (which failure did it come from?) and
   // `uninstall` the only thing that ever cleaned it up.
@@ -730,7 +719,7 @@ export function restartLaunchdJob(deps: {
   const run = deps.launchctl ?? runLaunchctl;
   const target = `${launchdGuiDomain()}/${LABEL}`;
   const expectedCommand = deps.expectedCommand
-    ?? (() => launchdServiceCommand(stableLauncherEntry()));
+    ?? (() => launchdServiceCommand());
   const kicked = run(["kickstart", "-k", target]);
   const verdict = (deps.probe ?? probeLaunchdLoadState)({ expectedCommand });
   if (!kicked.ok || verdict.state === "not-loaded" || verdict.state === "loaded-stale") {

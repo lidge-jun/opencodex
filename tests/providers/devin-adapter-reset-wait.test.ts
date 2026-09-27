@@ -1,15 +1,18 @@
 /**
- * The Devin adapter pins maxWaitMs to 0 when it calls the stated-reset retry
- * helper, so an admitted HTTP turn never holds shared capacity while sleeping
- * out a provider 429. The helper-level tests cannot see this: they pass their
- * own maxWaitMs. This file drives the real adapter end to end and asserts the
- * refusal surfaces without a replay — a mock.module spy would also work, but a
+ * The Devin adapter resolves its stated-reset wait allowance from
+ * OPENCODEX_DEVIN_STATED_RESET_WAIT_MS and defaults to 0, so an admitted HTTP
+ * turn never holds shared capacity while sleeping out a provider 429 unless
+ * the operator explicitly opts in. The helper-level tests cannot see this:
+ * they pass their own maxWaitMs. This file drives the real adapter end to end
+ * and asserts the default refusal surfaces without a replay while an opted-in
+ * allowance waits and replays — a mock.module spy would also work, but a
  * module mock registered at file scope leaks into every sibling test file Bun
  * loads into the same process.
  *
- * Removing the adapter's maxWaitMs: 0 fails both tests fast: the helper would
- * sleep out the stated window, the 5s abort signal cancels that sleep, and the
- * turn ends in the 499 client-closed error instead of the provider's refusal.
+ * Dropping the adapter's wait resolution for the default case fails these
+ * tests fast: the helper would sleep out the stated window, the 5s abort
+ * signal cancels that sleep, and the turn ends in the 499 client-closed error
+ * instead of the provider's refusal.
  */
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -29,6 +32,7 @@ const CHAT_URL = `${host}/exa.api_server_pb.ApiServerService/GetChatMessage`;
 let home = "";
 const previousHome = process.env.OPENCODEX_HOME;
 const previousFetch = globalThis.fetch;
+const previousWait = process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS;
 let chatPosts = 0;
 let seenUrls: string[] = [];
 
@@ -70,7 +74,7 @@ function stubTransport(message: string): void {
   }) as typeof fetch;
 }
 
-async function runOneTurn(): Promise<AdapterEvent[]> {
+async function runOneTurn(abortSignal: AbortSignal = AbortSignal.timeout(5_000), comboAttempt = false): Promise<AdapterEvent[]> {
   const adapter = createDevinAdapter({ adapter: "devin", apiKey, baseUrl: host });
   const events: AdapterEvent[] = [];
   await adapter.runTurn!({
@@ -81,7 +85,8 @@ async function runOneTurn(): Promise<AdapterEvent[]> {
   }, {
     headers: new Headers(),
     translatorBudget: createTranslatorBudget(),
-    abortSignal: AbortSignal.timeout(5_000),
+    abortSignal,
+    comboAttempt,
   }, event => { events.push(event); });
   return events;
 }
@@ -90,6 +95,7 @@ describe("devin adapter stated-reset wait", () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ocx-devin-reset-wait-"));
     process.env.OPENCODEX_HOME = home;
+    delete process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS;
     seed();
   });
   afterEach(() => {
@@ -97,6 +103,8 @@ describe("devin adapter stated-reset wait", () => {
     setCachedCatalogForTests(null);
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
+    if (previousWait === undefined) delete process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS;
+    else process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS = previousWait;
     removeTreeWithRetry(home);
   });
 
@@ -123,6 +131,43 @@ describe("devin adapter stated-reset wait", () => {
     const error = events.find((event): event is Extract<AdapterEvent, { type: "error" }> => event.type === "error");
     expect(error?.message).toContain("retry after ~1s");
     expect(chatPosts).toBe(1);
+  });
+
+  test("an opted-in wait allowance sleeps out the stated reset and replays", async () => {
+    process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS = "3000";
+    stubTransport("Your limit will reset in 1 second");
+
+    const events = await runOneTurn(AbortSignal.timeout(30_000));
+
+    expect(chatPosts).toBe(3);
+    expect(events.some(event => event.type === "heartbeat" && event.preflightReady === true)).toBe(true);
+    const error = events.find((event): event is Extract<AdapterEvent, { type: "error" }> => event.type === "error");
+    expect(error).toMatchObject({ status: 429, errorType: "rate_limit_error", code: "resource_exhausted" });
+    expect(error?.message).toContain("retry after ~1s");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("a combo child returns the stated reset immediately despite a standalone wait allowance", async () => {
+    process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS = "3000";
+    stubTransport("Your limit will reset in 1 second");
+
+    const events = await runOneTurn(AbortSignal.timeout(500), true);
+
+    expect(events.find(event => event.type === "error")).toMatchObject({
+      type: "error", status: 429, errorType: "rate_limit_error", code: "resource_exhausted",
+    });
+    expect(events.some(event => event.type === "heartbeat" && event.preflightReady === true)).toBe(false);
+    expect(chatPosts).toBe(1);
+  });
+
+  test("an invalid wait allowance fails closed without replay", async () => {
+    process.env.OPENCODEX_DEVIN_STATED_RESET_WAIT_MS = "not-a-duration";
+    stubTransport("Your limit will reset in 1 second");
+
+    const events = await runOneTurn();
+
+    expect(chatPosts).toBe(1);
+    expect(events.some(event => event.type === "error")).toBe(true);
   });
 
   test("an alias-bound tenant refusal keeps one send and content-free reset timing", async () => {

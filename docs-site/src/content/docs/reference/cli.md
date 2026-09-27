@@ -37,8 +37,8 @@ without printing its bearer or private key. See [Remote Workspace](/guides/remot
   authentication, credential pools, quota, custom models, visibility, selected models, and context
   caps.
 - [Agents, routing, and integrations](/reference/cli/agents/) — multi-agent controls, combos,
-  observability, admission keys, client integrations, runtime settings, validated configuration, and
-  read-only Codex CLI update inspection.
+  observability, admission keys, protocol paths, client integrations, runtime settings, validated
+  configuration, and read-only Codex CLI update inspection.
 
 ## Headless behavior
 

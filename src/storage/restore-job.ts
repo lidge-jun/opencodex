@@ -9,6 +9,7 @@
  * `storage_mutation_busy` (409) instead of queueing.
  */
 import { resolveCodexHomeDir } from "../codex/home";
+import { spawnWorker } from "../lib/worker-embed";
 import { restoreTrashEntry, type RestoreResult, type RestoreTestHooks } from "./cleanup";
 import {
   resetStorageMutationCoordinatorForTests,
@@ -167,7 +168,7 @@ function runInWorker(opts: {
     let settled = false;
     let worker: Worker;
     try {
-      worker = new Worker(new URL("./restore-worker.ts", import.meta.url).href);
+      worker = spawnWorker(new URL("./restore-worker.ts", import.meta.url).href, "restore-worker");
       reservation.bind(worker);
     } catch (error) {
       reservation.release();

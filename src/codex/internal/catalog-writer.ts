@@ -5,6 +5,7 @@ import {
   AtomicWriteResidualTempError,
   AtomicWriteSecretResidualError,
   atomicWriteFile,
+  getConfigDir,
   resolveWriteTarget,
   type AtomicWriteIO,
 } from "../../config";
@@ -17,6 +18,7 @@ import {
   hardenSecretPath,
 } from "../../lib/windows-secret-acl";
 import { resetCodexAppServerCatalogStateCache } from "../app-server-processes";
+import { recordOwnedConfigPath } from "../../lib/config-ownership";
 
 export interface PreparedCatalogFileWrite {
   readonly path: string;
@@ -169,6 +171,7 @@ function scrubAndRemoveUnpublishedTemp(
 function publishCatalogBackup(
   prepared: PreparedCatalogFileWrite,
   suppliedIo?: CatalogBackupWriteIO,
+  onPublished?: () => void,
 ): CatalogBackupPublication {
   const io = suppliedIo ?? defaultBackupWriteIO(prepared.path);
   const target = io.resolveTarget(prepared.path);
@@ -187,7 +190,12 @@ function publishCatalogBackup(
     throw error;
   }
 
-  removePublishedTemp(tempPath, io);
+  try {
+    // Publication already succeeded; cleanup failure must not erase that ownership.
+    onPublished?.();
+  } finally {
+    removePublishedTemp(tempPath, io);
+  }
   return "written";
 }
 
@@ -211,7 +219,10 @@ export function publishHashedCodexCatalogBackup(
   io?: CatalogBackupWriteIO,
 ): CatalogBackupPublication {
   assertCatalogWritePermit(permit, owningCodexHome);
-  return publishCatalogBackup(prepared, io);
+  return publishCatalogBackup(prepared, io, io ? undefined : () => {
+    // Called only after a new no-replace publication, never for preserved winners.
+    recordOwnedConfigPath(getConfigDir(), prepared.path);
+  });
 }
 
 /** Atomically publish the legacy immutable backup without clobbering. */

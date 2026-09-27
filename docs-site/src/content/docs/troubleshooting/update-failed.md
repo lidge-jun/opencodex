@@ -58,12 +58,14 @@ They sit next to the package in npm's global folder, usually
 | Folder | Created by | What to do |
 |---|---|---|
 | `.opencodex-<random>` | npm itself, while replacing the package during a direct `npm install -g` | Delete it once no OpenCodex process runs from it |
-| `.ocx-staging-<timestamp>` | the OpenCodex updater's staging install | Updaters after 2.64.0 remove their own on a later update; one without an `.ocx-update-owner.json` file inside came from an older updater and can be deleted by hand once nothing runs from it |
+| `.ocx-staging-<timestamp>` | the OpenCodex updater's staging install | A marked stage older than half an hour is reported but left in place; delete it by hand once no OpenCodex process runs from it. A stage without an `.ocx-update-owner.json` marker has an unverified origin — an interrupted update can leave one, but so can anything else that chose the prefix — so confirm it belongs to OpenCodex before deleting it |
 | `.ocx-backup-<timestamp>` | the updater's copy of the previous version | Leave it; it is removed automatically after the new version starts healthy, and restored if it does not |
 
-None of these folders blocks the next update: every attempt stages into a new folder. The updater
-only deletes a staging folder that carries its own marker file and is older than half an hour, and
-it never follows links. It lists anything else it finds, so you can decide.
+None of these folders blocks the next update by pathname: every attempt stages into a new folder.
+Retained staging contents still consume disk space, though, and enough leftovers can make a later
+staging attempt fail with `ENOSPC`. The updater leaves leftover staging folders in place during
+later updates; it reports marked stages older than half an hour after checking their recorded
+ownership marker. Delete a leftover only after confirming that no OpenCodex process runs from it.
 
 If a folder will not delete, a process is still running from it. Signing out or restarting Windows
 releases the lock.

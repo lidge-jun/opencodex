@@ -15,7 +15,7 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Un autre `--port` explicite est également refusé avec le même `OPENCODEX_HOME`, car les modes d’observation et de plafond écrivent tous deux dans le même journal de dépenses. Utilisez un `OPENCODEX_HOME` distinct pour une instance sœur indépendante ; `port: 0` ne sépare que l’attribution du port, pas l’état. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
+Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Un autre `--port` explicite est également refusé avec le même `OPENCODEX_HOME`, car les modes d’observation et de plafond écrivent tous deux dans le même journal de dépenses. Utilisez un `OPENCODEX_HOME` distinct pour une instance sœur indépendante ; `port: 0` ne sépare que l’attribution du port, pas l’état. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`). Une instance sœur démarrée à côté d’un proxy déjà actif ne fait ni l’un ni l’autre, même lorsqu’elle est arrêtée avec `ocx stop` ou par un signal : elle ne sert que les requêtes directes sur son propre port, et Codex, Grok et Claude restent dirigés vers le proxy qui tournait déjà.
 
 `--socks5` (par défaut `127.0.0.1:10808`) enregistre l’URL SOCKS5 dans `config.proxy` et achemine
 les requêtes HTTP(S) sortantes dans un véritable tunnel SOCKS5. `--socks5-off` supprime uniquement
@@ -200,6 +200,31 @@ aux contrôles de santé en cas de contention CPU : la zone de notification affi
 Après la mise à jour, exécutez `ocx service repair` pour migrer cette priorité enregistrée et redémarrer le service.
 Une confirmation UAC peut être nécessaire. Une priorité déjà normale ou haute ne déclenche pas, à elle seule, de réenregistrement.
 
+Sous Linux, l’unité systemd invoque le premier fichier `ocx` ordinaire et exécutable trouvé dans `PATH`
+au moment de l’installation, plutôt que les chemins Bun et CLI à l’intérieur de l’arborescence du paquet
+installé. Les gestionnaires de versions comme **mise** et **asdf** installent dans un répertoire
+versionné et suppriment l’ancien lors d’une mise à niveau ; leur shim stable permet à l’unité de
+continuer à résoudre. Les checkouts de source sans lanceur `ocx` conservent la forme directe Bun + CLI.
+Un `OPENCODEX_BUN_PATH` de confiance choisi avant le démarrage de Bun est conservé à travers le shim ;
+les chemins du Bun embarqué dans le paquet sont redécouverts après les mises à niveau.
+
+Sous macOS, launchd utilise à la place les chemins Bun et CLI propres au paquet choisis lors de
+l’installation ou de la réparation. Cela empêche un shim PATH mutable de recevoir le jeton d’API du
+service et l’environnement de proxy configuré lors d’un redémarrage ultérieur. Après la mise à niveau
+d’une installation gérée par un gestionnaire de versions, exécutez `ocx service repair` pour
+actualiser ces chemins avant de redémarrer le service.
+
+Les définitions installées avant ce changement portent encore les anciens chemins versionnés et ne
+peuvent pas migrer d’elles-mêmes — une fois l’ancien exécutable supprimé, aucun code opencodex ne
+s’exécute pour le réparer. Exécutez `ocx service repair` une fois après la mise à niveau. Les
+démarrages du service Linux suivent alors le lanceur ; la réparation macOS écrit les nouveaux chemins
+du paquet dans la définition launchd. Un proxy déjà en cours d’exécution n’est pas remplacé par une
+mise à niveau externe : lorsque la CLI installée est plus récente que le proxy en cours, exécutez
+`ocx service restart` pour que la nouvelle version serve. Sous macOS, `repair` ne suffit pas dans ce
+cas : la définition n’a pas changé, et une réparation qui ne change rien ne recharge rien. Si c’est le
+proxy qui est plus récent, vérifiez l’installation de la CLI et le `PATH` comme décrit sous
+[`ocx status`](#ocx-status---json).
+
 | Sous-commande | Action |
 | --- | --- |
 | aucune | Installe et démarre le service s’il est absent ; sinon, applique `repair` au service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
@@ -304,6 +329,7 @@ Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif,
 
 Installe et contrôle l’icône OpenCodex dans la zone de notification Windows. Elle démarre à l’ouverture de session et fournit des commandes du proxy accessibles en un clic. `start` et `stop` contrôlent uniquement l’icône ; utilisez son menu pour contrôler le proxy. `--no-start` s’applique à `install` et installe l’icône sans la lancer immédiatement.
 Obsolète : l’application OpenCodex fournit la zone de notification sous Windows, macOS et Linux ; `ocx tray` reste disponible pour les installations sans l’application de bureau.
+Lorsqu'une version plus récente du paquet est connue, la zone de notification ajoute un point bleu à l'icône en ligne, d'avertissement ou hors ligne et affiche **Update available**. Elle vérifie le badge mis en cache localement environ une fois par minute ; les résultats obsolètes ou indisponibles retirent le point. L'élément ouvre le tableau de bord, où vous pouvez lancer la mise à jour du paquet. L'installation automatique est désactivée.
 
 ## Tableau de bord
 
@@ -318,6 +344,8 @@ Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http:/
 ### `ocx update [--tag latest|preview]`
 
 Lorsque OpenCodex est installé avec mise, cette commande échoue avant d'arrêter le proxy ou de modifier les fichiers du paquet et affiche `mise upgrade <outil>` avec l'alias mise local vérifié. La vérification des mises à jour reste disponible et signale une gestion externe. Des métadonnées de propriété mise illisibles ou incohérentes bloquent aussi toute modification sans deviner le nom de l'outil, et `--tag preview` ne change jamais la sélection configurée dans mise.
+
+Sous Linux, un service en arrière-plan dont le lanceur enregistré est le lanceur de paquet de mise (`<tool>/latest/node_modules/.bin/ocx`, et non un shim mise) suit `mise upgrade` tout seul : une dizaine de secondes après la stabilisation de la nouvelle version, il draine les requêtes actives et redémarre sur celle-ci, et il se rétablit de la même façon si mise supprime plus tard la version qu'il exécutait. Sous macOS, pour un service installé via un shim mise et pour un proxy au premier plan, redémarrez-le vous-même après la mise à jour (sous macOS, d'abord `ocx service repair`).
 
 Met à jour opencodex depuis npm. Les installations stables utilisent `@latest` ; les préversions restent sur `@preview`, sauf si vous indiquez `--tag latest|preview`. La commande détecte un dépôt de sources et vous invite alors à exécuter `git pull && bun install`. Elle ne fait rien si la version la plus récente correspondant à cette balise est déjà installée.
 

@@ -88,7 +88,7 @@ export async function startManagementServerFixture(
   // response deadline. Keep the production startup and the ordinary 5s test limit.
   // Neither management endpoint exercises native Codex synchronization or the
   // developer's installed service. Keep those external owners outside this fixture.
-  const runtime = spyOn(codexRuntime, "resolveCodexRuntime").mockReturnValue({
+  const runtime = spyOn(codexRuntime, "getCodexRuntimeSnapshot").mockReturnValue({
     runtime: { command: "codex-fixture", version: null, source: "fallback" }, failures: [],
   });
   try {

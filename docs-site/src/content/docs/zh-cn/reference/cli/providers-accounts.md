@@ -84,23 +84,34 @@ ocx login anthropic
 通过正在运行的代理列出并切换提供方账号和 API 密钥池。随附的帮助输出如下：
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
+Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
+pause <provider> <id|alias|main>  Hold an account out of automatic selection.
+resume <provider> <id|alias|main>  Return a paused account to automatic selection.
+pause-exhausted <provider>  Pause every account whose quota is spent.
+clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
+priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
 grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
+import <provider> --format <format> (--file <path>|--stdin)  Import credentials from a named external format.
+import-orca --source <dir> --registry <file> [--apply]  Preview or apply imports from Orca-managed Codex homes.
+main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App login the pool calls 'main'.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
-所有子命令都要求代理正在运行；CLI 会自动解析其记录的运行时端口。成功操作的
+除 `import-orca` 外，子命令都要求代理正在运行，CLI 会自动解析其记录的运行时端口；`import-orca` 的预览完全在本地进行，而 `import-orca --apply` 要求代理已停止。成功操作的
 退出码为 0。无效用法、未知的提供方或账号/密钥 id、无法访问的代理，或 API 失败
 都会以 1 退出。凭据字段会严格按管理 API 返回的样子显示（包括其屏蔽格式）；
 原始 API 密钥和 OAuth token 永远不会返回。显示上的便利字段都像仪表盘一样在
@@ -146,7 +157,9 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
+
+`auto` 会清除手动选择，让 Pool 重新按自身策略分配工作。Codex 账号可以用 `ocx account alias` 设置的别名代替 id 来指定；`priority`、`pause`、`resume`、`clear-cooldown`、`remove` 和 `alias` 同样如此。对于 Codex 账号，`auto`、`main` 和 `__main__` 为保留字（不区分大小写），不能设为别名。OAuth 账号和 API 密钥的显示名称仍遵循原有规则。
 
 选择已有的 Codex 账号、OAuth 账号或 API key。对 `openai` 而言，`main` 选择 Codex App 登录。
 Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生效，包括已有可见任务的请求；代理重启或 affinity eviction 后，任务也可能变为未绑定，但进行中的请求保留已捕获账号。此选择只控制 Pool routing；Direct mode 继续使用 caller-owned/native main credential。基于用量的主动切换、401/403 重新认证、429/retry-after cooldown、排除，以及输出前 429/402 故障恢复之后仍可能选择其他合格 Pool 账号。这些恢复路径在关闭基于用量的切换时仍然有效。账号变化后 OpenCodex 会重放对话上下文，但 provider prompt cache 可能需要重新预热。未知 provider 或 id 返回退出码 1。`--json` 返回：
@@ -181,7 +194,7 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 读取或设置某个 Codex pool 账号的选择顺序：**数值越大越先使用**，默认值为 `0`，范围是 `-100` 到
 `100`。只有 `openai` 的 Codex pool 有选择顺序，其他 provider 返回退出码 1。`main` 指向 Codex Desktop
@@ -209,7 +222,7 @@ generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean,
 `--json` 时 stdout 保持可解析，已完成的登录状态会包含 `catalogRefreshPending: true`，且不会
 打印人类可读警告。
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
 这个受保护的非交互式删除需要 `--yes`。删除前，它会验证 id 是否存在；缺失的 id
 会以 1 退出，而不会发送 DELETE。主 Codex App 登录不能被移除，因此会拒绝
@@ -322,7 +335,7 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 | `provider <name> <on\|off>` | `--json` | 一次写入中启用或禁用某个提供方的全部模型。 |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 读取或替换提供方模型允许列表。`--clear` 会移除允许列表，使所有模型都可提供。 |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | 读取或设置上下文窗口上限，可全局设置或按提供方设置。`value <tokens> --set-all` 还会把值重新应用到所有已路由提供方（等同于仪表板开关）；不加它则只改变默认值。`provider ... on --value <tokens>` 仅为该提供方设置独立上限（`--value` 仅可用于 `on`）。 |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-5.6-luna`；0.144.x 及更早客户端使用的 `gpt-5.4-mini` 可通过显式 `sourceModels` 覆盖恢复）。 |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-6-luna`, `gpt-5.6-luna`；0.144.x 及更早客户端使用的 `gpt-5.4-mini` 可通过显式 `sourceModels` 覆盖恢复）。 |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

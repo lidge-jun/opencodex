@@ -94,23 +94,34 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
+Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
+pause <provider> <id|alias|main>  Hold an account out of automatic selection.
+resume <provider> <id|alias|main>  Return a paused account to automatic selection.
+pause-exhausted <provider>  Pause every account whose quota is spent.
+clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
+priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
 grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
+import <provider> --format <format> (--file <path>|--stdin)  Import credentials from a named external format.
+import-orca --source <dir> --registry <file> [--apply]  Preview or apply imports from Orca-managed Codex homes.
+main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App login the pool calls 'main'.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
-Все подкоманды требуют запущенного прокси; CLI сам определяет записанный runtime-port. Успешные
+Подкоманды требуют запущенного прокси и сами определяют записанный runtime-port, кроме `import-orca`: предпросмотр работает только локально, а `import-orca --apply` требует остановленного прокси. Успешные
 операции завершаются с кодом 0. Некорректное использование, неизвестный провайдер, account/key id,
 недостижимый прокси или ошибка API приводят к коду 1. Поля credential'ов выводятся ровно в том
 виде, как их возвращает management API (включая его masking); сырые API-key'и и OAuth-token'ы
@@ -162,7 +173,9 @@ credential'а, это состояние тоже печатается, но к�
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
+
+`auto` снимает ручной выбор, и пул снова распределяет работу по своей стратегии. Аккаунт Codex можно указать по псевдониму, заданному через `ocx account alias`, вместо id; это относится и к `priority`, `pause`, `resume`, `clear-cooldown`, `remove` и `alias`. Для аккаунтов Codex значения `auto`, `main` и `__main__` зарезервированы независимо от регистра и не могут назначаться как псевдонимы. Для отображаемых имён аккаунтов OAuth и API-ключей действуют прежние правила.
 
 Выбирает существующий аккаунт Codex, OAuth-аккаунт или API-ключ. Для `openai` значение `main`
 выбирает вход Codex App. Выбор Codex Pool очищает process-local affinity и применяется к следующему запросу, включая запрос существующей видимой задачи; после перезапуска прокси или affinity eviction задача также может стать непривязанной, а выполняющиеся запросы сохраняют захваченный аккаунт. Это управляет только Pool routing; Direct mode продолжает использовать caller-owned/native main credential. Проактивное переключение по использованию, повторная аутентификация 401/403, cooldown 429/retry-after, исключение и восстановление после отказа 429/402 до вывода могут позже выбрать другой подходящий Pool-аккаунт. Эти пути восстановления остаются активными, когда переключение по использованию выключено. После смены аккаунта OpenCodex воспроизводит контекст разговора, но prompt cache провайдера может потребовать прогрева. Неизвестные провайдеры
@@ -200,7 +213,7 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Читает или задаёт порядок выбора одного аккаунта пула Codex: **больше — используется раньше**,
 значение по умолчанию `0`, диапазон от `-100` до `100`. Порядок есть только у пула Codex `openai`,
@@ -234,7 +247,7 @@ provider-specific формы команды используйте `ocx account 
 остаётся пригодным для парсинга, а завершённый login-state содержит
 `catalogRefreshPending: true` без human-readable предупреждения.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
 Это защищённое неинтерактивное удаление требует `--yes`. Перед удалением оно проверяет, что id
 существует; если id отсутствует, команда завершается кодом 1 и DELETE даже не отправляется.
@@ -354,7 +367,7 @@ management API и требуют, чтобы прокси уже работал 
 | `provider <name> <on\|off>` | `--json` | Включить или выключить сразу все модели одного провайдера одним действием. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Прочитать или заменить allowlist моделей провайдера. `--clear` удаляет allowlist, и тогда доступны все модели. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Прочитать или задать context-window cap глобально либо по провайдерам. `value <tokens> --set-all` также переустанавливает значение для всех маршрутизируемых провайдеров (как переключатель дашборда); без него меняется только значение по умолчанию. `provider ... on --value <tokens>` задаёт отдельный cap только для этого провайдера (`--value` допустим только с `on`). |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-5.6-luna`; `gpt-5.4-mini` для клиентов до 0.144.x включительно можно восстановить явным переопределением `sourceModels`). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-6-luna`, `gpt-5.6-luna`; `gpt-5.4-mini` для клиентов до 0.144.x включительно можно восстановить явным переопределением `sourceModels`). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

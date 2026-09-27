@@ -16,7 +16,7 @@ runs helper features around provider requests.
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Remove optional client-facing hints from canonical Codex Responses passthrough: the two `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` response headers, `response.metadata` events whose metadata type is `safety_buffering`, and top-level `safety_buffering` fields. Other headers, response data, policy refusals and failures are preserved. This does not disable provider safety enforcement or upstream buffering. Native `codex.response.metadata.headers` WebSocket metadata and `/responses/compact` are outside this filter. |
-| `stallTimeoutSec?` | `number` | `300` | Seconds without meaningful upstream progress (Responses and native Chat). Minimum 1. |
+| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the watchdog everywhere. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
 | `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Device-code flows never open a browser either way. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
@@ -40,7 +40,7 @@ runs helper features around provider requests.
 | `codexProviderDisplayName?` | `string` | `"OpenCodex Proxy"` | Label Codex shows for the injected `opencodex` provider, written as its `name` field in `config.toml` and the reference profile. Presentation only: routing resolves through the provider id `opencodex`, so a rename never moves `model_provider = "opencodex"` or the `[model_providers.opencodex]` header and cannot orphan threads already tagged with that id. Codex refuses to load a provider with no name, so there is no way to omit the field — choose a neutral label instead. A blank, over-128-character, or control-character value is ignored and the default label is written. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefix is `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
@@ -116,7 +116,7 @@ history; review the full-scope warning in the lifecycle reference before running
 
 ### Native Chat timeouts and completion
 
-Native Chat also uses `stallTimeoutSec` while waiting for upstream output. Nonempty text, reasoning, refusal, tool updates, and finish frames renew the allowance; keepalive comments, role-only frames, and usage alone do not. Waiting for a slow client to read pauses the allowance. A stall produces `upstream_stall_timeout`: an error frame for streaming clients, or HTTP 502 for non-streaming clients. Cancellation before a terminal result returns a cancellation error instead of a successful partial answer. Buffered Chat results accept both LF and CRLF SSE framing, including multiline data.
+Native Chat also uses `stallTimeoutSec` while waiting for upstream output, with the same local-vs-public default: an unset budget is disabled for a local upstream and 300 s for a public one, and `0` disables it everywhere. Nonempty text, reasoning, refusal, tool updates, and finish frames renew the allowance; keepalive comments, role-only frames, and usage alone do not. Waiting for a slow client to read pauses the allowance. A stall produces `upstream_stall_timeout`: an error frame for streaming clients, or HTTP 502 for non-streaming clients. Cancellation before a terminal result returns a cancellation error instead of a successful partial answer. Buffered Chat results accept both LF and CRLF SSE framing, including multiline data.
 
 ## Codex quota network diagnostics
 
@@ -500,9 +500,62 @@ shell-injection surface. Delivery is attempted once; there is no retry.
 
 Read recent detections with `ocx provider resets` or `GET /api/quota-resets`.
 
+## API surfaces (`apiSurfaces`)
+
+Responses (`/v1/responses`) and Chat Completions (`/v1/chat/completions`) are always served.
+The Messages API (`/v1/messages` and `/v1/messages/count_tokens`) can be closed on its own.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiSurfaces.messages.enabled?` | `boolean` | inherit | `true` serves the Messages API, `false` refuses both routes with 403. Unset inherits `claudeCode.enabled`, so a Claude integration that is off also closes Messages. |
+
+A present but malformed value (a non-object `apiSurfaces` or `messages`, or a non-boolean
+`enabled`) closes the Messages API rather than falling back to the inherited value. Both
+routes always agree.
+
+The dashboard's API page shows one card per API with the setting's source (explicit,
+inherited from Claude settings, or invalid) and a toggle for Messages. Turning Messages off
+there writes `apiSurfaces.messages.enabled: false` **and** `claudeCode.enabled: false` in the
+same save, so a proxy version older than this setting, which only reads `claudeCode.enabled`,
+keeps the endpoint closed after a downgrade. Turning it on writes only
+`apiSurfaces.messages.enabled: true`; an older version then still follows
+`claudeCode.enabled` and may keep Messages closed, which is the safe direction.
+
+## Protocol paths (`protocols`)
+
+How a Chat Completions or Messages request may reach a provider. Every value defaults to the
+behavior before these keys existed; see [Protocol paths](/guides/protocol-paths/) for the delivery
+modes, the preview, and the per-request trace.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
+| `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the unpooled `anthropic` OAuth provider on `api.anthropic.com`. Read as off unless `managedMessagesNative` is on; a pooled account set stays on the bridge. |
+| `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
+| `protocols.rollout.shadowPlan?` | `boolean` | `false` | Compare each Chat or Messages request's path with the plan a preview predicts and mark a disagreement as `planMismatch` on its log row. Sends nothing extra. |
+
+A malformed `protocols` block is dropped to these defaults, because each default is the
+conservative one. Only `true` turns a switch on.
+
+```json
+{
+  "protocols": {
+    "unrepresentable": "legacy",
+    "rollout": { "shadowPlan": true }
+  }
+}
+```
+
+`ocx api policy` shows the resolved values and changes them through the running proxy
+(`--unrepresentable <legacy|reject>`, `--rollout <switch>=<on|off>`, `--messages <on|off>` for
+[`apiSurfaces`](#api-surfaces-apisurfaces)). It writes only when a setting flag is given. The
+dashboard's API page and `PATCH /api/protocols/settings` use the same validation.
+
 ## Claude Code (`claudeCode`)
 
-These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page.
+These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page. Whether the Messages API is served at all is decided by [`apiSurfaces`](#api-surfaces-apisurfaces), which inherits `claudeCode.enabled` while unset.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -606,18 +659,19 @@ Codex uses small helper models for tasks such as titles and commit messages. Ena
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
 replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
 uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
-extending them, so include `gpt-5.6-luna` in the list when current clients should still be
-intercepted.
+extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x clients) in the
+list when current clients should still be intercepted.
 Interception is model-based: every request whose bare model id matches `sourceModels` can be
-redirected, including normal `request_kind: "turn"` requests. `x-codex-turn-metadata` does not exempt
-a matching request.
+redirected, including normal `request_kind: "turn"` requests. Requests marked as spawned children by
+`x-openai-subagent: collab_spawn` or `subagent_kind: "thread_spawn"` in the `x-codex-turn-metadata`
+JSON header are exempt, so an explicitly spawned sub-agent keeps its model.
 
 ```json
 {
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.6-luna"]
+    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna"]
   }
 }
 ```
@@ -654,6 +708,8 @@ usable key; it never falls back to another paid upstream. The endpoint must impl
 Images API paths and response shape expected by Codex.
 
 ### `webSearchSidecar` (`OcxWebSearchSidecarConfig`)
+
+RunTurn adapters also use the configured search sidecar. Search turns preserve progress heartbeats. A first-event OAuth 429 rotates the account on the initial request and on each post-search answer request. The replay keeps the search tool and the gathered results. With `emptyCompletionRetry: true`, an empty answer before the search limit receives one retry using the current conversation and gathered results. The existing tool-free recovery after the search limit remains available independently of that setting. Upstream failures stop the turn instead of triggering another search.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |

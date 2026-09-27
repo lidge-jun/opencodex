@@ -14,15 +14,15 @@ aracının bulunması gerekir. Yayınlanan npm paketi kullanıcılar için kendi
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run setup:hooks  # post-merge kur ve eski yönetilen pre-push kancasını kaldır
+bun run setup:hooks  # eski yönetilen pre-push ve post-merge kancalarını kaldır
 bun run dev:proxy    # geliştirme modunda proxy API
 bun run dev:gui      # kontrol paneli geliştirme sunucusu (başka bir terminalde)
 bun run typecheck    # bun x tsc --noEmit
 bun run test        # tam test paketi (varsayılan)
 ```
 
-`bun run setup:hooks` yalnızca `post-merge` kancasını kurar ve değiştirilmemiş eski yönetilen
-`pre-push` kancasını kaldırır; özel kancaları korur. `pre-push` kancası artık zorunlu değildir.
+`bun run setup:hooks` değiştirilmemiş eski yönetilen `pre-push` ve `post-merge`
+kancalarını kaldırır; özel kancaları korur. `pre-push` kancası artık zorunlu değildir.
 `bun run prepush` isteğe bağlı bir manuel denetim olarak kullanılabilir.
 
 `bun run dev`, `bun run dev:proxy` komutunun bir takma adıdır. Kontrol paneli

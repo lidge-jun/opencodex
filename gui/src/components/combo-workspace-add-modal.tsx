@@ -23,6 +23,7 @@ export function AddComboModal({
   providerQuotaStates,
   providers,
   models,
+  initialDraft,
   onClose,
   onSubmit,
 }: {
@@ -32,12 +33,15 @@ export function AddComboModal({
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
+  initialDraft?: ComboItem;
   onClose: () => void;
   onSubmit: (item: ComboItem) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [draft, setDraft] = useState<ComboItem>(() => emptyDraft());
+  const [draft, setDraft] = useState<ComboItem>(() => initialDraft
+    ? { ...initialDraft, targets: initialDraft.targets.map(target => ({ ...target })) }
+    : emptyDraft());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const effortMap = useMemo(() => {
@@ -52,6 +56,11 @@ export function AddComboModal({
     [draft.targets, effortMap, draft.reasoningEffortMode],
   );
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
+  const isJevPreset = initialDraft?.strategy === "jev";
+  const jevCollision = isJevPreset && (
+    existingIds.includes(draft.id.trim())
+    || (!!draft.alias?.trim() && existingAliases.includes(draft.alias.trim()))
+  );
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -97,6 +106,7 @@ export function AddComboModal({
     <dialog
       ref={dialogRef}
       className="modal-overlay"
+      data-combo-preset={isJevPreset ? "jev-auto" : undefined}
       aria-labelledby="cwi-add-title"
       onCancel={handleCancel}
     >
@@ -108,8 +118,11 @@ export function AddComboModal({
             <IconX width={16} height={16} />
           </button>
         </div>
-        <p className="muted" style={{ marginTop: 0, maxWidth: "62ch", overflowWrap: "anywhere" }}>{t("cws.addSubtitle")}</p>
+        <p className="muted" style={{ marginTop: 0, maxWidth: "62ch", overflowWrap: "anywhere" }}>
+          {isJevPreset ? t("cws.jev.setupHint") : t("cws.addSubtitle")}
+        </p>
         {error && <Notice tone="err">{error}</Notice>}
+        {jevCollision && <Notice tone="err">{t("cws.jev.exists")}</Notice>}
         {allTargetsExhausted && (
           <div className="cwi-quota-banner" role="status" aria-live="polite">
             {t("cws.quota.allExhausted")}
@@ -227,7 +240,7 @@ export function AddComboModal({
         </div>
         <div className="cwi-modal-actions">
           <button type="button" className="btn btn-ghost" onClick={requestClose} disabled={busy}>{t("common.cancel")}</button>
-          <button type="button" className="btn btn-primary" onClick={() => { void submit(); }} disabled={busy || allTargetsExhausted}>
+          <button type="button" className="btn btn-primary" onClick={() => { void submit(); }} disabled={busy || allTargetsExhausted || jevCollision}>
             {busy ? t("common.saving") : t("cws.create")}
           </button>
         </div>

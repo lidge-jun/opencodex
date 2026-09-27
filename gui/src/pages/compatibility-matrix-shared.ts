@@ -2,6 +2,8 @@
  * CL-05 Compatibility Matrix - shared types and matrix helpers.
  * Read-only DTO shapes mirror GET /api/lab/* responses.
  */
+import { protocolFromLabProtocol, type Protocol } from "../../../src/protocols/contract";
+import type { ProtocolPairFilter } from "../protocol-deep-links";
 
 export const EVIDENCE_LAYERS = [
   "protocol_conformance",
@@ -374,4 +376,53 @@ export function artifactDigestsForVerdict(verdict: VerdictDto): string[] {
   for (const digest of verdict.scenarioManifestDigests) if (digest) digests.add(digest);
   if (verdict.claimSourceDigest) digests.add(verdict.claimSourceDigest);
   return [...digests];
+}
+
+/**
+ * The public protocol pair a Lab subject was observed on. Lab records its own identities
+ * (`openai-chat`, `anthropic-messages`, ...); `protocolFromLabProtocol` maps them, and an
+ * identity with no public protocol stays undefined rather than guessed.
+ */
+export type SubjectProtocolPair = { inbound?: Protocol; upstream?: Protocol };
+
+export function subjectProtocolPair(detail: SubjectDetailDto | null | undefined): SubjectProtocolPair {
+  if (!detail) return {};
+  const inbound = typeof detail.inboundProtocol === "string" ? protocolFromLabProtocol(detail.inboundProtocol) : undefined;
+  const upstream = typeof detail.upstreamProtocol === "string" ? protocolFromLabProtocol(detail.upstreamProtocol) : undefined;
+  return { ...(inbound ? { inbound } : {}), ...(upstream ? { upstream } : {}) };
+}
+
+export function protocolFilterActive(filter: ProtocolPairFilter): boolean {
+  return filter.inbound !== "" || filter.upstream !== "";
+}
+
+export function subjectMatchesProtocolPair(pair: SubjectProtocolPair | undefined, filter: ProtocolPairFilter): boolean {
+  if (!protocolFilterActive(filter)) return true;
+  if (!pair) return false;
+  if (filter.inbound && pair.inbound !== filter.inbound) return false;
+  if (filter.upstream && pair.upstream !== filter.upstream) return false;
+  return true;
+}
+
+/** Rows whose subject was observed on the filtered pair. A subject whose pair is unknown is left out. */
+export function filterMatrixRowsByProtocol(
+  rows: MatrixRow[],
+  pairs: ReadonlyMap<string, SubjectProtocolPair>,
+  filter: ProtocolPairFilter,
+): MatrixRow[] {
+  if (!protocolFilterActive(filter)) return rows;
+  return rows.filter(row => subjectMatchesProtocolPair(pairs.get(row.subjectId), filter));
+}
+
+/**
+ * What the matrix can say about a filtered pair. No matching Lab row means nobody has
+ * checked it yet: `unverified`, never a failure or an unsupported verdict. Only a verdict
+ * the Lab actually recorded says more, and the matrix shows that verdict itself.
+ */
+export type ProtocolPairEvidence = "any" | "evidence" | "unverified";
+
+export function protocolPairEvidence(filter: ProtocolPairFilter, matchingRows: readonly MatrixRow[]): ProtocolPairEvidence {
+  if (!protocolFilterActive(filter)) return "any";
+  const recorded = matchingRows.some(row => EVIDENCE_LAYERS.some(layer => row.byLayer[layer].length > 0));
+  return recorded ? "evidence" : "unverified";
 }

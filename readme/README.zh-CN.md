@@ -333,6 +333,17 @@ codex -m "ollama/llama3" "重构这个 function"
 包含 `/` 的提供商模型 id 会把内部斜杠别名为 `-` 再对外暴露；带全部斜杠的原始形式
 仍然可用。详情：[模型路由文档](https://opencodex.me/zh-cn/guides/model-routing/)。
 
+### JEV Auto 路由（可选）
+
+TypeSafe JEV 可以为显式启用的 Combo 选择首个模型和推理强度，普通模型选择器和所有直连路由保持不变。
+通过 `ocx login jev`、**Providers → TypeSafe JEV → Add API key** 或 `TYPESAFE_API_KEY`/`JEV_API_KEY`
+添加凭据。然后打开 **Models → Combos → Create JEV Auto**，选择允许的目标模型，并为每个目标勾选
+JEV 可选的推理强度。未改动强度设置的目标允许该模型当前声明的全部强度。
+
+JEV 只用于 `jev-auto`，且每次逻辑模型调用只咨询一次。缺少凭据、网络失败或决策无效时，会回退
+（fail-open）到当前第一个可用目标；调用方取消仍会取消请求。自动化测试使用模拟的 TypeSafe 端点，
+不验证真实的 JEV 账户。
+
 ## 提供商与适配器
 
 <!-- sponsors:main-first-mention -->

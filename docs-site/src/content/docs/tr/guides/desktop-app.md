@@ -60,7 +60,13 @@ Kullanılamayan veya açıkça ölçülmemiş kullanım, ölçülmüş sıfır y
 
 ## Güncellemeler
 
-Hemen denetlemek için tepsi menüsünden **Check for Updates…** seçeneğini seçin. Sürüm derlemeleri başlangıçtan sonra ve altı saatte bir otomatik denetim de yapar. Güncellemeler kurulmadan önce projenin imzalı güncelleyici açık anahtarıyla doğrulanır. macOS'ta uygulama içi güncellemeler `OpenCodex-<version>-macos.app.tar.gz` dosyasını indirir; DMG ilk kurulum içindir. Sürüm bildirimi yalnızca güncelleyici anahtar sırrı yapılandırıldığında üretilir ve o durumda dört platformun tamamının imzalanmasını gerektirir.
+Hemen denetlemek için tepsi menüsünden **Check for Updates…** seçeneğini seçin. Sürüm derlemeleri başlangıçtan sonra ve altı saatte bir otomatik denetim de yapar.
+
+Tauri güncelleyici yeni bir uygulama sürümü bulduğunda macOS menü çubuğu simgesinde veya bir tray host varsa Windows/Linux tepsi simgesinde mavi nokta görünür. Gömülü pano aynı masaüstü güncelleme sinyalini gösterir. Aynı proxy’ye bağlı normal tarayıcı, proxy paketinin güncelleme durumunu görmeye devam eder. Kabuk yaklaşık üç dakika bildirim yapmazsa gömülü rozet yeniden bağlanana kadar unknown olur. Nokta kullanılabilirliği bildirir; kurulum açık bir kullanıcı eylemi gerektirir.
+
+Masaüstü uygulamasında, kontrol panelindeki güncelleme düğmesi uygulamanın güncelleme sayfasını açar. Buradan yeniden denetleyebilir, bekleyen imzalı güncellemeyi kurabilir veya kontrol paneline dönebilirsiniz. Aynı kurulum işlemi tepsi menüsünde de bulunur. Kurulum başarısız olursa güncelleme yeniden denenmek üzere tutulur. Bu sayfa, masaüstünde tepsi simgesi bulunmayan Linux'ta da çalışır. Normal bir tarayıcı kontrol paneli bunun yerine o proxy'nin paket kurulumunu yönetir.
+
+Güncellemeler kurulmadan önce projenin imzalı güncelleyici açık anahtarıyla doğrulanır. macOS'ta uygulama içi güncellemeler `OpenCodex-<version>-macos.app.tar.gz` dosyasını indirir; DMG ilk kurulum içindir. Sürüm bildirimi yalnızca güncelleyici anahtar sırrı yapılandırıldığında üretilir ve o durumda dört platformun tamamının imzalanmasını gerektirir.
 
 ## Widget
 

@@ -38,8 +38,8 @@ import {
   resolveFirstUsableOpenAiSidecar,
   type ExactOpenAiSidecarAccount,
 } from "../providers/openai-sidecar";
-import { routeModel } from "../router";
-import { handleAlphaSearchSidecarFallback } from "../web-search/alpha-search";
+import { previewRouteModel, routeModel } from "../router";
+import { handleAlphaSearchSidecarFallback, handleDevinAlphaSearch } from "../web-search/alpha-search";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
@@ -65,11 +65,6 @@ export async function handleSearch(
   turnAdmissionLease?: AdmissionLease,
   admission?: DataPlaneAdmission,
 ): Promise<Response> {
-  try { validateForwardAdmissionCredential(req.headers, config); }
-  catch (err) {
-    if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
-    throw err;
-  }
   let body: unknown;
   try {
     body = await readJsonRequestBody(req, undefined, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
@@ -78,6 +73,32 @@ export async function handleSearch(
   }
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
+
+  if (typeof model === "string" && model.trim()) {
+    try {
+      const route = previewRouteModel(config, model);
+      if (route.providerName === "devin" || route.staticPolicy.model.adapter === "devin") {
+        const denial = admissionScopeDenial(config, admission, model, route);
+        if (denial) return denial;
+        logCtx.provider = route.providerName;
+        logCtx.routeDecision = route.routeDecision;
+        return handleDevinAlphaSearch(
+          body,
+          "devin",
+          config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS,
+          req.signal,
+        );
+      }
+    } catch {
+      // Preview is advisory: existing relay/fallback still owns unsupported or unroutable models.
+    }
+  }
+
+  try { validateForwardAdmissionCredential(req.headers, config); }
+  catch (err) {
+    if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
+    throw err;
+  }
 
   let exactAccount: ExactOpenAiSidecarAccount | undefined;
   let relayBody = body;

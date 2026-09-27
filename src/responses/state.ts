@@ -6,16 +6,23 @@ import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
 import {
   deleteResponseSpill,
+  inspectResponseSpillDir,
   noteStubSwapForTest,
   readResponseSpill,
   recoverOrphanedResponseSpills,
+  resetPeriodicSpillSweepCursorForTests,
   responseSpillDirectory,
   responseSpillPayloadCap,
+  sweepOrphanedResponseSpillsPeriodically,
+  type ResponseSpillDirInspection,
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
+import { collectReferencedSpillFileNames, snapshotReferencedSpillFileNames } from "./state/spill-inspect";
+import { selectSnapshotEntries } from "./state/snapshot-select";
 import { clientCarriedPrefixLength, providerIssuedIdentity } from "./state/replay-fingerprint";
 export type { ResponseStateTempRecoveryResult, ResponseStateTempRecoveryOptions } from "./state/temp-recovery";
+export type { ResponseSpillDirInspection } from "./spill-store";
 export { recoverStaleResponseStateTemps, reclaimAbandonedResponseStateTemps, inspectAbandonedResponseStateTemps, sweepAbandonedResponseStateTemps } from "./state/temp-recovery";
 import { recoverStaleResponseStateTemps } from "./state/temp-recovery";
 export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
@@ -36,6 +43,7 @@ import {
   spillQueueAccounting,
   spillQueueHoldsResidentCandidate,
   spillQueuePendingBytes,
+  spillQueueReferencedSpillFileNames,
   spillQueueResidentCandidates,
   spillQueueSupersededSpillFor,
 } from "./state/spill-queue";
@@ -144,6 +152,7 @@ let residentResponseBytes = 0;
 let oldestResidentId: string | undefined;
 let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
+let snapshotTotalCapOverride: number | null = null;
 let stateRevision = 0;
 /** Byte length and digest of the last snapshot actually written, for the
  *  identical-payload skip and the size-scaled debounce. The payload itself is not
@@ -213,6 +222,15 @@ function byteCap(): number {
 /** Test-only: lower/restore the in-memory byte cap (null restores the default). */
 export function setResponseStateByteCapForTests(bytes: number | null): void {
   byteCapOverride = bytes;
+}
+
+function snapshotTotalBytes(): number {
+  return snapshotTotalCapOverride ?? SNAPSHOT_TOTAL_MAX_BYTES;
+}
+
+/** Test-only: lower/restore the durable snapshot byte budget (null restores the default). */
+export function setResponseStateSnapshotByteCapForTests(bytes: number | null): void {
+  snapshotTotalCapOverride = bytes;
 }
 
 /** Test-only: current in-memory byte accounting (proves evictions release their bytes). */
@@ -655,12 +673,25 @@ function ensureLoaded(): void {
   } catch {
     /* missing/corrupt snapshot: start empty */
   }
-  const referenced = new Set<string>();
-  for (const state of states.values()) {
-    if (state.kind === "spill") referenced.add(state.spill.fileName);
-  }
-  try { recoverOrphanedResponseSpills(referenced); } catch { /* best effort */ }
+  try { recoverOrphanedResponseSpills(ownedSpillFileNames()); } catch { /* best effort */ }
   pruneResponses();
+}
+
+/** Every file name the process still needs: live stubs, deferred unlinks, and queued publications. */
+function ownedSpillFileNames(): Set<string> {
+  const referenced = collectReferencedSpillFileNames(states.values(), pendingSpillUnlinks);
+  for (const name of spillQueueReferencedSpillFileNames()) referenced.add(name);
+  return referenced;
+}
+
+/** Liveness-tick counterpart of the orphan GC in ensureLoaded; a no-op until first load. */
+export function sweepOrphanedResponseSpills(): number {
+  if (!loaded) return 0;
+  try {
+    return sweepOrphanedResponseSpillsPeriodically(ownedSpillFileNames()).removed;
+  } catch {
+    return 0;
+  }
 }
 
 type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
@@ -674,28 +705,7 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
-      const entries: Array<[string, unknown]> = [];
-      let total = 0;
-      // Newest-first so the most recent chains survive both legacy snapshot caps.
-      for (const [id, state] of [...states].reverse()) {
-        let persistable: unknown;
-        if (state.kind === "resident") {
-          const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
-          persistable = resident;
-        } else {
-          const { sizeBytes: _sizeBytes, ...smallState } = state;
-          persistable = smallState;
-        }
-        const persistEntry: [string, unknown] = [id, persistable];
-        // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
-        // past both snapshot caps at up to 2x the intended size.
-        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-        if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
-        if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
-        total += size;
-        entries.push(persistEntry);
-      }
-      entries.reverse();
+      const entries = selectSnapshotEntries(states, snapshotTotalBytes(), SNAPSHOT_ENTRY_MAX_BYTES);
       const payload = JSON.stringify({ version: 2, states: entries });
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
@@ -1227,6 +1237,19 @@ export function responseStateMetrics(): ResponseStateMetrics {
 }
 
 /**
+ * Read-only spill report for `ocx doctor` and /api/system/memory. Owned = live
+ * stubs, deferred unlinks, queued publications, and snapshot references (what a
+ * restart re-owns). Shares the reclaim's orphan predicate; never unlinks.
+ */
+export function inspectResponseSpillStorage(): ResponseSpillDirInspection {
+  const referenced = ownedSpillFileNames();
+  for (const name of snapshotReferencedSpillFileNames(snapshotPath(), SNAPSHOT_FILE_MAX_BYTES)) {
+    referenced.add(name);
+  }
+  return inspectResponseSpillDir(referenced);
+}
+
+/**
  * Cache completed output and max_output_tokens partial output for previous_response_id replay.
  * Content-filtered incomplete and failed output are not authoritative replay history.
  */
@@ -1307,6 +1330,7 @@ export function clearResponseStateMemoryForTests(): void {
   }
   pendingPersistPath = null;
   resetSpillQueueForTests();
+  resetPeriodicSpillSweepCursorForTests();
   states.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;

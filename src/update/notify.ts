@@ -17,7 +17,8 @@ import {
 } from "./index";
 
 const VERSION_FILENAME = "version.json";
-const REFRESH_INTERVAL_MS = 20 * 60 * 60 * 1000; // 20h, matching codex-rs
+export const REFRESH_INTERVAL_MS = 20 * 60 * 60 * 1000; // 20h, matching codex-rs
+export const CACHE_MAX_AGE_MS = 40 * 60 * 60 * 1000;
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
 
 export interface VersionCache {
@@ -60,6 +61,17 @@ export function writeVersionCache(cache: VersionCache): void {
   } catch {
     /* best-effort; never block startup */
   }
+}
+
+export function writeFreshVersionCache(channel: Channel, latest: string, nowMs = Date.now()): void {
+  const previous = readVersionCache(channel);
+  writeVersionCache({
+    latest_version: latest,
+    last_checked_at: new Date(nowMs).toISOString(),
+    dismissed_version: previous?.latest_version === latest && previous.dismissed_version === latest
+      ? latest : undefined,
+    tag: channel,
+  });
 }
 
 function parseStable(v: string): [number, number, number] | null {
@@ -196,14 +208,7 @@ export function triggerBackgroundRefreshIfStale(channel: Channel, cache: Version
  */
 export async function refreshVersionCache(channel: Channel): Promise<void> {
   const latest = latestVersion(channel);
-  if (!latest) return; // do not dirty the cache or advance the timestamp
-  const prev = readVersionCache(channel);
-  writeVersionCache({
-    latest_version: latest,
-    last_checked_at: new Date().toISOString(),
-    dismissed_version: prev?.dismissed_version,
-    tag: channel,
-  });
+  if (latest) writeFreshVersionCache(channel, latest);
 }
 
 /** Persist a dismissal so this exact version stops prompting. */
@@ -242,7 +247,6 @@ export async function maybeShowUpdatePrompt(): Promise<void> {
     const { channel, current } = eligible;
 
     const cache = readVersionCache(channel);
-    triggerBackgroundRefreshIfStale(channel, cache);
 
     const latest = getUpgradeVersionForPopup(cache, current, channel);
     if (!latest) return;

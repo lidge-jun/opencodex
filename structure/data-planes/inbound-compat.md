@@ -1,5 +1,8 @@
 # Inbound Compatibility Surfaces
 
+The names used for these paths (native, translated, legacy bridge) and the declared per-feature
+dispositions are owned by [Protocol Paths](protocol-paths.md).
+
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
@@ -111,7 +114,17 @@ responses-wire upstreams; the responses-lane assembly for chat-wire upstreams ke
 attempt telemetry only.
 
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
-or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+or storage semantics retain the existing Chat -> Responses -> Chat bridge. With
+`protocols.rollout.directEncoders` on, the response half of that bridge is skipped for a single
+non-Responses route: adapter delivery encodes the adapter events straight into Chat (or, on the
+Messages ingress, Anthropic) frames and marks the response, and the ingress returns it without
+the Responses-to-client conversion. The client-visible frames are the converter's; see
+[Protocol Paths](protocol-paths.md#direct-client-encoders) and
+[`responses.md`](../transports/responses.md#direct-client-encoders).
+On its streaming return path, typed `response.heartbeat` events become SSE comment-line
+keepalives. They preserve connection liveness without adding a Chat completion chunk, changing
+usage, or claiming semantic progress; see the
+[heartbeat contract](../transports/streaming-health.md#heartbeat-and-stall-deadline).
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
 aliasing as native Responses; see [`responses.md`](../transports/responses.md).
 
@@ -296,6 +309,20 @@ Translated Chat request construction uses the [inline-image budget](../transport
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+## Claude message threads on translated routes
+
+Claude Code enables its message-threads beta only against first-party Anthropic, so it reaches
+OpenCodex through the first-party intercept. A threaded request carries a `thread` object; a
+`continue` sends only the messages after `previous_message_id` and may leave `system` and `tools`
+to the thread Anthropic stores. `src/server/claude-messages.ts` forwards the request unchanged on
+native passthrough. On the translated path, before compatibility analysis or inference, it
+answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
+`error.details.error_code` is `thread_unsupported_request` and whose request-log error code is
+`claude_thread_unsupported`. A translated `count_tokens` request with a `thread` object gets the
+same 400, because counting the delta would undercount the conversation. Claude Code then resends the turn with the full conversation and keeps
+that model stateless for the session. Translating the delta instead would drop the task,
+instructions and earlier turns without an error.
 
 ## Shared inbound Chat image recognition
 

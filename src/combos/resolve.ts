@@ -1,6 +1,6 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
-import type { ProviderQuota } from "../providers/quota-types";
+import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { sleepWithAbort } from "../lib/upstream-retry";
 import {
   coolComboTarget,
@@ -10,7 +10,7 @@ import {
 } from "./failover";
 import { quotaResetRemainingMs } from "./reset-window";
 import { getCombo, resolveComboId, targetKey } from "./types";
-import type { NormalizedComboConfig } from "./types";
+import type { NormalizedComboConfig, NormalizedComboTarget } from "./types";
 import {
   captureConfigGeneration,
   type GenerationContext,
@@ -18,7 +18,7 @@ import {
 
 export interface ComboPick {
   comboId: string;
-  target: Required<OcxComboTarget>;
+  target: NormalizedComboTarget;
   targetIndex: number;
   attempted: string[];
   writerGeneration: number;
@@ -64,7 +64,7 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: 
   if (!Object.hasOwn(config.providers, target.provider)) return false;
   const provider = config.providers[target.provider];
   if (!provider || provider.disabled === true) return false;
-  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now);
+  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model);
 }
 
 function quotaWindowExhausted(percent: number | undefined, resetAt: number | undefined, now: number): boolean {
@@ -72,15 +72,39 @@ function quotaWindowExhausted(percent: number | undefined, resetAt: number | und
   return typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt > now;
 }
 
+// `customWindows` is a generic carrier. Most labels are provider-wide counters ("Prepaid
+// credits", "Free trial", "burst", "Spark") and must gate every model. Anthropic also rides it
+// for per-model family counters, where a spent Opus week says nothing about a Sonnet request.
+// `routing/quota.ts` already scopes those per model when it ranks accounts
+// (`anthropicFamilyWindow`); this is the same fact applied to combo target selection.
+//
+// The scoping keys on `window.scope`, which the PRODUCER sets only where it proved model scope
+// structurally, NEVER on the label text: `quota/antigravity.ts` forwards an upstream
+// `group.displayName` unchanged, so a provider-wide group named "Opus" read as per-model would
+// leave a spent window unenforced and send a doomed request. Every unproven direction keeps
+// gating everything, which is the behaviour before this change: no scope on the window, no
+// model on the request, or a family this gateway cannot match against a model id. Failing
+// closed there costs at most a diverted target.
+const MODEL_FAMILY_WINDOW_LABELS = new Set(["fable", "opus", "sonnet"]);
+
+function customWindowAppliesToModel(window: ProviderQuotaWindow, model: string | undefined): boolean {
+  if (window.scope !== "model" || model === undefined) return true;
+  const family = window.label.trim().toLowerCase();
+  if (!MODEL_FAMILY_WINDOW_LABELS.has(family)) return true;
+  return model.toLowerCase().includes(family);
+}
+
 export function cachedProviderQuotaIsExhausted(
   quota: ProviderQuota | null,
   now = Date.now(),
+  model?: string,
 ): boolean {
   if (!quota) return false;
   if (quotaWindowExhausted(quota.fiveHourPercent, quota.fiveHourResetAt, now)) return true;
   if (quotaWindowExhausted(quota.weeklyPercent, quota.weeklyResetAt, now)) return true;
   if (quotaWindowExhausted(quota.monthlyPercent, quota.monthlyResetAt, now)) return true;
-  if (quota.customWindows?.some(window => quotaWindowExhausted(window.percent, window.resetAt, now))) return true;
+  if (quota.customWindows?.some(window => customWindowAppliesToModel(window, model)
+    && quotaWindowExhausted(window.percent, window.resetAt, now))) return true;
   if (quota.creditsUsd?.unlimited !== true
       && typeof quota.creditsUsd?.percent === "number"
       && Number.isFinite(quota.creditsUsd.percent)
@@ -120,7 +144,9 @@ export type QuotaInactiveReason = "no_credit";
  */
 export function quotaInactiveReason(
   config: OcxConfig,
-  targets: readonly { provider: string }[],
+  // A combo votes over its own targets, which carry a model; the single-provider case has none,
+  // and an absent model keeps gating on every window exactly as before.
+  targets: readonly { provider: string; model?: string }[],
   now = Date.now(),
 ): QuotaInactiveReason | undefined {
   const usable = targets.filter(target => {
@@ -132,15 +158,15 @@ export function quotaInactiveReason(
   for (const target of usable) {
     const provider = config.providers[target.provider]!;
     const quota = getCachedProviderRoutingQuota(target.provider, provider, now);
-    if (!quota || !cachedProviderQuotaIsExhausted(quota, now)) return undefined;
+    if (!quota || !cachedProviderQuotaIsExhausted(quota, now, target.model)) return undefined;
   }
   return "no_credit";
 }
 
 function smoothWeightedIndex(
-  targets: Required<OcxComboTarget>[],
+  targets: NormalizedComboTarget[],
   state: SelectionState,
-  eligible: (target: Required<OcxComboTarget>) => boolean,
+  eligible: (target: NormalizedComboTarget) => boolean,
 ): number {
   let best = -1;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -175,8 +201,8 @@ function smoothWeightedIndex(
  */
 function resetWindowIndex(
   config: OcxConfig,
-  targets: Required<OcxComboTarget>[],
-  eligible: (target: Required<OcxComboTarget>) => boolean,
+  targets: NormalizedComboTarget[],
+  eligible: (target: NormalizedComboTarget) => boolean,
   now = Date.now(),
 ): number {
   let selected = -1;
@@ -185,7 +211,11 @@ function resetWindowIndex(
     const target = targets[index]!;
     if (!eligible(target)) continue;
     const remaining = quotaResetRemainingMs(
-      getCachedProviderRoutingQuota(target.provider, config.providers[target.provider], now), now,
+      getCachedProviderRoutingQuota(target.provider, config.providers[target.provider], now),
+      now,
+      // Rank by the windows that gate this target: a model-scoped window of another family
+      // says nothing about when this model regains capacity.
+      window => customWindowAppliesToModel(window, target.model),
     );
     // Strict comparison deliberately retains configured order for ties,
     // including the no-snapshot fallback where every value is Infinity.
@@ -202,8 +232,10 @@ export function pickComboTarget(
   comboId: string,
   options: {
     exclude?: Iterable<string>;
-    eligible?: (target: Required<OcxComboTarget>) => boolean;
+    eligible?: (target: NormalizedComboTarget) => boolean;
     now?: number;
+    /** Inspect a round-robin choice without mutating its sticky/weight state. */
+    preview?: boolean;
   } = {},
 ): ComboPick | null {
   const writerGeneration = captureConfigGeneration();
@@ -211,7 +243,7 @@ export function pickComboTarget(
   if (!combo) throw new UnknownComboError(comboId);
   const excluded = new Set(options.exclude ?? []);
   const now = options.now ?? Date.now();
-  const eligible = (target: Required<OcxComboTarget>): boolean =>
+  const eligible = (target: NormalizedComboTarget): boolean =>
     targetProviderIsUsable(config, target, now)
     && !isComboTargetInCooldown(comboId, target, now)
     && !excluded.has(targetKey(target))
@@ -222,7 +254,13 @@ export function pickComboTarget(
     let state = selectionState.get(comboId);
     if (!state) {
       state = { successes: 0, currentWeights: new Map(), successfulUses: new Map() };
-      selectionState.set(comboId, state);
+      if (!options.preview) selectionState.set(comboId, state);
+    } else if (options.preview) {
+      state = {
+        ...state,
+        currentWeights: new Map(state.currentWeights),
+        successfulUses: new Map(state.successfulUses),
+      };
     }
     if (state.activeKey) {
       targetIndex = combo.targets.findIndex(target => targetKey(target) === state.activeKey && eligible(target));
@@ -291,7 +329,7 @@ export function pickComboTarget(
 export function noteComboSuccess(
   comboId: string,
   combo: NormalizedComboConfig,
-  target: Required<OcxComboTarget>,
+  target: NormalizedComboTarget,
   writerGeneration = captureConfigGeneration(),
 ): void {
   const key = targetKey(target);
@@ -336,8 +374,9 @@ export function advanceComboAfterFailure(
     resetAt?: unknown | unknown[];
     now?: number;
     cooldownMs?: number;
-    eligible?: (target: Required<OcxComboTarget>) => boolean;
+    eligible?: (target: NormalizedComboTarget) => boolean;
     cooldownScope?: ComboFailureCooldownScope;
+    onCooldownRecorded?: (target: Pick<OcxComboTarget, "provider" | "model">) => void;
     status?: number;
     code?: string | null;
     message?: string;
@@ -352,11 +391,12 @@ export function advanceComboAfterFailure(
       ? combo.targets.filter(target => target.provider === pick.target.provider)
       : [pick.target];
     for (const target of cooldownTargets) {
-      coolComboTarget(pick.comboId, target, {
+      const recorded = coolComboTarget(pick.comboId, target, {
         ...options,
         cooldownMs: options.cooldownMs ?? combo?.cooldownMs,
         writerGeneration: pick.writerGeneration,
       });
+      if (recorded) options.onCooldownRecorded?.(target);
     }
   }
   // #5691: under `cooldownWaitPolicy: "before-last-resort"` this final synchronous pick
@@ -380,7 +420,7 @@ export async function pickComboTargetWithWait(
   comboId: string,
   options: {
     exclude?: Iterable<string>;
-    eligible?: (target: Required<OcxComboTarget>) => boolean;
+    eligible?: (target: NormalizedComboTarget) => boolean;
     waitForCooldownMs: number;
     abortSignal?: AbortSignal;
     now?: number;
@@ -390,10 +430,10 @@ export async function pickComboTargetWithWait(
   const now = options.now ?? Date.now();
   const excluded = new Set(options.exclude ?? []);
   const customEligible = options.eligible;
-  const eligibleAt = (target: Required<OcxComboTarget>, at: number): boolean =>
+  const eligibleAt = (target: NormalizedComboTarget, at: number): boolean =>
     !isComboTargetInCooldown(comboId, target, at)
     && (customEligible?.(target) ?? true);
-  const eligible = (target: Required<OcxComboTarget>): boolean => eligibleAt(target, now);
+  const eligible = (target: NormalizedComboTarget): boolean => eligibleAt(target, now);
   // Milliseconds already slept inside this call. `waitForCooldownMs` is documented as a cap
   // per *selection attempt*, so a deferral wait and the ordinary wait below must share it —
   // otherwise a 3s deferral followed by a 9s ordinary wait spends 12s against a 10s budget.
@@ -411,7 +451,7 @@ export async function pickComboTargetWithWait(
   const defersLastResort = policyCombo?.cooldownWaitPolicy === "before-last-resort"
     && policyCombo.targets.some(target => !target.lastResort);
   if (defersLastResort && !options.abortSignal?.aborted) {
-    const normalOnly = (target: Required<OcxComboTarget>): boolean =>
+    const normalOnly = (target: NormalizedComboTarget): boolean =>
       !target.lastResort && eligible(target);
     const normalPick = pickComboTarget(config, comboId, {
       exclude: excluded,
@@ -540,11 +580,11 @@ export function clearComboSelectionState(comboId?: string): void {
   selectionState.delete(comboId);
 }
 
-export function tryPickComboModel(config: OcxConfig, modelId: string): ComboPick | null {
+export function tryPickComboModel(config: OcxConfig, modelId: string, preview = false): ComboPick | null {
   const comboId = resolveComboId(config, modelId);
   if (!comboId) return null;
   if (!getCombo(config, comboId)) throw new UnknownComboError(comboId);
-  const picked = pickComboTarget(config, comboId);
+  const picked = pickComboTarget(config, comboId, { preview });
   if (!picked) throw new NoAvailableComboTargetsError(comboId);
   return picked;
 }

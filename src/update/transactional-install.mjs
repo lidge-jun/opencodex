@@ -17,9 +17,9 @@
  *   <scopeDir>/.ocx-recovery.json             double-fault marker with a one-line restore
  *
  * A staging directory is created exclusively and immediately carries an ownership marker
- * (`.ocx-update-owner.json`). Only a marked staging directory is ever swept by a later
- * update; anything else next to the package — an unmarked stage from an older updater, npm's
- * own `.<name>-<random>` rename-aside, a link — is reported and left alone (#5624).
+ * (`.ocx-update-owner.json`). Later updates report leftovers but do not delete them: a marker
+ * proves provenance only while this process owns the fresh path, not after another local
+ * process could have replaced it. Other neighbouring entries are likewise left alone (#5624).
  */
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -169,9 +169,8 @@ function stampedName(prefix) {
 export const UPDATE_OWNER_MARKER = ".ocx-update-owner.json";
 const STAGE_PREFIX = ".ocx-staging-";
 /**
- * A marked stage younger than this is left alone by the sweep. npm's staging install is bounded
- * at three minutes by the launcher; the floor is far above it so an update running from another
- * home against the same global prefix never loses its in-flight stage.
+ * A marked stage younger than this is reported as recent. npm's staging install is bounded at
+ * three minutes by the launcher; the floor distinguishes likely in-flight work from leftovers.
  */
 export const STALE_STAGE_MIN_AGE_MS = 30 * 60 * 1000;
 const RETRYABLE_REMOVE_CODES = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
@@ -190,8 +189,12 @@ function createOwnedStage(scopeDir, pkgName, deps = {}) {
       pid: process.pid,
       createdAt: (deps.now ?? Date.now)(),
     }), { flag: "wx" });
+    // npm's strict script policy plans the global tree before it creates the prefix layout, so
+    // `-g --prefix` into a bare stage fails with ENOENT on <stage>/lib (#5760). POSIX global
+    // prefixes keep packages under lib/; Windows installs into the prefix itself.
+    if (process.platform !== "win32") mkdir(join(stageRoot, "lib"));
   } catch (error) {
-    // Still empty and created by this call: remove it rather than leave an unmarked stage.
+    // Created by this call and not yet handed to npm: remove it rather than leave a partial stage.
     try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* reported by the caller */ }
     throw error;
   }
@@ -256,14 +259,14 @@ export function removeOwnedStage(stageRoot, deps = {}) {
 }
 
 /**
- * Clear what earlier update attempts left next to the package, without ever deleting anything
- * this updater cannot prove it created. Never throws and never fails the update: every stage is
- * a fresh, uniquely named directory, so a leftover can only cost disk space, not block staging.
+ * Report what earlier update attempts left next to the package. A marker is forgeable and a
+ * pathname can be replaced after inspection, so no later process may recursively delete a
+ * leftover by that pathname. Never throws or fails the update: fresh unique stages step around it.
  */
 export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps = {} }) {
   const scopeDir = dirname(packageDir);
   const now = (deps.now ?? Date.now)();
-  const result = { removed: [], inUse: [], recent: [], notOwned: [] };
+  const result = { inUse: [], recent: [], notOwned: [] };
   let names = [];
   try {
     names = readdirSync(scopeDir);
@@ -281,9 +284,7 @@ export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps
       } else if (now - marker.createdAt < STALE_STAGE_MIN_AGE_MS) {
         result.recent.push(full);
       } else {
-        const removal = removeOwnedStage(full, deps);
-        if (removal.removed) result.removed.push(full);
-        else result.inUse.push({ path: full, code: removal.code });
+        result.inUse.push({ path: full, code: "ESTALE" });
       }
     } else if (name.startsWith(renameAsidePrefix)) {
       result.notOwned.push(full);
@@ -291,9 +292,10 @@ export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps
   }
   // Names only: the full path under a user-scoped npm prefix carries the account name, and
   // this logger is the launcher's console.
-  for (const path of result.removed) log("Removed a staging directory left by an earlier update: " + basename(path));
   for (const entry of result.inUse) {
-    log("Left an earlier update's staging directory in place (" + entry.code + "; a file inside is still in use); the next update retries it: " + basename(entry.path));
+    log(entry.code === "ESTALE"
+      ? "Left an earlier update's staging directory in place; delete it by hand once no OpenCodex process is running from it: " + basename(entry.path)
+      : "Left an earlier update's staging directory in place (could not remove it: " + entry.code + "): " + basename(entry.path));
   }
   for (const path of result.notOwned) {
     log("Not removing " + basename(path) + " next to the package: this updater did not create it. Delete it by hand once no OpenCodex process is running from it.");
@@ -393,7 +395,7 @@ export function transactionalNpmUpdate({
 }) {
   const rename = deps.rename ?? renameSync;
   const scopeDir = dirname(packageDir);
-  // Leftovers from earlier attempts are cleared or stepped around first; this never fails.
+  // Leftovers from earlier attempts are only reported; fresh unique stages step around them. This never fails.
   try { sweepUpdateLeftovers({ packageDir, pkgName, log, deps }); } catch { /* report-only */ }
   let stageRoot;
   // GLOBAL-style staging (-g --prefix): npm nests the package's dependencies INSIDE the
@@ -419,7 +421,9 @@ export function transactionalNpmUpdate({
   const discardStage = () => {
     const removal = removeOwnedStage(stageRoot, deps);
     if (!removal.removed) {
-      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); the next update removes it: " + basename(stageRoot));
+      // EACCES/EUNKNOWN do not prove an open file, so the message names the failure
+      // without blaming a process; the code stays for whoever reads the log.
+      log("Left this update's staging directory in place (could not remove it: " + removal.code + "); later updates will not remove it either — delete it by hand once no OpenCodex process is running from it: " + basename(stageRoot));
     }
   };
   const spec = pkgName + "@" + (targetVersion || tag);

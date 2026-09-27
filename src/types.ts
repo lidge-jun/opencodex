@@ -61,6 +61,8 @@ export type {
 } from "./types/request";
 
 export type {
+  OcxApiSurfacesConfig,
+  OcxProtocolsConfig,
   OcxClaudeCodeConfig,
   OcxClaudeDesktopFamily,
   OcxClaudeDesktopAssignment,

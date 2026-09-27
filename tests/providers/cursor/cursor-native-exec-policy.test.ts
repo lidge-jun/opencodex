@@ -212,11 +212,15 @@ describe("Cursor native exec sandbox policy", () => {
     }), { unsafeAllowNativeLocalExec }))[0]);
     expect(stringify(allowedRead)).toContain(content);
 
-    const allowedShell = decode((await handleCursorNativeExec(execMessage({
+    const unavailableShell = decode((await handleCursorNativeExec(execMessage({
       case: "shellArgs",
       value: create(ShellArgsSchema, { command: "printf SHELL_ALLOWED", workingDirectory: dir, hardTimeout: 2000 }),
     }), { unsafeAllowNativeLocalExec }))[0]);
-    expect(stringify(allowedShell)).toContain("SHELL_ALLOWED");
+    expect(unavailableShell.message.case).toBe("shellResult");
+    if (unavailableShell.message.case !== "shellResult" || unavailableShell.message.value.result.case !== "failure") throw new Error("expected foreground denial");
+    expect(unavailableShell.message.value.result.value.stdout).toBe("");
+    expect(unavailableShell.message.value.result.value.aborted).toBe(true);
+    expect(unavailableShell.message.value.result.value.stderr).toContain("kernel-backed descendant ownership");
 
     let fetchCalled = false;
     const allowedFetch = decode((await handleCursorNativeExec(execMessage({
@@ -274,7 +278,7 @@ describe("Cursor native exec sandbox policy", () => {
     }
   });
 
-  test("explicit nativeLocalExec on remains the only mode that authorizes native shell, read, and fetch", async () => {
+  test("explicit nativeLocalExec on authorizes read and fetch but not unowned foreground shells", async () => {
     const declared = await capturedFullAccessDeclaration({
       model: "cursor/auto",
       input: [

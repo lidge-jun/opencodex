@@ -30,11 +30,18 @@ function deps(
         body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
       };
       calls.push(captured);
+      if (captured.method === "GET" && captured.path === "/api/codex-auth/accounts") {
+        // Pool verbs resolve their account argument against the list before writing.
+        return new Response(JSON.stringify({ accounts: KNOWN_ACCOUNTS.map(id => ({ id })) }), { status: 200 });
+      }
       const { status = 200, json } = respond(captured);
       return new Response(JSON.stringify(json), { status });
     }) as unknown as typeof fetch,
   };
 }
+
+// Ids the mocked pool list answers with; "nope" stays listed so the 404 test still reaches the server.
+const KNOWN_ACCOUNTS = ["acct_1", "acct_2", "nope"];
 
 function capture(): { lines: string[]; errors: string[]; restore: () => void } {
   const lines: string[] = [];
@@ -55,10 +62,10 @@ describe("ocx account pause / resume", () => {
       code = await cmdPause(["openai", "acct_1"], deps(() => ({ json: { ok: true } }), calls), true);
     } finally { out.restore(); }
     expect(code).toBe(0);
+    const write = calls.find(call => call.path === "/api/codex-auth/accounts/pause");
     // PUT, not POST: the issue text says POST and the server implements PUT.
-    expect(calls[0]?.method).toBe("PUT");
-    expect(calls[0]?.path).toBe("/api/codex-auth/accounts/pause");
-    expect(calls[0]?.body).toEqual({ id: "acct_1", paused: true });
+    expect(write?.method).toBe("PUT");
+    expect(write?.body).toEqual({ id: "acct_1", paused: true });
     expect(out.lines.join("\n")).toContain("paused");
   });
 
@@ -68,8 +75,8 @@ describe("ocx account pause / resume", () => {
     try {
       await cmdPause(["openai", "acct_1"], deps(() => ({ json: { ok: true } }), calls), false);
     } finally { out.restore(); }
-    expect(calls[0]?.path).toBe("/api/codex-auth/accounts/pause");
-    expect(calls[0]?.body).toEqual({ id: "acct_1", paused: false });
+    const write = calls.find(call => call.path === "/api/codex-auth/accounts/pause");
+    expect(write?.body).toEqual({ id: "acct_1", paused: false });
     expect(out.lines.join("\n")).toContain("resumed");
   });
 

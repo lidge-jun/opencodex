@@ -6,7 +6,9 @@
  * `killAllOcxOnPort`, and successful ocx verification. A historical PID allowlist
  * never overrides a rejected verifier result; rejected live holders stay protected.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { readFile, readdir, readlink } from "node:fs/promises";
+import { promisify } from "node:util";
 import { verifyPidIdentity } from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { isPortAvailable, type WaitForPortOptions } from "./ports";
@@ -167,6 +169,114 @@ export function scanListenPids(port: number): ListenPidScan {
 export function listListenPids(port: number): number[] {
   const scan = scanListenPids(port);
   return scan.ok ? scan.pids : [];
+}
+
+const execFileAsync = promisify(execFile);
+const OWNER_LOOKUP_TIMEOUT_MS = 2_000;
+const MAX_PROC_NET_BYTES = 4 * 1024 * 1024;
+const MAX_PROCESS_FDS = 4_096;
+
+/** The exact IPv4 listener the Child relay contacts; ::1 and wildcard binds are not proof. */
+export function parseProcLoopbackListenInodes(tcp: string, tcp6: string, port: number): string[] {
+  const wantedPort = port.toString(16).toUpperCase().padStart(4, "0");
+  const inodes = new Set<string>();
+  for (const [content, wantedAddress] of [
+    [tcp, "0100007F"],
+    [tcp6, "0000000000000000FFFF00000100007F"], // ::ffff:127.0.0.1 in proc word order
+  ] as const) {
+    for (const line of content.split(/\r?\n/).slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      const [address, hexPort] = (fields[1] ?? "").toUpperCase().split(":");
+      if (address !== wantedAddress || hexPort !== wantedPort || fields[3] !== "0A") continue;
+      const inode = fields[9];
+      if (inode && /^[1-9]\d*$/.test(inode)) inodes.add(inode);
+    }
+  }
+  return [...inodes];
+}
+
+/** Parse only 127.0.0.1:port LISTEN owners; an unrelated [::1]:port must not veto it. */
+export function parseIpv4LoopbackListenPidsFromNetstat(output: string, port: number): number[] {
+  const pids = new Set<number>();
+  for (const raw of output.split(/\r?\n/)) {
+    const fields = raw.trim().split(/\s+/);
+    if (fields[0]?.toUpperCase() !== "TCP" || fields[1] !== `127.0.0.1:${port}`) continue;
+    const state = fields[3] ?? "";
+    const foreign = fields[2] ?? "";
+    if (!/^LISTEN/i.test(state) && !["0.0.0.0:0", "[::]:0", "*:*"].includes(foreign)) continue;
+    const pid = Number(fields.at(-1));
+    if (Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+
+async function runOwnerLookup(file: string, args: string[], timeoutMs: number): Promise<string> {
+  const { stdout } = await execFileAsync(file, args, {
+    encoding: "utf8", timeout: timeoutMs, maxBuffer: MAX_PROC_NET_BYTES, windowsHide: true,
+  });
+  return stdout;
+}
+
+export interface LoopbackOwnerLookupIo {
+  platform?: NodeJS.Platform;
+  readProc?: (path: string) => Promise<string>;
+  listFds?: (path: string) => Promise<string[]>;
+  readFdLink?: (path: string) => Promise<string>;
+  run?: (file: string, args: string[], timeoutMs: number) => Promise<string>;
+}
+
+/** Async, bounded proof that this PID owns the IPv4 loopback LISTEN socket used by the relay. */
+export async function ownsIpv4LoopbackListener(
+  port: number,
+  expectedPid: number,
+  io: LoopbackOwnerLookupIo = {},
+): Promise<boolean> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535
+    || !Number.isSafeInteger(expectedPid) || expectedPid < 1) return false;
+  const platform = io.platform ?? process.platform;
+  const lookup = async (): Promise<boolean> => {
+    if (platform === "linux") {
+      const readProc = io.readProc ?? (path => readFile(path, "utf8"));
+      const tcp = await readProc("/proc/net/tcp");
+      const tcp6 = await readProc("/proc/net/tcp6").catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+        throw error;
+      });
+      if (tcp.length > MAX_PROC_NET_BYTES || tcp6.length > MAX_PROC_NET_BYTES) return false;
+      const inodes = parseProcLoopbackListenInodes(tcp, tcp6, port);
+      if (inodes.length !== 1) return false;
+      const fdDir = `/proc/${expectedPid}/fd`;
+      const fds = await (io.listFds ?? readdir)(fdDir);
+      if (fds.length > MAX_PROCESS_FDS) return false;
+      const wanted = `socket:[${inodes[0]}]`;
+      const readFdLink = io.readFdLink ?? readlink;
+      for (const fd of fds) {
+        try { if (await readFdLink(`${fdDir}/${fd}`) === wanted) return true; }
+        catch { /* an fd may close while it is enumerated */ }
+      }
+      return false;
+    }
+    const run = io.run ?? runOwnerLookup;
+    if (platform === "darwin") {
+      const stdout = await run("/usr/sbin/lsof", ["-nP", "-a", `-iTCP@127.0.0.1:${port}`, "-sTCP:LISTEN", "-t"], OWNER_LOOKUP_TIMEOUT_MS);
+      const pids = new Set(stdout.split(/\r?\n/).map(line => Number(line.trim())).filter(pid => Number.isSafeInteger(pid) && pid > 0));
+      return pids.size === 1 && pids.has(expectedPid);
+    }
+    if (platform === "win32") {
+      const netstat = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\netstat.exe`;
+      const stdout = await run(netstat, ["-ano", "-p", "tcp"], OWNER_LOOKUP_TIMEOUT_MS);
+      const pids = parseIpv4LoopbackListenPidsFromNetstat(stdout, port);
+      return pids.length === 1 && pids[0] === expectedPid;
+    }
+    return false;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), OWNER_LOOKUP_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try { return await Promise.race([lookup().catch(() => false), deadline]); }
+  finally { if (timer) clearTimeout(timer); }
 }
 
 /**

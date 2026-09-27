@@ -88,6 +88,7 @@ interface NativeStreamToolCall {
   nativeIndex?: number;
   arguments: Record<string, unknown>;
   argumentBytes: number;
+  metadataBytes: number;
 }
 
 interface NativeStreamState {
@@ -106,6 +107,10 @@ type NativeReadResult = { done: false; value: Uint8Array } | { done: true; value
 
 const NATIVE_THINK_VALUES = new Set(["low", "medium", "high", "max"]);
 const NATIVE_TOOL_ID_MAX_LENGTH = 256;
+const NATIVE_TOOL_NAME_MAX_BYTES = 1024;
+const NATIVE_MAX_PENDING_TOOL_CALLS = 128;
+// Account for the retained Map key and call bookkeeping in addition to the provider's name.
+const NATIVE_TOOL_CALL_BOOKKEEPING_BYTES = 128;
 const NATIVE_TOOL_ID_CONTROL = /[\u0000-\u001f\u007f]/u;
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -598,6 +603,10 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
       }
       const fn = rawCall.function;
       if (typeof fn.name !== "string" || !fn.name.trim()) throw new Error("ollama-native response tool call had no name");
+      const nameBytes = new TextEncoder().encode(fn.name).byteLength;
+      if (nameBytes > NATIVE_TOOL_NAME_MAX_BYTES) {
+        throw new Error(`ollama-native response tool call name exceeded ${NATIVE_TOOL_NAME_MAX_BYTES} bytes`);
+      }
       const args = assertObjectArguments(fn.arguments, "response tool call");
       const index = isFiniteNonNegativeInteger(fn.index) ? fn.index : undefined;
       const nativeId = validNativeToolCallId(rawCall.id);
@@ -609,6 +618,9 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
       const existing = state.toolCalls.get(key);
       if (!existing && !state.allowParallelToolCalls && state.toolCalls.size > 0) {
         throw new Error("ollama-native provider emitted parallel tool calls while parallelToolCalls:false was requested");
+      }
+      if (!existing && state.toolCalls.size >= NATIVE_MAX_PENDING_TOOL_CALLS) {
+        throw new Error(`ollama-native response exceeded ${NATIVE_MAX_PENDING_TOOL_CALLS} pending tool calls`);
       }
       if (existing) {
         if (existing.name !== fn.name) throw new Error("ollama-native response reused a tool-call index for another function");
@@ -627,12 +639,25 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
           ...(index !== undefined ? { nativeIndex: index } : {}),
           arguments: args,
           argumentBytes: 0,
+          metadataBytes: 0,
         };
         budget.openCall(call.budgetKey);
         try {
+          const metadataBytes = nameBytes + NATIVE_TOOL_CALL_BOOKKEEPING_BYTES;
+          // Name and bookkeeping are retained call metadata, not arguments: charging them to the
+          // call's budget key would consume the per-call argument allowance. Keep them on the
+          // shared retained budget and release them when the call closes.
+          budget.chargeRetained(metadataBytes, {
+            kind: "tool_args",
+          });
+          call.metadataBytes = metadataBytes;
           replaceNativeToolArguments(call, args, budget);
           state.toolCalls.set(key, call);
         } catch (error) {
+          if (call.metadataBytes > 0) {
+            budget.releaseRetained(call.metadataBytes, { kind: "tool_args" });
+            call.metadataBytes = 0;
+          }
           budget.closeCall(call.budgetKey);
           throw error;
         }
@@ -687,7 +712,13 @@ function replaceNativeToolArguments(
 }
 
 function releaseNativeStateBuffers(state: NativeStreamState, budget: TranslatorBudget): void {
-  for (const call of state.toolCalls.values()) budget.closeCall(call.budgetKey);
+  for (const call of state.toolCalls.values()) {
+    if (call.metadataBytes > 0) {
+      budget.releaseRetained(call.metadataBytes, { kind: "tool_args" });
+      call.metadataBytes = 0;
+    }
+    budget.closeCall(call.budgetKey);
+  }
 }
 
 function nativeBodyMessage(value: unknown): JsonRecord {

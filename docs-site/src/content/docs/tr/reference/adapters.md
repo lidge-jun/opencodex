@@ -141,6 +141,7 @@ Pro/Max için Bearer + `anthropic-beta`).
   (en az 1024 … en çok 32000) eşler, ardından çıktı payı ile güvenli bir
   `max_tokens` hesaplar ve düşünme etkinleştirildiğinde
   **`temperature`/`top_p`'yi bırakır** (Anthropic orada bunları yasaklar).
+- **Uyarlanabilir thinking gösterimi:** uyarlanabilir thinking modellerine (Opus 4.7+, Sonnet 5, Fable) `thinking.display: "summarized"` gönderilir; böylece uzun bir düşünme, Chat ve Responses istemcilerine dakikalarca heartbeat yerine reasoning deltaları olarak ulaşır. Reasoning özetini gizleyen bir istek (`reasoning.summary: "none"`) sağlayıcının varsayılanını korur.
 - **Yapılandırılmış çıktı:** `type: "json_schema"` içeren Responses
   `text.format` ve Chat Completions `response_format` istekleri Anthropic
   `output_config.format` haline gelir. Format, uyumlu bir
@@ -201,6 +202,15 @@ veya Google Antigravity OAuth.
 **Kimlik Doğrulama:** Kiro kimlik bilgisinden bölge/profil meta verileriyle
 birlikte Bearer olarak Kiro OAuth erişim belirteci.
 
+`meteringEvent` kredileri `providerCredits` içinde ölçülür: bir fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler ise isteğin toplam harcamasına eklenir. Tokenlardan kredi tahmini yapılmaz.
+
+Bir istek hesaba kabul edildikten sonra proxy, hesabın model listesini bölgesel yönetim
+hizmetinden arka planda okur. Gözlenen modeller yerleşik listeye eklenir; boş veya tanınmayan
+yanıt son geçerli listeyi korur. Üyelik yalnızca uygun hesaplar arasında tercih sağlar; bilinmeyen
+model kimlikleri de üst hizmete gönderilir. Bildirilen giriş sınırları bağlam penceresini
+bilgilendirir ve kısmi kanıtta yerleşik sınır kullanılır. Henüz hizmet vermemiş hesaplarda
+model listesi kanıtı bulunmayabilir.
+
 - Kiro `conversationState` oluşturur, Codex araçlarını ve araç sonuçlarını eşler
   ve Kiro hattı tarafından desteklenen görsel bloklarını gönderir.
 - `application/vnd.amazon.eventstream` kodunu çözer, metin/düşünme/araç
@@ -208,15 +218,16 @@ birlikte Bearer olarak Kiro OAuth erişim belirteci.
   belirteç sayılarını döndürmediği için kullanımı tahmin eder.
 - Özel olduğunda yapılandırılmış `baseUrl`'i birebir kullanır. Kurallı bir
   `runtime.{region}.kiro.dev` URL'si içe aktarılan kimlik bilgisinin API
-  bölgesini takip eder; bir uç nokta, imza, DNS veya bağlantı hatasından sonra
+  bölgesini takip eder; bir uç nokta, imza, DNS veya bağlantı hatasından ya da çıktı başlamadan alınan HTTP 502/503/504 yanıtından sonra
   `q.{region}.amazonaws.com`'a tek bir sınırlı geri dönüş için yalnızca bu
   kurallı şekil uygundur.
 - Yeniden oynatma güvenli bağlantı sıfırlama kurtarmasına, bu tek uygun uç nokta
   geri dönüşüne, HTTP 401'den sonra bir OAuth yenileme/yeniden oynatmaya ve
   geçici Kiro 429'ları için sınırlı kurtarmaya sahiptir. Paylaşılan bir soğuma
   süresi ve soğuma sonrası tek bir araştırma, eşzamanlı isteklerin bağımsız
-  yeniden deneme bütçelerini tüketmesini önler; sabit kota hataları ve sıradan
-  hizmet hataları yeniden oynatılmaz.
+  yeniden deneme bütçelerini tüketmesini önler; kota tükenmesi aynı hesapta yeniden
+  denenmez ve diğer hizmet hataları yeniden oynatılmaz. Tüm Kiro gönderimleri yapılandırılmış sağlayıcı çıkışını kullanır; başlık zaman aşımı 504 döndürür, istemci iptali isteği durdurur ve son HTTP 5xx gövdeleri sabit genel metin kullanır.
+- İki hesap kayıtlıysa hız sınırı reddi ilgili hesabı kısa süreliğine bekletir. Doğrulanmış aylık kota reddi (HTTP 400 veya 429) hesabı gözlenen sıfırlamaya ya da kanıtın süresinin dolmasına kadar dışlar. Doğrulanmış askıya alma (HTTP 403) hesabı geçici olarak karantinaya alır; sıradan bir 403 hesap değişimine yol açmaz. Redden sonraki hesap değişimi proaktif tercih kapalıyken de çalışır. İlk gönderimden önce hesap değiştirmek proaktif tercih gerektirir ve sağlayıcı ayarı genel ayardan önceliklidir. Aynı hesapta tamamlanan tur eski tükenme kararını temizler.
 - Akışsız ayrıştırıcısı web arama döngüsü için aynı olay akışını boşaltır.
 
 ### Tamamlama anlambilimi
@@ -339,4 +350,3 @@ Vizyon duyarlı adaptörler tarafından kullanılan paylaşılan yardımcılar:
 - `contentPartsToText(content)` — salt metin araç mesajları için içerik
   parçalarını metne düzleştirir (açıklanmayan bir görsel kısa bir `[image]`
   işaretçisi haline gelir, asla belirteç patlatan bir base64 bloğu olmaz).
-

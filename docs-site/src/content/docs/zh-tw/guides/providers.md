@@ -249,7 +249,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 97 個 preset：80 個 key-based、13 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 99 個 preset：82 個 key-based、13 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 

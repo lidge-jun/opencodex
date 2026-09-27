@@ -392,12 +392,20 @@ describe("combo request cloning", () => {
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", undefined).reasoning).toBeUndefined();
   });
 
-  test("force mode overrides only valid caller effort and resolves independently per target", () => {
+  test("force mode overrides every valid declared caller effort and resolves independently per target", () => {
     const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" } };
     expect(concreteComboRequestBody(raw, target, "max", ["low", "high", "max"], "strict", "force").reasoning)
       .toEqual({ effort: "max", summary: "concise" });
     expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], "strict", "force").reasoning)
       .toEqual({ effort: "high", summary: "concise" });
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "none", summary: "auto" } },
+      target, "high", ["minimal", "low", "medium", "high", "xhigh", "max"], "strict", "force",
+    ).reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "minimal" } },
+      target, "high", ["minimal", "low", "medium", "high", "xhigh", "max"], "strict", "force",
+    ).reasoning).toEqual({ effort: "high", summary: "auto" });
     expect(raw.reasoning).toEqual({ effort: "medium", summary: "concise" });
   });
 
@@ -416,6 +424,11 @@ describe("combo request cloning", () => {
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "medium" } }, target, "max", undefined, "strict", "force",
     ).reasoning).toEqual({ effort: "medium" });
+    // Unknown capability stays conservative even for a declared sentinel: force cannot prove
+    // the target accepts the configured default, so strict mode preserves the caller value.
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "none" } }, target, "high", undefined, "strict", "force",
+    ).reasoning).toEqual({ effort: "none" });
     expect(concreteComboRequestBody(
       { model: "combo/x" }, target, "max", [], "strict", "force",
     ).reasoning).toBeUndefined();
@@ -633,14 +646,21 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("free", configuredPick.target, 1_000 + 7_000)).toBe(false);
   });
 
-  test("keeps the default cooldown for usage-window 1308", () => {
+  // Changed in #5860. This arrived as the negative control proving 1308 does NOT take the
+  // 5-second request-rate cooldown, so the 60-second value was a side effect of that contrast,
+  // not a position on exhaustion. 1308 IS a 5-hour usage window: a 60-second cooldown re-probes
+  // it about 300 times before it can possibly succeed. The contrast it was written to prove is
+  // preserved -- 1308 is still not COMBO_REQUEST_RATE_COOLDOWN_MS -- it now holds the full
+  // ten-minute exhaustion cooldown instead of the generic default.
+  test("holds the exhaustion cooldown for usage-window 1308", () => {
     coolComboTarget("free", target, {
       now: 1_000,
       code: "1308",
       message: "Usage limit reached for 5 hour",
     });
-    expect(isComboTargetInCooldown("free", target, 1_000 + 59_999)).toBe(true);
-    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(false);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 10 * 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 10 * 60_000)).toBe(false);
   });
 
   test("honors explicit Retry-After over the request-rate default", () => {
@@ -1195,6 +1215,20 @@ describe("combo failure policy and advancement", () => {
 });
 
 describe("deterministic combo selection", () => {
+  test("jev is a valid persisted strategy and its synchronous fail-open is configured order", () => {
+    const raw = {
+      strategy: "jev",
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+      ],
+    } as unknown as OcxComboConfig;
+    expect(comboConfigIssues("auto", raw, baseConfig().providers)).toEqual([]);
+    expect(normalizeComboConfig(raw).strategy).toBe("jev");
+    const config = baseConfig({ combos: { auto: raw } });
+    expect(pickComboTarget(config, "auto")?.target.provider).toBe("a");
+  });
+
   test("replacing quota snapshots removes providers omitted from the refresh", () => {
     const now = Date.now();
     replaceCachedProviderQuotas([
@@ -1499,7 +1533,31 @@ describe("combo validation and normalization", () => {
       { raw: { targets: [null] }, path: ["targets", 0], message: "must be an object" },
       { raw: { targets: [{ provider: " ", model: "m1" }] }, path: ["targets", 0, "provider"], message: "is required" },
       { raw: { targets: [{ provider: "missing", model: "m1" }] }, path: ["targets", 0, "provider"], message: "not configured" },
+      {
+        raw: { targets: [{ provider: "jev", model: "jev-latest" }] },
+        providers: {
+          ...providers,
+          jev: { adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone" },
+        },
+        path: ["targets", 0, "provider"],
+        message: "decision service and cannot be a model target",
+      },
       { raw: { targets: [{ provider: "a", model: " " }] }, path: ["targets", 0, "model"], message: "is required" },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: [] }] },
+        path: ["targets", 0, "reasoningEfforts"],
+        message: "non-empty array",
+      },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: ["turbo"] }] },
+        path: ["targets", 0, "reasoningEfforts", 0],
+        message: "low, medium, high, xhigh, max, ultra",
+      },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: ["low", "low"] }] },
+        path: ["targets", 0, "reasoningEfforts", 1],
+        message: "must not contain duplicates",
+      },
       {
         raw: VALID_COMBO,
         providers: { a: { ...providers.a!, disabled: true } },
@@ -1584,6 +1642,13 @@ describe("combo validation and normalization", () => {
       targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    const targetReasoningEfforts: OcxComboDefaultEffort[] = ["low", "high"];
+    const normalizedTargetEfforts = normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1", reasoningEfforts: targetReasoningEfforts }],
+    });
+    expect(normalizedTargetEfforts.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
+    targetReasoningEfforts.push("max");
+    expect(normalizedTargetEfforts.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
     // #5691: both new fields default to the inert value, and only the exact
     // literal opts in — the same rule reasoningEffortMode follows below.
     expect(normalizeComboConfig({
@@ -1860,4 +1925,60 @@ test("combo identifiers leaf preserves public export identity without facade imp
   const source = readFileSync(repoPath("src", "combos", "identifiers.ts"), "utf8");
   expect(source.split(/\r?\n/).some(line => /from\s+["']\.\/(types|index)["']/.test(line)))
     .toBe(false);
+});
+
+describe("per-model provider quota windows", () => {
+  const now = 100_000;
+  const resetAt = now + 60_000;
+  const quotaConfig = (targets: { provider: string; model: string }[]): OcxConfig =>
+    baseConfig({ combos: { scoped: { strategy: "failover", targets } } });
+
+  beforeEach(() => { clearCachedProviderQuotas(); });
+  afterEach(() => { clearCachedProviderQuotas(); });
+
+  test("a spent model-scoped window gates only its own family", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Opus", scope: "model", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([
+      { provider: "a", model: "claude-opus-4-5" },
+      { provider: "a", model: "claude-sonnet-4-5" },
+    ]);
+    expect(pickComboTarget(config, "scoped", { now })?.target.model).toBe("claude-sonnet-4-5");
+  });
+
+  test("an unscoped window of the same label still gates every model", () => {
+    // `quota/antigravity.ts` forwards an upstream group display name unchanged, so a
+    // provider-wide group named "Opus" must not be read as per-model: skipping it would
+    // leave a spent window unenforced.
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Opus", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([{ provider: "a", model: "claude-sonnet-4-5" }]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+
+  test("a model-scoped family this gateway cannot match gates every model", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Claude Neptune", scope: "model", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([{ provider: "a", model: "claude-opus-4-5" }]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+
+  test("provider-wide windows and canonical buckets are untouched", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Prepaid credits", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    setCachedProviderQuotaForTests("b", { weeklyPercent: 100, weeklyResetAt: resetAt, updatedAt: now });
+    const config = quotaConfig([
+      { provider: "a", model: "claude-opus-4-5" },
+      { provider: "b", model: "claude-sonnet-4-5" },
+    ]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
 });

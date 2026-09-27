@@ -20,6 +20,7 @@ import {
   resolveDataPlaneAdmissionSecret,
   validateForwardAdmissionCredential,
   type DataPlaneAdmission,
+  type DataPlaneAdmissionOptions,
 } from "./auth-cors";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import type { RequestLogContext } from "./request-log";
@@ -28,16 +29,20 @@ export const TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 export const LIVE_AUDIO_MODEL = "gpt-live-1-codex";
 
 /** Audio keys remain identifiable even on the otherwise unauthenticated local listener. */
-export function resolveAudioAdmission(headers: Headers, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveAudioAdmission(
+  headers: Headers,
+  config: OcxConfig,
+  options: DataPlaneAdmissionOptions = {},
+): DataPlaneAdmission | null {
   const dedicated = headers.get("x-opencodex-api-key")?.trim();
-  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated");
+  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", options);
   const authorization = headers.get("authorization")?.trim();
   if (authorization) {
     const token = /^Bearer\s+([^\s,]+)$/i.exec(authorization)?.[1];
-    return token ? resolveDataPlaneAdmissionSecret(token, config, "bearer") : null;
+    return token ? resolveDataPlaneAdmissionSecret(token, config, "bearer", options) : null;
   }
   const key = headers.get("x-api-key")?.trim();
-  return key ? resolveDataPlaneAdmissionSecret(key, config, "x-api-key") : null;
+  return key ? resolveDataPlaneAdmissionSecret(key, config, "x-api-key", options) : null;
 }
 
 export interface AudioUpstream {

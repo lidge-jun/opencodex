@@ -727,3 +727,70 @@ describe("devin cloud trailer errors", () => {
     }
   });
 });
+
+describe("devin rejected HTTP response ownership", () => {
+  for (const status of [401, 429, 503]) {
+    for (const mode of ["resolve", "reject", "throw", "pending"] as const) {
+      test(`HTTP ${status}: cancel ${mode} preserves the original CloudChatError`, async () => {
+        const cancellations: unknown[] = [];
+        const pending = Promise.withResolvers<void>();
+        let pulls = 0;
+        const body = new ReadableStream<Uint8Array>({
+          pull() { pulls++; },
+          cancel(reason) {
+            cancellations.push(reason);
+            if (mode === "reject") return Promise.reject(new Error("cancel rejected"));
+            if (mode === "pending") return pending.promise;
+          },
+        }, { highWaterMark: 0 });
+        if (mode === "throw") {
+          // Real stream callbacks turn throws into rejected promises. Exercise
+          // the separate boundary for a transport that throws from cancel itself.
+          body.cancel = reason => {
+            cancellations.push(reason);
+            throw new Error("cancel threw");
+          };
+        }
+        const response = new Response(body, { status });
+        const events = streamChatEvents({
+          apiKey: "fixture-http-cancellation",
+          modelUid: "swe-2-high",
+          messages: [{ role: "user", content: "hi" }],
+          catalog: null,
+          executor: async () => response,
+        });
+        try {
+          const error = await events.next().catch(error => error);
+          expect(error).toBeInstanceOf(CloudChatError);
+          expect(error.message).toBe(`GetChatMessage failed (HTTP ${status})`);
+          expect(error.status).toBe(status);
+          expect(error.code).toBeUndefined();
+          expect(error.traceId).toBeUndefined();
+          expect(cancellations).toHaveLength(1);
+          expect(cancellations[0]).toBe(error);
+          expect(pulls).toBe(0);
+          expect(body.locked).toBe(false);
+          expect((await events.next()).done).toBe(true);
+          // Give a rejected cancel the chance to become an unhandled rejection.
+          await new Promise(resolve => setTimeout(resolve, 0));
+        } finally {
+          pending.resolve();
+          await events.return(undefined);
+        }
+      });
+    }
+  }
+
+  test("a bodyless HTTP error retains its status", async () => {
+    const events = streamChatEvents({
+      apiKey: "fixture-http-cancellation",
+      modelUid: "swe-2-high",
+      messages: [],
+      catalog: null,
+      executor: async () => new Response(null, { status: 403 }),
+    });
+    await expect(events.next()).rejects.toMatchObject({
+      name: "CloudChatError", status: 403, message: "GetChatMessage failed (HTTP 403)",
+    });
+  });
+});

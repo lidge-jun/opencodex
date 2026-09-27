@@ -7,10 +7,15 @@ export type SharedTransport = "same-origin" | "direct" | "relay";
  * Read without removing the tag: unlike the session meta, which is consumed once so a
  * credential does not linger in the DOM, the role is non-secret and may be read again.
  */
-function runtimeRoleFromDocument(): string | null {
+export function runtimeRoleFromDocument(): "standalone" | "hub" | "client" | null {
   if (typeof document === "undefined") return null;
   const meta = document.querySelector('meta[name="opencodex-runtime-role"]');
-  return meta?.getAttribute("content")?.trim() || null;
+  const role = meta?.getAttribute("content")?.trim();
+  return role === "standalone" || role === "hub" || role === "client" ? role : null;
+}
+
+export function isStandaloneRuntime(): boolean {
+  return runtimeRoleFromDocument() === "standalone";
 }
 
 /**

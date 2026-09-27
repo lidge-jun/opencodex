@@ -27,6 +27,7 @@ const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_AC
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let active: Root | null = null;
+let rerender: (props: Partial<ApiKeysWorkspaceProps>) => Promise<void> = async () => {};
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
@@ -44,6 +45,7 @@ afterEach(async () => {
   if (active) {
     const root = active;
     active = null;
+    rerender = async () => {};
     await act(async () => { root.unmount(); });
   }
   testWindow.close();
@@ -105,6 +107,13 @@ async function mount(props: Partial<ApiKeysWorkspaceProps>): Promise<HTMLDivElem
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(container);
   active = root;
+  // Same root, new props: how a parent's state update (the rotationSecret
+  // landing after a start, say) actually reaches the mounted workspace.
+  rerender = async next => {
+    await act(async () => {
+      root.render(<LanguageProvider><ApiKeysWorkspace {...value} {...next} /></LanguageProvider>);
+    });
+  };
   await act(async () => { root.render(<LanguageProvider><ApiKeysWorkspace {...value} /></LanguageProvider>); });
   return container;
 }
@@ -282,6 +291,174 @@ test("rotation start, one-time secret, commit, and abort stay explicit", async (
   await act(async () => { button(pending, "Abort rotation").click(); await Promise.resolve(); });
   expect(calls).toContain("commit:k1:rotation-1");
   expect(calls).toContain("abort:k1:rotation-1");
+});
+
+test("rotation controls stay hidden when the runtime supplies no rotation handlers", async () => {
+  const container = await mount({});
+  await openKey(container);
+
+  expect(container.textContent).not.toContain("Key rotation");
+  expect(container.textContent).not.toContain("Start rotation");
+  expect(container.textContent).not.toContain("Commit rotation");
+  expect(container.textContent).not.toContain("Abort rotation");
+});
+
+test("an idle key offers rotation only when its start handler is wired", async () => {
+  // Commit/abort without start: the only action an idle key can take has no
+  // handler, so the whole section hides — a visible Start could only fail.
+  const container = await mount({
+    onRotationCommit: async () => true,
+    onRotationAbort: async () => true,
+  });
+  await openKey(container);
+
+  expect(container.textContent).not.toContain("Key rotation");
+  expect(container.textContent).not.toContain("Start rotation");
+});
+
+test("a start-only integration keeps the issued secret on screen", async () => {
+  const calls: string[] = [];
+  const container = await mount({
+    onRotationStart: async id => { calls.push(`start:${id}`); return true; },
+  });
+  await openKey(container);
+  await act(async () => { button(container, "Start rotation").click(); await Promise.resolve(); });
+  expect(calls).toEqual(["start:k1"]);
+
+  // The hub's answer carries the one-time secret. Without finish handlers the
+  // pending-state guard alone would hide the section — stranding the only copy.
+  await rerender({
+    rotationSecret: { id: "k1", key: "ocx_data_shown_once", rotationId: "rotation-1" },
+  });
+  expect(container.textContent).toContain("Key rotation");
+  expect(container.textContent).toContain("ocx_data_shown_once");
+  // The secret is only useful if it can leave the screen: Copy stays even when
+  // the host never wired a copy handler (clipboard fallback).
+  expect(container.querySelector(".api-key-reveal")!.textContent).toContain("Copy");
+  expect(container.textContent).not.toContain("Commit rotation");
+  expect(container.textContent).not.toContain("Abort rotation");
+});
+
+test("the secret's own controls are wired separately from the lifecycle actions", async () => {
+  const pendingKey = {
+    id: "k1",
+    name: "alpha",
+    prefix: "ocx_data_aaaaaaaa...",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    pendingRotation: {
+      id: "rotation-1",
+      createdAt: "2026-08-28T00:00:00.000Z",
+      expiresAt: "2026-08-28T00:10:00.000Z",
+    },
+    usage: { requests7d: 0, totalRequests: 0 },
+  };
+  const rotationSecret = { id: "k1", key: "ocx_data_shown_once", rotationId: "rotation-1" };
+
+  // A finish handler keeps the section up. Copy is always rendered — a shown
+  // secret is useless if it cannot leave the screen; an unwired host gets the
+  // clipboard fallback. Close still checks its own callback.
+  const container = await mount({
+    keys: [pendingKey],
+    rotationSecret,
+    onRotationCommit: async () => true,
+  });
+  await openKey(container);
+  const reveal = container.querySelector<HTMLElement>(".api-key-reveal")!;
+  expect(reveal.textContent).toContain("ocx_data_shown_once");
+  const revealLabels = [...reveal.querySelectorAll("button")].map(b => b.textContent?.trim());
+  expect(revealLabels).toEqual(["Copy"]);
+
+  await act(async () => { active?.unmount(); active = null; });
+
+  const wired = await mount({
+    keys: [pendingKey],
+    rotationSecret,
+    onRotationCommit: async () => true,
+    onCopyRotationSecret: () => {},
+    onDismissRotationSecret: () => {},
+  });
+  await openKey(wired);
+  const wiredReveal = wired.querySelector<HTMLElement>(".api-key-reveal")!;
+  const labels = [...wiredReveal.querySelectorAll("button")].map(b => b.textContent?.trim());
+  expect(labels).toEqual(["Copy", "Close"]);
+});
+
+test("a failed clipboard fallback says so instead of implying the secret copied", async () => {
+  const rotationSecret = { id: "k1", key: "ocx_data_shown_once", rotationId: "rotation-1" };
+  const container = await mount({
+    keys: [{
+      id: "k1",
+      name: "alpha",
+      prefix: "ocx_data_aaaaaaaa...",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      pendingRotation: {
+        id: "rotation-1",
+        createdAt: "2026-08-28T00:00:00.000Z",
+        expiresAt: "2026-08-28T00:10:00.000Z",
+      },
+      usage: { requests7d: 0, totalRequests: 0 },
+    }],
+    rotationSecret,
+    onRotationCommit: async () => true,
+  });
+  await openKey(container);
+  const reveal = container.querySelector<HTMLElement>(".api-key-reveal")!;
+  const copyButton = () => [...reveal.querySelectorAll("button")].find(b => b.textContent?.trim() === "Copy")!;
+
+  // A rejected write must not leave the one-time secret looking copied.
+  Object.defineProperty(testWindow.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: () => Promise.reject(new Error("denied")) },
+  });
+  await act(async () => { copyButton().click(); await Promise.resolve(); });
+  const alert = reveal.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain("Could not copy the key");
+  expect(reveal.textContent).not.toContain("Copied");
+
+  // A missing Clipboard API fails the same way: visible error, no copied badge.
+  Object.defineProperty(testWindow.navigator, "clipboard", { configurable: true, value: undefined });
+  await act(async () => { copyButton().click(); await Promise.resolve(); });
+  expect(reveal.querySelector('[role="alert"]')!.textContent).toContain("Could not copy the key");
+});
+
+test("a pending key renders only the rotation actions that have handlers", async () => {
+  const pendingKey = {
+    id: "k1",
+    name: "alpha",
+    prefix: "ocx_data_aaaaaaaa...",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    pendingRotation: {
+      id: "rotation-1",
+      createdAt: "2026-08-28T00:00:00.000Z",
+      expiresAt: "2026-08-28T00:10:00.000Z",
+    },
+    usage: { requests7d: 0, totalRequests: 0 },
+  };
+
+  // Commit without abort: Commit renders, Abort does not.
+  const container = await mount({
+    keys: [pendingKey],
+    onRotationCommit: async () => true,
+  });
+  await openKey(container);
+  expect(container.textContent).toContain("Commit rotation");
+  expect(container.textContent).not.toContain("Abort rotation");
+
+  await act(async () => { active?.unmount(); active = null; });
+
+  // Start without commit/abort: no action applies to a pending key, so the
+  // buttons hide. The pending status and expiry stay — they are notice, not
+  // actions, and hiding them would leave the rotation invisible to the user.
+  const startOnly = await mount({
+    keys: [pendingKey],
+    onRotationStart: async () => true,
+  });
+  await openKey(startOnly);
+  expect(startOnly.textContent).toContain("Key rotation");
+  expect(startOnly.textContent).toContain("Rotation is pending");
+  expect(startOnly.textContent).toContain("Overlap expires:");
+  expect(startOnly.textContent).not.toContain("Commit rotation");
+  expect(startOnly.textContent).not.toContain("Abort rotation");
 });
 
 test("a protocol result belongs to its own chip", async () => {

@@ -11,7 +11,7 @@ import {
   readKiroCliSqliteCredential,
   restoreStaleKiroCliSessionRecovery,
 } from "../../../src/oauth/kiro-credentials";
-import { getAccountCredential, getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
+import { getAccountCredential, getAccountSet, saveCredential, saveCredentialWithReceipt, setActiveAccount } from "../../../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../../../src/oauth/types";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -251,6 +251,98 @@ describe("Kiro review regressions", () => {
       access: "old-access",
       accountId: "arn:aws:codewhisperer:us-east-1:123456789012:profile/old",
     });
+  });
+
+  test("a failed forced login removes only its own account and preserves a concurrent login", async () => {
+    const accountA = "arn:aws:codewhisperer:us-east-1:123456789012:profile/a";
+    const accountB = "arn:aws:codewhisperer:us-east-1:123456789012:profile/b";
+    const accountC = "arn:aws:codewhisperer:us-east-1:123456789012:profile/c";
+    await saveCredential("kiro", {
+      access: "access-a", refresh: "refresh-a", expires: Date.now() + 60_000, accountId: accountA,
+    });
+    const rawCredential: OAuthCredentials = {
+      access: "access-c", refresh: "refresh-c", expires: Date.now() + 60_000, accountId: accountC,
+    };
+    const originalLogin = OAUTH_PROVIDERS.kiro.login;
+    OAUTH_PROVIDERS.kiro.login = async () => rawCredential;
+    try {
+      await expect(runLogin("kiro", {} as OAuthController, { forceLogin: true }, {
+        loadConfig: config,
+        saveCredentialWithReceipt: async (provider, credential, options) => {
+          const receipt = await saveCredentialWithReceipt(provider, credential, options);
+          await saveCredential("kiro", {
+            access: "access-b", refresh: "refresh-b", expires: Date.now() + 60_000, accountId: accountB,
+          }, { preserveIdentityless: true });
+          return receipt;
+        },
+        saveConfig: () => { throw new Error("config publication failed"); },
+        settleKiroLoginTransaction: () => {},
+      })).rejects.toThrow("config publication failed");
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = originalLogin;
+    }
+
+    const set = getAccountSet("kiro")!;
+    expect(set.accounts.map(account => account.credential.accountId).sort()).toEqual([accountA, accountB]);
+    expect(getAccountCredential("kiro", set.activeAccountId)?.accountId).toBe(accountB);
+  });
+
+  test("rollback leaves a concurrently refreshed copy of the same account untouched", async () => {
+    const accountA = "arn:aws:codewhisperer:us-east-1:123456789012:profile/base";
+    const accountC = "arn:aws:codewhisperer:us-east-1:123456789012:profile/owned";
+    await saveCredential("kiro", {
+      access: "access-base", refresh: "refresh-base", expires: Date.now() + 60_000, accountId: accountA,
+    });
+    const rawCredential: OAuthCredentials = {
+      access: "access-owned", refresh: "refresh-owned", expires: Date.now() + 60_000, accountId: accountC,
+    };
+    const originalLogin = OAUTH_PROVIDERS.kiro.login;
+    OAUTH_PROVIDERS.kiro.login = async () => rawCredential;
+    try {
+      await expect(runLogin("kiro", {} as OAuthController, { forceLogin: true }, {
+        loadConfig: config,
+        saveCredentialWithReceipt: async (provider, credential, options) => {
+          const receipt = await saveCredentialWithReceipt(provider, credential, options);
+          await saveCredential("kiro", {
+            ...rawCredential,
+            access: "access-concurrent",
+            refresh: "refresh-concurrent",
+          }, { preserveIdentityless: true });
+          return receipt;
+        },
+        saveConfig: () => { throw new Error("config publication failed"); },
+        settleKiroLoginTransaction: () => {},
+      })).rejects.toThrow("config publication failed");
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = originalLogin;
+    }
+
+    const set = getAccountSet("kiro")!;
+    const concurrent = set.accounts.find(account => account.credential.accountId === accountC)!;
+    expect(concurrent.credential).toMatchObject({
+      access: "access-concurrent",
+      refresh: "refresh-concurrent",
+    });
+    expect(set.activeAccountId).toBe(concurrent.id);
+  });
+
+  test("a failed first forced login rolls back the newly created provider set", async () => {
+    const rawCredential: OAuthCredentials = {
+      access: "access-first", refresh: "refresh-first", expires: Date.now() + 60_000,
+      accountId: "arn:aws:codewhisperer:us-east-1:123456789012:profile/first-only",
+    };
+    const originalLogin = OAUTH_PROVIDERS.kiro.login;
+    OAUTH_PROVIDERS.kiro.login = async () => rawCredential;
+    try {
+      await expect(runLogin("kiro", {} as OAuthController, { forceLogin: true }, {
+        loadConfig: config,
+        saveConfig: () => { throw new Error("config publication failed"); },
+        settleKiroLoginTransaction: () => {},
+      })).rejects.toThrow("config publication failed");
+    } finally {
+      OAUTH_PROVIDERS.kiro.login = originalLogin;
+    }
+    expect(getAccountSet("kiro")).toBeNull();
   });
 
   test("forced login refuses custom import DB selectors that diverge from the CLI store", async () => {

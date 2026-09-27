@@ -40,8 +40,10 @@ export function mayBecomeCodeModeShellInput(argumentsText: string, input: string
   const head = input.trimStart();
   if (head === "" || head.startsWith("{")) return true;
   // Canonical JavaScript streams progressively; avoid reparsing its growing wrapper on every
-  // delta. The shared prefix scanner is bounded independently of the command's size.
-  if (input === argumentsText || scanFreeformWrapper(argumentsText).kind === "input") return false;
+  // delta. The shared prefix scanner is bounded independently of the command's size. No fallback
+  // keys here: a fallback value is a shell command, not JavaScript, so only canonical `input`
+  // may short-circuit the parse below.
+  if (input === argumentsText || scanFreeformWrapper(argumentsText, []).kind === "input") return false;
   try {
     const args = JSON.parse(argumentsText);
     // A fallback cmd value becomes visible only when the outer object closes. Do not emit

@@ -3,6 +3,8 @@ title: Remote Hub 部署
 description: 使用仅回环管理入口、Tailscale Serve 和无头 OAuth 运行 opencodex hub。
 ---
 
+有关 SSH 机器链接，请参阅[远程链接](/zh-cn/guides/remote-link/)。
+
 Remote Hub 将提供商凭据、模型目录和使用记录保存在一台主机上，经过身份验证的客户端直接访问其数据平面。管理平面相互独立：可选管理监听器只绑定 `127.0.0.1`，仅提供控制台和 `/api/*`。它不提供 `/v1/*`、`/healthz`、`/readyz` 或 WebSocket。不要直接发布 `10101`，也不要使用 Tailscale Funnel。
 
 ## 角色与信任边界

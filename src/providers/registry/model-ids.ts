@@ -46,6 +46,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   apiKeyTransport: NONE,
   alias: NONE,
   authKind: NONE,
+  credentialOnly: NONE,
   codexAccountMode: NONE,
   allowKeyAuthOverride: NONE,
   allowPrivateNetworkByDefault: NONE,

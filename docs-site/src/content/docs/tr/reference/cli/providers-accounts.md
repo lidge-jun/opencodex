@@ -113,25 +113,35 @@ Bir sağlayıcı için saklanan OAuth kimlik bilgisini kaldırın.
 listeleyin ve değiştirin. Sağlanan yardım arayüzü şöyledir:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
+Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
+pause <provider> <id|alias|main>  Hold an account out of automatic selection.
+resume <provider> <id|alias|main>  Return a paused account to automatic selection.
+pause-exhausted <provider>  Pause every account whose quota is spent.
+clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
+sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
+priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
 grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
+import <provider> --format <format> (--file <path>|--stdin)  Import credentials from a named external format.
+import-orca --source <dir> --registry <file> [--apply]  Preview or apply imports from Orca-managed Codex homes.
+main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App login the pool calls 'main'.
 Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
 A selection-order change applies from the next unbound request and never moves a bound thread.
 ```
 
-Tüm alt komutlar proxy'nin çalışmasını gerektirir; CLI kaydedilen çalışma zamanı
-portunu otomatik olarak çözer. Başarılı işlemler 0 ile çıkar. Geçersiz kullanım,
+`import-orca` dışındaki alt komutlar proxy'nin çalışmasını gerektirir ve kaydedilen çalışma zamanı portunu otomatik çözer; `import-orca` önizlemesi tamamen yereldir ve `import-orca --apply` proxy'nin durdurulmuş olmasını gerektirir. Başarılı işlemler 0 ile çıkar. Geçersiz kullanım,
 bilinmeyen bir sağlayıcı veya hesap/anahtar kimliği, erişilemeyen bir proxy veya
 bir API hatası 1 ile çıkar. Kimlik bilgisi alanları tam olarak yönetim API'sinin
 döndürdüğü gibi (maskelemesi dahil) görüntülenir; ham API anahtarları ve OAuth
@@ -168,10 +178,16 @@ Bir sağlayıcı ile yalnızca bu kimlik bilgisi ailesini listeler. İnsan çık
 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` kullanır; manuel olarak seçilen
 bir Codex satırı `selected` olarak işaretlenir. `PRIORITY`, imzalı Codex seçim
 sırasıdır (ayarlanmadığında `0`) ve OAuth hesapları ve API anahtarları gibi
-sıralamanın geçerli olmadığı satırlar için `-` gösterir. İki veya daha fazla uygun Kiro hesabı
+sıralamanın geçerli olmadığı satırlar için `-` gösterir. İki veya daha fazla kayıtlı Kiro hesabı
 saklandığında, varsayılan olarak 429 yanıtı otomatik olarak başka bir hesaba geçer ve bilinen kalan
-kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkinleşir ve kapatılamaz — `oauthAccountFailover.enabled: false` gönderim öncesi hesap tercihini reddeder, 429 kurtarmasını değil; `ocx account login kiro` hesapları havuza teker teker ekler. Boş bir sonuç
-yine de başarıdır. `--json` şunu döndürür:
+kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkinleşir ve kapatılamaz — `oauthAccountFailover.enabled: false` gönderim öncesi hesap tercihini reddeder, 429 kurtarmasını değil; `ocx account login kiro` hesapları havuza teker teker ekler. Boş bir sonuç yine de başarıdır.
+
+Kiro için hız sınırı, doğrulanmış aylık kota ve doğrulanmış askıya alma retleri çıktıdan önce uygun başka bir hesaba geçebilir. Aylık kota yalnızca o hesabı sıfırlamaya veya kanıtın süresinin dolmasına kadar dışlar; aynı hesaptaki tamamlanmış yanıt eski kararı temizler. Proaktif tercih için sağlayıcı ayarı genel ayardan önceliklidir; reaktif hesap değişimi açık kalır.
+Kiro, `pool.kernel` ve proaktif tercih açıkken `least-loaded` stratejisini seçebilir. `maxConcurrentPerAccount` (1–100), süreç başına hesap kuyruğu sınırıdır: seçili hesap doluysa en çok 250 ms bekler, ardından `Retry-After: 1` ile 503 `account_capacity` döner. Sınır, isteği başka bir hesaba taşımaz.
+
+`ocx account list kiro`, otomatik seçimden dışlanan hesaplar için `not-auto-selected(<neden>)` gösterir. JSON, `autoSelectable` ve false olduğunda kapalı kümeden bir `skipReason` (`needs_reauth`, `suspended`, `cooldown` veya `quota_exhausted`) içerir. Tek etkin hesap yine istek gönderebilir. `providerCredits`, `meteringEvent` ile ölçülür: fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler toplanır; tokenlardan kredi tahmini yapılmaz.
+
+`--json` şunu döndürür:
 
 ```text
 { accounts: AccountRow[], notes: string[] }
@@ -189,7 +205,9 @@ yine de 0 ile çıkar. `--json` şunu döndürür:
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
+
+`auto` elle yapılan seçimi temizler; havuz işi yeniden kendi stratejisiyle yerleştirir. Bir Codex hesabı, id yerine `ocx account alias` ile verilen takma adla da belirtilebilir; bu `priority`, `pause`, `resume`, `clear-cooldown`, `remove` ve `alias` için de geçerlidir. Codex hesaplarında `auto`, `main` ve `__main__` büyük/küçük harf fark etmeksizin ayrılmış sözcüklerdir ve takma ad olarak atanamaz. OAuth hesaplarının ve API anahtarlarının görünen adları için mevcut kurallar geçerlidir.
 
 Mevcut bir Codex hesabını, OAuth hesabını veya API anahtarını seçer. `openai`
 için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi süreç içi yerel
@@ -242,7 +260,7 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Bir Codex havuz hesabının seçim sırasını okur veya ayarlar: **daha yüksek olan
 daha önce kullanılır**, varsayılan `0`'dır ve aralık `-100` ile `100`
@@ -291,7 +309,7 @@ sync` kurtarma rehberliği yazdırır. `--json`, stdout'u ayrıştırılabilir t
 insan uyarısı olmadan tamamlanan giriş durumunda `catalogRefreshPending: true`
 taşır.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
 Bu korumalı, etkileşimsiz silme işlemi `--yes` gerektirir. Silmeden önce
 kimliğin var olduğunu doğrular; eksik bir kimlik DELETE göndermeden 1 ile çıkar.
@@ -457,7 +475,7 @@ kurulu bir servis).
 | `provider <ad> <on\|off>` | `--json` | Tek bir yazmada bir sağlayıcının her modelini etkinleştirin veya devre dışı bırakın. |
 | `selected <saglayici>` | `--set <id,id...>`, `--clear`, `--json` | Sağlayıcı model izin listesini okuyun veya değiştirin. `--clear` her modelin sunulması için izin listesini kaldırır. |
 | `context <status\|value <tokens> [--set-all]\|provider <ad> on [--value <tokens>]\|provider <ad> off\|all <on\|off>>` | `--json` | Küresel olarak veya sağlayıcı başına bağlam penceresi sınırını okuyun veya ayarlayın. `value <tokens> --set-all` ayrıca her yönlendirilen sağlayıcıyı yeniden yönlendirir (kontrol paneli anahtarı gibi); bu olmadan değer yalnızca varsayılan olur. `provider ... on --value <tokens>` yalnızca o sağlayıcı için açık bir sınır belirler (`--value` yalnızca `on` ile geçerlidir). |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex'in arka plan yardımcı çağrıları için değiştirme modelini okuyun veya ayarlayın. `-` modeli temizler. `status` ayrıca proxy'nin müdahale ettiği yardımcı slug'ları olan `sourceModels`'ı bildirir (varsayılan: `gpt-5.6-luna`; 0.144.x'e kadar olan istemciler açık bir `sourceModels` geçersiz kılmasının geri yükleyebileceği `gpt-5.4-mini` kullanmıştır). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex'in arka plan yardımcı çağrıları için değiştirme modelini okuyun veya ayarlayın. `-` modeli temizler. `status` ayrıca proxy'nin müdahale ettiği yardımcı slug'ları olan `sourceModels`'ı bildirir (varsayılan: `gpt-6-luna`, `gpt-5.6-luna`; 0.144.x'e kadar olan istemciler açık bir `sourceModels` geçersiz kılmasının geri yükleyebileceği `gpt-5.4-mini` kullanmıştır). |
 
 ```bash
 ocx models live --json                                  # Codex'in şu anda gerçekte görebildikleri

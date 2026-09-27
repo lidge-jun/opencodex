@@ -3,6 +3,8 @@ title: Remote Hub Dağıtımı
 description: Loopback yönetimi, Tailscale Serve ve başsız OAuth ile opencodex hub çalıştırma.
 ---
 
+SSH makine bağlantıları için [Uzak Bağlantı](/tr/guides/remote-link/) kılavuzuna bakın.
+
 Remote Hub sağlayıcı kimlik bilgilerini, kataloğu ve kullanım kayıtlarını tek ana bilgisayarda tutar. Kimliği doğrulanmış istemciler veri düzlemine doğrudan bağlanır. Yönetim düzlemi ayrıdır: isteğe bağlı dinleyici yalnızca `127.0.0.1` üzerinde çalışır ve pano ile `/api/*` yollarını sunar; `/v1/*`, `/healthz`, `/readyz` veya WebSocket sunmaz. `10101` portunu yayımlamayın ve Tailscale Funnel kullanmayın.
 
 ## Roller ve güven sınırı

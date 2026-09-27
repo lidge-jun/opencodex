@@ -278,6 +278,17 @@ describe("#2568 generic OAuth account failover", () => {
     expect(genericFailoverRetryAfterSeconds("xai")).toBeGreaterThan(500);
   });
 
+  test("a stated Retry-After past the local cap is honoured, not truncated", async () => {
+    const ids = await seed(2);
+    const now = Date.now();
+    // One hour. Retrying before it elapses buys a second 429 on an account upstream already
+    // told us to leave alone — the exact wasted send this pool exists to avoid.
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", ids[0]!, "3600", now)).toBe(ids[1]);
+    expect(genericFailoverRetryAfterSeconds("xai", now)).toBe(3600);
+    // Still cooled long after any local truncation would have released it.
+    expect(eligibleFailoverAccounts("xai", now + 20 * 60_000)).toEqual([ids[1]!]);
+  });
+
   test("an excluded provider is never enabled, however many accounts it has", async () => {
     await seed(2);
     // Codex and Anthropic own quota scopes, probe leases and affinity that this must not
@@ -307,12 +318,12 @@ describe("sidecar on429 wiring", () => {
   const coreSource = readResponsesCoreSource();
 
   test("budget-withheld attribution proves a cooldown-eligible generic OAuth target", () => {
-    // Continuation, native passthrough and run-turn each have their own budget-denial branch.
+    // Kiro and non-Kiro continuation, native passthrough and run-turn have budget-denial branches.
     // A durable two-account quorum is insufficient because it intentionally ignores cooldowns.
-    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(3);
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(4);
     // The check must GATE the log, not merely run beside it: every call site wraps
     // noteAttemptRecoveryWithheld in the eligibility condition.
-    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(3);
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(4);
   });
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
@@ -341,7 +352,7 @@ describe("sidecar on429 wiring", () => {
     // The gate is a POSITIVE else-if, not an early return: an early bare return here made the
     // Anthropic arm below unreachable, because Anthropic never has a genericFailoverAccountId.
     expect(body).toContain("genericFailoverAccountId");
-    expect(body).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(body).toContain("genericFailovers < transportState.genericFailoverLimit");
     expect(body).toContain("isGenericOAuthFailoverEnabled(config, route.providerName)");
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
@@ -391,9 +402,9 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
-    // Five includes native Responses passthrough, which returns before the Chat bridge loop.
+    // Seven includes Kiro-specific adapter and continuation branches plus native passthrough.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
-    expect(snapshotUses.length).toBe(5);
+    expect(snapshotUses.length).toBe(7);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
@@ -416,10 +427,10 @@ describe("sidecar on429 wiring", () => {
     const arm = coreSource.slice(armStart, armEnd);
 
     expect(arm).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
-    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(2);
+    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(4);
     expect(arm).toContain("parsed: nextParsed");
     expect(arm).toMatch(/bindRouteReasoningReplayScope\(\{\s*parsed,/);
-    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(2);
+    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(4);
   });
 
   test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {

@@ -57,6 +57,7 @@ Usage:
                               Open the dashboard or create a single-use remote pairing grant
   ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
                               (hub only; see \`ocx help hub\` for the one-port topology)
+  ocx link <sub>              Machine links over SSH (port|issue|revoke|status)
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
@@ -81,6 +82,7 @@ Usage:
   ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
+  ocx api <sub>               Protocol paths: vocabulary, request-path preview, and policy
   ocx export --client <id>    Print a client config wired to the running proxy (15 clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply

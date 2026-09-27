@@ -28,6 +28,13 @@ Generated catalogs include only enabled models from each provider selection. Thi
 downloads and managed integrations, including Pi and Aside. The management model list still shows
 the full roster so you can enable additional models.
 
+`ocx uninstall` disables recorded integrations, including all owned Aside profiles, before deleting
+OpenCodex's recovery state. Unreadable ownership, missing profile registration or a conflicting edit
+stops that deletion. Cleanup is sequential: earlier successful disables are not undone when a later
+one fails. If compensation also fails, a client file may be left in an intermediate state. Inspect
+the reported client files and retained recovery snapshots before retrying; retained state does not
+mean every client was restored or left unchanged.
+
 For Gajae built-in presets, keep the routing choice in `~/.gjc/agent/config.yml`:
 
 ```yaml
@@ -37,6 +44,8 @@ modelProfile:
 ```
 
 Keep your chosen `modelProfile.default` to apply it when plain `gjc` starts. The managed integration owns only `providers.opencodex` in `models.yml`; refreshing or disabling that provider does not rewrite your preset choice. Refresh the integration after changing the exported model selection.
+
+GJC models with a supported reasoning-effort ladder export `reasoning: true`, `thinking.levels`, and `compat.supportsReasoningEffort`, so GJC can offer an effort choice. Native Codex models receive their standard ladder even when the catalog omits it. Models without a known ladder omit these fields; `none` and `ultra` are not offered because `none` sends no effort and `ultra` folds to `max` on the wire. Refresh the integration to update these model options.
 
 The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
 `providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort

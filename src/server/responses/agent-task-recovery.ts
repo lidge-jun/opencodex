@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { decodeJwtPayload, extractAccountId } from "../../oauth/chatgpt";
 import type { OcxConfig } from "../../types";
 import { boundedBodyDecodeFailure, readBoundedResponseBody } from "../../lib/bounded-body";
+import { isTransientUpstreamStatus, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstream-retry";
 import { isApiAuthRequired, isProxyAdmissionSecret } from "../auth-cors";
 import { MAX_AGENT_TASK_CIPHERTEXT_BYTES, MAX_AGENT_TASK_ENCRYPTED_PARTS, structurallyValidFernetTokens } from "./encrypted-payload";
 import {
@@ -34,12 +35,18 @@ const OPENAI_TOKEN_AUDIENCE = "https://api.openai.com/v1";
 const MAX_ASSIGNMENT_BYTES = 2 * 1024 * 1024;
 const MAX_RECOVERY_RESPONSE_BYTES = 4 * 1024 * 1024;
 const CACHE_SCOPE_KEY = randomBytes(32);
+// 1 initial send + up to 2 retries matches TRANSIENT_RETRY_MAX_ATTEMPTS; retries stay inside
+// the caller's deadline, admission scope, and shared flight (#3661).
+const MAX_RECOVERY_RETRIES = 2;
+const RECOVERY_RETRY_BASE_DELAY_MS = 500;
+const RECOVERY_RETRY_MAX_DELAY_MS = 2_000;
 
 export interface AgentTaskRecoveryOptions {
   enabled?: boolean;
   model?: string;
   timeoutMs?: number;
   cacheEntries?: number;
+  retries?: number;
 }
 
 export type AgentTaskRecoveryFailureReason =
@@ -67,6 +74,9 @@ export function agentTaskRecoveryConfig(config: OcxConfig): AgentTaskRecoveryOpt
     cacheEntries: Number.isFinite(raw.cacheEntries) && (raw.cacheEntries ?? 0) >= 1
       ? Math.min(512, Math.floor(raw.cacheEntries!))
       : 200,
+    retries: Number.isFinite(raw.retries) && (raw.retries ?? 0) >= 0
+      ? Math.min(MAX_RECOVERY_RETRIES, Math.floor(raw.retries!))
+      : 0,
   };
 }
 
@@ -448,20 +458,24 @@ function assignmentFromRecoverySse(raw: string, envelope: AgentEnvelope): string
     : null;
 }
 
-async function requestRecovery(
+interface RecoveryAttempt {
+  resolution: AgentTaskRecoveryResolution;
+  retryable: boolean;
+  retryHeaders?: Headers;
+}
+
+async function attemptRecovery(
   admission: RecoveryAdmission,
   envelope: AgentEnvelope,
   options: AgentTaskRecoveryOptions,
-  abortSignal?: AbortSignal,
-): Promise<AgentTaskRecoveryResolution> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException("Agent task recovery timed out", "TimeoutError")),
-    options.timeoutMs ?? 45_000,
-  );
-  const signal = abortSignal
-    ? AbortSignal.any([abortSignal, controller.signal])
-    : controller.signal;
+  signal: AbortSignal,
+  abortSignal: AbortSignal | undefined,
+  deadlineSignal: AbortSignal,
+): Promise<RecoveryAttempt> {
+  const terminal = (resolution: AgentTaskRecoveryResolution): RecoveryAttempt => ({
+    resolution,
+    retryable: false,
+  });
   try {
     const response = await fetch(RECOVERY_ENDPOINT, {
       method: "POST",
@@ -473,9 +487,13 @@ async function requestRecovery(
     if (!response.ok) {
       // A rejected or never-settling cancellation must not extend the recovery deadline.
       try { void response.body?.cancel().catch(() => undefined); } catch { /* already closed */ }
-      if (abortSignal?.aborted) return { recovered: false, reason: "recovery_aborted" };
-      if (controller.signal.aborted) return { recovered: false, reason: "recovery_timeout" };
-      return { recovered: false, reason: "recovery_http_rejected" };
+      if (abortSignal?.aborted) return terminal({ recovered: false, reason: "recovery_aborted" });
+      if (deadlineSignal.aborted) return terminal({ recovered: false, reason: "recovery_timeout" });
+      return {
+        resolution: { recovered: false, reason: "recovery_http_rejected" },
+        retryable: isTransientUpstreamStatus(response.status),
+        retryHeaders: response.headers,
+      };
     }
     const body = await readBoundedResponseBody(response, {
       signal,
@@ -485,18 +503,68 @@ async function requestRecovery(
       inactivityTimeoutMs: options.timeoutMs ?? 45_000,
       firstByteTimeoutMs: options.timeoutMs ?? 45_000,
     });
-    if (abortSignal?.aborted) return { recovered: false, reason: "recovery_aborted" };
-    if (controller.signal.aborted || body.timedOut) return { recovered: false, reason: "recovery_timeout" };
-    if (body.truncated || body.oversized || !body.displaySafe) return { recovered: false, reason: "recovery_invalid_output" };
+    if (abortSignal?.aborted) return terminal({ recovered: false, reason: "recovery_aborted" });
+    if (deadlineSignal.aborted || body.timedOut) return terminal({ recovered: false, reason: "recovery_timeout" });
+    if (body.truncated || body.oversized || !body.displaySafe) return terminal({ recovered: false, reason: "recovery_invalid_output" });
     const assignment = assignmentFromRecoverySse(body.text, envelope);
-    return assignment === null
+    return terminal(assignment === null
       ? { recovered: false, reason: "recovery_invalid_output" }
-      : { recovered: true, assignment };
+      : { recovered: true, assignment });
   } catch (error) {
-    if (abortSignal?.aborted) return { recovered: false, reason: "recovery_aborted" };
+    if (abortSignal?.aborted) return terminal({ recovered: false, reason: "recovery_aborted" });
     const decodeFailure = boundedBodyDecodeFailure(error);
-    if (controller.signal.aborted || decodeFailure === "timeout") return { recovered: false, reason: "recovery_timeout" };
-    return { recovered: false, reason: decodeFailure === "invalid_utf8" ? "recovery_invalid_output" : "recovery_transport_error" };
+    if (deadlineSignal.aborted || decodeFailure === "timeout") return terminal({ recovered: false, reason: "recovery_timeout" });
+    return decodeFailure === "invalid_utf8"
+      ? terminal({ recovered: false, reason: "recovery_invalid_output" })
+      : { resolution: { recovered: false, reason: "recovery_transport_error" }, retryable: true };
+  }
+}
+
+async function requestRecovery(
+  admission: RecoveryAdmission,
+  envelope: AgentEnvelope,
+  options: AgentTaskRecoveryOptions,
+  abortSignal?: AbortSignal,
+): Promise<AgentTaskRecoveryResolution> {
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("Agent task recovery timed out", "TimeoutError")),
+    timeoutMs,
+  );
+  const signal = abortSignal
+    ? AbortSignal.any([abortSignal, controller.signal])
+    : controller.signal;
+  try {
+    // The configured bound is re-clamped here: callers may pass options that never went
+    // through agentTaskRecoveryConfig, and a larger value must not widen the outage window.
+    const retries = Number.isFinite(options.retries)
+      ? Math.max(0, Math.min(MAX_RECOVERY_RETRIES, Math.floor(options.retries!)))
+      : 0;
+    for (let attempt = 0; ; attempt += 1) {
+      const { resolution, retryable, retryHeaders } = await attemptRecovery(
+        admission, envelope, options, signal, abortSignal, controller.signal,
+      );
+      if (resolution.recovered || !retryable || attempt >= retries) return resolution;
+      // Retry-After is the provider's floor, not something our backoff cap may shorten.
+      // If honouring it would outlive the shared deadline, end with this failure rather
+      // than resend early into a refusal.
+      const delayMs = retryBackoffDelayMs(attempt, {
+        baseDelayMs: RECOVERY_RETRY_BASE_DELAY_MS,
+        maxDelayMs: RECOVERY_RETRY_MAX_DELAY_MS,
+        headers: retryHeaders,
+        retryAfterIsLowerBound: true,
+      });
+      if (delayMs >= deadline - Date.now()) return resolution;
+      try {
+        await sleepWithAbort(delayMs, signal);
+      } catch {
+        return abortSignal?.aborted
+          ? { recovered: false, reason: "recovery_aborted" }
+          : { recovered: false, reason: "recovery_timeout" };
+      }
+    }
   } finally {
     clearTimeout(timeout);
   }

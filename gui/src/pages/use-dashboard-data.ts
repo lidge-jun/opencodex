@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { useKeyedClientResource } from "../client-resource";
 import { replaceHash } from "../hash-routing";
 import { useI18n } from "../i18n/shared";
+import { openDesktopUpdatePage } from "../lib/desktop-shell";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import {
   PROJECT_CONFIG_DIAGNOSTICS_POLL_MS,
@@ -859,6 +860,7 @@ const [maBusy, setMaBusy] = useState(false);
   };
 
   const openUpdateDialog = () => {
+    if (openDesktopUpdatePage()) return;
     const channel = defaultUpdateChannel(health?.version);
     setUpdateChannel(channel);
     setUpdateRestart(true);

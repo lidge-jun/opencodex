@@ -80,14 +80,11 @@ export async function* readJsonLines(
   const maxLineBytes = limits.maxLineBytes ?? MAX_STREAM_LINE_BYTES;
   const maxTotalBytes = limits.maxTotalBytes ?? MAX_STREAM_TOTAL_BYTES;
   const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
+  let parts: string[] = [];
+  let lineBytes = 0;
   let totalBytes = 0;
 
   const flushLine = function* (line: string): Generator<StreamMessage> {
-    if (encoder.encode(line).byteLength > maxLineBytes) {
-      throw new CodingAgentStreamLimitError("Coding-agent stream line exceeded the byte ceiling");
-    }
     const trimmed = line.trim();
     if (!trimmed) return; // Blank lines and whitespace-only lines are ignored as padding.
     let parsed: unknown;
@@ -108,26 +105,39 @@ export async function* readJsonLines(
     yield parsed as StreamMessage;
   };
 
+  // Decode continuously for split UTF-8/BOM semantics, but search and measure only new
+  // decoded segments. Joining once per frame avoids repeatedly flattening a growing rope.
+  const consume = function* (text: string): Generator<StreamMessage> {
+    let start = 0;
+    while (start < text.length) {
+      const newline = text.indexOf("\n", start);
+      const end = newline < 0 ? text.length : newline;
+      const part = text.slice(start, end);
+      lineBytes += Buffer.byteLength(part);
+      if (lineBytes > maxLineBytes) {
+        throw new CodingAgentStreamLimitError("Coding-agent stream line exceeded the byte ceiling");
+      }
+      if (part) parts.push(part);
+      if (newline < 0) break;
+      const line = parts.join("");
+      parts = [];
+      lineBytes = 0;
+      yield* flushLine(line);
+      start = newline + 1;
+    }
+  };
+
   for await (const chunk of chunks) {
     totalBytes += chunk.byteLength;
     if (totalBytes > maxTotalBytes) {
       throw new CodingAgentStreamLimitError("Coding-agent stream exceeded the total byte ceiling");
     }
-    buffer += decoder.decode(chunk, { stream: true });
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
-      yield* flushLine(line);
-      newline = buffer.indexOf("\n");
-    }
-    if (encoder.encode(buffer).byteLength > maxLineBytes) {
-      throw new CodingAgentStreamLimitError("Coding-agent stream line exceeded the byte ceiling");
-    }
+    yield* consume(decoder.decode(chunk, { stream: true }));
   }
-  // Flush the decoder's trailing bytes and any final line without a newline terminator.
-  buffer += decoder.decode();
-  if (buffer.trim()) yield* flushLine(buffer);
+  // Flush incomplete UTF-8 through the same decoded-byte accounting before parsing EOF.
+  yield* consume(decoder.decode());
+  const finalLine = parts.join("");
+  if (finalLine.trim()) yield* flushLine(finalLine);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -212,9 +222,23 @@ export interface StreamParseState {
   sawPartialText: boolean;
   sawPartialThinking: boolean;
   sawTerminalResult: boolean;
-  openToolCallId?: string;
   /** A `message_stop` stream event arrived: the assistant message is complete. */
   sawMessageStop?: boolean;
+  /**
+   * Open tool_use blocks keyed by content-block index. CodeBuddy parallel tool calls arrive
+   * as several tool_use blocks on ONE shared content-block index — intermediate blocks never
+   * receive a stop and only the final block does — while deltas for different indices (for
+   * example a long thinking block) interleave freely (observed 2026-09-25/26: four parallel
+   * calls, one counted stop, "incomplete tool call" 502 at message_stop). A single open-call
+   * slot both mis-attributes argument fragments and miscounts completions. Downstream
+   * assembly keeps a single open call, so each block is buffered and emitted atomically:
+   * when its own stop arrives, or when a new tool_use start reuses its index.
+   */
+  openToolBlocks?: Map<number, OpenToolBlock>;
+  /** Synthetic decreasing keys for tool_use start frames that omit the block index. */
+  nextSyntheticToolBlockKey?: number;
+  /** Tool_use blocks opened in this stream, whether or not they have closed yet. */
+  toolBlockStarts?: number;
   /** Completed tool_use content blocks observed in this stream. */
   completedToolCalls?: number;
   /** Tool IDs already captured through partial events, for complete-assistant deduplication. */
@@ -322,6 +346,53 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
   return events;
 }
 
+/** One in-flight tool_use block: identity plus its buffered argument fragments. */
+export interface OpenToolBlock {
+  id: string;
+  name: string;
+  argParts: string[];
+}
+
+/** Key a tool_use start frame by content-block index, falling back to a synthetic key. */
+function toolBlockKey(state: StreamParseState, event: StreamMessage): number {
+  const index = event.index;
+  if (typeof index === "number" && Number.isInteger(index)) return index;
+  const key = state.nextSyntheticToolBlockKey ?? -1;
+  state.nextSyntheticToolBlockKey = key - 1;
+  return key;
+}
+
+/**
+ * Resolve a delta/stop frame to an open tool block. An indexed frame only matches a block
+ * opened under the same index — CodeBuddy skips stop frames for thinking blocks, and such a
+ * stop must not close a tool block that happens to be open. An index-less frame resolves
+ * only when exactly one block is open. Ambiguous argument deltas are rejected before
+ * resolution; an unmatched stop cannot close a tool block.
+ */
+function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): number | undefined {
+  const index = event.index;
+  if (typeof index === "number" && Number.isInteger(index)) {
+    return state.openToolBlocks?.has(index) ? index : undefined;
+  }
+  const blocks = state.openToolBlocks;
+  if (!blocks || blocks.size !== 1) return undefined;
+  return blocks.keys().next().value;
+}
+
+/**
+ * Emit a closed block atomically — start, the buffered fragments in arrival order, end —
+ * so the strictly sequential downstream bridge never sees two calls open at once.
+ */
+function closeToolBlock(state: StreamParseState, key: number, events: AdapterEvent[]): void {
+  const block = state.openToolBlocks?.get(key);
+  if (!block || !state.openToolBlocks) return;
+  state.openToolBlocks.delete(key);
+  events.push({ type: "tool_call_start", id: block.id, name: block.name });
+  for (const part of block.argParts) events.push({ type: "tool_call_delta", arguments: part });
+  events.push({ type: "tool_call_end" });
+  state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
+}
+
 /** Map a raw Anthropic SSE event (carried inside a `stream_event` frame) to AdapterEvents. */
 function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): AdapterEvent[] {
   const events: AdapterEvent[] = [];
@@ -343,11 +414,22 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
         events.push({ type: "thinking_delta", thinking });
       }
     } else if (deltaType === "input_json_delta") {
-      // Tool-input streaming. Live for capture-only bridge turns, where the advertised MCP
-      // catalog makes the CLI emit real tool_use blocks; parsed unconditionally so a stray
-      // frame on a tools-disabled turn is ignored rather than crashing.
+      // Tool-input streaming. Fragments are buffered under their own block index because
+      // CodeBuddy alternates deltas across interleaved parallel blocks; parsed
+      // unconditionally so a stray frame on a tools-disabled turn is ignored rather than
+      // crashing.
+      if (
+        (state.openToolBlocks?.size ?? 0) > 1
+        && (typeof event.index !== "number" || !Number.isInteger(event.index))
+      ) {
+        throw new CodingAgentProtocolError("Coding-agent CLI sent an unindexed tool argument delta with multiple tool blocks open.");
+      }
       const partial = asString(delta?.partial_json);
-      if (partial && state.openToolCallId) events.push({ type: "tool_call_delta", arguments: partial });
+      if (partial) {
+        const key = resolveToolBlockKey(state, event);
+        const block = key === undefined ? undefined : state.openToolBlocks?.get(key);
+        if (block) block.argParts.push(partial);
+      }
     }
     return events;
   }
@@ -358,20 +440,27 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       const id = asString(block?.id) ?? "";
       const name = asString(block?.name) ?? "tool";
       if (id) {
-        state.openToolCallId = id;
+        const key = toolBlockKey(state, event);
+        if (state.openToolBlocks?.has(key)) {
+          // CodeBuddy reuses one content-block index for a parallel batch: every call in the
+          // batch starts on the same index, intermediate blocks never receive a stop, and only
+          // the final block does (observed 2026-09-26: START 2 alpha, A's complete args, START 2
+          // beta, B's complete args, one STOP 2). Parallel calls stream their arguments
+          // sequentially — never interleaved — so the block already open on this index is
+          // complete, and the new start implicitly closes it.
+          closeToolBlock(state, key, events);
+        }
+        (state.openToolBlocks ??= new Map()).set(key, { id, name, argParts: [] });
+        state.toolBlockStarts = (state.toolBlockStarts ?? 0) + 1;
         state.partialToolCallIds?.add(id);
-        events.push({ type: "tool_call_start", id, name });
       }
     }
     return events;
   }
 
   if (eventType === "content_block_stop") {
-    if (state.openToolCallId) {
-      state.openToolCallId = undefined;
-      state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
-      events.push({ type: "tool_call_end" });
-    }
+    const key = resolveToolBlockKey(state, event);
+    if (key !== undefined) closeToolBlock(state, key, events);
     return events;
   }
 

@@ -207,8 +207,8 @@ Katman modeli ve her katmanın yazdığı anahtarlar için [Codex İstem Katmanl
 | `GET, POST /api/windows-tray` | Windows tepsisi durumunu okuyun veya kurun/başlatın/durdurun/kaldırın | 400 desteklenmeyen platform/eylem; 500 işlem hatası |
 | `GET /api/diagnostics/project-config` | Önbelleğe alınmış proje yapılandırma uyarılarını okuyun | — |
 | `POST /api/sync` | Geçerli model kataloğunu Codex ile senkronize edin | 500 başarısız senkronizasyon |
-| `GET /api/update/check` | `latest` veya `preview` güncelleme kanalını kontrol edin | 400 geçersiz etiket |
-| `POST /api/update/run` | İsteğe bağlı olarak yeniden başlatmanın takip ettiği bir güncelleme işini başlatın | 400 geçersiz gövde; işe özgü çakışma/hata durumu |
+| `GET /api/update/check` | `latest` veya `preview` paket kanalını eşzamansız denetleyip başarılı olursa önbelleği yenile | 400 geçersiz etiket |
+| `POST /api/update/run` | Yeni paket sürümünü eşzamansız denetle, ardından isteğe bağlı yeniden başlatmayla güncelleme işini başlat | 400 geçersiz gövde; işe özgü çakışma/hata durumu |
 | `GET /api/update/status` | Bir güncelleme işini kimliğe göre yoklayın | 404 bilinmeyen iş |
 | `GET, PUT /api/sidecar-settings` | Web arama ve vizyon sidecar model/arka uç ayarlarını okuyun veya güncelleyin | 400 geçersiz şekil, arka uç veya sınır |
 | `GET, PUT /api/shadow-call-settings` | Gölge çağrı müdahale ayarlarını okuyun veya güncelleyin | 400 geçersiz şekil veya değer |
@@ -228,8 +228,8 @@ gelmezse bu alan boş kalır; istenen modelden çıkarım yapılmaz.
 | `GET /api/debug/usage-logs` | Sınırlı kullanım hata ayıklama girdilerini okuyun | — |
 | `GET /api/debug/injection-logs` | Sınırlı rehberlik enjeksiyonu hata ayıklama girdilerini okuyun | — |
 | `GET /api/claude/inbound-debug` | Claude gelen hata ayıklama durumunu ve girdilerini okuyun | — |
-| `GET /api/usage` | Kullanımı aralığa ve istemci yüzeyine göre özetleyin; Codex yanıtları ayrıca kararlı PII olmayan günlük etiketlerine göre anahtarlanan bir `accounts` dökümü içerir | Depolama okunamıyorsa bir `error: "read_failed"` özeti döndürür |
-| `GET /api/metrics` | Mantıksal istekler, fiziksel gönderimler, kurtarma türleri, süre ve TTFT için süreç yerel Prometheus metin metriklerini döndürür. Etiketler kapalı protokol, sonuç ve kurtarma sınıfı kümeleriyle sınırlıdır; istek veya kimlik bilgisi tanımlayıcıları dışa aktarılmaz. | Başlangıçta `metricsExport.enabled` true değilse 404; olağan yönetim kimlik doğrulaması gerekir ve veri düzlemi kimlik bilgileri erişim sağlamaz |
+| `GET /api/usage` | Kullanımı aralığa ve istemci yüzeyine göre özetleyin; Codex yanıtları ayrıca kararlı PII olmayan günlük etiketlerine göre anahtarlanan bir `accounts` dökümü içerir | Depolama okunamıyorsa 500 `{ "error": "read_failed" }` döndürür |
+| `GET /api/metrics` | Mantıksal istekler, fiziksel gönderimler, kurtarma türleri, süre ve TTFT için süreç yerel Prometheus metin metriklerini döndürür. İstek metriklerinin etiketleri kapalı kümelerdir; Kiro göstergeleri yalnızca sınırlı opak hesap etiketleri ekler; istek veya kimlik bilgisi tanımlayıcıları dışa aktarılmaz. Dört `opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}` göstergesi yalnızca önbelleği okur ve en fazla 32 opak hesap etiketi kullanır. Toplama sırasında ağ sorgusu yapılmaz. | Başlangıçta `metricsExport.enabled` true değilse 404; olağan yönetim kimlik doğrulaması gerekir ve veri düzlemi kimlik bilgileri erişim sağlamaz |
 | `GET /api/storage` | Sepete göre Codex depolama kullanımını tarayın | Tarama hatasında bir `error: "scan_failed"` yükü döndürür |
 | `POST /api/storage/cleanup/preview` | Arşivlenmiş oturum temizliğini önizleyin ve bağlayıcı bir özet döndürün | 400 `invalid_json` veya `invalid_percent` |
 | `POST /api/storage/cleanup` | Önizlenen arşivlenmiş kümeyi karantinaya alın veya kalıcı olarak kaldırın | 400 geçersiz girdi; 409 eski/meşgul/başvurulan durum; 500 dosya sistemi/veritabanı hatası |
@@ -296,7 +296,7 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `POST /api/oauth/login/cancel` | Devam eden bir genel OAuth akışını iptal edin | 400 bilinmeyen sağlayıcı |
 | `GET /api/oauth/status` | Bir sağlayıcının OAuth akışını yoklayın | 400 bilinmeyen sağlayıcı |
 | `POST /api/oauth/logout` | Seçilen sağlayıcı kimlik bilgisini kaldırın | 400 bilinmeyen sağlayıcı; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın Kiro satırları otomatik seçimden dışlandığında `autoSelectable` ve kapalı bir `skipReason` taşır; tek etkin hesap yine istek gönderebilir. Kota isteğe bağlıdır. | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth havuz politikasını okuyun veya güncelleyin | 400 Anthropic olmayan sağlayıcı veya geçersiz politika |
 | `POST /api/oauth/accounts/clear-cooldown` | Bir OAuth hesabının çalışma zamanı soğuma süresini temizleyin | 400 geçersiz sağlayıcı/hesap |
@@ -343,7 +343,12 @@ yeniden yüklemeden sonra da saklar, ancak bir sınır olarak uygulamaz.
 | --- | --- | --- |
 | `GET /api/github/star` | Kullanıcının `gh` oturumu aracılığıyla depo yıldız durumunu okuyun | Duruma özgü sabit sonuç kodları |
 | `POST /api/github/star` | Depoyu yalnızca kimliği doğrulanmış bir insan eyleminden yıldızlayın | Kontrol paneli oturumu kanıtı olmayan ajan odaklı arayanlar için 403 `agent_consent_required` |
-| `GET /api/update/badge` | Ucuz kenar çubuğu güncelleme rozeti durumunu okuyun | — |
+| `GET /api/update/badge` | Kayıt sorgusu yapmadan önbellekteki paket rozetini oku; önbellek yoksa, kanal farklıysa veya 40 saatten eskiyse `unknown: true` döndür. `surface=desktop&session=<id>` yalnızca belirtilen masaüstü uygulaması oturumunu okur. | 400 geçersiz surface; eksik veya süresi dolmuş masaüstü oturumu `unknown: true` döndürür |
+| `POST /api/update/desktop-snapshot` | Masaüstü kabuğu, Tauri güncelleyicisinin görüntü durumunu bağlı proxy istemcisi üzerinden yayımlar | `Origin` üstbilgisi varsa veya ham `admin-token` principal yoksa 403; geçersiz alanlarda 400; 1 KiB üzerinde 413 |
+
+Masaüstü snapshot geçici görüntü durumudur, kurulum isteği değildir. Proxy bellekte en fazla 32 oturum tutar ve bir oturumu son heartbeat sonrasında 180 saniyede sona erdirir. surface=desktop olmayan normal tarayıcı paket rozetini okumaya devam eder.
+
+Proxy, uygun paket kurulumunda başlangıçtan sonra önbellek eksikse veya 20 saatten eskiyse denetim yapar; ardından tazeliği saat başı kontrol eder. `OCX_DISABLE_UPDATE_CHECK=1` yalnızca otomatik denetimleri kapatır. Açıkça yapılan denetim ve çalıştırma istekleri kullanılabilir.
 
 :::caution
 Yönetim kimlik doğrulaması proxy'ye erişimi kanıtlar; kullanıcının kimliğini

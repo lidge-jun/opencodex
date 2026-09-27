@@ -16,10 +16,14 @@ import { enqueuePlannedRuns } from "../../src/lab/automation/queue";
 import { rollBudgetWindow, runBudgetRemaining } from "../../src/lab/automation/budgets";
 import {
   enqueueManualLabRun,
+  isLabAutomationSchedulerRunning,
+  reconcileLabAutomationQueue,
   requestLabAutomationShutdown,
   resetLabAutomationSchedulerStateForTests,
   runLabAutomationTick,
   setLabAutomationDispatchDeps,
+  setLabAutomationManualEnqueuePostWriteHookForTests,
+  startLabAutomationScheduler,
   stopLabAutomationScheduler,
 } from "../../src/lab/automation/orchestrator";
 import { dispatchLabAutomationRun } from "../../src/lab/automation/dispatch";
@@ -31,6 +35,10 @@ import type {
 import { LabAutomationError } from "../../src/lab/automation/types";
 import { LAB_AUTOMATION_HARD_MAX } from "../../src/lab/automation/constants";
 import { createHostIssuedLabRouteExecutor } from "../../src/lib/lab-live-host";
+import {
+  resetOptionalShutdownHooksForTests,
+  runOptionalShutdownHooks,
+} from "../../src/lib/optional-shutdown-hooks";
 import { readInstallationSalt } from "../../src/lab/subject/installation-salt";
 import type { NormalizedObservation } from "../../src/lab/conformance/types";
 import {
@@ -151,6 +159,7 @@ afterEach(() => {
   requestLabAutomationShutdown();
   stopLabAutomationScheduler();
   resetLabAutomationSchedulerStateForTests();
+  resetOptionalShutdownHooksForTests();
   setLabAutomationDispatchDeps({});
   resetCompatibilityVersionCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -236,6 +245,142 @@ describe("CL-08 independent review regressions", () => {
       scenarioId: "responses-core.protocol.request-shape",
       configDir: home,
     });
+    const result = await enqueueManualLabRun(plan, home);
+    expect(result).not.toBeNull();
+    expect(result?.state).not.toBe("queued");
+    expect(result?.state).not.toBe("running");
+  });
+
+  test("manual run remains cancellable by shutdown after its activation lease is released", async () => {
+    const home = tempHome();
+    prepareHome(home);
+    const config = providerConfig();
+    const plan = planManualLabRun({
+      evidenceLayer: "live_route_compatibility",
+      scenarioId: "responses-core.live.basic-turn",
+      providerName: "fixture-provider",
+      modelId: "fixture-model",
+      config,
+      configDir: home,
+    });
+    let startedResolve!: () => void;
+    const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+    const release = setLabAutomationDispatchDeps({
+      configDir: home,
+      loadConfig: () => config,
+      resolve: fixtureDnsResolve(),
+      routeExecutor: createHostIssuedLabRouteExecutor(async (input) => {
+        startedResolve();
+        if (!input.signal.aborted) {
+          await new Promise<void>((resolve) => input.signal.addEventListener("abort", () => resolve(), { once: true }));
+        }
+        return passObservation();
+      }),
+    });
+
+    const manualRun = enqueueManualLabRun(plan, home);
+    await started;
+    release();
+    runOptionalShutdownHooks();
+
+    const result = await manualRun;
+    expect(result?.state).toBe("cancelled");
+    expect(result?.terminalCode).toBe("cancelled");
+  });
+
+  // Regression: the management route is outside the data-plane drain gate, so a manual run
+  // accepted while drainAndShutdown is in flight could register its per-run hook AFTER the
+  // hooks snapshot ran — orphaned, never invoked, and free to dispatch past shutdown (the
+  // Lab was never activated in that scenario, so no scheduler hook had set
+  // shutdownRequested either). The enqueue path now treats a completed sweep as already
+  // fired and refuses to queue or dispatch.
+  test("a manual run arriving after the shutdown sweep does not queue or dispatch", async () => {
+    const home = tempHome();
+    prepareHome(home);
+    saveLabAutomationPolicy(defaultLabAutomationPolicyV1(), home);
+    const plan = planManualLabRun({
+      evidenceLayer: "protocol_conformance",
+      scenarioId: "responses-core.protocol.request-shape",
+      configDir: home,
+    });
+    runOptionalShutdownHooks();
+    const result = await enqueueManualLabRun(plan, home);
+    expect(result).toBeNull();
+    expect(loadLabAutomationState(home).runs).toHaveLength(0);
+  });
+
+  // Regression: the post-registration sweep check runs after the queue row is already on
+  // disk. A sweep landing in that gap used to leave the row `queued` forever — scheduler
+  // ticks only pick up scheduled runs — while the route treated the returned record as a
+  // 200 success. The row is now cancelled and the enqueue reports failure.
+  test("a sweep between the queue write and the post-write check cancels the row and fails", async () => {
+    const home = tempHome();
+    prepareHome(home);
+    saveLabAutomationPolicy(defaultLabAutomationPolicyV1(), home);
+    const plan = planManualLabRun({
+      evidenceLayer: "protocol_conformance",
+      scenarioId: "responses-core.protocol.request-shape",
+      configDir: home,
+    });
+    setLabAutomationManualEnqueuePostWriteHookForTests(() => runOptionalShutdownHooks());
+    const result = await enqueueManualLabRun(plan, home);
+    expect(result).toBeNull();
+    const stored = loadLabAutomationState(home).runs.find((row) => row.runKey === plan.runKey);
+    expect(stored?.state).toBe("cancelled");
+    expect(stored?.terminalCode).toBe("cancelled");
+  });
+
+  // Regression: a policy PUT shares the same post-sweep race as the manual-run POST — the
+  // route resumes past the snapshot and applySchedulerPolicy used to start a scheduler
+  // whose startup cleared `shutdownRequested`, leaving a live interval dispatching Lab
+  // work outside the completed sweep. The start is now refused and the latch stays set.
+  test("a policy update landing after the shutdown sweep cannot restart Lab automation", async () => {
+    const home = tempHome();
+    prepareHome(home);
+    const config = providerConfig();
+    const policy = livePolicy();
+    saveLabAutomationPolicy(policy, home);
+    saveLabAutomationRoutes({
+      schemaVersion: 1,
+      routes: [{ providerName: "fixture-provider", modelId: "fixture-model" }],
+    }, home);
+    let invokes = 0;
+    setLabAutomationDispatchDeps({
+      configDir: home,
+      loadConfig: () => config,
+      resolve: fixtureDnsResolve(),
+      routeExecutor: createHostIssuedLabRouteExecutor(async () => {
+        invokes += 1;
+        return passObservation();
+      }),
+    });
+    runOptionalShutdownHooks();
+
+    // The late PUT path: applySchedulerPolicy reconciles then starts the scheduler.
+    reconcileLabAutomationQueue(home);
+    startLabAutomationScheduler(home);
+    expect(isLabAutomationSchedulerRunning(home)).toBe(false);
+    await runLabAutomationTick(home);
+    expect(invokes).toBe(0);
+  });
+
+  // `hooksRan` is process-lifetime (drainAndShutdown callers exit; restarts are new
+  // processes), so a later manual run must stay rejected. The test reset models the
+  // fresh process: with both latches cleared, the manual path dispatches again.
+  test("manual runs stay rejected after the sweep until a test reset re-arms them", async () => {
+    const home = tempHome();
+    prepareHome(home);
+    saveLabAutomationPolicy(defaultLabAutomationPolicyV1(), home);
+    const plan = planManualLabRun({
+      evidenceLayer: "protocol_conformance",
+      scenarioId: "responses-core.protocol.request-shape",
+      configDir: home,
+    });
+    runOptionalShutdownHooks();
+    expect(await enqueueManualLabRun(plan, home)).toBeNull();
+
+    resetOptionalShutdownHooksForTests();
+    resetLabAutomationSchedulerStateForTests();
     const result = await enqueueManualLabRun(plan, home);
     expect(result).not.toBeNull();
     expect(result?.state).not.toBe("queued");

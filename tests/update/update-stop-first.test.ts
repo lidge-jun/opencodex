@@ -831,6 +831,21 @@ esac
     expect(recovery).toContain("currentPackageRuntimeLiveness()");
   });
 
+  test("failed-update service recovery releases the update lease before the service starts (#5760)", () => {
+    // The service manager starts the proxy outside this process tree, so it cannot join the
+    // delegated lease; it has to take the lease itself while the repair waits for it.
+    const start = launcherSource.indexOf("function recoverStoppedRuntimeAfterFailure(");
+    const recovery = launcherSource.slice(start, launcherSource.indexOf("const hasPendingTeardown", start));
+    const serviceAt = recovery.indexOf('recovery.action === "service"');
+    const releaseAt = recovery.indexOf("releaseUpdateLease()", serviceAt);
+    const replanAt = recovery.indexOf("planRecovery()", releaseAt);
+    const refreshAt = recovery.indexOf("refreshBackgroundServiceOrStartDirect()", replanAt);
+    expect(serviceAt).toBeGreaterThan(-1);
+    expect(releaseAt).toBeGreaterThan(serviceAt);
+    expect(replanAt).toBeGreaterThan(releaseAt);
+    expect(refreshAt).toBeGreaterThan(replanAt);
+  });
+
   test("GUI worker update children use pipe stdio so background updates do not open consoles", () => {
     expect(updateSource).toContain("function updateChildStdio()");
     expect(updateSource).toContain('process.env.OCX_SERVICE === "1"');

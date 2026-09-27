@@ -24,7 +24,7 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Responses admission and finalization are composed through the
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](transports/responses.md#core-module-ownership). Kiro's optional account-load admission is process-local and request-owned; its slot ends with the response body or cancellation. Other providers retain their admission path.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 
@@ -122,7 +122,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `bin/ocx.mjs` | Published npm `bin` entry (Node shim). Resolves the bundled or explicit Bun binary before project dotenv can load, stamps its runtime provenance plus a proof-bound Anthropic parent-env snapshot, lazy-runs `bun/install.js` if only the placeholder stub is present, then execs `src/cli/index.ts` under Bun. Lets `npm install -g` work without a separately-installed Bun. The exact `system codex-cli-update` inspection namespace skips both boot repair and lazy Bun installation; missing runtime support fails closed instead of mutating state. |
 | `src/lib/bun-runtime.ts` | Bundled-Bun resolution: `isRealBunBinary()` (size gate vs the ~450-byte placeholder stub), `bundledBunPath()`, and `durableBunPath()` (path baked into service/shim artifacts). Durable selection accepts only the source/path pair already stamped for the running executable; it never re-reads a project-dotenv `OPENCODEX_BUN_PATH`. |
 | `src/lib/plain-data.ts` | Detached copies for a consumer that must not observe later edits. Descriptor-based reads, including array elements, so an accessor is refused rather than invoked; refuses cycles, functions, class instances and anything else JSON could not have produced, and returns a copy-or-refusal union rather than degrading silently. Symbol-keyed process bookkeeping is skipped. |
-| `src/cli/index.ts` | `ocx` / `opencodex` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, service, update. `restart` refuses an in-place restart requested by a CLI whose version differs from the attested `/healthz` version, because the replacement respawns from the live installation; placeholder versions (unknown/0.0.0) stay incomparable and keep the restart path. Configuration: provider, account, models, combo/route, access, integrations, v2. Client launchers: Claude, OpenCode, MiniMax Code, and MiniMax CLI text. The MMX launcher owns a child-lifetime loopback path bridge from the client's hard-coded `/anthropic/v1/messages` path to the canonical `/v1/messages` data plane; the server does not expose an extra auth surface. Diagnostics: doctor, debug, observe, health. Windows adds tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. `system codex-cli-update` is the deliberate read-only exception and suppresses auto-restore for its whole namespace, including malformed invocations. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
+| `src/cli/index.ts` | `ocx` / `opencodex` CLI. Lifecycle: init, start, stop, restart, status, sync, restore/eject, gui, service, update. `restart` refuses an in-place restart requested by a CLI whose version differs from the attested `/healthz` version, because the replacement respawns from the live installation; placeholder versions (unknown/0.0.0) stay incomparable and keep the restart path. Configuration: provider, account, models, combo/route, access, integrations, v2. Client launchers: Claude, OpenCode, MiniMax Code, and MiniMax CLI text. The MMX launcher owns a child-lifetime loopback path bridge from the client's hard-coded `/anthropic/v1/messages` path to the canonical `/v1/messages` data plane; the server does not expose an extra auth surface. Diagnostics: doctor, debug, observe, health. Windows adds tray. Hidden `__update-badge` prints the read-only package badge JSON without refresh or shim repair for the npm tray. The full command surface is `src/cli/help.ts`; this table names the groups, not every verb. After help/version early exits, ordinary commands run the bounded best-effort Codex-shim auto-restore policy before dispatch. `system codex-cli-update` is the deliberate read-only exception and suppresses auto-restore for its whole namespace, including malformed invocations. Keeps the `#!/usr/bin/env bun` shebang for from-source dev (`bun run src/cli/index.ts`). |
 | `src/server/index.ts` | Bun server entrypoint: `startServer`, `/v1/responses` HTTP + WebSocket routing (compact handled before generic Responses), exact `POST /v1/images/generations` and `POST /v1/images/edits` routing, `/v1/models`, the Anthropic-shaped `/v1/messages` and OpenAI-shaped `/v1/chat/completions` compatibility surfaces, the Live/Realtime surface, the hosted-search relay, artifact serving, `/healthz`, the `/api/*` auth gate, the `/v1/*` JSON 404 guard, GUI fallback, the opt-in loopback-only hub-management listener, and facade re-exports for split server modules. The route table itself is built by `src/server/index/serve-options.ts`; this entry file owns the listener and the startup transaction. |
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/server/audio-transcriptions.ts` | Standalone multipart transcription; audio-specific key admission, bounded upload/response, stored OpenAI credential resolution and lease-bound cancellation. See [audio contracts](data-planes/inbound-compat.md#standalone-file-transcription). |
@@ -140,7 +140,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
-| `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. |
+| `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. Elevated Task Scheduler repair stages bounded payloads; the unelevated launcher pins every namespace ancestor and payload with non-reparse handles that deny write/delete sharing on the payload and delete sharing on each ancestor until UAC processing exits. |
 
 `src/cli/provider.ts` accepts the Google-only `--google-tool-schema-policy` creation flag and rejects
 an unknown value or non-Google effective adapter before persistence. The persisted field and default
@@ -156,7 +156,7 @@ there. Feature code is grouped by responsibility:
 | Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
-| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/` |
+| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |
 
 `src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct.
 
@@ -185,7 +185,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
-until shutdown. Normal shutdown restores native Codex. Service mode sets
+until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected and no pending connect marker owns the newly issued key. `src/client/connect.ts` publishes that fingerprint marker before the key, then clears it with the connection commit or rollback under the client lifecycle and config mutation locks. Connected, invalid, or mismatched client state retains an existing token. A valid pending marker retains only its matching fingerprint; an older marker does not own a replacement service key. An absent token is reported as absent; unsafe, malformed, or unreadable markers and lock, state-read, or deletion failures leave cleanup unverified.
 The package-tree integrity fence for live package replacement follows the
@@ -198,11 +198,11 @@ lost probe deletes this home's pid record and then binds a second listener that 
 records and re-points Codex at itself. `probePortOwner` in `src/server/proxy-liveness.ts` asks the
 busy port directly, on both loopback families, independent of the pid and runtime records; the
 outcome is the pure decision `decideBusyPreferredPort` in `src/cli/dispatch.ts`. An opencodex
-holder is refused with the same message the owner check prints (exit 0 instead under
-`OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
+holder is refused with the same message the owner check prints (intentional stay-out under
+`OCX_SERVICE=1`, using the [Windows wrapper protocol](ops/docs-and-release.md#windows-service-wrapper-and-incomplete-updates)), and a holder that does not identify as opencodex
 is reported as such rather than called foreign, because an identity probe cannot distinguish a
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
-pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS". A restart replacement that finds its own draining parent waits for it instead ([restart handoff](ops/service-and-sidecars.md#restart-handoff)).
 
 Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
 for its resolved OpenCodex state directory before loading configuration or binding a listener.
@@ -219,21 +219,21 @@ TTL or lock-file deletion participates in recovery.
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 
-`startServer` composes up to three sockets in one synchronous startup transaction: the public data
-listener, the optional unauthenticated data-loopback listener, and the optional hub-management
-listener.
-
+`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`.
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
 the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
 `POST /v1/messages/count_tokens`, and `POST /v1/chat/completions`. It never serves `/api/*`,
 `/healthz`, `/readyz`, or GUI routes, so local management discovery has to use an authenticated
 surface with a management credential.
-
 The hub-management socket is enabled only by `runtimeRole: "hub"` plus
 `hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except
 GUI, session bootstrap/exchange, and `/api/*`.
-
+The `hub-link` socket is HTTP-only and default-denies all but the fixed data routes, catalog, hub-state,
+usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
+`/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
+key ids recorded by `links.json`, never the environment token. Context relays rebuild that policy for their post-body admission check, so key revocation stops an in-flight request before dispatch. `ensureStarted()` is single-flight,
+final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
 At the end of the startup transaction, `startServer` also starts the optional Claude intercept pair
@@ -242,25 +242,25 @@ the ingress decision, `stop` joined into the listener shutdown) from `src/claude
 and a loopback TLS listener (`src/claude/intercept/listener.ts`) that presents a leaf for
 `api.anthropic.com` signed by a per-install authority (`src/claude/intercept/local-ca.ts`, persisted
 under `<OPENCODEX_HOME>/claude-intercept/` with a 0600 key; never installed into an OS trust store). CA reads and pair publication share a directory-bound SQLite lease; persisted certificates must match their private key and verify as a self-signed CA. Startup retries only lease contention with bounded asynchronous backoff before binding either listener.
-Claude Code reaches the pair through `HTTPS_PROXY` plus `NODE_EXTRA_CA_CERTS` in its settings env
+Claude Code reaches the pair through an authenticated `HTTPS_PROXY` URL plus `NODE_EXTRA_CA_CERTS` in its settings env
 (`src/claude/intercept/settings.ts`), so no `ANTHROPIC_BASE_URL` rewrite is involved and the client
 still believes it talks to Anthropic. The proxy splices `CONNECT api.anthropic.com:443` onto the TLS
-listener, relays every other CONNECT target blind, and refuses plain proxied HTTP and loopback targets.
-The TLS listener rewrites `POST /v1/messages` and `POST /v1/messages/count_tokens` onto a loopback
-origin and dispatches them to the same route table under the `claude-intercept` ingress, which takes
-the loopback request policy; every other path on the intercepted host is relayed verbatim to the
-configured Anthropic upstream. The pair is on by default on a hub (`claudeCode.intercept.enabled`),
-its proxy port defaults to the public port + 100 (`claudeCode.intercept.port`), and a bind failure
-degrades to a startup warning rather than a startup failure; stop joins both sockets. A server asked
-for an ephemeral public port (`startServer(0)`, the shape every in-process test fixture uses) has no
-stable port to derive from, so the pair stays off unless `claudeCode.intercept.port` is explicit. Requests on this ingress also honour first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode adds a second, Desktop-only CONNECT proxy on the next port; see [Claude Desktop](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
+listener, relays every other CONNECT target blind, and refuses unauthenticated clients, plain proxied HTTP, and loopback targets. The per-install proxy token is stored owner-only under `<OPENCODEX_HOME>/claude-intercept/` (0600 plus a real per-user NTFS ACL on Windows, via `src/lib/windows-secret-acl.ts`, and re-pinned on every read-through `ensure`), and the settings file carrying it is written through the same hardened atomic writer. Every start runs `migrateClaudeInterceptSettings` (`src/claude/intercept/settings.ts`), which rewrites an owned env that no longer matches — e.g. a pre-auth URL left by an upgrade — while never creating an absent env or touching a foreign one, so a service restart cannot strand clients on 407s. Status/inspection reads the token without minting it; only apply and intercept startup create it.
+The TLS listener rewrites `POST /v1/messages` and `POST /v1/messages/count_tokens` to a loopback origin and dispatches them under the `claude-intercept` ingress; other paths relay to the configured upstream.
+The pair is on by default on a hub (`claudeCode.intercept.enabled`); its proxy port defaults to public port + 100 (`claudeCode.intercept.port`). Bind failure warns, and stop joins both sockets. With an ephemeral public port (`startServer(0)`), an explicit intercept port is required.
+This ingress honours first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode and the primitive's optional `allowedTargets` restriction are described under [Desktop egress proxy](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
 
+`src/claude/intercept/client-class.ts` classifies each request by its Claude Code `User-Agent` entrypoint: `claude-desktop`, `claude-desktop-3p`, and `local-agent` are Desktop; other well-formed `claude-cli/<v> (external, <entrypoint>)` values are CLI; absent or malformed values are unknown.
+Only a client with its own first-party intent enabled (Desktop mode or `claudeCode.cliFirstParty`) enters the router for Messages paths; other paths use the configured upstream relay.
+Every path from an opted-out or unknown client, and every path while Claude routing is disabled, relays to real Anthropic through `relayToUpstream` with `CLAUDE_INTERCEPT_UPSTREAM`.
+The User-Agent split is a routing hint any local process can forge, not a trust boundary.
+Two independent intents can want that settings env: Desktop first-party mode and `claudeCode.cliFirstParty` for the standalone CLI. `src/claude/first-party-settings.ts` owns the union: `reconcileClaudeFirstPartySettings` writes the owned pair while either intent is on, keeps the file untouched while an intent is on but the intercept cannot run, and removes the owned pair only when neither intent remains. `firstPartyProxyStatus` classifies what the settings file currently points at against the bound listener (`none`, `live`, `stopped`, `disabled`, `broken`, `foreign`, `local`, `unknown`); it reads the proxy token and never mints it. `ocx claude` with Claude routing off launches natively; when the shared settings env carries opencodex's proxy it adds `NO_PROXY=*` and `no_proxy=*` so this launch bypasses it, unless an inherited foreign `HTTPS_PROXY` or `https_proxy` is present, in which case it warns instead.
 Auxiliary listener bind failures carry the listener key and effective address through `AuxiliaryListenerBindError` in `src/server/ports.ts`. `src/cli/index.ts` reports them without retrying the public port. Startup still rolls back every earlier socket synchronously.
 
-A failed optional bind initiates rollback of every earlier socket; normal stop joins all bound
-sockets before lifecycle release. The existing launchd/systemd installer remains the service owner
-and continues loading the data token from `service-api-token`; hub mode adds no service-manager
-fork and no token-bearing unit/plist field.
+A failed public, loopback, or management bind rolls back earlier sockets; a failed hub-link bind warns
+and exposes `failed{bind}` through optional-listener status while existing sockets remain available.
+Listener-port persistence failures expose `failed{persist}` and close the new socket. Normal stop joins
+sockets before release. The existing launchd/systemd installer remains the service owner and loads the data token from `service-api-token`; hub mode adds no service-manager fork or token-bearing unit/plist field.
 
 > Decision record: [ADR-0002](decisions/ADR-0002-lifecycle.md)
 
@@ -314,7 +314,7 @@ diagnostics only for a confirmed candidate and never reads adjacent auth state.
 Unix install-probe cleanup refusals retain their fail-closed behavior and report a bounded
 diagnostic suffix: a fixed probe phase, allowlisted native error/signal, and bounded exit status.
 Metadata contents, launcher paths and raw child errors never enter that suffix. Diagnostic
-classification does not grant process ownership or change rollback/termination policy.
+classification does not grant process ownership or change rollback/termination policy. An explicit `codex-shim install` (`src/cli/dispatch.ts`) exits nonzero when installation is refused or the resulting shim is unhealthy, printing the diagnostic summary; an already-installed healthy shim succeeds.
 
 Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,
@@ -342,7 +342,7 @@ field for every tool. Only bare or `default.`-prefixed `exec` and `apply_patch` 
 one recognized alternate body field or remove one complete outer Markdown fence; ambiguous
 alternate fields and every other freeform grammar pass through unchanged.
 
-The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
+The server exposes `POST /api/stop` which restores native Codex config (a sibling instance answers `sharedTeardown: "not-owned"` instead), stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
 
 > Decision record: [ADR-0004](decisions/ADR-0004-lifecycle.md)
@@ -359,7 +359,7 @@ config snapshot and the bounded service-token observation needed for its `_remot
 it does not import the connect command, inspect catalog readiness, acquire lifecycle locks, or run
 config/secret ACL hardening.
 
-`src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes.
+`src/remote/protocol.ts` owns pure interval/feature negotiation. `src/remote/hub-state.ts` owns the `GET|HEAD /v1/hub-state` contract, its caps, and the parser both sides share. `src/client/hub-client.ts` owns bounded, schema-validated remote catalog consumption, hub-state reads, and key-id probes; `src/client/hub-state.ts` owns the resolution and the owner-stamped 0600 cache, and a failed read reports "unavailable" rather than degrading to the client's own local provider and login state. `src/client/hub-relay.ts` is a fixed-authority management relay with URL, header, body, redirect, and stream bounds. The public data listener remains the direct client→hub path; the loopback management ingress never serves data-plane routes. A client with `transport: "link"` reaches its hub through an SSH tunnel instead; see [Remote Link](remote-link.md). A client with a link sidecar owns its SSH tunnel; see [Remote Link](remote-link.md).
 
 ### Remote Hub status credential binding
 
@@ -394,7 +394,7 @@ Automatic Codex pool selection and account status share the [plan exclusion cont
 
 ### Empty forced search answers
 
-`src/web-search/loop.ts` makes at most one extra answer attempt after a clean forced-answer terminal with no visible output or tool call. The recovery has no tools and reuses gathered search results. Malformed calls fail before refusal/truncation passthrough, and well-formed recognized refusal/truncation terminals pass through unchanged, including empty or partial answers. The extra generation may incur provider usage.
+`src/web-search/loop.ts` makes at most one extra answer attempt after a clean forced-answer terminal with no visible output or tool call. The recovery has no tools and reuses gathered search results. Malformed calls fail before refusal/truncation passthrough, and well-formed recognized refusal/truncation terminals pass through unchanged, including empty or partial answers. The extra generation may incur provider usage. `src/web-search/run-turn-loop.ts` shares this recovery; below the search cap, `emptyCompletionRetry` permits one identical empty-answer retry per request with current tools and results. Errors and invalid terminals never authorize another search.
 
 OpenAI sidecar 429 replays run only when their backoff fits the remaining sidecar deadline; otherwise the original 429 remains the routing-health outcome rather than becoming a timeout. Reset recovery and 429 replays share one three-send budget per search, so the two layers cannot multiply physical sends.
 ## Scoped provider quota for Combo selection
@@ -502,7 +502,7 @@ This is also why the classifier cannot duplicate visible output. Native byte str
 
 Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, `tests/routing/routing-policy-fallback.test.ts`, `tests/helpers/combo-context-overflow-cases.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
 
-`src/combos/failover.ts` caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
+`src/combos/failover.ts` uses a 10-minute fallback for a spent account usage window (codes `usage_limit_exceeded`, `usage_limit_reached`, `1308`, or `usage limit reached` / `usage limit has been reached` prose, including HTTP 502) and for provider-scoped credential or billing failure codes such as `invalid_api_key` and `insufficient_quota`. This duration does not change failure classification or cooldown scope; upstream retry/reset signals and configured durations retain precedence. It caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
 
 ## Combo default effort precedence
 

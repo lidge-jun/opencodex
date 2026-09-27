@@ -70,6 +70,17 @@ const ICO_SIZES = [16, 32, 48, 64, 128, 256];
 const TRAY_OUTPUT = "tray/icon.png";
 const TRAY_SIZE = 44;
 const traySource = join(iconsDir, "tray", "icon.svg");
+const DOTTED_TRAY_OUTPUT = "tray/icon-update.png";
+const DOTTED_TRAY_SVG = '<g id="update-dot"><circle cx="409" cy="395" r="48" fill="#ffffff"/><circle cx="409" cy="395" r="34" fill="#2f81f7"/></g>';
+
+function renderDottedTray(target: string): void {
+  const dottedSvg = join(target, ".tray-update.svg");
+  const base = readFileSync(traySource, "utf8");
+  if (!base.includes("</svg>")) throw new Error("tray icon source is not SVG");
+  writeFileSync(dottedSvg, base.replace("</svg>", DOTTED_TRAY_SVG + "</svg>"));
+  try { render(TRAY_SIZE, join(target, DOTTED_TRAY_OUTPUT), dottedSvg); }
+  finally { rmSync(dottedSvg, { force: true }); }
+}
 
 /** Render at `size` from `from`, defaulting to the app icon vector. */
 function render(size: number, out: string, from: string = source): void {
@@ -112,6 +123,8 @@ function generateInto(target: string): { produced: string[]; icnsSkipped: boolea
   mkdirSync(join(target, "tray"), { recursive: true });
   render(TRAY_SIZE, join(target, TRAY_OUTPUT), traySource);
   produced.push(TRAY_OUTPUT);
+  renderDottedTray(target);
+  produced.push(DOTTED_TRAY_OUTPUT);
 
   return { produced, icnsSkipped };
 }

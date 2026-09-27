@@ -9,6 +9,7 @@ private final class NativeTrayPopover: NSObject {
     let panel = NativeTrayPanel()
     let store = NativeTrayStore()
     var callback: (@convention(c) (Int32) -> Void)?
+    var switchCallback: (@convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>) -> Void)?
 
     override init() {
         super.init()
@@ -18,6 +19,13 @@ private final class NativeTrayPopover: NSObject {
             guard let self else { return }
             if event == 2 || event == 3 || event == 4 { self.panel.dismiss() }
             if event != 2 { self.callback?(event) }
+        }
+        // Only names cross the ABI: the host picks the route and body from its own config.
+        store.switchAccount = { [weak self] provider, accountId in
+            guard let callback = self?.switchCallback else { return }
+            provider.withCString { provider in
+                accountId.withCString { accountId in callback(provider, accountId) }
+            }
         }
     }
 
@@ -31,6 +39,78 @@ private final class NativeTrayPopover: NSObject {
         if panel.isVisible { callback(1) }
     }
 
+}
+
+@MainActor
+private final class UpdateDotView: NSView {
+    weak var statusButton: NSStatusBarButton?
+
+    init(button: NSStatusBarButton) {
+        statusButton = button
+        super.init(frame: button.bounds)
+        autoresizingMask = [.width, .height]
+        // AppKit keeps the template image and its highlighted tint. This view draws only
+        // the independent accent, without making the status button layer-backed.
+        wantsLayer = false
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let button = statusButton else { return }
+        let imageRect = button.cell?.imageRect(forBounds: button.bounds) ?? button.bounds
+        let image = imageRect.isEmpty ? button.bounds : imageRect
+        let diameter: CGFloat = 7
+        let dot = NSRect(x: min(bounds.maxX - diameter, image.maxX - 4),
+                         y: max(bounds.minY, image.minY + 1),
+                         width: diameter, height: diameter)
+        NSColor.windowBackgroundColor.setFill()
+        NSBezierPath(ovalIn: dot.insetBy(dx: -1.25, dy: -1.25)).fill()
+        NSColor(calibratedRed: 0.18, green: 0.48, blue: 0.97, alpha: 1).setFill()
+        NSBezierPath(ovalIn: dot).fill()
+    }
+}
+
+@MainActor
+private enum UpdateDot {
+    static weak var button: NSStatusBarButton?
+    static var view: UpdateDotView?
+
+    static func set(_ item: NSStatusItem, visible: Bool) {
+        guard let next = item.button else { return }
+        if button !== next {
+            view?.removeFromSuperview()
+            view = nil
+            button = next
+        }
+        guard visible else {
+            view?.removeFromSuperview()
+            view = nil
+            return
+        }
+        if view == nil {
+            let overlay = UpdateDotView(button: next)
+            next.addSubview(overlay)
+            view = overlay
+        }
+        view?.frame = next.bounds
+        view?.needsDisplay = true
+    }
+}
+
+@_cdecl("ocx_native_tray_update_dot")
+@MainActor
+public func nativeTrayUpdateDot(_ item: UnsafeMutableRawPointer?, _ show: Int32) {
+    guard Thread.isMainThread, let item else { return }
+    let statusItem = Unmanaged<NSStatusItem>.fromOpaque(item).takeUnretainedValue()
+    UpdateDot.set(statusItem, visible: show != 0)
 }
 
 @_cdecl("ocx_native_tray_show")
@@ -62,7 +142,18 @@ public func nativeTrayUpdate(_ bytes: UnsafePointer<UInt8>?, _ count: Int) {
     do {
         store.snapshot = try NativeTraySnapshot.decode(Data(bytes: bytes, count: count))
         store.decodeFailed = false
+        store.settlePendingSwitch()
     } catch {
         store.decodeFailed = true
     }
+}
+
+/// Registers the host's handler for the panel's "Use" action on an account row.
+@_cdecl("ocx_native_tray_set_switch_handler")
+@MainActor
+public func nativeTraySetSwitchHandler(
+    _ callback: @escaping @convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>) -> Void
+) {
+    guard Thread.isMainThread else { return }
+    NativeTrayPopover.shared.switchCallback = callback
 }

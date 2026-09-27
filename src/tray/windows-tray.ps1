@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$BunPath,
   [Parameter(Mandatory = $true)][string]$CliPath,
   [Parameter(Mandatory = $true)][string]$CodexHome,
@@ -14,6 +14,19 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { $null = $_ }
+
+# Chinese UI cultures get Chinese tray text; every other locale keeps the English strings. The
+# judgment is a named function so it can be exercised directly instead of only through a live
+# desktop, where a selector that always answered English would still look correct.
+function Test-TrayChineseCulture([string]$CultureName) {
+  return $CultureName -like "zh*"
+}
+$script:isZh = Test-TrayChineseCulture ([System.Globalization.CultureInfo]::CurrentUICulture.Name)
+function Get-TrayText {
+  param([string]$En, [string]$Zh)
+  if ($script:isZh) { return $Zh }
+  return $En
+}
 
 # Normalize aliases before deriving singleton/event names. Without this,
 # C:\path and C:\path\. create separate tray instances for the same home.
@@ -41,6 +54,9 @@ function Load-TrayIcon([string]$Name, [System.Drawing.Icon]$Fallback) {
 $onlineIcon = Load-TrayIcon "opencodex-tray-online.ico" ([System.Drawing.SystemIcons]::Information)
 $warningIcon = Load-TrayIcon "opencodex-tray-warning.ico" ([System.Drawing.SystemIcons]::Warning)
 $offlineIcon = Load-TrayIcon "opencodex-tray-offline.ico" ([System.Drawing.SystemIcons]::Error)
+$onlineUpdateIcon = Load-TrayIcon "opencodex-tray-online-update.ico" $onlineIcon
+$warningUpdateIcon = Load-TrayIcon "opencodex-tray-warning-update.ico" $warningIcon
+$offlineUpdateIcon = Load-TrayIcon "opencodex-tray-offline-update.ico" $offlineIcon
 
 function Get-StableHash([string]$Value) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -86,6 +102,20 @@ function ConvertTo-NativeArgument([string]$Value) {
   return '"' + $Value + '"'
 }
 
+# A fresh profile may not have created the default %USERPROFILE%.codex yet, and the
+# CLI rejects a CODEX_HOME that does not exist. Only that default home is dropped so
+# children resolve it themselves; any other home is passed through unchanged.
+function Set-OcxChildEnvironment([System.Diagnostics.ProcessStartInfo]$StartInfo) {
+  $defaultHome = Normalize-HomePath (Join-Path $env:USERPROFILE ".codex")
+  $isDefaultHome = [string]::Equals($CodexHome, $defaultHome, [System.StringComparison]::OrdinalIgnoreCase)
+  if ($isDefaultHome -and -not [System.IO.Directory]::Exists($CodexHome)) {
+    $StartInfo.EnvironmentVariables.Remove("CODEX_HOME")
+  } else {
+    $StartInfo.EnvironmentVariables["CODEX_HOME"] = $CodexHome
+  }
+  $StartInfo.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+}
+
 function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
   try {
     $allArgs = @($CliPath) + $CommandArgs
@@ -95,8 +125,7 @@ function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
-    $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    Set-OcxChildEnvironment $psi
     if ($BunRuntimeSource) {
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
       # Paired with the source so a later relaunch can tell the marker still describes
@@ -111,7 +140,7 @@ function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
     return $true
   } catch {
     Write-ActionLog "launch failed: $($_.Exception.GetType().Name)"
-    $notify.ShowBalloonTip(5000, "opencodex action failed", "The action could not start. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
+    $notify.ShowBalloonTip(5000, (Get-TrayText "opencodex action failed" "opencodex 操作失败"), (Get-TrayText "The action could not start. Open the logs folder or run ocx doctor." "操作无法启动。打开日志文件夹或运行 ocx doctor。"), [System.Windows.Forms.ToolTipIcon]::Error)
     return $false
   }
 }
@@ -155,8 +184,7 @@ function Start-StartupHealthProbe {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
-    $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    Set-OcxChildEnvironment $psi
     if ($BunRuntimeSource) {
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_PATH"] = $BunPath
@@ -195,6 +223,147 @@ function Complete-StartupHealthProbe {
     } catch {
       Write-ActionLog "startup-health probe dispose failed: $($_.Exception.GetType().Name)"
     }
+  }
+}
+
+function Initialize-UpdateBadgeReader {
+  if (([System.Management.Automation.PSTypeName]"TrayUpdateBadgeReader").Type) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
+public static class TrayUpdateBadgeReader {
+  public static async Task<string> ReadAsync(Stream input, int maxBytes) {
+    byte[] chunk = new byte[4096];
+    using (var content = new MemoryStream()) {
+      while (true) {
+        int count = await input.ReadAsync(chunk, 0, chunk.Length).ConfigureAwait(false);
+        if (count == 0) break;
+        if (content.Length + count > maxBytes) throw new InvalidDataException("badge pipe byte cap exceeded");
+        content.Write(chunk, 0, count);
+      }
+      return new UTF8Encoding(false, true).GetString(content.ToArray());
+    }
+  }
+}
+'@
+}
+
+function Parse-UpdateBadgeText([string]$Text) {
+  $lines = @($Text -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($lines.Count -ne 1) { return $null }
+  try {
+    $badge = $lines[0] | ConvertFrom-Json
+    if (($badge.updateAvailable -isnot [bool]) -or ($badge.unknown -isnot [bool]) -or
+        ($badge.canUpdate -isnot [bool])) { return $null }
+    return [bool]($badge.updateAvailable -and -not $badge.unknown -and $badge.canUpdate)
+  } catch { return $null }
+}
+
+function Complete-UpdateBadgeProbe {
+  $process = $script:updateBadgeProcess
+  $script:updateBadgeProcess = $null
+  $script:updateBadgeOutputTask = $null
+  $script:updateBadgeErrorTask = $null
+  $script:updateBadgeTerminating = $false
+  if ($null -ne $process) {
+    try {
+      $process.StandardOutput.Dispose()
+      $process.StandardError.Dispose()
+      $process.Dispose()
+    } catch { Write-ActionLog "update badge probe dispose failed: $($_.Exception.GetType().Name)" }
+  }
+}
+
+function Stop-UpdateBadgeProbe([switch]$Shutdown) {
+  if ($null -eq $script:updateBadgeProcess) { return }
+  $script:updateBadgeTerminating = $true
+  try {
+    if (-not $script:updateBadgeProcess.HasExited) { $script:updateBadgeProcess.Kill() }
+  } catch { Write-ActionLog "update badge probe termination failed: $($_.Exception.GetType().Name)" }
+  if ($Shutdown) {
+    # Only shutdown may wait, and it is bounded; the UI tick never calls this branch.
+    try { [void]$script:updateBadgeProcess.WaitForExit(500) } catch { $null = $_ }
+    Complete-UpdateBadgeProbe
+  }
+}
+
+function Start-UpdateBadgeProbe {
+  try {
+    Initialize-UpdateBadgeReader
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $BunPath
+    $psi.Arguments = ((@($CliPath, "__update-badge") | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " ")
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    Set-OcxChildEnvironment $psi
+    if ($BunRuntimeSource) {
+      $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
+      $psi.EnvironmentVariables["OCX_BUN_RUNTIME_PATH"] = $BunPath
+    }
+    $script:updateBadgeProcess = [System.Diagnostics.Process]::Start($psi)
+    if ($null -eq $script:updateBadgeProcess) { throw "Process did not start" }
+    $script:updateBadgeOutputTask = [TrayUpdateBadgeReader]::ReadAsync($script:updateBadgeProcess.StandardOutput.BaseStream, $script:updateBadgeMaxBytesPerStream)
+    $script:updateBadgeErrorTask = [TrayUpdateBadgeReader]::ReadAsync($script:updateBadgeProcess.StandardError.BaseStream, $script:updateBadgeMaxBytesPerStream)
+    $script:updateBadgeStarted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  } catch {
+    Write-ActionLog "update badge probe launch failed: $($_.Exception.GetType().Name)"
+    if ($null -ne $script:updateBadgeProcess) { Stop-UpdateBadgeProbe }
+  }
+}
+
+function Maintain-UpdateBadgeProbe([long]$Now) {
+  if ($null -ne $script:updateBadgeProcess) {
+    $terminatingAtStart = $script:updateBadgeTerminating
+    $expired = ($Now - $script:updateBadgeStarted) -gt $script:updateBadgeTimeoutMs
+    $exited = $false
+    try { $exited = $script:updateBadgeProcess.HasExited } catch { Stop-UpdateBadgeProbe }
+    $drained = ($null -eq $script:updateBadgeOutputTask -or $script:updateBadgeOutputTask.IsCompleted) -and
+      ($null -eq $script:updateBadgeErrorTask -or $script:updateBadgeErrorTask.IsCompleted)
+    $failedRead = ($null -ne $script:updateBadgeOutputTask -and
+      ($script:updateBadgeOutputTask.IsFaulted -or $script:updateBadgeOutputTask.IsCanceled)) -or
+      ($null -ne $script:updateBadgeErrorTask -and
+      ($script:updateBadgeErrorTask.IsFaulted -or $script:updateBadgeErrorTask.IsCanceled))
+    if ($failedRead -and -not $script:updateBadgeTerminating) {
+      Write-ActionLog "update badge probe pipe read failed or exceeded byte cap"
+      Stop-UpdateBadgeProbe
+    }
+    if ($script:updateBadgeTerminating) {
+      # Reap on a later tick after both bounded readers settle; no replacement starts meanwhile.
+      if ($terminatingAtStart -and -not $exited) { Stop-UpdateBadgeProbe }
+      if ($terminatingAtStart -and $exited -and $drained) { Complete-UpdateBadgeProbe }
+    } elseif ($exited -and $drained -and $null -ne $script:updateBadgeOutputTask -and
+        $null -ne $script:updateBadgeErrorTask) {
+      $answer = $null
+      try {
+        if ($script:updateBadgeProcess.ExitCode -eq 0) {
+          $answer = Parse-UpdateBadgeText $script:updateBadgeOutputTask.Result
+        }
+      } catch { Write-ActionLog "update badge probe read failed: $($_.Exception.GetType().Name)" }
+      if ($null -ne $answer) {
+        $script:updateAvailable = [bool]$answer
+        $script:updateBadgeObservedAt = $Now
+      }
+      Complete-UpdateBadgeProbe
+    } elseif ($expired) {
+      Write-ActionLog "update badge probe timed out"
+      Stop-UpdateBadgeProbe
+    }
+  }
+  if ($script:updateBadgeObservedAt -eq 0 -or
+      ($Now - $script:updateBadgeObservedAt) -gt $script:updateBadgeExpiryMs) {
+    $script:updateAvailable = $false
+  }
+  if ($null -eq $script:updateBadgeProcess -and -not $script:updateBadgeTerminating -and
+      ($script:updateBadgeAttemptAt -eq 0 -or ($Now - $script:updateBadgeAttemptAt) -ge $script:updateBadgeRefreshMs)) {
+    $script:updateBadgeAttemptAt = $Now
+    Start-UpdateBadgeProbe
   }
 }
 
@@ -240,16 +409,19 @@ $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $statusItem.Enabled = $false
 $safetyItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $safetyItem.Enabled = $false
-$openItem = $menu.Items.Add("Open Dashboard")
-$startItem = $menu.Items.Add("Start Proxy")
-$stopItem = $menu.Items.Add("Stop Proxy and Restore Native Routing")
-$restartItem = $menu.Items.Add("Restart Proxy")
+$openItem = $menu.Items.Add((Get-TrayText "Open Dashboard" "打开面板"))
+$updateItem = $menu.Items.Add((Get-TrayText "Update available" "有可用更新"))
+$updateItem.Visible = $false
+$updateItem.Enabled = $false
+$startItem = $menu.Items.Add((Get-TrayText "Start Proxy" "启动代理"))
+$stopItem = $menu.Items.Add((Get-TrayText "Stop Proxy and Restore Native Routing" "停止代理并还原原生路由"))
+$restartItem = $menu.Items.Add((Get-TrayText "Restart Proxy" "重启代理"))
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 [void]$menu.Items.Add($statusItem)
 [void]$menu.Items.Add($safetyItem)
-$logsItem = $menu.Items.Add("Open Logs Folder")
+$logsItem = $menu.Items.Add((Get-TrayText "Open Logs Folder" "打开日志文件夹"))
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$exitItem = $menu.Items.Add("Exit Tray")
+$exitItem = $menu.Items.Add((Get-TrayText "Exit Tray" "退出托盘"))
 
 $script:online = $false
 $script:port = 10100
@@ -263,6 +435,18 @@ $script:startupProbeOutputTask = $null
 $script:startupProbeErrorTask = $null
 $script:startupProbeStarted = 0L
 $script:startupProbeTimeoutMs = 30000L
+$script:updateAvailable = $false
+$script:updateBadgeObservedAt = 0L
+$script:updateBadgeAttemptAt = 0L
+$script:updateBadgeRefreshMs = 60000L
+$script:updateBadgeExpiryMs = 180000L
+$script:updateBadgeTimeoutMs = 12000L
+$script:updateBadgeMaxBytesPerStream = 16384
+$script:updateBadgeProcess = $null
+$script:updateBadgeOutputTask = $null
+$script:updateBadgeErrorTask = $null
+$script:updateBadgeStarted = 0L
+$script:updateBadgeTerminating = $false
 $script:pendingAction = $null
 $script:pendingStarted = 0L
 $script:pendingDeadline = 0L
@@ -292,6 +476,14 @@ function Set-PendingAction([string]$Action, [int]$TimeoutSeconds) {
 function Complete-PendingAction([bool]$Success) {
   if ($null -eq $script:pendingAction) { return }
   $action = $script:pendingAction
+  # The pending value stays English because it is compared against the labels the click
+  # handlers set; only the text a user reads is localized.
+  $displayAction = switch ($action) {
+    "Start Proxy" { Get-TrayText "Start Proxy" "启动代理" }
+    "Stop Proxy" { Get-TrayText "Stop Proxy" "停止代理" }
+    "Restart Proxy" { Get-TrayText "Restart Proxy" "重启代理" }
+    default { $action }
+  }
   $script:pendingAction = $null
   if ($null -ne $script:pendingProcess) {
     try {
@@ -303,10 +495,10 @@ function Complete-PendingAction([bool]$Success) {
   }
   if ($Success) {
     Write-ActionLog "$action completed (port=$($script:port), pid=$($script:proxyPid))"
-    $notify.ShowBalloonTip(2500, "opencodex", "$action completed.", [System.Windows.Forms.ToolTipIcon]::Info)
+    $notify.ShowBalloonTip(2500, "opencodex", (Get-TrayText "$displayAction completed." "$displayAction 已完成。"), [System.Windows.Forms.ToolTipIcon]::Info)
   } else {
     Write-ActionLog "$action failed to reach the expected state"
-    $notify.ShowBalloonTip(5000, "opencodex action failed", "$action did not reach the expected state. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
+    $notify.ShowBalloonTip(5000, (Get-TrayText "opencodex action failed" "opencodex 操作失败"), (Get-TrayText "$displayAction did not reach the expected state. Open the logs folder or run ocx doctor." "$displayAction 未达到预期状态。打开日志文件夹或运行 ocx doctor。"), [System.Windows.Forms.ToolTipIcon]::Error)
   }
 }
 
@@ -322,6 +514,7 @@ function Update-TrayState {
   $cameOnline = $script:online -and -not $script:wasOnline
   $script:wasOnline = $script:online
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  Maintain-UpdateBadgeProbe $now
   if ($null -ne $script:startupProbeProcess) {
     $probeExited = $false
     try {
@@ -364,8 +557,8 @@ function Update-TrayState {
     Start-StartupHealthProbe
   }
   if ($script:online) {
-    $statusItem.Text = "Proxy: Online (port $($script:port))"
-    $notify.Text = "opencodex: Online"
+    $statusItem.Text = (Get-TrayText "Proxy: Online (port $($script:port))" "代理: 在线 (端口 $($script:port))")
+    $notify.Text = (Get-TrayText "opencodex: Online" "opencodex: 在线")
     $startItem.Enabled = $false
     $stopItem.Enabled = $true
     $restartItem.Enabled = $true
@@ -375,22 +568,34 @@ function Update-TrayState {
     # diagnostic is cleaned up outside the online-only UI branch.
     $startup = $script:startupHealth
     if ($null -ne $startup) {
-      $label = if ($startup.status -eq "at-risk") { "At risk" } elseif ($startup.status -eq "protected") { "Protected" } else { "Native routing" }
-      $safetyItem.Text = "Restart safety: $label"
-      $notify.Icon = if ($startup.status -eq "at-risk") { $warningIcon } else { $onlineIcon }
+      $label = if ($startup.status -eq "at-risk") {
+        Get-TrayText "At risk" "有风险"
+      } elseif ($startup.status -eq "protected") {
+        Get-TrayText "Protected" "已保护"
+      } else {
+        Get-TrayText "Native routing" "原生路由"
+      }
+      $safetyItem.Text = (Get-TrayText "Restart safety: $label" "重启保护: $label")
+      $notify.Icon = if ($startup.status -eq "at-risk") {
+        if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }
+      } else {
+        if ($script:updateAvailable) { $onlineUpdateIcon } else { $onlineIcon }
+      }
     } else {
-      $safetyItem.Text = "Restart safety: unavailable"
-      $notify.Icon = $warningIcon
+      $safetyItem.Text = (Get-TrayText "Restart safety: unavailable" "重启保护: 不可用")
+      $notify.Icon = if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }
     }
   } else {
-    $statusItem.Text = "Proxy: Offline"
-    $safetyItem.Text = "Restart safety: start the proxy to inspect"
-    $notify.Text = "opencodex: Offline"
-    $notify.Icon = $offlineIcon
+    $statusItem.Text = (Get-TrayText "Proxy: Offline" "代理: 离线")
+    $safetyItem.Text = (Get-TrayText "Restart safety: start the proxy to inspect" "重启保护: 启动代理后查看")
+    $notify.Text = (Get-TrayText "opencodex: Offline" "opencodex: 离线")
+    $notify.Icon = if ($script:updateAvailable) { $offlineUpdateIcon } else { $offlineIcon }
     $startItem.Enabled = $true
     $stopItem.Enabled = $false
     $restartItem.Enabled = $false
   }
+  $updateItem.Visible = $script:updateAvailable
+  $updateItem.Enabled = $script:updateAvailable
   if ($null -ne $script:pendingAction) {
     $startItem.Enabled = $false
     $stopItem.Enabled = $false
@@ -426,9 +631,10 @@ function Update-TrayState {
 }
 
 $openItem.add_Click({ Start-OcxCommand @("gui") })
+$updateItem.add_Click({ Start-OcxCommand @("gui") })
 $startItem.add_Click({
   if (-not (Set-PendingAction "Start Proxy" 75)) { return }
-  $statusItem.Text = "Proxy: Starting..."
+  $statusItem.Text = (Get-TrayText "Proxy: Starting..." "代理: 启动中...")
   # service start can spend 20s and the CLI then observes health for another 40s.
   $startProcess = Start-OcxCommand @("__tray-start") -TrackExit
   if ($startProcess -is [System.Diagnostics.Process]) {
@@ -439,7 +645,7 @@ $startItem.add_Click({
 })
 $stopItem.add_Click({
   if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
-  $statusItem.Text = "Proxy: Stopping..."
+  $statusItem.Text = (Get-TrayText "Proxy: Stopping..." "代理: 停止中...")
   $stopProcess = Start-OcxCommand @("stop") -TrackExit
   if ($stopProcess -is [System.Diagnostics.Process]) {
     $script:pendingProcess = $stopProcess
@@ -449,7 +655,7 @@ $stopItem.add_Click({
 })
 $restartItem.add_Click({
   if (-not (Set-PendingAction "Restart Proxy" 160)) { return }
-  $statusItem.Text = "Proxy: Restarting..."
+  $statusItem.Text = (Get-TrayText "Proxy: Restarting..." "代理: 重启中...")
   # /api/system/restart may drain active work for 60s and then spend up to 70s
   # handing off to an identity-verified replacement. The tray observes health/PID
   # rather than the detached CLI exit, so keep a watchdog margin around that shared
@@ -486,9 +692,10 @@ $timer.add_Tick({
 $notify.ContextMenuStrip = $menu
 $notify.Icon = $offlineIcon
 $notify.Visible = $true
-$notify.Text = "opencodex: Checking..."
+$notify.Text = (Get-TrayText "opencodex: Checking..." "opencodex: 检查中...")
 
 try {
+  Initialize-UpdateBadgeReader
   Update-TrayState
   $timer.Start()
   [System.Windows.Forms.Application]::Run()
@@ -512,6 +719,7 @@ try {
     }
     Complete-StartupHealthProbe
   }
+  Stop-UpdateBadgeProbe -Shutdown
   $notify.Dispose()
   foreach ($icon in $script:ownedIcons) { $icon.Dispose() }
   $menu.Dispose()

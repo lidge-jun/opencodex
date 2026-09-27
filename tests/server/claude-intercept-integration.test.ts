@@ -5,7 +5,7 @@
  * and never touches the router's own routes.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -13,17 +13,23 @@ import { startServer } from "../../src/server";
 import { findAvailablePort } from "../../src/server/ports";
 import { claudeInterceptCaCertPath } from "../../src/claude/intercept/local-ca";
 import { getClaudeInterceptState } from "../../src/claude/intercept/runtime";
+import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousHome = process.env.OPENCODEX_HOME;
+const previousClaudeDir = process.env.CLAUDE_CONFIG_DIR;
 let testDir = "";
+let claudeDir = "";
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-intercept-"));
+  claudeDir = join(testDir, "claude-config");
+  mkdirSync(claudeDir, { recursive: true });
   process.env.OPENCODEX_HOME = testDir;
+  process.env.CLAUDE_CONFIG_DIR = claudeDir;
   process.env.OPENCODEX_API_AUTH_TOKEN = "public-secret";
 });
 
@@ -32,9 +38,17 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousClaudeDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = previousClaudeDir;
   if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
+  claudeDir = "";
 });
+
+// The intercept routes only a client whose first-party intent is on (src/claude/intercept/client-class.ts);
+// these tests speak as the standalone CLI with claudeCode.cliFirstParty set. Every request carries the agent,
+// because an unknown one is relayed to the real Anthropic host instead of the configured upstream.
+const CLI_UA = { "user-agent": "claude-cli/2.1.282 (external, cli)" };
 
 async function waitForIntercept(): Promise<NonNullable<ReturnType<typeof getClaudeInterceptState>>> {
   for (let i = 0; i < 100; i++) {
@@ -65,6 +79,7 @@ test("Messages through CONNECT reach the router; other paths relay to the config
       chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
     },
     claudeCode: {
+      cliFirstParty: true,
       anthropicBaseUrl: `http://127.0.0.1:${fakeUpstream.port}`,
       intercept: { port: interceptPort },
     },
@@ -75,7 +90,8 @@ test("Messages through CONNECT reach the router; other paths relay to the config
     expect(state.proxyPort).toBe(interceptPort);
     expect(state.caCertPath).toBe(claudeInterceptCaCertPath(testDir));
     const ca = readFileSync(state.caCertPath, "utf8");
-    const proxy = `http://127.0.0.1:${state.proxyPort}`;
+    const proxyToken = ensureClaudeInterceptProxyToken(testDir);
+    const proxy = `http://opencodex:${proxyToken}@127.0.0.1:${state.proxyPort}`;
 
     // No opencodex admission token is sent: the intercept ingress takes the loopback policy, so
     // the request is judged by the Messages handler (which fails on routing, since the test
@@ -84,7 +100,7 @@ test("Messages through CONNECT reach the router; other paths relay to the config
       method: "POST",
       proxy,
       tls: { ca },
-      headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "sk-ant-not-real" },
+      headers: { ...CLI_UA, "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "sk-ant-not-real" },
       body: JSON.stringify({ model: "no-such-model-for-intercept-test", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }),
     });
     const messagesBody = await messages.json() as { type: string; error: { message: string } };
@@ -95,9 +111,9 @@ test("Messages through CONNECT reach the router; other paths relay to the config
     expect(upstreamHits).toEqual([]);
 
     // Anything else on the intercepted host is the client's own business with Anthropic.
-    const models = await fetch("https://api.anthropic.com/v1/models", { proxy, tls: { ca } });
+    const models = await fetch("https://api.anthropic.com/v1/models", { proxy, tls: { ca }, headers: CLI_UA });
     expect(await models.json()).toEqual({ upstream: true });
-    const health = await fetch("https://api.anthropic.com/healthz", { proxy, tls: { ca } });
+    const health = await fetch("https://api.anthropic.com/healthz", { proxy, tls: { ca }, headers: CLI_UA });
     expect(await health.json()).toEqual({ upstream: true });
     expect(upstreamHits).toEqual(["GET /v1/models", "GET /healthz"]);
   } finally {
@@ -142,6 +158,7 @@ test("a first-party binding routes a picker id on the intercept only; the public
       bindtarget: { adapter: "openai-chat", baseUrl: `http://127.0.0.1:${fakeProvider.port}/v1`, allowPrivateNetwork: true, apiKey: "sk-fake", models: ["fake-model"], liveModels: false },
     },
     claudeCode: {
+      cliFirstParty: true,
       anthropicBaseUrl: `http://127.0.0.1:${fakeAnthropic.port}`,
       intercept: { port: interceptPort, modelMap: { "claude-sonnet-4-6": "bindtarget/fake-model" } },
     },
@@ -150,11 +167,11 @@ test("a first-party binding routes a picker id on the intercept only; the public
   try {
     const state = await waitForIntercept();
     const ca = readFileSync(state.caCertPath, "utf8");
-    const proxy = `http://127.0.0.1:${state.proxyPort}`;
+    const proxy = `http://opencodex:${readClaudeInterceptProxyToken(testDir)}@127.0.0.1:${state.proxyPort}`;
     const request = { model: "claude-sonnet-4-6", max_tokens: 8, messages: [{ role: "user", content: "hi" }] };
-    const anthropicHeaders = { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "sk-ant-not-real" };
+    const anthropicHeaders = { ...CLI_UA, "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "sk-ant-not-real" };
 
-    // Desktop's Code tab: the picker id arrives through the CONNECT tunnel and is served by the binding.
+    // An opted-in client (here the CLI): the picker id arrives through the CONNECT tunnel and is served by the binding.
     const bound = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", proxy, tls: { ca }, headers: anthropicHeaders, body: JSON.stringify(request) });
     expect(bound.status).toBe(200);
     expect(providerHits.map(hit => hit.model)).toEqual(["fake-model"]);
@@ -178,6 +195,37 @@ test("a first-party binding routes a picker id on the intercept only; the public
     await server.stop(true);
     fakeAnthropic.stop(true);
     fakeProvider.stop(true);
+  }
+}, SERVER_BUDGET_MS);
+
+test("an owned legacy unauthenticated env is migrated on start; nothing else is written", async () => {
+  // Upgrade path: a pre-auth apply wrote a bare loopback URL. A service-style `ocx start`
+  // must refresh it before the authenticated proxy answers 407 to every CONNECT.
+  const caCertPath = claudeInterceptCaCertPath(testDir);
+  writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({
+    env: { HTTPS_PROXY: "http://127.0.0.1:10200", NODE_EXTRA_CA_CERTS: caCertPath },
+  }));
+  const interceptPort = await findAvailablePort(0, "127.0.0.1");
+  const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: interceptPort });
+  saveConfig({
+    port: publicPort,
+    hostname: "127.0.0.1",
+    defaultProvider: "chatgpt",
+    providers: {
+      chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+    },
+    claudeCode: { intercept: { port: interceptPort } },
+  } as unknown as OcxConfig);
+  const server = startServer(publicPort);
+  try {
+    const state = await waitForIntercept();
+    const token = readClaudeInterceptProxyToken(testDir);
+    expect(token).not.toBeNull();
+    const written = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8")) as { env: Record<string, string> };
+    expect(written.env.HTTPS_PROXY).toBe(`http://opencodex:${encodeURIComponent(token!)}@127.0.0.1:${state.proxyPort}`);
+    expect(written.env.NODE_EXTRA_CA_CERTS).toBe(caCertPath);
+  } finally {
+    await server.stop(true);
   }
 }, SERVER_BUDGET_MS);
 

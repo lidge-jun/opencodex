@@ -36,6 +36,7 @@ import {
   submitManualLoginCode,
   upsertOAuthProvider,
 } from "../../oauth";
+import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
 import { replaceProviderAccountSet } from "../../oauth/store";
@@ -73,6 +74,7 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaRepo
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
+import { resolveJevDecision } from "../../combos/jev";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -1423,9 +1425,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (!provider || !isCanonicalOpenAiForwardProvider(provider)) {
         return jsonResponse({ error: "provider openai must be the canonical built-in provider" }, 400);
       }
-      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-      config.providers.openai = { ...provider, codexAccountMode: mode };
-      save(config);
+      commitProviderPatch(config, () => {
+        config.providers.openai = { ...provider, codexAccountMode: mode };
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
       reconcileLiveStateStores();
       (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
       (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
@@ -1450,9 +1452,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (config.providers[name]!.disabled) {
         return jsonResponse({ error: "cannot set a disabled provider as default", code: "default_provider_disabled" }, 400);
       }
-      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-      config.defaultProvider = name;
-      save(config);
+      commitProviderPatch(config, () => {
+        config.defaultProvider = name;
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
       reconcileLiveStateStores();
       return jsonResponse({ success: true, name, defaultProvider: name });
     }
@@ -1557,19 +1559,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
-      const previous = Object.getOwnPropertyDescriptor(config.providers, name);
-      const rollback = pinsTouched ? captureConfigTopLevelRollback(config, []) : undefined;
-      try {
+      commitProviderPatch(config, () => {
         config.providers[name] = candidate;
-        (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
-      } catch (error) {
-        if (rollback) {
-          if (previous) Object.defineProperty(config.providers, name, previous);
-          else delete config.providers[name];
-          rollback();
-        }
-        throw error;
-      }
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
@@ -1609,6 +1601,35 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ok: true,
         latencyMs: 0,
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
+      });
+    }
+    if (name === "jev" && providerMatchesRegistryTransport(name, prov)) {
+      const probe = { targetKey: "jev/probe", effort: null } as const;
+      const decision = await resolveJevDecision({
+        body: { input: "Verify the configured TypeSafe JEV decision service." },
+        candidates: [{
+          key: probe.targetKey,
+          provider: "jev",
+          model: "jev-latest",
+          reasoningEfforts: [],
+        }],
+        fallback: probe,
+        config,
+        signal: req.signal,
+      });
+      if (decision.gate === "apply") {
+        return jsonResponse({
+          ok: true,
+          latencyMs: decision.latencyMs,
+          message: "Connected. TypeSafe JEV answered a decision probe.",
+        });
+      }
+      return jsonResponse({
+        ok: false,
+        latencyMs: decision.latencyMs,
+        error: decision.gate === "missing_key"
+          ? "TypeSafe JEV API key is not configured"
+          : `TypeSafe JEV decision probe failed (${decision.gate})`,
       });
     }
     if (prov.liveModels === false) {

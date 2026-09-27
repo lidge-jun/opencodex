@@ -48,6 +48,60 @@ requests/sockets. Only allowlisted event types and localized error categories ar
 displayed. Tests live in `gui/tests/audio-api-client.test.ts`,
 `gui/tests/audio-api-panel.test.tsx`, `gui/tests/api-auth-memory.test.ts` and
 `tests/server/api-access-endpoints.test.ts`.
+
+The endpoints panel (`gui/src/pages/api-keys-endpoints-panel.tsx`) shows the base URL and models
+endpoint, then one card per public API from `gui/src/pages/api-surface-cards.tsx`: state, endpoint
+and the decision source (always served, explicit, inherited from Claude settings, or invalid and
+closed). The Messages card stays visible while closed, carries the toggle that calls
+`PATCH /api/protocols/settings` on the page's `apiBase` (machine or shared target) before reloading
+the keys payload, and links to `#integrations/claude`. `parseApiSurfaces`
+(`gui/src/pages/api-keys-utils.ts`) validates `surfaces` from the keys payload and the session
+cache; a server without it keeps the flat endpoint list gated on `claudeCodeEnabled`. Tests live in
+`gui/tests/api-surface-cards.test.tsx`.
+
+The API page's request path preview is
+`gui/src/components/protocols/ProtocolPlanPanel.tsx`, placed after the endpoints section. It asks
+`POST /api/protocols/plan` through `gui/src/protocol-api.ts`, which validates the answer with the
+shared `isProtocolPlanV1` and caches it per target, selector, sorted features and policy revision;
+a 404 from an older server turns the preview off without an error. The panel shows each candidate's
+path, delivery mode, fidelity, reasons and feature effects (`FeatureDispositionList.tsx`), and the
+features every eligible candidate guarantees apart from those only some keep. Delivery mode is not a
+verification verdict, so the panel shows no Lab badge and does not read `ExternalModelRow.native`.
+Tests live in `gui/tests/protocol-api.test.ts` and `tests/server/protocol-routes.test.ts`.
+
+The same vocabulary appears on three more screens, each answering one question and each hiding
+quietly when the server predates its route:
+
+- Provider settings: `gui/src/components/provider-workspace/ProviderProtocolPanel.tsx` sits under
+  the adapter field and reads `GET /api/protocols?provider=<name>` on the settings `apiBase`
+  (`fetchProtocolProviderSummary`; a 404 or a body without `provider` hides it). It names the
+  adapter as the upstream wire the provider receives, the decision source and the per-model
+  overrides, and has no control of its own: the adapter field above it still saves through
+  `onUpdateProvider` → `PATCH /api/providers`, and the panel only says what an unsaved choice would
+  send. It is not an API exposure switch; those are the API page's cards.
+- Compatibility matrix: inbound and upstream protocol filters
+  (`gui/src/pages/compatibility-protocol-filter.tsx`). The Lab subject list has no protocol, so
+  while a filter is active `gui/src/pages/compatibility-protocol-pairs.ts` reads the listed
+  subjects' details (at most 200, six at a time, cached per target) and maps their Lab identities
+  with `protocolFromLabProtocol`. A subject whose pair is unknown is left out; a pair with no
+  matching row reads "unverified, not failed", never failed or unsupported. The matrix shows Lab
+  verdicts only; delivery mode stays on the path preview, so the two never share a badge.
+- Combo detail: `gui/src/components/protocols/ComboProtocolPlan.tsx` in the saved combo's config
+  tab runs `POST /api/protocols/plan` on an explicit click for every feature the chosen client API
+  can express, and renders the shared `PlanResult`: each target's path and feature effects, and the
+  guaranteed/partial split. It reads the saved combo, and says so while edits are unsaved.
+
+Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash query, which
+`resolveAppHashChange` keeps only on `#providers` and `#models/compatibility` (`QUERY_HASH_PATHS`)
+and drops elsewhere. Each plan candidate links to `#providers?provider=<name>` (`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
+the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a traced Logs row links to the compatibility pair it took. Each chip of the header quota strip
+(`gui/src/components/quota-summary-bar/QuotaSummaryBar.tsx`, one scrolling row with « / » paging) links to `#providers?provider=<name>&tab=accounts`, which opens that provider's
+Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. Links push history, the matrix replaces
+the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
+so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
+`gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
+
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
 existing reading line. The section strip stays one row at every width.
@@ -78,6 +132,8 @@ single forms, and the shell pattern is the part worth keeping stable:
 | Codex accounts | Account pool cards, add-account flow, switch and reset modals (`gui/src/components/CodexAccountPool.tsx`, `gui/src/components/AddCodexAccountModal.tsx`), plus the generic account-targeting picker opt-in on `gui/src/pages/codex-set-multiauth.tsx`. Add/delete/login completion is projected to one boolean before presentation; pending catalog work is a warning, not a failed account mutation. The main card's native-main device reauth (#3898) is owned by `gui/src/components/use-main-device-reauth.ts`: the dedicated `/api/codex-auth/main/reauth-device` namespace only — never the pool login route — with flowId-owned polling, an allowlisted verification URL, and no token fields accepted from payloads. The main-device reauth hook retains flow ownership from the Cancel click, while DELETE is unresolved and after retryable failure; polling normally continues. A concurrent GET HTTP error cannot expose a replacement login POST before DELETE settles. If a retryable DELETE failure races with a non-2xx GET while the flow is pending or committing, either response order preserves same-flow Cancel retry, restores the last server-provided device code, verification URL, and phase when needed, and keeps the existing poll cadence so a later terminal result remains observable. Outside same-flow cancellation ownership, a GET HTTP failure still stops polling without starting a second login POST. The cancellation-failure indication survives pending status updates until a trusted terminal result releases ownership. A successful DELETE with a terminal `failed` DTO releases it and uses the same closed failure-code mapping as polling; only `succeeded` notifies login completion. Unrecognized or nonterminal DTO status values remain retryable. A DELETE response with HTTP 404 and code `unknown_flow` releases the expired flow and shows the existing generic failure state so device re-login is available again; it claims neither login success nor confirmed cancellation. Confirmed cancellation also makes device re-login available. Start, polling and cancellation completions verify their controller or flow ownership after asynchronous response reads; replaced flows and unmounted hooks cannot update a newer flow or notify completion. Effect setup restores mounted state after the StrictMode development cleanup cycle. |
 | Dashboard overview | Overview, Providers, and Models tabs at the page level (`gui/src/pages/Dashboard.tsx`), the 30-day token and coverage stats in the overview head (`gui/src/pages/dashboard-overview-head.tsx`), and the effort-cap, injection, maintenance, sidecar, and memory panels below it (`gui/src/pages/dashboard-overview-panels.tsx`). |
 
+JEV setup and its Stats tab reuse these shells; see [providers-and-adapters.md](./providers-and-adapters.md#typesafe-jev-decision-provider).
+
 The native-main reauth poller captures an immutable accepted flow id for queued callbacks.
 Its POST, GET and DELETE JSON reads retain API error codes, but non-2xx responses never
 become successful flow DTOs. The three local React Doctor response-body exceptions preserve
@@ -85,7 +141,7 @@ that tested contract without disabling the rule for other calls.
 
 Rail selection is component-local state today, so a reload returns to the workspace's default
 selection rather than the previously selected row. An OAuth ToS warning is shown before a login that
-requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`).
+requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`). Provider-login polling follows the [current continuation contract](gui-and-management-api.md#oauth-login-continuations): device approval shows its code and verification link without a callback paste field; a later manual step replaces that hint and restores paste. Discovery reflects the current management principal.
 
 The `/#codex-auth` add-account modal has a three-step manual-code UX contract on top of the existing
 OAuth polling API: submit request, waiting-for-login completion, and terminal success/failure. Once
@@ -107,6 +163,11 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
+`OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
+through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
+is a measured value. Separate attempts add credits when usage is merged. The field is independent
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage.
+
 ### Upstream key account attribution
 
 API-key attempts in `src/usage/log.ts` carry `accountLogLabel` as `k` plus 32 lowercase
@@ -116,6 +177,8 @@ hex digits. `src/codex/account-label.ts` derives it from the first 128 bits of S
 keychain resolution. The log contains the digest, not raw keys, references, or pool IDs.
 Existing Codex and OAuth label formats remain valid. Replacing a literal or reference changes
 identity; rotating the secret behind the same reference preserves the logical account.
+
+`src/usage/jev-stats.ts` owns the parallel content-free JEV projection; its accumulator contract lives in [providers-and-adapters.md](./providers-and-adapters.md#typesafe-jev-decision-provider).
 
 `src/providers/label.ts` stamps only key authentication, including implicit custom-provider
 keys. `src/server/request-log.ts` commits identity at dispatch after queued selection changes,
@@ -227,16 +290,11 @@ ordinary appends. It does not retain the full input or a normalized object for e
 neither the old byte window nor the parsed-entry cap can discard an earlier prefix before range and
 surface filtering. `managementUsageMaxReadBytes` remains a recognized compatibility setting for
 bounded legacy readers, but it is not an accuracy limit or tuning knob for `GET /api/usage`.
-A Codex-surface response also includes an `accounts` breakdown keyed by the stable non-PII
-`accountLogLabel`; current cards join those rows to the management account DTO and show the 30-day
-token total, API-equivalent cost estimate, and measurement coverage. New main-pool rows use `main`,
-while legacy bare `openai` rows stay ambiguous rather than being reassigned from current config.
-A missing `usage.jsonl` returns a zeroed summary with 200, not an error: a fresh install has no
-usage and must not render as a failure. What the shape must never do is present an unmeasured
-request as a measured zero — that is what the `measured / reported / unreported / unsupported /
-estimated` split exists for, and why coverage is reported alongside totals. The dashboard Usage tab renders the same shape, and the
-main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
-200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
+A Codex-surface response includes an `accounts` breakdown keyed by stable non-PII `accountLogLabel`; cards join it to the management account DTO for 30-day tokens, API-equivalent cost and coverage. New main-pool rows use `main`; legacy bare `openai` rows remain ambiguous.
+A missing `usage.jsonl` returns a zeroed summary with 200 because a fresh install has no usage. Unmeasured requests remain distinct from measured zero through `measured / reported / unreported / unsupported / estimated` counts and their coverage totals.
+The Usage tab renders that shape and the main Dashboard shows its 30-day summary. The 200-entry in-memory `requestLog` is not the aggregation source; the JSONL ledger is.
+Ledger read failures instead return `500 { error: "read_failed" }`. Shared GUI usage admission reads that body before classifying HTTP failure and also rejects the legacy HTTP-200 envelope, so every shared cache retains its last valid report rather than fabricating zero totals.
+> Decision record: [ADR-0106](decisions/ADR-0106-usage-read-failure-contract.md)
 
 A row also records the upstream cost of its logical request. `logicalRequestId` names the turn
 that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
@@ -285,9 +343,10 @@ is treated as an append: the scanner verifies the previous LF and its trailing 6
 folds only the suffix into a cloned accumulator and publishes it after validation. Concurrent callers
 share that work. Cold rebuilds scan the whole ledger in fixed-size chunks and yield between bounded
 batches, so memory stays bounded and unrelated management requests remain serviceable even for a
-large existing log. The first read is proportional to ledger size; steady-state refresh work is
-proportional to newly appended bytes. The Dashboard polls its 30-day usage summary independently once
-per minute, so usage work cannot delay health/provider/settings state or run every five seconds.
+large existing log. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger.
+The Dashboard polls its 30-day usage independently once per minute, separate from five-second state polls.
+An unchanged retained snapshot reuses its verified region digest only for identical bounds; appends or trimming hash the returned region, preserving same-inode rewrite detection.
+> Decision record: [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md)
 
 An oversized row is skipped inside the scanner bound without shortening identities. Accumulators keep normal rows plus `usageIncomplete` / `usageIncompleteReason: "oversized_rows"` on caches and rollups; append ORs the flag and a rebuild recalculates it. Invalid-row counts are not sticky, and absence of the flag is not completeness. GUI caches warn on Usage, Dashboard, provider and key views; CLI warns in human output only; most-used order save refuses an incomplete snapshot. Quota surfaces stay separate. Legacy truncation fields keep their meaning; read/mutation failures still fail closed.
 
@@ -313,6 +372,7 @@ calls the injected recorder once from `addFinalRequestLog`; the management route
 snapshot capability. There is no module-global active registry, timer, outbound connection, scrape-time
 log scan, or persistence. Restart creates a fresh owner, resets every counter/histogram, and changes
 `opencodex_metrics_process_start_time_seconds`.
+The opt-in owner also renders four Kiro quota gauges from fresh, identity-matched cached observations in `src/providers/kiro-quota-metrics.ts`. It emits at most 32 distinct opaque account labels and makes no scrape-time upstream call; missing, future-dated, expired, or reset-passed evidence emits no sample.
 
 The label vocabularies are closed: protocol is `responses`, `chat`, `messages`, or `unknown`; result
 is `completed`, `failed`, `incomplete`, or `aborted`; recovery is one of the coarse classes listed in
@@ -327,8 +387,7 @@ recovery kind already retained on an attempt contributes once to its coarse clas
 and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
 only finite nonnegative first-output values, while `opencodex_ttft_missing_total` is the complementary
-denominator. No request, credential, account, provider, model, conversation, raw error, prompt, tool,
-body, header, or URL value enters a label or sample.
+denominator. The only account-specific metric label is the bounded Kiro opaque digest; no raw request, credential, account, provider, model, conversation, error, prompt, tool, body, header, or URL value enters a label or sample.
 
 For diagnosing upstream-shape / usage-extraction issues run `ocx debug usage on` (or set
 `OPENCODEX_USAGE_DEBUG=1` before start). The proxy then writes a rolling debug record per finalized
@@ -507,6 +566,11 @@ the client's own selector echoed in `response.model` (Anthropic routes keep `ant
 An absent upstream model stays absent; the tooltip
 retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
 labels collapse for reporting; configured provider names ending in `-main` remain separate.
+
+Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
+re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and
+`src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page.
+[Protocol Paths](data-planes/protocol-paths.md) owns its derivation.
 
 Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete
 selector; exact-match filtering uses the same idempotent encoding. The derived index rebuilds when its

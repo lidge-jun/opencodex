@@ -255,15 +255,17 @@ describe("image bridge dispatch priority (handler activation)", () => {
     await res.body?.cancel();
   });
 
-  test("dual-tool on a runTurn adapter → image bridge wins (web-search loop has no runTurn support)", async () => {
+  test("dual-tool on a runTurn adapter → web-search wins through runTurn, image bridge deferred", async () => {
     imageBridgeRun = false; webSearchRun = false; runTurnCalled = false;
     useRunTurnAdapter = true;
-    mockWsPlan = { backend: "openai" };
+    mockWsPlan = { backend: "openai", maxSearches: 1 };
     try {
       const res = await post(true, [{ type: "web_search" }, { type: "image_generation" }]);
+      // The fetch-path loop never runs for runTurn adapters; the search
+      // interception lives inside the runTurn dispatch instead.
       expect(webSearchRun).toBe(false);
-      expect(imageBridgeRun).toBe(true);
-      expect(runTurnCalled).toBe(false);
+      expect(imageBridgeRun).toBe(false);
+      expect(runTurnCalled).toBe(true);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
       await res.body?.cancel();
     } finally {

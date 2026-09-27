@@ -57,6 +57,7 @@ function desktopSwitchInertReason(reason: unknown): string {
   return "the stored setting is not effective in the current runtime configuration";
 }
 
+
 function settingsUpdateLines(
   result: unknown,
   changed: { desktopAuthless: boolean; clientCompaction: boolean },
@@ -68,8 +69,19 @@ function settingsUpdateLines(
   const lines: string[] = [];
   const appendSwitch = (key: string, label: string): boolean => {
     const state = recordValue(switches[key]);
-    if (!state || typeof state.stored !== "boolean" || typeof state.effective !== "boolean") return false;
+    if (!state || typeof state.stored !== "boolean"
+      || (typeof state.effective !== "boolean" && state.effective !== null)) return false;
     lines.push(`${label}: stored ${state.stored ? "on" : "off"}.`);
+    if (state.effective === null) {
+      // `null` is reported for both withheld cases; the apply reason is the only place
+      // that still distinguishes them, so the line has to read it rather than claim
+      // external control over an ownership the server could not determine.
+      const withheld = recordValue(switches.apply)?.reason === "ownership_undetermined"
+        ? "effective state could not be determined"
+        : "effective state is controlled by the external model provider";
+      lines.push(`${label}: ${withheld}.`);
+      return true;
+    }
     // The effective value is always stated, even when it matches. Printing it only on a
     // mismatch would make silence ambiguous — the reader could not tell "the stored value is
     // in force" from "this build does not report effective state", and that ambiguity is a
@@ -96,7 +108,14 @@ function settingsUpdateLines(
     lines.push("Codex config: ~/.codex/config.toml was rewritten.");
   } else {
     const detail = typeof apply.detail === "string" && apply.detail.length > 0 ? ` Details: ${apply.detail}` : "";
-    lines.push(`Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail} Run 'ocx sync' to apply the stored settings.`);
+    const retry = apply.reason === "external_provider"
+      ? ""
+      : apply.reason === "ownership_undetermined"
+      ? " Resolve the reported config.toml read error, then inspect 'ocx system settings --json'."
+      : apply.reason === "integration_disabled"
+      ? " Enable Codex integration before applying the stored settings."
+      : " Run 'ocx sync' to apply the stored settings.";
+    lines.push(`Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail}${retry}`);
   }
   lines.push(`Auth source: ${authSource.summary}`);
   return lines;

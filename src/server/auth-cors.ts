@@ -312,14 +312,29 @@ export function isApiAuthRequired(config: Pick<OcxConfig, "hostname">): boolean 
  * So this type is deliberately narrow: it cannot masquerade as a business config, and a policy
  * view that leaks into a routing path fails to typecheck rather than silently taking effect.
  */
-export type RequestPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "apiKeys">;
+export interface LinkIngressPolicy {
+  allowedKeyIds: ReadonlySet<string>;
+}
+
+export type RequestPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "apiKeys"> & {
+  linkIngress?: LinkIngressPolicy;
+};
+
+export type DataPlaneAdmissionOptions = {
+  linkIngress?: ReadonlySet<string>;
+};
 
 /** Derive the per-request policy view for a listener. Cheap enough to build per request. */
-export function requestPolicyView(config: OcxConfig, bindHostname: string): RequestPolicyView {
+export function requestPolicyView(
+  config: OcxConfig,
+  bindHostname: string,
+  linkIngress?: LinkIngressPolicy,
+): RequestPolicyView {
   return {
     hostname: bindHostname,
     ...(config.corsAllowOrigins ? { corsAllowOrigins: config.corsAllowOrigins } : {}),
     ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
+    ...(linkIngress ? { linkIngress } : {}),
   };
 }
 
@@ -398,13 +413,15 @@ export function resolveDataPlaneAdmissionSecret(
   token: string,
   config: Pick<OcxConfig, "apiKeys">,
   source: DataPlaneAdmissionSource = "dedicated",
+  options: DataPlaneAdmissionOptions = {},
 ): DataPlaneAdmission | null {
   const actual = token.trim();
   if (!actual) return null;
-  if (secretEquals(actual, configuredApiAuthToken(config))) {
+  if (!options.linkIngress && secretEquals(actual, configuredApiAuthToken(config))) {
     return { kind: "environment", source, contextPrincipalId: mintContextPrincipal("environment", "", actual) };
   }
   for (const k of config.apiKeys ?? []) {
+    if (options.linkIngress && !options.linkIngress.has(k.id)) continue;
     if (secretEquals(actual, k.key)) {
       return { kind: "configured", keyId: k.id, source, contextPrincipalId: mintContextPrincipal("configured", k.id, actual) };
     }
@@ -555,12 +572,12 @@ export function resolveApiAuth(req: Request, config: RequestPolicyView): DataPla
   // A loopback bind never reads a token at all, so there is no key to name.
   if (!isApiAuthRequired(config)) return { kind: "loopback", source: "loopback" };
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated");
+  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds });
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer");
+  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds });
   // Anthropic-SDK clients (Claude Code with ANTHROPIC_API_KEY) authenticate via x-api-key.
   const apiKey = req.headers.get("x-api-key")?.trim();
-  if (apiKey) return resolveDataPlaneAdmissionSecret(apiKey, config, "x-api-key");
+  if (apiKey) return resolveDataPlaneAdmissionSecret(apiKey, config, "x-api-key", { linkIngress: config.linkIngress?.allowedKeyIds });
   return null;
 }
 
@@ -582,14 +599,14 @@ export function resolveResponsesApiAuth(req: Request, config: RequestPolicyView)
   if (!isApiAuthRequired(config)) return { kind: "loopback", source: "loopback" };
   // The dedicated header still WINS, because it is unambiguous.
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated");
+  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds });
   // #1686: a bearer may also be one of OUR admission secrets. Rejecting it outright meant a
   // Codex client configured with `env_key` could not reach Direct at all. Admitting it is only
   // safe because the upstream credential is then SUBSTITUTED rather than forwarded -- see
   // materializeCodexUpstreamAuth. A bearer that is NOT our secret stays unadmitted here and
   // remains Codex Direct passthrough, so the two bearer domains still never mix.
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer");
+  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds });
   // `x-api-key` is deliberately NOT accepted on this transport.
   return null;
 }

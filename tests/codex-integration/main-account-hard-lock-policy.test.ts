@@ -67,6 +67,9 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(getMainAccountHardLockStatus(enabled, now + 60_000).state).toBe("blocked");
     expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "blocked" });
     observe({ shortPercent: 0 });
+    // Weekly99 still blocks on its own after the 5h window reads 0.
+    expect(getMainAccountHardLockStatus(enabled, now + 120_000).state).toBe("blocked");
+    observe({ weeklyPercent: 0 });
     expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "ready" });
   });
 
@@ -120,23 +123,49 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
   });
 
-  test("5h usage wins over a higher weekly window", () => {
-    observe({ shortPercent: 97, shortWindowSeconds: 18_000, weeklyPercent: 100 });
-    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("ready");
-    observe({ shortPercent: 99, shortWindowSeconds: 18_000, weeklyPercent: 20 });
-    expect(isMainAccountHardLocked(enabled, now)).toBe(true);
+  test.each([
+    { shortPercent: 98, weeklyPercent: 50, state: "blocked" },
+    { shortPercent: 99, weeklyPercent: 20, state: "blocked" },
+    { shortPercent: 97, weeklyPercent: 98, state: "blocked" },
+    { shortPercent: 20, weeklyPercent: 100, state: "blocked" },
+    { shortPercent: 97, weeklyPercent: 97.99, state: "ready" },
+  ])("5h $shortPercent / weekly $weeklyPercent is $state: either window at 98 blocks alone", ({ state, ...usage }) => {
+    observe({ ...usage, shortWindowSeconds: 18_000 });
+    expect(getMainAccountHardLockStatus(enabled, now).state).toBe(state);
   });
 
-  test("an expired 5h window does not fall back to the high weekly bar", () => {
+  test("the lock holds until every blocking window reads lower", () => {
     observe({ shortPercent: 99, shortWindowSeconds: 18_000, shortResetAt: now / 1000, weeklyPercent: 100 });
     expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked" });
     observe({ shortPercent: 0 });
+    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
+    observe({ weeklyPercent: 97 });
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe("ready");
+    observe({ weeklyPercent: 98 });
+    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
   });
 
-  test("a known 5h shape with no percentage stays unknown instead of selecting weekly", () => {
+  test("a blocked status reports the latest reset among the blocking windows only", () => {
+    observe({ shortPercent: 99, shortResetAt: now + 60_000, weeklyPercent: 98, weeklyResetAt: now + 600_000 });
+    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked", resetAt: now + 600_000 });
+    observe({ shortPercent: 99, shortResetAt: now + 60_000, weeklyPercent: 40, weeklyResetAt: now + 600_000 });
+    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked", resetAt: now + 60_000 });
+  });
+
+  test("an unknown 5h reading neither hides a weekly block nor blocks alone", () => {
     observe({ shortWindowSeconds: 18_000, weeklyPercent: 100 });
+    expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
+    observe({ weeklyPercent: 20 });
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe("unknown");
+  });
+
+  test("a reset-only weekly observation cannot release a retained weekly block", () => {
+    observe({ shortPercent: 10, shortWindowSeconds: 18_000, weeklyPercent: 99, weeklyResetAt: now + 60_000 });
+    observe({ weeklyResetAt: now + 120_000 });
+    expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 99, weeklyResetAt: now + 60_000 });
+    expect(isMainAccountHardLocked(enabled, now)).toBe(true);
+    observe({ monthlyPercent: 5, monthlyIsPrimaryWindow: true });
+    expect(getMainPolicyQuota()?.weeklyPercent).toBeUndefined();
   });
 
   test("weekly-only accounts do not use a higher monthly bar", () => {

@@ -3,7 +3,7 @@ import { MAX_HUB_USAGE_BYTES, parseHubUsage } from "../remote/hub-usage";
 import { parseRange, parseUsageSurface, USAGE_RANGES, USAGE_SURFACES } from "../usage/summary";
 import { parseUsageTimeWindow } from "../usage/time-range";
 import { getFilteredUsageAggregate } from "./management/usage-aggregate-cache";
-import { isAllowedRequestOrigin, resolveDataPlaneAdmissionSecret, withCors, type RequestPolicyView } from "./auth-cors";
+import { isAllowedRequestOrigin, resolveDataPlaneAdmissionSecret, withCors, type DataPlaneAdmissionOptions, type RequestPolicyView } from "./auth-cors";
 
 /** Read only the ledger rows belonging to an explicitly authenticated configured key. */
 export async function handleHubUsage(req: Request, config: OcxConfig, policy: RequestPolicyView): Promise<Response> {
@@ -12,7 +12,8 @@ export async function handleHubUsage(req: Request, config: OcxConfig, policy: Re
   }), req, policy);
   const error = (code: string, message: string, status: number) => reply({ error: { code, message } }, status);
   const token = req.headers.get("x-opencodex-api-key") ?? "";
-  const admission = resolveDataPlaneAdmissionSecret(token, config);
+  const options: DataPlaneAdmissionOptions = { linkIngress: policy.linkIngress?.allowedKeyIds };
+  const admission = resolveDataPlaneAdmissionSecret(token, config, "dedicated", options);
   if (admission?.kind !== "configured") return error("hub_usage_unauthorized", "A configured client data key is required", 401);
   if (!isAllowedRequestOrigin(req, policy)) return error("origin_rejected", "Cross-origin request blocked", 403);
   if (config.runtimeRole !== "hub") return error("hub_usage_not_a_hub", "Usage is served here only by a hub", 404);
@@ -38,7 +39,7 @@ export async function handleHubUsage(req: Request, config: OcxConfig, policy: Re
     const aggregate = await getFilteredUsageAggregate({
       apiKeyId: keyId, provider: query.get("provider"), model: query.get("model"),
     }, window);
-    const current = resolveDataPlaneAdmissionSecret(token, config);
+    const current = resolveDataPlaneAdmissionSecret(token, config, "dedicated", options);
     if (current?.kind !== "configured" || current.keyId !== keyId) {
       return error("hub_usage_unauthorized", "The client key changed during the read", 401);
     }

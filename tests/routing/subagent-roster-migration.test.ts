@@ -85,6 +85,8 @@ describe("subagent roster defaults and one-time upgrades", () => {
     [["gpt-6-astra", "gpt-5.6-sol", "gpt-6-sol", "gpt-5.5-pro"], ["gpt-6-astra", "gpt-6-sol"]],
     // Routed and account-qualified ids keep their exact spelling, 5.x suffix or not.
     [["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"], ["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"]],
+    // A retired-family prefix belongs to the namespace, not the qualified model id.
+    [["gpt-5.6-router/model", "gpt-5.5-team/gpt-6-sol"], ["gpt-5.6-router/model", "gpt-5.5-team/gpt-6-sol"]],
     // A list of only retired rows receives the defaults rather than becoming empty.
     [["gpt-5.5", "gpt-5.6-terra"], ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]],
     // Ids that name Object.prototype members are ordinary strings, not lookup hits.

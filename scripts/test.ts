@@ -22,6 +22,18 @@ export interface IsolatedTestEnvironment {
   cleanup(): void;
 }
 
+/**
+ * Credentials of the developer's own OpenCodex install that the sandbox must not inherit. A
+ * Windows install stores its data-plane token as a user environment variable, so every shell on
+ * that machine carries it; a test that then builds a service definition or starts a proxy reads
+ * the live token instead of its fixture and fails only on a developer machine.
+ */
+export const LIVE_INSTALL_CREDENTIAL_ENV = [
+  "OPENCODEX_API_AUTH_TOKEN",
+  "OPENCODEX_ADMIN_AUTH_TOKEN",
+  "OCX_API_TOKEN_FILE",
+] as const;
+
 export function createIsolatedTestEnvironment(
   baseEnv: Record<string, string | undefined> = process.env,
 ): IsolatedTestEnvironment {
@@ -53,11 +65,13 @@ export function createIsolatedTestEnvironment(
     mkdirSync(join(root, "AppData", "Roaming"), { recursive: true });
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
+  const inherited = { ...baseEnv };
+  for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
 
   return {
     root,
     env: {
-      ...baseEnv,
+      ...inherited,
       // Captured BEFORE HOME is overwritten: once the child starts with a rewritten
       // HOME, `homedir()` returns the sandbox, so this hand-off is the only way the
       // real-home write guard can still know which path to protect.
@@ -357,6 +371,9 @@ export const SERIAL_FULL_SUITE_FILES = [
   // Synchronous injection subprocesses can wedge the long-lived macOS isolate
   // parent while reaping a history Worker; contain them in a fresh bounded lane.
   "codex-integration/codex-inject-write-lock.test.ts",
+  // Its management API import stalled the long-lived macOS isolate pool before
+  // any case ran; the complete file finishes in under a second in a fresh process.
+  "routing/subagent-roster-retention.test.ts",
   "update/update-stop-first.test.ts",
   // Relays a 50 MiB WebSocket frame end to end against a 15s deadline, so its result is a
   // measurement of the whole process, not of the relay. On a healthy 3-CPU macOS runner the
@@ -372,6 +389,9 @@ export const SERIAL_FULL_SUITE_FILES = [
   "service/service-ownership-state.test.ts",
   "service/service-sqlite-home.test.ts",
   "service/service.test.ts",
+  "service/service-claim.test.ts",
+  "service/service-wsl-home-ownership.test.ts",
+  "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
 ] as const;
 

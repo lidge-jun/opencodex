@@ -20,7 +20,18 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
+Foreground `shellArgs` and `shellStreamArgs` are unavailable on every platform, including with
+`nativeLocalExec: "on"`. `src/adapters/cursor/native-foreground-shell.ts` rejects them before spawn
+until a kernel-backed descendant owner exists; process-group disappearance is not cleanup proof.
+The streaming form still sends start, aborted exit, typed failure, and stream close, with no output
+frames. The synchronous form sends one typed failure. Both preserve catalog-specific client-tool
+redirects. Transport teardown seals the foreground owner, and queued frames then report cancellation.
+No child, output buffer, timer, or process-table scan is created. This does not change background
+shell admission, synchronous filesystem tools, or separately configured MCP/desktop executors.
+
 > Decision record: [ADR-0047](../decisions/ADR-0047-cursor-native-exec.md)
+> Decision record: [ADR-0105](../decisions/ADR-0105-cursor-foreground-shell-ownership.md)
+> Decision record: [ADR-0122](../decisions/ADR-0122-cursor-foreground-admission.md)
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
 that survives the transport budget: unified Desktop `exec` as well as the legacy

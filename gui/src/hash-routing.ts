@@ -6,6 +6,15 @@ export function normalizeHashPath(hash: string): string {
 }
 
 /**
+ * Split a normalized hash into its route path and an optional `?query`. The query is page-owned
+ * state (a prefilter, a selected provider); routing decisions read the path alone.
+ */
+export function splitHashQuery(raw: string): { path: string; query: string } {
+  const index = raw.indexOf("?");
+  return index < 0 ? { path: raw, query: "" } : { path: raw.slice(0, index), query: raw.slice(index + 1) };
+}
+
+/**
  * Passive URL correction: replace the current history entry.
  * Does not emit `hashchange` — callers must update React state themselves when needed.
  */

@@ -32,6 +32,8 @@ import {
 } from "./sse-frame-buffer";
 import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
 import { createBoundedResponseLogBody } from "./response-log-body";
+import { clientWireLogOf } from "./inference/client-wire";
+import { recordClientWireRequestLog } from "./inference/client-wire-log";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -815,6 +817,13 @@ export function responseWithDeferredRequestLog(
     logCtx.usageDebugContentType = contentType;
   }
   if (isNativePassthroughSseResponse(response)) {
+    return response;
+  }
+  // A body already in the client's wire is not Responses SSE or JSON; its producer reports the
+  // facts the tap below would read (PF-09 direct encoders).
+  const clientWireLog = clientWireLogOf(response);
+  if (clientWireLog) {
+    recordClientWireRequestLog(clientWireLog, requestId, start, logCtx, addLog);
     return response;
   }
   if (!response.body || !contentType.includes("text/event-stream")) {
@@ -1615,6 +1624,21 @@ export const CODEX_SAFETY_BUFFERING_HEADERS = [
 
 const CODEX_SAFETY_BUFFERING_HEADER_SET: ReadonlySet<string> = new Set(CODEX_SAFETY_BUFFERING_HEADERS);
 
+const PASSTHROUGH_DROP_HEADERS: ReadonlySet<string> = new Set([
+  "content-encoding",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "set-cookie",
+  "set-cookie2",
+  "te",
+  "trailer",
+  "upgrade",
+]);
+
 export interface CodexSafetyBufferingFilterOptions {
   /**
    * Drop Codex safety-buffering hints: the `x-codex-safety-buffering-*` response
@@ -1633,24 +1657,10 @@ export function codexSafetyBufferingFilterOptions(
 
 export function sanitizePassthroughHeaders(upstream: Headers, options?: CodexSafetyBufferingFilterOptions): Headers {
   const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
-  const DROP = new Set([
-    "content-encoding",
-    "content-length",
-    "transfer-encoding",
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "set-cookie",
-    "set-cookie2",
-    "te",
-    "trailer",
-    "upgrade",
-  ]);
   const out = new Headers();
   upstream.forEach((value, key) => {
     const lower = key.toLowerCase();
-    if (DROP.has(lower)) return;
+    if (PASSTHROUGH_DROP_HEADERS.has(lower)) return;
     if (dropSafetyBuffering && CODEX_SAFETY_BUFFERING_HEADER_SET.has(lower)) return;
     out.set(key, value);
   });

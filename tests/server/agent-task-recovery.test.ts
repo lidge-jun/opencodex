@@ -1285,3 +1285,132 @@ describe("recovery refuses a wrong-family echoed routing header", () => {
     expect(fetches).toBe(1);
   });
 });
+
+describe("agent task recovery transient retry (#3661)", () => {
+  beforeEach(() => resetAgentTaskRecoveryState());
+  afterEach(() => { globalThis.fetch = originalFetch; resetAgentTaskRecoveryState(); });
+
+  const req = () => new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+
+  test.each([500, 502, 503, 504, 520] as const)("a transient %d refusal retries within the configured budget and recovers", async status => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return fetches === 1
+        ? new Response("private failure", { status })
+        : new Response(recoverySse("Recovered after outage."));
+    }) as typeof fetch;
+    const input = encryptedInput();
+    expect(await recoverEncryptedAgentTaskWithResult(req(), input, { retries: 1 }, routedConfig()))
+      .toEqual({ recovered: true });
+    expect(fetches).toBe(2);
+    expect((input[0] as { content: unknown[] }).content.at(-1))
+      .toEqual({ type: "input_text", text: "Recovered after outage." });
+  });
+
+  test.each([400, 401, 403, 404, 429] as const)("a %d refusal stays terminal under a configured retry budget", async status => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response("private failure", { status });
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 2 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_http_rejected" });
+    expect(fetches).toBe(1);
+  });
+
+  test("persistent transient rejections exhaust the bounded retry budget", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response("private failure", { status: 503 });
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 2 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_http_rejected" });
+    expect(fetches).toBe(3); // 1 initial + 2 retries
+  });
+
+  test("an over-budget retries value is clamped to the same bound", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response("private failure", { status: 503 });
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 99 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_http_rejected" });
+    expect(fetches).toBe(3);
+  });
+
+  test("transport failures retry while invalid recovery output stays terminal", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      if (fetches === 1) throw new TypeError("private transport failure");
+      return new Response("data: {not-json}\n\n");
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 2 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_invalid_output" });
+    expect(fetches).toBe(2);
+  });
+
+  test("persistent transport failures exhaust the same bounded budget", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      throw new TypeError("private transport failure");
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 2 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_transport_error" });
+    expect(fetches).toBe(3);
+  });
+
+  test("caller cancellation during retry backoff reports caller_cancelled without another send", async () => {
+    const caller = new AbortController();
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response("private failure", { status: 503 });
+    }) as typeof fetch;
+    const pending = recoverEncryptedAgentTaskWithResult(
+      req(), encryptedInput(), { retries: 2 }, routedConfig(), { abortSignal: caller.signal },
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    caller.abort();
+    expect(await pending).toEqual({ recovered: false, reason: "caller_cancelled" });
+    expect(fetches).toBe(1);
+  });
+
+  test("a Retry-After past the recovery deadline ends with the failure instead of resending early", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response("private failure", { status: 503, headers: { "retry-after": "30" } });
+    }) as typeof fetch;
+    const started = Date.now();
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 2, timeoutMs: 5_000 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_http_rejected" });
+    // Before the fix the 30 s instruction was clamped to the 2 s backoff cap and resent.
+    expect(fetches).toBe(1);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test("a Retry-After inside the deadline is honoured as a floor, not capped", async () => {
+    let fetches = 0;
+    let firstAt = 0;
+    let secondAt = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        firstAt = Date.now();
+        return new Response("private failure", { status: 503, headers: { "retry-after": "2.5" } });
+      }
+      secondAt = Date.now();
+      return new Response(recoverySse("Recovered after outage."));
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 1 }, routedConfig()))
+      .toEqual({ recovered: true });
+    expect(fetches).toBe(2);
+    // 2.5 s exceeds RECOVERY_RETRY_MAX_DELAY_MS (2 s), so a capped wait would resend sooner.
+    expect(secondAt - firstAt).toBeGreaterThanOrEqual(2_400);
+  }, 10_000);
+});

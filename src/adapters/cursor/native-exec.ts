@@ -1,3 +1,4 @@
+import type { CursorForegroundShellOwner } from "./native-foreground-shell";
 import { createHash } from "node:crypto";
 import { enforceAppOwnedMemoryBudget } from "../../lib/app-owned-memory";
 import { create } from "@bufbuild/protobuf";
@@ -66,6 +67,8 @@ export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDep
 export interface CursorNativeExecContext extends CursorNativeExecDeps {
   /** Stable owner for background shells created by this transport session. */
   sessionId?: string;
+  foregroundShellOwner?: CursorForegroundShellOwner;
+  signal?: AbortSignal;
   mcpToolDefs?: McpToolDefinition[];
   clientToolDefs?: McpToolDefinition[];
   /** Unsafe opt-in escape hatch for Cursor server-driven local fs/shell/fetch execution. */
@@ -706,8 +709,8 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
   if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : deleteExec(execMsg)];
   if (execCase === "lsArgs") return [lsExec(execMsg)];
   if (execCase === "grepArgs") return [grepExec(execMsg)];
-  if (execCase === "shellArgs") return [shellExec(execMsg)];
-  if (execCase === "shellStreamArgs") return shellStreamExec(execMsg);
+  if (execCase === "shellArgs") return [shellExec(execMsg, deps.nativeExecRedirectHint)];
+  if (execCase === "shellStreamArgs") return shellStreamExec(execMsg, deps.foregroundShellOwner, deps.signal, deps.nativeExecRedirectHint);
   if (execCase === "backgroundShellSpawnArgs") return [backgroundShellSpawnExec(execMsg, deps.sessionId ?? "")];
   if (execCase === "writeShellStdinArgs") return [writeShellStdinExec(execMsg, deps.sessionId ?? "")];
   if (execCase === "fetchArgs") return [await fetchExec(execMsg, deps)];

@@ -9,8 +9,10 @@ import {
   setPersistedConfigMutationBeforeCommitForTests,
 } from "../../src/config";
 import { computeNextRun, runStorageCleanupPolicy } from "../../src/storage/policy";
+import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import {
   getStorageCleanupPolicyJobState,
+  maybeRequestStorageCleanupPolicyRun,
   requestStorageCleanupPolicyRun,
   resetStorageCleanupPolicyJobForTestsAsync,
   setStorageCleanupPolicyJobTestHooks,
@@ -148,4 +150,36 @@ test("job outcome keeps successful cleanup when metadata cannot persist", async 
   expect(state.lastError).toBeUndefined();
   expect(existsSync(archived)).toBe(false);
   expect(existsSync(getConfigPath())).toBe(false);
+}, { timeout: 10_000 });
+
+test("a sibling instance never starts a startup or scheduled policy run on the shared CODEX_HOME", async () => {
+  // A second `ocx start --port <other>` shares CODEX_HOME with the live owner
+  // (src/codex/sibling-start.ts); its archived sessions are the owner's to clean up.
+  const initial = loadConfig();
+  initial.storageCleanupPolicy = {
+    enabled: true,
+    trigger: { archivedBytesOver: 1_000_000_000 },
+    target: { removeOldestPercent: 10 },
+    schedule: "daily",
+    mode: "quarantine",
+  };
+  saveConfig(initial);
+  setStorageCleanupPolicyJobTestHooks({ runInProcess: true });
+  markSiblingStart(10100);
+  try {
+    for (const reason of ["startup", "schedule"] as const) {
+      maybeRequestStorageCleanupPolicyRun(reason, { codexHome: configHome });
+      expect(getStorageCleanupPolicyJobState(), reason).toEqual({ status: "idle" });
+    }
+  } finally {
+    resetSiblingStartForTests();
+  }
+  // Unmarked control: the same due policy does start a run, so the idle state above is the mark's.
+  maybeRequestStorageCleanupPolicyRun("schedule", { codexHome: configHome });
+  expect(getStorageCleanupPolicyJobState()).toMatchObject({ status: "running", reason: "schedule" });
+  const deadline = Date.now() + 5_000;
+  while (getStorageCleanupPolicyJobState().status !== "idle" && Date.now() < deadline) {
+    await Bun.sleep(10);
+  }
+  expect(getStorageCleanupPolicyJobState().lastOutcome).toMatchObject({ ok: true, skipped: "under_threshold" });
 }, { timeout: 10_000 });

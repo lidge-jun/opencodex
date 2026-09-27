@@ -23,6 +23,8 @@ macOS 菜单栏项目是 OpenCodex 桌面应用的一部分。它显示来自本
 
 面板提供 **Refresh**、**Dashboard** 和 **Settings** 控件。**Dashboard** 会在桌面窗口中打开用量视图；**Settings** 会在其中打开配套设置。托盘菜单还提供 **Open Dashboard**、**Open in Browser**、**Start at Login**、**Stop proxy**、**Check for Updates…**、有更新时的 **Install update**，以及 **Quit**。**Stop proxy** 始终列在菜单中，但只有应用自行启动 proxy 时才可点击；你单独启动的 proxy 会继续运行。有托盘可用时，关闭窗口或按 Command-Q 只会隐藏应用；要退出，请使用托盘中的 **Quit**。
 
+桌面仪表盘的更新按钮会打开应用自己的更新页面；它检查并安装与托盘菜单相同的已签名更新。
+
 托盘标题每 60 秒刷新一次。原生面板打开期间，其数据也每 60 秒刷新；点击 **Refresh** 会立即请求更新。
 
 ## Widget

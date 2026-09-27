@@ -3,6 +3,8 @@ title: Uzak Çalışma Alanı
 description: Codex, Claude Code, Pi ve bunların girişlerini tek OCX Hub üzerinde tutarken yalnızca OCX kurulu bilgisayarlar çalışma alanını ve derleme ortamını sağlar.
 ---
 
+SSH makine bağlantıları için [Uzak Bağlantı](/tr/guides/remote-link/) kılavuzuna bakın.
+
 Remote Workspace, bir OpenCodex Hub üzerinde kodlama ajanlarını çalıştırırken
 başka bir bilgisayarın proje dosyalarını, komutları, testleri ve derleme
 kaynaklarını sağlamasına olanak verir. Telefon veya üçüncü bir bilgisayar,

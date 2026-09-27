@@ -4,7 +4,7 @@
  * request replayed — but only while the stream produced zero events, and only
  * within the replay/wait bounds.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { CloudChatError, type CloudChatEvent, type CloudChatRequest } from "../../src/adapters/devin/cloud-direct";
 import { clearCachedCatalog } from "../../src/adapters/devin/cloud-direct/catalog";
 import { streamChatEventsWithResetRetry } from "../../src/adapters/devin/cloud-direct/stated-reset-retry";
@@ -125,6 +125,39 @@ describe("streamChatEventsWithResetRetry", () => {
     expect(calls).toBe(2);
     expect(waits).toEqual([35_000]);
     expect(out.map(e => e.kind)).toEqual(["text", "finish"]);
+  });
+
+  test("wait heartbeats stay below the shortest stall budget and stop after sleep", async () => {
+    const waiting = Promise.withResolvers<number>();
+    const resume = Promise.withResolvers<void>();
+    let calls = 0;
+    let heartbeats = 0;
+    jest.useFakeTimers();
+    try {
+      const pending = drain(streamChatEventsWithResetRetry(REQ, {
+        stream: () => ++calls === 1
+          ? exhausting("Your limit will reset in 3 seconds")()
+          : events({ kind: "finish", reason: "stop" } as CloudChatEvent),
+        sleep: async ms => { waiting.resolve(ms); await resume.promise; },
+        onWaitHeartbeat: () => { heartbeats += 1; },
+      }));
+
+      expect(await waiting.promise).toBe(3_000);
+      expect(heartbeats).toBe(1);
+      jest.advanceTimersByTime(500);
+      expect(heartbeats).toBe(2);
+      jest.advanceTimersByTime(500);
+      expect(heartbeats).toBe(3);
+      resume.resolve();
+      expect((await pending).map(event => event.kind)).toEqual(["finish"]);
+      jest.advanceTimersByTime(1_000);
+      expect(heartbeats).toBe(3);
+      expect(calls).toBe(2);
+    } finally {
+      resume.resolve();
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
   });
 
   test("waits the generated approximate retry delay and replays", async () => {

@@ -201,7 +201,7 @@ describe("#5624 leftovers from earlier update attempts", () => {
     removeTreeWithRetry(scopeDir);
   });
 
-  test("a stage held by a locked file stays owned, does not block, and is removed once it is stale", () => {
+  test("a stage held by a locked file stays owned and never becomes an automatic deletion target", () => {
     let lockedStage: string | null = null;
     const lockingRm = (target: string, options: { recursive: true; force: true }) => {
       if (lockedStage && target.startsWith(lockedStage + "/") || lockedStage && target.startsWith(lockedStage + "\\")) {
@@ -235,7 +235,8 @@ describe("#5624 leftovers from earlier update attempts", () => {
     expect(liveVersion(packageDir)).toBe("2.0.0");
     expect(stages(scopeDir)).toEqual([leftover!]);
 
-    // The lock is gone and the stage is past the in-flight floor: the next update removes it.
+    // Even after the lock is gone and the stage is stale, its pathname is no longer trusted:
+    // another local process could replace it with a link between marker validation and deletion.
     lockedStage = null;
     const later = transactionalNpmUpdate({
       packageDir, pkgName: PKG, targetVersion: "3.0.0", tag: "latest",
@@ -245,8 +246,9 @@ describe("#5624 leftovers from earlier update attempts", () => {
     });
     expect(later.ok).toBe(true);
     expect(liveVersion(packageDir)).toBe("3.0.0");
-    expect(stages(scopeDir)).toEqual([]);
-    expect(lines.some(line => line.includes("Removed a staging directory left by an earlier update"))).toBe(true);
+    expect(stages(scopeDir)).toEqual([leftover!]);
+    expect(existsSync(join(scopeDir, leftover!, "lib", "node_modules", ...PKG.split("/"), "package.json"))).toBe(true);
+    expect(lines.some(line => line.includes("delete it by hand"))).toBe(true);
   });
 
   test("anything the updater did not create is never deleted", () => {

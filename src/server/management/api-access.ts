@@ -3,6 +3,7 @@ import { isWildcardHostname } from "../../codex/loopback-target";
 import { localCredentialDestinationHostname, localInferenceDestination } from "../../lib/local-destinations";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";
 import { LIVE_AUDIO_MODEL, TRANSCRIPTION_MODEL } from "../audio-upstream";
+import { resolveApiSurfaceSettings, type ApiSurfaceSettings } from "../../protocols/settings";
 
 export interface AudioApiAccess {
   transcriptionEndpoint: string;
@@ -23,6 +24,13 @@ export interface ApiAccessEndpoints {
   chatCompletionsEndpoint: string;
   messagesEndpoint: string;
   modelsEndpoint: string;
+  /** Which public APIs are served and who decided it, from `resolveApiSurfaceSettings`. */
+  surfaces: ApiSurfaceSettings;
+  /**
+   * Back-compat for dashboards that predate `surfaces`: they hide the Messages endpoint when
+   * this is false. It mirrors `surfaces.messages.enabled`, not `claudeCode.enabled`, so an
+   * older dashboard never advertises a closed endpoint or hides an open one.
+   */
   claudeCodeEnabled: boolean;
   audio: AudioApiAccess;
   /** Back-compat alias for older GUI clients. */
@@ -165,13 +173,15 @@ export function buildApiAccessEndpoints(
   const apiConfigured = !!keyed && keyed.disabled !== true && keyed.adapter === "openai-responses"
     && keyed.authMode !== "forward" && keyed.baseUrl.replace(/\/+$/, "") === "https://api.openai.com/v1"
     && typeof keyed.apiKey === "string" && !!keyed.apiKey.trim();
+  const surfaces = resolveApiSurfaceSettings(config);
   return {
     baseUrl,
     responsesEndpoint,
     chatCompletionsEndpoint: `${baseUrl}/chat/completions`,
     messagesEndpoint: `${baseUrl}/messages`,
     modelsEndpoint: `${baseUrl}/models`,
-    claudeCodeEnabled: config.claudeCode?.enabled !== false,
+    surfaces,
+    claudeCodeEnabled: surfaces.messages.enabled,
     audio: {
       transcriptionEndpoint: `${baseUrl}/audio/transcriptions`,
       dictationStreamEndpoint: `${socketBase.href}/audio/transcriptions/stream`,

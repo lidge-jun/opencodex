@@ -15,6 +15,9 @@ import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import { normalizeHashPath, replaceHash } from "../hash-routing";
+import { JEV_AUTO_CREATE_HASH } from "../app-routing";
+import type { ComboAddIntent } from "../components/combo-workspace-types";
 
 type ProviderOption = {
   name: string;
@@ -94,7 +97,16 @@ export default function Combos({
   const [retainedData, setRetainedData] = useState<CachedCombosPage | null>(cached ?? null);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [addIntent, setAddIntent] = useState<ComboAddIntent | null>(() => (
+    normalizeHashPath(window.location.hash) === JEV_AUTO_CREATE_HASH ? "jev-auto" : null
+  ));
+
+  const closeAdd = useCallback(() => {
+    setAddIntent(null);
+    if (normalizeHashPath(window.location.hash) === JEV_AUTO_CREATE_HASH) {
+      replaceHash("models/combos");
+    }
+  }, []);
 
   const notify = (msg: string, ok: boolean) => {
     setStatus(msg);
@@ -140,7 +152,7 @@ export default function Combos({
     const providers = Object.entries(allProviders).map(([name, p]) => ({
       name,
       disabled: !!p.disabled,
-      hiddenFromPicker: !Object.hasOwn(visibleProviders, name),
+      hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
       adapter: p.adapter,
       baseUrl: p.baseUrl,
@@ -370,6 +382,7 @@ export default function Combos({
           {state.refreshing ? t("common.loading") : ""}
         </span>
         <ComboWorkspace
+          apiBase={apiBase}
           combos={combos}
           providerQuotaStates={providerQuotaStates}
           providers={providers}
@@ -379,9 +392,10 @@ export default function Combos({
           onRefresh={() => { resource.refresh(); quotaResource.refresh(); }}
           onSave={saveCombo}
           onRemove={removeCombo}
-          onAdd={() => setAdding(true)}
-          adding={adding}
-          onCloseAdd={() => setAdding(false)}
+          onAdd={(intent = "blank") => setAddIntent(intent)}
+          adding={addIntent !== null}
+          addIntent={addIntent ?? undefined}
+          onCloseAdd={closeAdd}
           onCreated={() => resource.refresh()}
         />
       </div>

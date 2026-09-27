@@ -37,12 +37,20 @@ function fixture() {
   };
   return {
     invocations,
-    async send(overrides: Partial<RemoteWorkspaceExecutionRequest> = {}) {
+    async send(overrides: Partial<RemoteWorkspaceExecutionRequest> = {}, grant = true, version = 2) {
       const message = new TextEncoder().encode(JSON.stringify({
-        version: 1, kind: "request", request: { ...request, ...overrides },
+        version, kind: version === 1 ? "request" : "prepare", timeoutMs: 5_000, request: { ...request, ...overrides },
       }));
       for (const frame of frameRemoteWorkspaceRpcMessage(message)) {
         await endpoint.receiveCiphertext(client.encrypt(frame));
+      }
+      if (grant) {
+        const grantMessage = new TextEncoder().encode(JSON.stringify({
+          version, kind: "grant", requestId: overrides.requestId ?? request.requestId,
+        }));
+        for (const frame of frameRemoteWorkspaceRpcMessage(grantMessage)) {
+          await endpoint.receiveCiphertext(client.encrypt(frame));
+        }
       }
     },
     close() { endpoint.close(); client.destroy(); },
@@ -63,6 +71,22 @@ test("encrypted requests cannot leave their session grant before executor invoca
       expect(state.invocations).toEqual([]);
     } finally { state.close(); }
   }
+});
+
+test("an encrypted prepare cannot invoke without an execution grant", async () => {
+  const state = fixture();
+  try {
+    await state.send({}, false);
+    expect(state.invocations).toEqual([]);
+  } finally { state.close(); }
+});
+
+test("legacy immediate-execution RPC requests fail closed", async () => {
+  const state = fixture();
+  try {
+    await expect(state.send({}, false, 1)).rejects.toThrow("unsupported remote workspace RPC version");
+    expect(state.invocations).toEqual([]);
+  } finally { state.close(); }
 });
 
 test("a matching encrypted read reaches the selected executor once", async () => {

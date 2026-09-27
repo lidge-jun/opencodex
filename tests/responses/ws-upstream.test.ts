@@ -1929,6 +1929,7 @@ describe("oversized Codex create frames", () => {
     expect(stage?.requestBytes).toBeGreaterThan(0);
     expect(stage?.upstreamFrames).toBe(0);
     expect(stage?.firstFrameMs).toBeNull();
+    expect(stage?.firstResponseMs).toBeNull();
     expect(stage?.reused).toBe(false);
     expect(typeof stage?.ocxVersion).toBe("string");
     expect(stage?.bunVersion).toBe(BOUNDED_WS_RUNTIME);
@@ -1956,6 +1957,7 @@ describe("oversized Codex create frames", () => {
     expect(stage?.closeCode).toBeNull();
     expect(stage?.sent).toBe(true);
     expect(stage?.relayedEvents).toBeGreaterThan(0);
+    expect(typeof stage?.firstResponseMs).toBe("number");
   });
 
   test("falls back before dialing a custom upstream URL", async () => {

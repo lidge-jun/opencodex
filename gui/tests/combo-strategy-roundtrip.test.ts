@@ -1,14 +1,21 @@
 /**
  * Dashboard load -> save must not rewrite a combo's strategy.
  *
- * The runtime and management API accept five strategies. The GUI parser used to
+ * The runtime and management API accept six strategies. The GUI parser used to
  * collapse random/least-used/reset-window to failover, so saving an untouched
  * combo silently rewrote its strategy (and stripped weights for random).
  */
 import { expect, test } from "bun:test";
 import { groupCombos, parseComboList, toPutBody } from "../src/combo-workspace-data";
 
-const strategies = ["failover", "round-robin", "random", "least-used", "reset-window"] as const;
+const strategies = [
+  "failover",
+  "round-robin",
+  "random",
+  "least-used",
+  "reset-window",
+  "jev",
+] as const;
 
 function payloadWith(strategy: unknown, weight?: number) {
   return {
@@ -55,6 +62,9 @@ test("saving an untouched combo round-trips merged strategies and random weights
 
   const [resetWindow] = parseComboList(payloadWith("reset-window"));
   expect(toPutBody(resetWindow!).combo.strategy).toBe("reset-window");
+
+  const [jev] = parseComboList(payloadWith("jev"));
+  expect(toPutBody(jev!).combo.strategy).toBe("jev");
 });
 
 test("round-robin still sends weights and stickyLimit", () => {
@@ -65,7 +75,7 @@ test("round-robin still sends weights and stickyLimit", () => {
   expect(body.combo.stickyLimit).toBe(3);
 });
 
-test("groupCombos keeps the three newer strategies in their own bucket", () => {
+test("groupCombos keeps non-primary strategies in their own bucket", () => {
   const combos = strategies.map((strategy) => parseComboList(payloadWith(strategy))[0]!);
   const sections = groupCombos(combos);
   expect(sections.failover.map((c) => c.strategy)).toEqual(["failover"]);
@@ -74,5 +84,6 @@ test("groupCombos keeps the three newer strategies in their own bucket", () => {
     "random",
     "least-used",
     "reset-window",
+    "jev",
   ]);
 });

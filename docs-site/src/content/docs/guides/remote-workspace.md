@@ -3,6 +3,8 @@ title: Remote Workspace
 description: Keep Codex, Claude Code, Pi, and their logins on one OCX Hub while OCX-only computers provide the workspace and build environment.
 ---
 
+For SSH machine links, see [Remote Link](/guides/remote-link/).
+
 Remote Workspace lets one OpenCodex Hub run your coding agents while another computer supplies the
 project files, commands, tests, and build compute. A phone or third computer can control the session
 through the Hub dashboard.
@@ -24,6 +26,16 @@ helpers reject probe and command requests. Windows commands remain unsupported u
 lifecycle owner can retain cleanup authority through cancellation. Missing command support never
 falls back to executing on the Hub.
 :::
+
+## RPC compatibility and timeouts
+
+Remote Workspace uses encrypted RPC v2. The Hub and every Executor must support v2; RPC v1 peers
+fail closed instead of falling back to immediate execution, so upgrade the Hub and Executors
+together.
+
+A timeout requests executor cancellation but does not confirm it. A grant may already be in transit,
+or its operation may already be running. The default RPC timeout is 65 seconds, and `timeoutMs`
+accepts inclusive values from 1 through 120,000 milliseconds.
 
 ## Set up the Hub
 

@@ -1,7 +1,8 @@
 /**
  * ProviderSettings — adapter/baseUrl/defaultModel/authMode/note editing form
  * for the workspace Settings tab (WP091). Uses PATCH /api/providers via an
- * onUpdateProvider prop. May fetch `/api/provider-presets` once per provider
+ * onUpdateProvider prop; the upstream wire panel below the adapter field is read-only
+ * and never saves on its own. May fetch `/api/provider-presets` once per provider
  * to discover `baseUrlChoices` (e.g. Qwen Cloud endpoint picker).
  *
  * Parent should remount on provider change (`key={item.name}`) so choice-loading
@@ -20,6 +21,7 @@ import { openAiAccountProviderState } from "../../provider-payload";
 import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/catalog";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
+import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
 import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
@@ -356,6 +358,13 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
+      <ProviderProtocolPanel
+        apiBase={apiBase}
+        providerName={item.name}
+        savedAdapter={item.adapter}
+        draftAdapter={adapter.trim()}
+        refreshKey={`${item.baseUrl}|${item.authMode ?? ""}`}
+      />
       {hasEndpointPicker ? (
         <>
           <label className="pwi-settings-field">

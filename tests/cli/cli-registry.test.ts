@@ -71,6 +71,7 @@ describe("CLI command registry parity", () => {
       "__tray-host",
       "__tray-restart",
       "__tray-start",
+      "__update-badge",
     ]);
     for (const entry of hidden) {
       expect(caseSet.has(entry.name)).toBe(true);
@@ -86,6 +87,7 @@ describe("CLI command registry parity", () => {
       "__tray-host",
       "__gui-update-worker",
       "__refresh-version",
+      "__update-badge",
     ];
     for (const name of internalRunners) {
       expect(DISPATCH_COMMANDS).toContain(name);

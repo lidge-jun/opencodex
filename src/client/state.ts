@@ -26,6 +26,10 @@ export type ClientConnectionState =
   | { kind: "invalid"; reason: string }
   | { kind: "mismatched"; reason: string };
 
+export function isLinkConnection(c: OcxClientConnectionConfig | undefined): boolean {
+  return c?.transport === "link";
+}
+
 const pendingConnectPath = (): string => join(getConfigDir(), "client-connect-pending");
 
 /** Validate pending ownership; an optional fingerprint restricts it to that exact key. */

@@ -621,3 +621,157 @@ describe("readBoundedJsonRequestBody", () => {
 		expect(cancelled).toBe(true);
 	});
 });
+
+describe("bounded read reaction ownership", () => {
+	for (const raw of [false, true]) {
+		for (const empty of [false, true]) {
+			test(`${raw ? "bytes" : "text"}: completed ${empty ? "empty" : "data"} chunks are collectible during a pending read`, async () => {
+				const parent = new AbortController();
+				const refs: WeakRef<Uint8Array>[] = [];
+				const count = 256;
+				let stalled!: () => void;
+				const pendingRead = new Promise<void>(resolve => { stalled = resolve; });
+				const body = new ReadableStream<Uint8Array>({
+					pull(controller) {
+						if (refs.length === count) { stalled(); return; }
+						const chunk = new Uint8Array(empty ? 0 : 1);
+						refs.push(new WeakRef(chunk));
+						controller.enqueue(chunk);
+					},
+				}, { highWaterMark: 0 });
+				const response = new Response(body);
+				const options = { signal: parent.signal, maxBytes: count, inactivityTimeoutMs: 30_000 };
+				const reading = raw
+					? readBoundedResponseBytes(response, options)
+					: readBoundedResponseBody(response, { ...options, totalTimeoutMs: 30_000 });
+				const reason = new Error("test cleanup");
+				// Observe rejection now, including if an assertion fails before cleanup.
+				const settled = reading.catch(error => error);
+				try {
+					await pendingRead;
+					// WeakRef targets survive the job that created/dereferenced them.
+					// Collect in later jobs while the signal, timers and pending read live.
+					for (let i = 0; i < 3; i++) {
+						await new Promise<void>(resolve => setTimeout(resolve, 0));
+						Bun.gc(true);
+					}
+					const alive = refs.filter(ref => ref.deref() !== undefined).length;
+					// Conservative runtime/async stack roots can keep a few recent
+					// chunks alive; retention must stay independent of chunk count.
+					expect(alive).toBeLessThanOrEqual(4);
+				} finally {
+					parent.abort(reason);
+					expect(await settled).toBe(reason);
+					expect(body.locked).toBe(false);
+				}
+			});
+		}
+	}
+
+	for (const raw of [false, true]) {
+		test(`${raw ? "bytes" : "text"}: no promise accumulates a reaction per completed read`, async () => {
+			const originalThen = Promise.prototype.then;
+			const counts = new WeakMap<Promise<unknown>, number>();
+			let maximum = 0;
+			const thenSpy = spyOn(Promise.prototype, "then").mockImplementation(function (fulfilled, rejected) {
+				const count = (counts.get(this) ?? 0) + 1;
+				counts.set(this, count);
+				maximum = Math.max(maximum, count);
+				return originalThen.call(this, fulfilled, rejected);
+			});
+			try {
+				// No optional signal/deadline: even inert promises must not collect reads.
+				const response = responseFromChunks(...Array.from({ length: 256 }, () => new Uint8Array(1)));
+				if (raw) expect((await readBoundedResponseBytes(response, { maxBytes: 256 })).bytes).toHaveLength(256);
+				else expect((await readBoundedResponseBody(response)).text).toHaveLength(256);
+				expect(maximum).toBeLessThanOrEqual(4);
+			} finally {
+				thenSpy.mockRestore();
+			}
+		});
+	}
+});
+
+describe("bounded read cancellation lifecycle", () => {
+	for (const raw of [false, true]) {
+		const read = (response: Response, options: { maxBytes: number; signal?: AbortSignal }) => raw
+			? readBoundedResponseBytes(response, options)
+			: readBoundedResponseBody(response, options);
+
+		for (const maxBytes of [0, 4]) {
+			test(`${raw ? "bytes" : "text"}: exact ${maxBytes}-byte EOF releases the lock without cancellation`, async () => {
+				let pulls = 0;
+				let cancellations = 0;
+				const body = new ReadableStream<Uint8Array>({
+					pull(controller) {
+						pulls++;
+						if (pulls === 1) controller.enqueue(new Uint8Array(maxBytes));
+						else if (pulls === 2) controller.enqueue(new Uint8Array(0));
+						else controller.close();
+					},
+					cancel() { cancellations++; },
+				}, { highWaterMark: 0 });
+				const result = await read(new Response(body), { maxBytes });
+				expect(result.oversized).toBe(false);
+				expect("bytes" in result ? result.bytes.length : result.text.length).toBe(maxBytes);
+				expect(pulls).toBe(3);
+				expect(cancellations).toBe(0);
+				expect(body.locked).toBe(false);
+			});
+		}
+
+		for (const mode of ["reject", "throw", "pending"] as const) {
+			test(`${raw ? "bytes" : "text"}: ${mode} cancel preserves abort and observes a late read rejection`, async () => {
+				const parent = new AbortController();
+				const reason = { code: "cancel-current-read" };
+				const pendingRead = Promise.withResolvers<ReadableStreamReadResult<Uint8Array>>();
+				const pendingCancel = Promise.withResolvers<void>();
+				const body = new ReadableStream<Uint8Array>({}, { highWaterMark: 0 });
+				const response = new Response(body);
+				const reader = body.getReader();
+				const readerSpy = spyOn(body, "getReader").mockReturnValue(reader);
+				const readSpy = spyOn(reader, "read").mockReturnValue(pendingRead.promise);
+				const cancelSpy = spyOn(reader, "cancel").mockImplementation(() => {
+					if (mode === "throw") throw new Error("sync cancel failure");
+					if (mode === "reject") return Promise.reject(new Error("async cancel failure"));
+					return pendingCancel.promise;
+				});
+				try {
+					const reading = read(response, { maxBytes: 4, signal: parent.signal });
+					parent.abort(reason);
+					await expect(reading).rejects.toBe(reason);
+					expect(readSpy).toHaveBeenCalledTimes(1);
+					expect(cancelSpy).toHaveBeenCalledTimes(1);
+					expect(cancelSpy).toHaveBeenCalledWith(reason);
+					expect(body.locked).toBe(false);
+					pendingRead.reject(new Error("late read failure"));
+					// Bun fails the case on an unhandled rejection, even with a listener.
+					await new Promise(resolve => setTimeout(resolve, 0));
+				} finally {
+					pendingRead.resolve({ done: true, value: undefined });
+					pendingCancel.resolve();
+					cancelSpy.mockRestore();
+					readSpy.mockRestore();
+					readerSpy.mockRestore();
+				}
+			});
+		}
+	}
+
+	test("raw inactivity cancels exactly once with the timeout rejection", async () => {
+		const cancellations: unknown[] = [];
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) { controller.enqueue(new Uint8Array([1])); },
+			cancel(reason) { cancellations.push(reason); },
+		});
+		const error = await readBoundedResponseBytes(new Response(body), {
+			maxBytes: 4, inactivityTimeoutMs: 10,
+		}).catch(error => error);
+		expect(error).toBeInstanceOf(DOMException);
+		expect(error.name).toBe("TimeoutError");
+		expect(error.message).toBe("Response body stalled");
+		expect(cancellations).toHaveLength(1);
+		expect(cancellations[0]).toBe(error);
+		expect(body.locked).toBe(false);
+	});
+});

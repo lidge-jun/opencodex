@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  desktopSession,
+  desktopUpdatePageUrl,
   desktopShellVersion,
   hostOs,
   isDesktopShell,
   isExternalLink,
+  updateBadgeUrl,
 } from "../src/lib/desktop-shell";
 
 const tauriMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) OpenCodexDesktop/2.61.0";
@@ -26,6 +29,25 @@ describe("desktop shell user-agent helpers", () => {
     expect(hostOs("Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0")).toBe("linux");
     expect(hostOs("Mozilla/5.0 (Linux; Android 15) Chrome/140.0")).toBe("unknown");
     expect(hostOs("unknown")).toBe("unknown");
+  });
+
+  test("routes bundled updates to each platform's exact app origin", () => {
+    expect(desktopUpdatePageUrl(tauriMac)).toBe("tauri://localhost/update.html");
+    expect(desktopUpdatePageUrl(tauriLinux)).toBe("tauri://localhost/update.html");
+    expect(desktopUpdatePageUrl(tauriWindows)).toBe("http://tauri.localhost/update.html");
+    expect(desktopUpdatePageUrl("Mozilla/5.0 Chrome/140.0")).toBeNull();
+  });
+
+  test("desktop session selects its badge, ordinary browser keeps package badge", () => {
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    expect(desktopSession("?desktop_session=" + id)).toBe(id);
+    expect(desktopSession("?desktop_session=not-a-uuid")).toBeNull();
+    expect(updateBadgeUrl("", tauriMac, "?desktop_session=" + id))
+      .toBe("/api/update/badge?surface=desktop&session=" + id);
+    expect(updateBadgeUrl("", tauriMac, ""))
+      .toBe("/api/update/badge?surface=desktop");
+    expect(updateBadgeUrl("", "Mozilla/5.0 Chrome/140.0", "?desktop_session=" + id))
+      .toBe("/api/update/badge");
   });
 
   test("recognizes only absolute cross-origin HTTP links", () => {

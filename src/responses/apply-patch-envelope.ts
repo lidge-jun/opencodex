@@ -28,6 +28,11 @@ const FREEFORM_FALLBACK_KEYS: Readonly<Record<string, readonly string[]>> = {
   apply_patch: ["patch", "content"],
 };
 
+/** The field names a tool's freeform wrapper may unwrap through, besides canonical `input`. */
+export function freeformFallbackKeys(toolName: string): readonly string[] {
+  return FREEFORM_FALLBACK_KEYS[toolName] ?? [];
+}
+
 function stripMarkdownCodeFence(text: string, toolName: string): string {
   if (toolName !== "exec" && toolName !== "apply_patch") return text;
   const match = OUTER_MARKDOWN_CODE_FENCE.exec(text.trim());
@@ -46,7 +51,7 @@ export function unwrapFreeformToolInput(argumentsText: unknown, toolName = ""): 
           ? stripMarkdownCodeFence(record.input, toolName)
           : argumentsText;
       }
-      const fallbackKeys = FREEFORM_FALLBACK_KEYS[toolName] ?? [];
+      const fallbackKeys = freeformFallbackKeys(toolName);
       const candidates = fallbackKeys.filter(key => typeof record[key] === "string");
       if (candidates.length === 1) {
         return stripMarkdownCodeFence(record[candidates[0]] as string, toolName);

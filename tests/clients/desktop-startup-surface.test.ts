@@ -131,6 +131,14 @@ describe("desktop startup surface", () => {
     const spawn = startup.indexOf("sidecar::start(app, endpoint, watch)");
     expect(guard).toBeGreaterThan(-1);
     expect(spawn).toBeGreaterThan(guard);
+    // The guard reads the child the app tracks. The ownership confirmation cannot stand in for
+    // it: the run's `attach` resets that just before, which left the wait unreachable.
+    const decl = startup.slice(startup.indexOf("let owns_live_child = app"), guard);
+    expect(decl).toContain("waits_on_child(state.child_age())");
+    expect(decl).not.toContain("owns_runtime");
+    const attach = startup.indexOf("state.attach(proxy.clone());");
+    expect(attach).toBeGreaterThan(-1);
+    expect(attach).toBeLessThan(guard);
   });
 
   test("the diagnostic names the state, the endpoint, the home and how the child ended", () => {

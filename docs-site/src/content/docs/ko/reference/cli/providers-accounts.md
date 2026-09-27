@@ -88,9 +88,10 @@ ocx login anthropic
 Reserve입니다. 차단 중에는 그 메인 계정의 Reserve를 활성화할 수 없으므로, 메인 계정을 끝까지
 쓰고 Reserve로 넘어가려면 스위치를 끄세요.
 
-**5h 창이 있으면 5h 사용률**, 없으면 주간 사용률을 봅니다. 월간 전용 계정은 월간을
-기준으로 합니다. 여러 창에서 가장 높은 값을 고르는 방식은 아닙니다. 새 사용률이 **0%**로
-리셋되면 자동으로 차단을 풀고, 스위치는 켜 둡니다. 이후 다시 98%가 되면 차단합니다.
+**5h 창과 주간 창은 각각 따로 차단합니다.** 둘 중 하나만 98%에 닿아도, 다른 창에 여유가
+있어도 바로 차단합니다. 월간 전용 계정은 월간을 기준으로 합니다. 차단한 창이 모두 새 사용률
+98% 미만(0% 리셋 포함)을 보고하면 자동으로 차단을 풀고, 스위치는 켜 둡니다. 이후 다시 98%가
+되면 차단합니다. 5h 수치를 읽지 못해도 주간 차단은 그대로 유지됩니다.
 값이 빠진 응답을 0%로 보지 않으며, 이미 확인한 차단 수치를 누락된 응답만으로 지우지도 않습니다.
 예정된 리셋 시간이 지났다는 이유만으로 풀지는 않습니다. 차단 중에는 기존 1분 주기 점검에서
 실제 사용량을 다시 확인하며, 조회 실패나 잘못된 수치는 차단을 풀지 않습니다.
@@ -163,23 +164,34 @@ Luna 메타데이터임을 표시해 사용합니다. 목록에 보인다는 사
 실행 중인 프록시를 통해 제공자 계정과 API 키 풀을 나열하고 전환합니다. 제공되는 도움말 표면은 다음과 같습니다:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
+Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
+pause <provider> <id|alias|main>  Hold an account out of automatic selection.
+resume <provider> <id|alias|main>  Return a paused account to automatic selection.
+pause-exhausted <provider>  Pause every account whose quota is spent.
+clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
+priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
 grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
+import <provider> --format <format> (--file <path>|--stdin)  Import credentials from a named external format.
+import-orca --source <dir> --registry <file> [--apply]  Preview or apply imports from Orca-managed Codex homes.
+main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App login the pool calls 'main'.
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
-모든 하위 명령은 프록시가 실행 중이어야 합니다. CLI는 기록된 런타임 포트를 자동으로 찾습니다. 성공한 작업은 종료 코드 0으로 끝납니다. 잘못된 사용, 알 수 없는 제공자 또는 계정/키 id, 도달할 수 없는 프록시, API 실패는 종료 코드 1로 끝납니다. 자격 증명 필드는 관리 API가 반환한 그대로 표시됩니다(마스킹도 그대로 포함됩니다). 원시 API 키와 OAuth 토큰은 절대 반환하지 않습니다. 표시 편의 기능은 대시보드와 마찬가지로 클라이언트 쪽에서 합성합니다. `main`은 `openai` 계정 풀의 Codex App 로그인에 대한 CLI 별칭이고, 이메일이 없는 OAuth 계정은 `Account N`으로 표시되며, plan/label 열은 plan, 마스킹된 이메일, label, 마스킹된 키 순으로 대체합니다.
+하위 명령은 프록시가 실행 중이어야 하며 기록된 런타임 포트를 자동으로 찾습니다. 다만 `import-orca`는 예외로, 미리보기는 로컬 전용이고 `import-orca --apply`는 프록시가 멈춰 있어야 합니다. 성공한 작업은 종료 코드 0으로 끝납니다. 잘못된 사용, 알 수 없는 제공자 또는 계정/키 id, 도달할 수 없는 프록시, API 실패는 종료 코드 1로 끝납니다. 자격 증명 필드는 관리 API가 반환한 그대로 표시됩니다(마스킹도 그대로 포함됩니다). 원시 API 키와 OAuth 토큰은 절대 반환하지 않습니다. 표시 편의 기능은 대시보드와 마찬가지로 클라이언트 쪽에서 합성합니다. `main`은 `openai` 계정 풀의 Codex App 로그인에 대한 CLI 별칭이고, 이메일이 없는 OAuth 계정은 `Account N`으로 표시되며, plan/label 열은 plan, 마스킹된 이메일, label, 마스킹된 키 순으로 대체합니다.
 
 `--json` 계정 행은 다음 공통 형태를 사용합니다(사용할 수 없는 필드는 생략됩니다):
 
@@ -215,7 +227,9 @@ Codex pool selection applies to the next request after clearing existing affinit
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
+
+`auto`는 수동 선택을 지워 풀이 다시 자체 전략으로 작업을 배치하게 합니다. Codex 계정은 id 대신 `ocx account alias`로 지정한 별칭으로도 가리킬 수 있으며, `priority`, `pause`, `resume`, `clear-cooldown`, `remove`, `alias`에서도 마찬가지입니다. Codex 계정에서 `auto`, `main`, `__main__`은 대소문자 구분 없이 예약어이므로 별칭으로 지정할 수 없습니다. OAuth 계정과 API 키의 표시 이름에는 기존 규칙이 그대로 적용됩니다.
 
 기존 Codex 계정, OAuth 계정 또는 API key를 선택합니다. `openai`에서 `main`은 Codex App 로그인을
 선택합니다. Codex Pool 선택은 프로세스 로컬 affinity를 지우고 기존에 보이던 작업을 포함한 다음 요청부터 적용됩니다. 프록시 재시작이나 affinity eviction 뒤에도 작업이 바인딩 없는 상태가 될 수 있지만, 진행 중인 요청은 이미 확보한 계정을 유지합니다. 이 선택은 Pool 라우팅만 제어하며 Direct mode는 호출자 소유/native main credential을 계속 사용합니다. 사용량 기반 선제 전환, 401/403 재인증, 429/retry-after cooldown, 제외, 출력 전 429/402 실패 복구는 나중에 다른 적격 Pool 계정을 선택할 수 있습니다. 이러한 복구 경로는 사용량 기반 전환이 꺼져 있어도 동작합니다. 계정이 바뀌어도 OpenCodex는 대화 문맥을 재생하지만 프로바이더 측 prompt cache는 다시 예열해야 할 수 있습니다.
@@ -244,7 +258,7 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이 클수록 먼저** 쓰이고 기본값은 `0`,
 범위는 `-100`부터 `100`까지입니다. 순서를 갖는 것은 `openai` Codex pool뿐이므로 다른 프로바이더는
@@ -270,7 +284,7 @@ Codex pool 계정 하나의 선택 순서를 읽거나 설정합니다. **값이
 
 헤드리스 셸에서 브라우저 기반 또는 수동 코드 계정 인증을 실행합니다. 제공자별 명령 형태는 `ocx account --help`를 보십시오. Codex account login이 저장되었지만 catalog refresh가 보류 중이면 성공으로 종료하고 human output의 stderr에 고정된 `ocx sync` 안내를 표시합니다. `--json`은 안내를 섞지 않고 완료 state의 `catalogRefreshPending: true`를 유지합니다.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
 이 보호된 비대화형 삭제는 `--yes`를 요구합니다. 삭제하기 전에 id가 존재하는지 확인하며, 없는 id는 DELETE를 보내지 않고 종료 코드 1로 끝납니다. Codex App의 main 로그인은 제거할 수 없으므로 `remove openai main --yes`는 거부됩니다. 삭제 후에는 해당 계열을 다시 읽습니다. 고정된 Codex 계정을 제거하면 고정이 풀리고 자동 선택으로 돌아갑니다. OAuth는 남아 있는 첫 번째 계정으로 승격하거나 없다고 보고합니다. API 키 풀은 남아 있는 첫 번째 키로 승격하거나 없다고 보고합니다. `--json`의 성공 및 실패 형식은 다음과 같습니다:
 
@@ -370,7 +384,7 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 | `provider <name> <on\|off>` | `--json` | 한 제공자의 모든 모델을 한 번의 쓰기로 활성화하거나 비활성화합니다. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 제공자 모델 허용 목록을 읽거나 교체합니다. `--clear`는 허용 목록을 제거해 모든 모델을 제공하도록 합니다. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | 전역 또는 제공자별로 컨텍스트 창 한도를 읽거나 설정합니다. `value <tokens> --set-all`은 모든 라우팅된 공급자에도 값을 다시 적용합니다(대시보드 토글과 동일). 지정하지 않으면 값은 기본값만 변경됩니다. `provider ... on --value <tokens>`는 해당 제공자에만 별도 한도를 설정합니다(`--value`는 `on`에서만 사용할 수 있습니다). |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-5.6-luna`; 0.144.x 이하 클라이언트가 사용한 `gpt-5.4-mini`는 명시적인 `sourceModels` 재정의로 복원할 수 있습니다). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-6-luna`, `gpt-5.6-luna`; 0.144.x 이하 클라이언트가 사용한 `gpt-5.4-mini`는 명시적인 `sourceModels` 재정의로 복원할 수 있습니다). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

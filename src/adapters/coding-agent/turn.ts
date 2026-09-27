@@ -79,13 +79,20 @@ export function baseScopedEnv(): Record<string, string> {
   return env;
 }
 
-/** Redact the profile's credential and common secret shapes before surfacing diagnostics. */
-export function redactSecrets(text: string, tokenEnv: string, credential?: string): string {
-  const escaped = tokenEnv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Redact the profile's credential and common secret shapes before surfacing diagnostics.
+ *
+ * `tokenEnv` is absent for a credentialless profile (the CLI owns its sign-in), which only drops
+ * the `NAME=value` rule; the generic secret shapes are redacted either way.
+ */
+export function redactSecrets(text: string, tokenEnv: string | undefined, credential?: string): string {
   let redacted = text;
   if (credential) redacted = redacted.split(credential).join("[redacted]");
+  if (tokenEnv) {
+    const escaped = tokenEnv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    redacted = redacted.replace(new RegExp(`(${escaped}\\s*[:=]\\s*)\\S+`, "gi"), "$1[redacted]");
+  }
   return redacted
-    .replace(new RegExp(`(${escaped}\\s*[:=]\\s*)\\S+`, "gi"), "$1[redacted]")
     .replace(/(authorization\s*[:=]\s*)\S+/gi, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9_-]{6,})\b/g, "[redacted]");
 }
@@ -173,8 +180,11 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     });
     return;
   }
-  const apiKey = provider.apiKey;
-  if (!apiKey) {
+  const apiKey = provider.apiKey ?? "";
+  // A profile WITHOUT a tokenEnv owns no credential to pre-flight: the CLI reads the operator's
+  // own sign-in (Claude Code), so an unauthenticated session is reported by the CLI itself as a
+  // terminal result frame and surfaces through the family's error mapping (§二十六).
+  if (profile.tokenEnv && !apiKey) {
     emit({
       type: "error",
       message: `${profile.label} credential missing — add an API key for this provider (${profile.tokenEnv}).`,
@@ -370,7 +380,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     sawPartialText: false,
     sawPartialThinking: false,
     sawTerminalResult: false,
-    openToolCallId: undefined,
+    openToolBlocks: new Map(),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -412,6 +422,29 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
           if (message.type === "system" && message.subtype === "init") initValidated = true;
+          const rawEvent = message.type === "stream_event" && message.event !== null && typeof message.event === "object"
+            ? message.event as Record<string, unknown>
+            : undefined;
+          const rawBlock = rawEvent?.content_block;
+          if (
+            !initValidated
+            && rawEvent?.type === "content_block_start"
+            && rawBlock !== null
+            && typeof rawBlock === "object"
+            && !Array.isArray(rawBlock)
+            && (rawBlock as Record<string, unknown>).type === "tool_use"
+          ) {
+            emitOnce({
+              type: "error",
+              message: "Coding-agent CLI called a tool before the tool bridge init handshake completed.",
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_bridge_init_missing",
+              retryable: false,
+            });
+            kill();
+            break;
+          }
         }
         const mappedEvents = mapStreamMessageToEvents(message, state);
         if (toolBridge && state.uncapturedToolUse) {
@@ -441,24 +474,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
           if (toolBridge && event.type === "tool_call_start") {
-            // The catalog is only advertised once the CLI has acknowledged the bridge server in
-            // its init handshake. A tool call that arrives before that acknowledgement means the
-            // model acted on a catalog this bridge never validated, so fail closed before the
-            // call is counted or renamed. Checking at arrival matters: a later init frame used to
-            // set initValidated and let an early call finish as a successful done(tool_use).
-            if (!initValidated) {
-              emitOnce({
-                type: "error",
-                message: "Coding-agent CLI called a tool before the tool bridge init handshake completed.",
-                status: 502,
-                errorType: "upstream_error",
-                code: "tool_bridge_init_missing",
-                retryable: false,
-              });
-              failClosed = true;
-              kill();
-              break;
-            }
             toolCallStarts += 1;
             if (toolCallStarts > toolBridge.maxTurnToolCalls) {
               emitOnce({
@@ -517,8 +532,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             toolBridge
             && !terminalEmitted
             && event.type === "done"
-            && toolCallStarts > 0
-            && (state.completedToolCalls ?? 0) !== toolCallStarts
+            && (state.toolBlockStarts ?? 0) > 0
+            && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
           ) {
             // A terminal result that arrives while a captured tool call is still open must not
             // become a successful completion the client can accept. The message_stop check after
@@ -542,8 +557,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             toolBridge
             && !terminalEmitted
             && event.type === "done"
-            && toolCallStarts > 0
-            && (state.completedToolCalls ?? 0) === toolCallStarts
+            && (state.toolBlockStarts ?? 0) > 0
+            && (state.completedToolCalls ?? 0) === (state.toolBlockStarts ?? 0)
           ) {
             // Every captured call completed and the CLI settled with a successful result before
             // message_stop (instead of parking on the never-answering capture server). Emitting
@@ -563,8 +578,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           toolBridge
           && !terminalEmitted
           && state.sawMessageStop
-          && toolCallStarts > 0
-          && (state.completedToolCalls ?? 0) !== toolCallStarts
+          && (state.toolBlockStarts ?? 0) > 0
+          && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
         ) {
           emitOnce({
             type: "error",
@@ -578,8 +593,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           break;
         }
         if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
-          // No init re-check here: a completed call implies a tool_call_start was mapped, and the
-          // arrival-time gate above already refuses any start that lands before the handshake.
+          // Raw tool_use starts are gated before buffering, so every completed call was admitted
+          // after the bridge init handshake.
           // The capture-only MCP handler never answers, so the CLI parks after message_stop.
           // The completed tool_use blocks are this turn's structured output: end the leg here
           // and terminate the tree; the client executes, and the next request continues.

@@ -72,9 +72,10 @@ validation policy; required CI must pass on the current PR head before merge.
 bun run setup:hooks
 ```
 
-This installs the `post-merge` hook, which rebuilds the packaged dashboard when a
-merge changes its source. It also removes the unmodified, retired repository
-pre-push hook from Git's resolved hooks directory, including linked worktrees
-and `core.hooksPath` setups. Custom pre-push hooks are preserved. Validation no
-longer runs automatically on every push; existing contributors should rerun the
-setup command once to migrate their hooks.
+This removes the unmodified, retired repository `pre-push` and `post-merge` hooks
+from Git's resolved hooks directory, including linked worktrees and
+`core.hooksPath` setups. Custom hooks are preserved. The managed post-merge hook
+was retired because it executed pulled code on every merge; rebuild the packaged
+dashboard explicitly with `bun run build:gui` after a merge that changes `gui/`
+sources. Validation no longer runs automatically on every push; existing
+contributors should rerun the setup command once to migrate their hooks.

@@ -9,6 +9,7 @@ import {
   readdirSync,
   readSync,
   rmSync,
+  statSync,
   writeSync,
   type Stats,
 } from "node:fs";
@@ -29,6 +30,9 @@ interface TrustedScratchDir {
   fd: number;
   identity: string;
 }
+
+// Unconfirmed producer trees are retained for manual review. Neither a marker
+// inside producer-writable scratch nor its age grants later deletion authority.
 
 /** Require stats to describe a regular file, not a symlink or special node. */
 function assertRegularFile(stats: Stats, label: string): void {
@@ -299,11 +303,14 @@ export function createSyntheticScratch(configDir?: string): ScratchTree {
     } finally {
       closeSync(fd);
     }
-    const trustedForCleanup = trusted;
+    // The pinned root is only needed to write the fixture; every later access
+    // opens its own trusted handle. Close it now so deferred cleanup — which
+    // may wait on a descendant-held pipe or never observe a release signal —
+    // cannot leak the descriptor (or hold the directory open on Windows).
+    closeTrustedScratchRoot(trusted);
     return {
       root,
       cleanup: () => {
-        closeTrustedScratchRoot(trustedForCleanup);
         try {
           rmSync(root, { recursive: true, force: true, maxRetries: 3 });
         } catch {

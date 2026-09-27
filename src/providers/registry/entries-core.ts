@@ -1263,7 +1263,12 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     modelReasoningEffortMap: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     modelSupportsReasoningSummaries: Object.fromEntries(DEEPSEEK_NATIVE_THINKING_MODELS.map(id => [id, true])),
-    preserveReasoningContentModels: DEEPSEEK_NATIVE_THINKING_MODELS,
+    // deepseek-v4-pro is absent from the live sets on purpose (retired upstream, requests
+    // route to V4.1-Flash — see model-seeds.ts), but it stays SELECTABLE in configs that
+    // already carry it, and what serves it is a thinking-mode model. A saved config with
+    // the alias selected would otherwise serialize a bare continuation the upstream 400s
+    // on (#5421). The preserve list governs replay, not advertisement.
+    preserveReasoningContentModels: [...DEEPSEEK_NATIVE_THINKING_MODELS, "deepseek-v4-pro"],
     // #4436: first-party deepseek-flash accepts native images on Chat and Responses.
     // Keep unprobed compatibility aliases on the #88 sidecar path. This must be fixed
     // here: router enrichment unions this list with saved config, so config cannot remove it.

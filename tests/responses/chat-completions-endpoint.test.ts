@@ -522,10 +522,11 @@ test("chatCompletionsUsage always emits detail objects with zero defaults", () =
   });
 });
 
-test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwarding a raw frame", async () => {
+test("responsesSseToChatCompletionsSse relays response.heartbeat as Chat-compatible SSE comments", async () => {
   // Upstream responses SSE may contain heartbeat events (SSE comment keep-alive in
   // bridge.ts, but some upstreams emit them as typed frames). The chat-completions
-  // converter must drop them rather than forwarding raw Responses-vocab frames.
+  // converter must preserve their transport liveness without forwarding raw Responses-vocab
+  // frames or manufacturing semantic Chat chunks.
   const { responsesSseToChatCompletionsSse } = budgetedChatOutbound(await import("../../src/chat/outbound"));
   const upstream = new Response([
     `event: response.heartbeat\ndata: ${JSON.stringify({ type: "response.heartbeat" })}\n\n`,
@@ -536,6 +537,7 @@ test("responsesSseToChatCompletionsSse consumes response.heartbeat without forwa
   const stream = responsesSseToChatCompletionsSse(upstream.body!, "routed/model");
   const text = await new Response(stream).text();
   expect(text).not.toContain("response.heartbeat");
+  expect(text.split(": opencodex heartbeat\n\n")).toHaveLength(3);
   expect(text).toContain('"content":"hi"');
   expect(text).toContain("data: [DONE]");
   // Every data frame must be a chat.completion.chunk — no Responses-vocab leaks.
@@ -2551,7 +2553,9 @@ test("collectChatCompletion accounts split surrogate content incrementally and r
         expect(await collectChatCompletion(stream, "mock/test-model", budget)).toMatchObject({
           choices: [{ message: { content: "😀", reasoning_content: "😀", refusal: "😀" } }],
         });
-        expect(budget.snapshot().currentBytes).toBe(12);
+        // Three retained fields each contain one completed scalar. This must match the runtime's
+        // full-string UTF-8 sizing even when its isolated-surrogate sizing differs.
+        expect(budget.snapshot().currentBytes).toBe(3 * Buffer.byteLength("😀"));
       }
     } finally { budget.dispose(); }
   }

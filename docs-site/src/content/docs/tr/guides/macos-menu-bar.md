@@ -23,6 +23,8 @@ Yerel paneli açmak için tepsi menüsündeki **Show Usage** seçeneğini kullan
 
 Panelde **Refresh**, **Dashboard** ve **Settings** denetimleri bulunur. **Dashboard** masaüstü penceresinde kullanım görünümünü, **Settings** ise oradaki yardımcı ayarları açar. Tepsi menüsünde ayrıca **Open Dashboard**, **Open in Browser**, **Start at Login**, **Stop proxy**, **Check for Updates…**, güncelleme varsa **Install update** ve **Quit** öğeleri bulunur. **Stop proxy** her zaman listelenir, ancak yalnızca uygulama proxy'yi kendisi başlattığında etkin olur; ayrı başlattığınız proxy çalışmaya devam eder. Tepsi kullanılabilirken pencereyi kapatmak veya Command-Q kullanmak uygulamayı gizler; çıkmak için tepsideki **Quit** seçeneğini kullanın.
 
+Kontrol panelindeki güncelleme düğmesi uygulamanın kendi güncelleme sayfasını açar; bu sayfa tepsi menüsüyle aynı imzalı güncellemeyi denetler ve kurar.
+
 Tepsi başlığı her 60 saniyede yenilenir. Yerel panel açıkken verileri de her 60 saniyede yenilenir; **Refresh** anında güncelleme ister.
 
 ## Widget

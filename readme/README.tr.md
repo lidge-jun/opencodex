@@ -350,6 +350,20 @@ Varsayılan sağlayıcıyı kullanmak ya da model adı desenine göre otomatik e
 değiştirilmiş biçimde sunulur; eğik çizgili tam biçim de çalışmaya devam eder. Ayrıntılar:
 [model yönlendirme belgeleri](https://opencodex.me/tr/guides/model-routing/).
 
+### JEV Auto yönlendirme (isteğe bağlı)
+
+TypeSafe JEV, açıkça etkinleştirilen bir Combo için ilk modeli ve akıl yürütme düzeyini seçebilir;
+normal model seçici ve tüm doğrudan rotalar değişmez. Kimlik bilgisini `ocx login jev` ile,
+**Providers → TypeSafe JEV → Add API key** üzerinden veya `TYPESAFE_API_KEY`/`JEV_API_KEY` ile ekleyin.
+Ardından **Models → Combos → Create JEV Auto** bölümünü açın, izin verilen hedef modelleri seçin ve
+JEV'in her hedef için seçebileceği düzeyleri işaretleyin. Düzey ayarına dokunulmayan bir hedef, modelin
+şu anda duyurduğu tüm düzeylere izin verir.
+
+JEV yalnızca `jev-auto` için ve mantıksal model çağrısı başına yalnızca bir kez kullanılır. Eksik kimlik
+bilgisi, ağ hatası veya geçersiz karar durumunda şu anda uygun olan ilk hedefe fail-open yapılır;
+çağıranın iptali isteği yine iptal eder. Otomatik testler sahte bir TypeSafe uç noktası kullanır ve
+gerçek bir JEV hesabını doğrulamaz.
+
 ## Sağlayıcılar ve adaptörler
 
 <!-- sponsors:main-first-mention -->

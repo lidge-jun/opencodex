@@ -132,17 +132,35 @@ export function findWslWindowsCodexHome(deps: CodexHomeDeps = {}): string | null
   return candidates.length === 1 ? candidates[0]! : null;
 }
 
+function canonicalExistingCodexHome(path: string, deps: CodexHomeDeps): string {
+  const stat = deps.statSync ?? statSync;
+  try {
+    if (!stat(path).isDirectory()) return path;
+    // Use the portable resolver here rather than realpathSync.native. The
+    // Windows Bun standalone runtime can reject a valid junction through the
+    // native resolver, while the effective home still needs to be physical
+    // before callers open auth.json or native-profile state.
+    return (deps.realpathSync ?? realpathSync)(path);
+  } catch {
+    // Preserve the existing lexical-path behavior for missing or unreadable
+    // homes; callers that require the directory still fail at their boundary.
+    return path;
+  }
+}
+
 export function defaultCodexHome(deps: CodexHomeDeps = {}): string {
   const home = (deps.homedir ?? homedir)();
   const defaultHome = join(home, ".codex");
+  const canonicalDefaultHome = canonicalExistingCodexHome(defaultHome, deps);
   // A local ~/.codex that Codex is already using is the user's Codex home even before
   // config.toml exists (a fresh install: login writes auth.json, first use writes
   // sessions/ and history.jsonl). A local directory with none of that state is not
   // evidence of a local Codex: before #5441 such a home let WSL discovery pick the
   // Windows home, and existing WSL users who run against that Windows home must not
-  // be moved to an empty local one on upgrade.
-  if (localCodexHomeIsDirectory(defaultHome, deps) && localCodexHomeInUse(defaultHome, deps)) return defaultHome;
-  return findWslWindowsCodexHome(deps) ?? defaultHome;
+  // be moved to an empty local one on upgrade. Return the canonical path so a
+  // Windows junction cannot leak into later credential and profile writes.
+  if (localCodexHomeIsDirectory(defaultHome, deps) && localCodexHomeInUse(defaultHome, deps)) return canonicalDefaultHome;
+  return findWslWindowsCodexHome(deps) ?? canonicalDefaultHome;
 }
 
 function localCodexHomeInUse(home: string, deps: CodexHomeDeps): boolean {

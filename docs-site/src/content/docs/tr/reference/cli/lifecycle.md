@@ -32,7 +32,9 @@ yalnızca gözlem ve sınır uygulama kiplerinin ikisi de aynı harcama günlü�
 bir kardeş örnek için ayrı bir `OPENCODEX_HOME` kullanın. `port: 0` yalnızca port seçimini
 işletim sistemine bırakır, durumu ayırmaz. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
 senkronize eder. Kapatıldığında — yönetilen bir servis olarak başlatılmadığı sürece
-(`OCX_SERVICE=1`) — yerel Codex'i geri yükler.
+(`OCX_SERVICE=1`) — yerel Codex'i geri yükler. Çalışan bir proxy'nin yanında başlatılan kardeş örnek,
+`ocx stop` ya da bir sinyalle durdurulduğunda da dahil ikisini de yapmaz: yalnızca kendi portundaki
+doğrudan istekleri karşılar ve Codex, Grok ile Claude zaten çalışmakta olan proxy'yi göstermeye devam eder.
 
 `--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
 HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş
@@ -304,6 +306,27 @@ sağlık denetimi yanıtlarını geciktirebilir ve işlem çalışırken bile si
 Güncellemeden sonra kayıtlı bu önceliği değiştirmek ve servisi yeniden başlatmak için `ocx service repair` komutunu çalıştırın.
 UAC onayı gerekebilir. Zaten normal veya yüksek öncelik ayarlanmışsa yalnızca öncelik nedeniyle yeniden kayıt yapılmaz.
 
+Linux'ta systemd birimi, kurulum sırasında `PATH` üzerinde bulunan ilk normal, çalıştırılabilir `ocx`
+dosyasını çağırır; kurulu paket ağacındaki Bun ve CLI yollarını değil. **mise** ve **asdf** gibi sürüm
+yöneticileri sürümlü bir dizine kurar ve yükseltmede eskisini siler; kararlı shim'leri birimin
+çözümlenmeye devam etmesini sağlar. `ocx` başlatıcısı olmayan kaynak checkout'ları doğrudan Bun + CLI
+biçimini korur. Bun başlamadan önce seçilen güvenilir bir `OPENCODEX_BUN_PATH` shim üzerinden korunur;
+paket içindeki paketlenmiş Bun yolları yükseltmelerden sonra yeniden keşfedilir.
+
+macOS'ta launchd bunun yerine kurulum veya repair sırasında seçilen paket içi Bun ve CLI yollarını
+kullanır. Bu, değiştirilebilir bir PATH shim'inin sonraki bir yeniden başlatmada servis API token'ını
+ve yapılandırılmış proxy ortamını almasını engeller. Sürüm yöneticili bir kurulumu yükselttikten sonra,
+servisi yeniden başlatmadan önce bu yolları tazelemek için `ocx service repair` komutunu çalıştırın.
+
+Bu değişiklikten önce kurulan tanımlar hâlâ eski sürümlü yolları taşır ve kendilerini taşıyamaz —
+eski yürütülebilir dosya silindiğinde, onu düzeltecek hiçbir opencodex kodu çalışmaz. Yükseltmeden
+sonra bir kez `ocx service repair` çalıştırın. Bundan sonra Linux servis başlatmaları başlatıcıyı
+izler; macOS repair'i yeni paket yollarını launchd tanımına yazar. Zaten çalışan bir proxy harici
+yükseltmeyle değiştirilmez: kurulu CLI çalışan proxy'den daha yeni ise, yeni derlemenin hizmet vermesi
+için `ocx service restart` çalıştırın. macOS'ta bu durumda `repair` yeterli değildir: tanım değişmedi
+ve hiçbir şeyi değiştirmeyen bir repair hiçbir şeyi yeniden yüklemez. Bunun yerine proxy daha yeni ise,
+[`ocx status`](#ocx-status---json) altında açıklandığı gibi CLI kurulumunu ve `PATH`'i kontrol edin.
+
 | Alt komut | Eylem |
 | --- | --- |
 | none | Servis yoksa kurup başlatın; varsa mevcut servise `repair` uygulayın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
@@ -472,6 +495,7 @@ simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 `--no-start`, `install` için geçerlidir ve tepsiyi hemen başlatmadan kurar.
 Kullanımdan kaldırıldı: OpenCodex masaüstü uygulaması Windows, macOS ve Linux'ta tepsi sağlar;
 `ocx tray`, masaüstü uygulaması olmayan kurulumlar için kullanılmaya devam eder.
+Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimdışı simgesine mavi bir nokta ekler ve **Update available** gösterir. Yerel önbellekteki rozeti yaklaşık dakikada bir denetler; eski veya kullanılamayan sonuçlar noktayı kaldırır. Menü öğesi panoyu açar ve paket güncellemesini oradan başlatabilirsiniz. Otomatik yükleme yapmaz.
 
 ## Kontrol Paneli
 
@@ -487,6 +511,8 @@ adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yö
 ### `ocx update [--tag latest|preview]`
 
 OpenCodex mise üzerinden kurulduğunda bu komut proxy'yi durdurmadan veya paket dosyalarını değiştirmeden önce başarısız olur ve doğrulanmış yerel mise diğer adını kullanarak `mise upgrade <tool>` komutunu gösterir. Güncelleme denetimi kullanılabilir kalır ve kurulumun harici olarak yönetildiğini bildirir. Okunamayan veya tutarsız mise sahiplik meta verileri de araç adını tahmin etmeden değişikliği reddeder; `--tag preview` mise içinde yapılandırılmış seçimi değiştirmez.
+
+Linux'ta kayıtlı başlatıcısı mise paket başlatıcısı (mise shim'i değil, `<tool>/latest/node_modules/.bin/ocx`) olan bir arka plan hizmeti `mise upgrade` işlemini kendiliğinden izler: yeni sürüm oturduktan yaklaşık on saniye sonra etkin istekleri boşaltır ve yeni sürümle yeniden başlar; mise daha sonra çalıştığı sürümü temizlerse de aynı şekilde toparlanır. macOS'ta, mise shim'i üzerinden kurulan bir hizmette ve ön plandaki bir proxy'de yükseltmeden sonra kendiniz yeniden başlatın (macOS'ta önce `ocx service repair`).
 
 opencodex'i npm'den kendi kendine güncelleyin. Kararlı kurulumlar `@latest`
 kullanır; önizleme kurulumları `--tag latest|preview` iletmediğiniz sürece

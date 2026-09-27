@@ -5,6 +5,15 @@ import { labSupplement, type LabSupplementKey } from "../i18n/lab-translations";
 import { EmptyState, Notice, Select } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton, DataSurfaceStatus } from "../components/data-surface";
+import { replaceHash } from "../hash-routing";
+import {
+  compatibilityPairHash,
+  EMPTY_PROTOCOL_PAIR,
+  readCompatibilityPair,
+  type ProtocolPairFilter,
+} from "../protocol-deep-links";
+import { ProtocolPairFilters, ProtocolPairStatus } from "./compatibility-protocol-filter";
+import { useSubjectProtocolPairs } from "./compatibility-protocol-pairs";
 import {
   fetchLabPageData,
   fetchMoreVerdicts,
@@ -17,7 +26,10 @@ import {
   COMPATIBILITY_VERDICTS,
   EVIDENCE_LAYERS,
   buildMatrixRows,
+  filterMatrixRowsByProtocol,
   formatAsOf,
+  protocolFilterActive,
+  protocolPairEvidence,
   shortSubjectId,
   verdictQueryFromFilters,
   type ArtifactStatus,
@@ -275,6 +287,9 @@ export default function CompatibilityMatrix({ apiBase, active = true, onCountCha
 }) {
   const { t, locale } = useI18n();
   const [filters, setFilters] = useState<VerdictFilters>({ layer: "", verdict: "", subjectQuery: "", suiteId: "" });
+  // The protocol pair lives in the hash (`#models/compatibility?inbound=…&upstream=…`) so a
+  // deep link from the plan preview or a log row survives refresh and Back/Forward.
+  const [pair, setPair] = useState<ProtocolPairFilter>(() => readCompatibilityPair() ?? EMPTY_PROTOCOL_PAIR);
   const [extraPage, setExtraPage] = useState<ExtraVerdictPage | null>(null);
   const [loadMoreFailure, setLoadMoreFailure] = useState<LoadMoreFailure | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -331,6 +346,28 @@ export default function CompatibilityMatrix({ apiBase, active = true, onCountCha
     setFilters(updater);
   }, [clearDetail, resetPagination]);
 
+  // Pair filtering is client-side over the loaded rows, so only the open detail resets.
+  const updatePair = useCallback((next: ProtocolPairFilter) => {
+    clearDetail();
+    setPair(next);
+    // Passive: a filter edit replaces the entry, so Back leaves the page instead of undoing it.
+    if (active) replaceHash(compatibilityPairHash(next));
+  }, [active, clearDetail]);
+
+  useEffect(() => {
+    const sync = () => {
+      const next = readCompatibilityPair();
+      if (!next) return;
+      setPair(current => current.inbound === next.inbound && current.upstream === next.upstream ? current : next);
+    };
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("popstate", sync);
+    return () => {
+      window.removeEventListener("hashchange", sync);
+      window.removeEventListener("popstate", sync);
+    };
+  }, []);
+
   const validExtraPage = extraPage !== null
     && extraPage.baseData === surface.data
     && extraPage.queryKey === queryKey
@@ -354,10 +391,23 @@ export default function CompatibilityMatrix({ apiBase, active = true, onCountCha
     () => surface.data ? [...surface.data.verdicts, ...(validExtraPage?.verdicts ?? [])] : [],
     [surface.data, validExtraPage],
   );
-  const matrixRows = useMemo(
+  const unfilteredRows = useMemo(
     () => surface.data ? buildMatrixRows(allVerdicts, surface.data.subjects) : [],
     [allVerdicts, surface.data],
   );
+  const pairActive = protocolFilterActive(pair);
+  const rowSubjectIds = useMemo(() => unfilteredRows.map(row => row.subjectId), [unfilteredRows]);
+  const pairResolution = useSubjectProtocolPairs(apiBase, rowSubjectIds, active && pairActive);
+  const matrixRows = useMemo(
+    () => filterMatrixRowsByProtocol(unfilteredRows, pairResolution.pairs, pair),
+    [pair, pairResolution.pairs, unfilteredRows],
+  );
+  const visibleVerdicts = useMemo(() => {
+    if (!pairActive) return allVerdicts;
+    const subjects = new Set(matrixRows.map(row => row.subjectId));
+    return allVerdicts.filter(verdict => subjects.has(verdict.subjectId));
+  }, [allVerdicts, matrixRows, pairActive]);
+  const pairEvidence = protocolPairEvidence(pair, matrixRows);
 
   const loadMore = useCallback(async () => {
     const cursor = validExtraPage?.nextCursor ?? surface.data?.nextCursor;
@@ -470,6 +520,9 @@ export default function CompatibilityMatrix({ apiBase, active = true, onCountCha
       {loadError && <Notice tone="err">{loadError}</Notice>}
       {projectionIncompatible && <Notice tone="err">{t("lab.projectionIncompatible")}</Notice>}
       {projectionUnavailable && !projectionIncompatible && <EmptyState title={t("lab.projectionUnavailable")} />}
+      {projectionUnavailable && !projectionIncompatible && (
+        <ProtocolPairStatus filter={pair} evidence="unverified" resolution={{ loading: false, unresolved: 0 }} />
+      )}
       {surface.data && <CommunityEvidencePanel community={surface.data.community} locale={locale} />}
 
       {surface.data && status?.projectionAvailable && !projectionIncompatible && (
@@ -511,7 +564,9 @@ export default function CompatibilityMatrix({ apiBase, active = true, onCountCha
                   portal={false}
                 />
               </div>
+              <ProtocolPairFilters value={pair} onChange={updatePair} />
             </div>
+            <ProtocolPairStatus filter={pair} evidence={pairEvidence} resolution={pairResolution} />
 
             {matrixRows.length === 0 ? (
               <EmptyState title={t("lab.empty")} />
@@ -564,7 +619,7 @@ export default function CompatibilityMatrix({ apiBase, active = true, onCountCha
                         </tr>
                       </thead>
                       <tbody>
-                        {allVerdicts.map(verdict => {
+                        {visibleVerdicts.map(verdict => {
                           const selected = visibleSelection?.projectionKey === verdict.projectionKey;
                           return (
                             <tr key={verdict.projectionKey} className={selected ? "selected" : ""}>

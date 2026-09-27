@@ -12,7 +12,7 @@ import { subagentFallbackNeedsModelEntitlements } from "../../codex/subagent-mod
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions } from "./core-options";
-import { prepareEffortNormalization } from "../effort-policy";
+import { prepareEffortNormalization, stripEmptyLadderEffort, supportedLadderFor } from "../effort-policy";
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
@@ -305,6 +305,18 @@ export async function applyFinalRouteRequestNormalization(args: {
       const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
       if (raw?.reasoning && typeof raw.reasoning === "object") raw.reasoning.effort = clamped;
       logCtx.requestedEffort = `${logCtx.requestedEffort ?? "max"}->${clamped}`;
+    }
+  }
+  // Chat ingress cannot strip effort against a provisional policy pick. Apply the
+  // concrete target's restriction to BOTH adapter options and the raw wire copy;
+  // policy-fallback retains the original body before this attempt-local mutation.
+  if (inboundWire === "chat" && supportedLadderFor(route)?.length === 0) {
+    parsed.options.reasoning = undefined;
+    const raw = parsed._rawBody as { reasoning?: unknown } | undefined;
+    if (raw) {
+      const reasoning = stripEmptyLadderEffort(raw.reasoning, []);
+      if (reasoning === undefined) delete raw.reasoning;
+      else raw.reasoning = reasoning;
     }
   }
   recordAttemptRequestedEffort(logCtx);

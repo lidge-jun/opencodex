@@ -66,14 +66,15 @@ async function freePortPair(): Promise<number> {
 }
 
 /** Start the intercept pair with picker mode wired, as the server lifecycle does. */
-async function startPicker(saved: OcxConfig): Promise<number> {
+async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Response): Promise<number> {
   writeFileSync(join(root, "config.json"), JSON.stringify(saved));
   const port = await freePortPair();
   handle = await startClaudeIntercept({
     config: config({ claudeCode: { intercept: { port } } }),
     publicPort: 10100,
     configDir: root,
-    dispatch: async () => new Response("unused"),
+    dispatch: async req => onDispatch?.(req) ?? new Response("unused"),
+    ...(onDispatch ? { desiredClients: () => ({ desktop: true, cli: false }) } : {}),
     loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [{ provider: "xai", id: "grok-4.7", contextWindow: 256_000 }] }),
     pickerSecurity: security,
     pickerPlatform: "darwin",
@@ -98,6 +99,23 @@ async function dispatch(path: string, init: RequestInit = {}, deps: Parameters<t
 
 const put = (body: unknown) => dispatch("/api/claude-desktop/picker", { method: "PUT", body: JSON.stringify(body) });
 const decision = () => getClaudePickerRuntime()!.selectTunnel("claude.ai", 443);
+
+test("picker egress uses HTTPS Desktop entrypoint after a UA-less CONNECT", async () => {
+  const seen: string[] = [];
+  await startPicker(config(), req => {
+    seen.push(req.headers.get("user-agent") ?? "");
+    return Response.json({ via: "router" });
+  });
+  const result = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    proxy: `http://127.0.0.1:${handle!.pickerProxyPort}`,
+    tls: { ca: readFileSync(handle!.caCertPath, "utf8") },
+    headers: { "user-agent": "claude-cli/2.1.282 (external, claude-desktop)", "anthropic-version": "2023-06-01" },
+    body: "{}",
+  });
+  expect(await result.json()).toEqual({ via: "router" });
+  expect(seen).toEqual(["claude-cli/2.1.282 (external, claude-desktop)"]);
+});
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-picker-routes-"));

@@ -3,6 +3,8 @@ title: Déploiement Remote Hub
 description: Déployer un hub opencodex avec une gestion locale, Tailscale Serve et OAuth sans interface locale.
 ---
 
+Pour les liaisons SSH entre machines, consultez [Liaison distante](/fr/guides/remote-link/).
+
 Un hub conserve les identifiants fournisseur, le catalogue et l’usage sur un hôte. Les clients authentifiés appellent directement son plan de données. Le plan de gestion est distinct : son écoute facultative reste sur `127.0.0.1` et ne sert que le tableau de bord et `/api/*`. Elle ne sert jamais `/v1/*`, `/healthz`, `/readyz` ni WebSocket. Ne publiez pas le port `10101` et n’utilisez pas Tailscale Funnel.
 
 ## Rôles, connexion et sécurité

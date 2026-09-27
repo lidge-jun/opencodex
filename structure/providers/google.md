@@ -47,6 +47,21 @@ mismatched, and standalone results become marked text instead of unpaired functi
 Representable data-URL images remain sibling `inline_data` parts in either case.
 
 > Decision record: [ADR-0058](../decisions/ADR-0058-google-tool-result-adjacency-repair.md)
+
+## Google opening functionCall repair
+
+A `functionCall` turn may not open `contents`: the upstream requires a call turn to follow a
+user or function-response turn and rejects an opening call turn with
+"function call turn comes immediately after a user turn or after a function response turn"
+(HTTP 400). Client-side context compaction can truncate a long history so it opens on an
+assistant tool call. `messagesToGeminiFormat` prepends a user `"(continue)"` nudge when the
+first compiled turn is `model` carrying a `functionCall` — the same repair Kiro applies to
+assistant-head turns in `src/adapters/kiro/payload.ts`. A model head carrying only text is left
+alone: no upstream rule against it is demonstrated, so repairing it would inject a turn into
+valid requests.
+
+> Decision record: [ADR-5008](../decisions/ADR-5008-google-opening-functioncall-repair.md)
+
 ## Structured output on generateContent
 
 A caller's Responses `text.format` reaches the Gemini wire as
@@ -155,3 +170,29 @@ per-turn ordinal lists; the serialized ceiling, held at half `MAX_DEBUG_LINE_BYT
 turn detail from the tail until the summary fits. Without the second, a worst case inside the
 first serializes past the debug buffer's per-line cap, and the buffer truncates at a byte
 boundary: the consumer gets unparseable JSON whose retained prefix still reads `truncated: false`.
+
+## Video part boundary and agentic media processing
+
+The inbound contract is the OpenAI-compatible content part
+`{ type: "video_url", video_url: { url, processing? } }`, normalized by both the Chat and
+Responses ingress into an internal `{ type: "video", videoUrl, processing? }` part. `processing`
+is caller-supplied and optional; nothing infers it.
+
+The outbound contract is a GenerateContent `contents[].parts[]` entry. `media_processing` is a
+**Part** field, not a request field and not the Interactions API's `processing`, so it is emitted
+beside `inline_data` and beside `file_data` alike — attaching it to only the fetched-URI branch
+would silently drop the mode for `data:` URLs, which is the shape the first revision of #3271 had.
+`geminiMediaProcessing` upper-cases the caller's value and returns `undefined` when absent, so a
+request that did not ask for a mode gains no field.
+
+`geminiFetchableVideoUri` is the trust boundary: it decides which URLs opencodex will ask Gemini
+to **fetch on its own behalf**. It parses the URL and requires HTTPS, then admits exactly two
+families — the YouTube watch hosts (`youtube.com`, `www.`/`m.`/`music.` variants, `youtu.be`, and
+the `-nocookie` forms) and `generativelanguage.googleapis.com` with a path matching
+`/files/<id>`. Matching is on the parsed host and pathname, never a substring of the URL, so a
+look-alike host cannot become a `file_data` reference. Everything else keeps the
+`[video: <url>]` text marker: without a media type there is nothing correct to send, and a
+fetchable reference the proxy cannot vouch for is the SSRF-shaped half of this feature.
+
+`file_data` carries `file_uri` only. An earlier revision guessed a `mime_type` for it; the Files
+API already knows the type of what it stores, and a wrong guess is worse than no guess.

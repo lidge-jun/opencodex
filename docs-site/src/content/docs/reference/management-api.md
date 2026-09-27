@@ -265,8 +265,8 @@ See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the key
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
 | `POST /api/sync` | Sync the current model catalog into Codex | 500 failed sync |
-| `GET /api/update/check` | Check the `latest` or `preview` update channel | 400 invalid tag |
-| `POST /api/update/run` | Start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
+| `GET /api/update/check` | Asynchronously check the `latest` or `preview` package channel and refresh the package cache on success | 400 invalid tag |
+| `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
@@ -294,9 +294,10 @@ by the current window size.
 | `GET /api/debug/usage-logs` | Read bounded usage-debug entries | — |
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
-| `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; 500 `{ "error": "read_failed" }` if storage cannot be read |
+| `GET /api/usage?jev=1` | Project persisted JEV decisions and their physical target sends. Optional `comboId` selects one Combo; `range` accepts `7d`, `30d`, or `all` (default `30d`). | 400 invalid `comboId`; 500 `{ "error": "read_failed" }` if the ledger cannot be read |
 | `GET /api/usage/timeline` | Bucketed usage by model/account; accepts `hours`, `bucketMinutes`, `metric`, `aggregation`, `grouping`, comma-separated `models` and repeated `hiddenProvider` filters | 400 invalid query or limits |
-| `GET /api/metrics` | Return process-local Prometheus text metrics for logical requests, physical sends, recovery kinds, duration, and TTFT. Labels are closed to protocol, result, and recovery class; request and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
+| `GET /api/metrics` | Return process-local Prometheus text metrics for requests and cached Kiro quota. Kiro accounts use bounded opaque digest labels; raw account and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -327,11 +328,12 @@ boundary. Histogram buckets are cumulative and end with `le="+Inf"`, equal to th
 | `opencodex_ttft_seconds` | `protocol`, `result` | Fixed-bucket TTFT histogram for requests with observed first output. |
 | `opencodex_ttft_missing_total` | `protocol`, `result` | Complementary count for requests without observed TTFT. |
 | `opencodex_metrics_process_start_time_seconds` | none | Process-local reset boundary. |
+| `opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}` | `account` (opaque `o` plus six hex digits; at most 32 distinct live accounts) | Identity-matched cached Kiro plan readings. Missing, stale, future-dated, or reset-passed readings emit no sample; scraping never probes upstream. |
 
 The `recovery` label takes one of a fixed set of classes: `transient`, `connection`, `credential`,
 `rate_limit`, `quota`, `policy`, `ciphertext`, `payload`, `empty_completion`, `effort_downgrade`,
-`fast_downgrade` and `other`. The set is closed, so no model, account, user or request identifier
-can ever appear in a series. `fast_downgrade` records an Anthropic Fast refusal repaired at standard
+`fast_downgrade` and `other`. The recovery set is closed; Kiro quota gauges use only the
+opaque account digest label described above, never a raw account identifier. `fast_downgrade` records an Anthropic Fast refusal repaired at standard
 speed; it is distinct from the reasoning-effort `effort_downgrade` class. `rate_limit`, `quota`,
 `policy` and `ciphertext` are separate because the operator response
 differs: wait out the limit, move to another account, change the prompt, or drop stale encrypted
@@ -344,6 +346,22 @@ responses and incremental appends, including empty or unmatched results; a rebui
 No provider, model, or API-key identifier is shortened to make a row fit. An absent flag is not proof
 that every ledger record was valid. This is separate from `historyTruncated`, `entriesTruncated`,
 and token measurement coverage.
+
+The JEV projection reports decision counts and gates, applied versus fail-open picks, decision
+latency/confidence, TypeSafe-reported decision tokens, physical target send counts, available model
+token/cache totals, reasoning-effort picks, and requests that sent to a target other than JEV's
+initial choice. `attempts` are summed from each persisted attempt's `sendCount`; a zero-send row is
+not a fallback. One reported usage object is counted once even when its attempt retried, so the
+measured-attempt count can be lower than the physical-send count. Model cardinality is bounded; an
+explicit overflow row aggregates additional identities without dropping summary totals.
+
+JEV stats use the same append-only `usage.jsonl` ledger and cooperative scanner as ordinary usage.
+Cold reads scan the current ledger, unchanged polls perform no file read, and verified growth folds
+only the appended suffix. Concurrent identical requests share one scan. The persisted JEV record is
+closed and content-free: Combo id, selected provider/model/effort, decision gate, latency, optional
+confidence/probability, and optional numeric decision usage. It never stores prompts, headers,
+credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain the same positive
+`usageIncomplete` diagnostic as the ordinary usage endpoint.
 
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
@@ -495,7 +513,7 @@ outcome fields from an older server do not establish successful recovery.
 | `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
@@ -508,6 +526,31 @@ outcome fields from an older server do not establish successful recovery.
 
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
 keys are not returned to dashboard clients.
+
+### Protocol paths
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/protocols` | Return the protocol contract version, which APIs are served, the protocol settings, the current policy revision, and the request features a preview understands | — |
+| `GET /api/protocols?provider=<name>` | The same body plus `provider`: `{ name, adapter, adapterSource, authMode, upstream, modelOverrides: [{ model, adapter, source }] }` — the wire the provider receives and who decided it (`hard-pin`, `operator`, `registry`, `provider-default`), with up to 64 models on a different wire (`modelOverridesTruncated: true` past that). No credential or base URL | 400 empty, repeated, over 200 characters, or control characters; 404 no provider with that name |
+| `POST /api/protocols/plan` | Preview the path a request would take: `{ "model": "...", "inbound": "responses" \| "chat" \| "messages", "features": [...] }` returns each route candidate's request and response path, delivery mode, fidelity, feature effects, and reasons | 400 invalid JSON, unknown field, model over 200 characters, unknown inbound, or more than 24 / unknown features |
+| `PATCH /api/protocols/settings` | Change protocol settings: `{ "messagesEnabled"?: boolean, "unrepresentable"?: "legacy" \| "reject", "rollout"?: { ...boolean switches } }`. Returns the same body as `GET /api/protocols`. Closing Messages also sets `claudeCode.enabled` to `false` in the same save; opening it writes only `apiSurfaces.messages.enabled` | 400 invalid JSON, empty body, unknown field, wrong type, or `rollout.managedMessagesNativeOAuth` without `rollout.managedMessagesNative`; 409 configuration busy; 500 save failed (nothing changes) |
+
+A preview is computed from configuration alone. It sends nothing to any provider, costs nothing,
+does not advance combo rotation, and is not logged. The API page in the dashboard shows the same
+preview under **Request path preview**. A delivery mode of `native` describes how the request
+travels; it is not a compatibility verification.
+
+The `?provider=` form backs the **Upstream wire** section of a provider's settings. It reports
+the format opencodex sends to that provider; it does not open or close any client API. To change
+the provider-wide adapter, save the provider's settings as usual (`PATCH /api/providers`).
+
+`PATCH /api/protocols/settings` is the only writer here and backs the Messages toggle on the
+API page. The CLI drives these routes with `ocx api protocols`, `ocx api explain` and
+`ocx api policy`. The rollout switches are staged and default off
+([Protocol paths](/guides/protocol-paths/#rollout-switches)); see
+[API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
+setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 
 ### Providers
 
@@ -544,7 +587,12 @@ deleting their provider.
 | --- | --- | --- |
 | `GET /api/github/star` | Read repository star status through the user's `gh` session | Status-specific fixed result codes |
 | `POST /api/github/star` | Star the repository only from an authenticated human action | 403 `agent_consent_required` for agent-driven callers without dashboard-session evidence |
-| `GET /api/update/badge` | Read the cheap sidebar update-badge state | — |
+| `GET /api/update/badge` | Read cached package badge without a registry lookup; missing, wrong-channel or 40-hour-old cache returns `unknown: true`. `surface=desktop&session=<id>` reads only that desktop app session. | 400 invalid surface; missing or expired desktop session returns `unknown: true` |
+| `POST /api/update/desktop-snapshot` | Desktop shell publishes its Tauri-updater display state through the bound proxy client | 403 if an `Origin` header is present or the principal is not the raw `admin-token`; 400 invalid fields; 413 over 1 KiB |
+
+The desktop snapshot is temporary display state, not an install request. The proxy stores at most 32 sessions in memory and expires one 180 seconds after its last heartbeat. A normal browser without surface=desktop continues to read the package badge.
+
+The proxy checks an eligible package install after startup when its cache is missing or older than 20 hours, and checks freshness hourly. Set `OCX_DISABLE_UPDATE_CHECK=1` to disable automatic checks. Explicit check and run requests still work.
 
 :::caution
 Management authentication proves access to the proxy; it does not prove consent to spend the

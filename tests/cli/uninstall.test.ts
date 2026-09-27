@@ -7,11 +7,17 @@ import { pathToFileURL } from "node:url";
 import { repoRoot } from "../helpers/repo-root";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { removeOwnedConfigAfterDesktopCleanup, type UninstallClientStateDeps } from "../../src/cli/uninstall-client-state";
+import { cleanupOwnedIntegrationsBeforeUninstall } from "../../src/cli/uninstall-integrations";
 import { assertClientLifecycleHeld, withClientLifecycle, withClientLifecycleSync, type ClientLifecycleHeld } from "../../src/client/lifecycle-lock";
 import type { UninstallObservation } from "../../src/cli/uninstall-plan";
 import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
+import type { ExportModel } from "../../src/clients/config-export";
+import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { createIntegrationStateStore } from "../../src/integrations/store";
+import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
+import type { OcxConfig } from "../../src/types";
 
 const root = pathToFileURL(repoRoot() + "/");
 
@@ -321,16 +327,17 @@ function uninstallFixture() {
     beforeFinalLock?: () => void;
     beforeDisconnectLock?: () => void;
     duringCleanup?: () => Promise<void>;
+    duringIntegrationCleanup?: () => Promise<void>;
     duringRemove?: () => void;
     finishCleanup: boolean;
     lease?: ClientLifecycleHeld;
     aclReapPending: boolean;
-    calls: { read: number; cleanup: number; remove: number; finalLock: number };
+    calls: { read: number; cleanup: number; integrations: number; remove: number; finalLock: number };
     cleanupOptions: Array<Parameters<UninstallClientStateDeps["disconnect"]>[0]>;
   } = {
     connection: { kind: "disconnected" }, desktop: { kind: "absent" }, receipt: { kind: "absent" },
     finishCleanup: true, aclReapPending: false,
-    calls: { read: 0, cleanup: 0, remove: 0, finalLock: 0 }, cleanupOptions: [],
+    calls: { read: 0, cleanup: 0, integrations: 0, remove: 0, finalLock: 0 }, cleanupOptions: [],
   };
   const deps: UninstallClientStateDeps = {
     readConnection: () => { fixture.calls.read++; return fixture.connection; },
@@ -366,6 +373,11 @@ function uninstallFixture() {
         finally { fixture.lease = undefined; }
       }, { lockPath });
     },
+    cleanupIntegrations: async () => {
+      fixture.calls.integrations++;
+      await fixture.duringIntegrationCleanup?.();
+      return { attempted: 0, changed: 0 };
+    },
     remove: () => {
       // Real destructive work is confined to this fixture, never getConfigDir().
       assertClientLifecycleHeld(fixture.lease!);
@@ -393,7 +405,7 @@ describe("uninstall client cleanup before owner-state deletion", () => {
       const before = f.bytes();
       await expect(removeOwnedConfigAfterDesktopCleanup({ ...safeTeardown, proxyProvenDown: false }, f.deps))
         .rejects.toThrow("teardown is not proven");
-      expect(f.fixture.calls).toEqual({ read: 0, cleanup: 0, remove: 0, finalLock: 0 });
+      expect(f.fixture.calls).toEqual({ read: 0, cleanup: 0, integrations: 0, remove: 0, finalLock: 0 });
       expect(f.bytes()).toEqual(before);
       expect(existsSync(f.lockPath)).toBe(false);
     });
@@ -458,6 +470,18 @@ describe("uninstall client cleanup before owner-state deletion", () => {
       const before = f.bytes();
       await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .rejects.toThrow("ACL hardening still owns a path under the config directory");
+      expect(f.fixture.calls.remove).toBe(0);
+      expect(f.bytes()).toEqual(before);
+    });
+  });
+
+  test("an integration cleanup failure preserves OpenCodex recovery state and skips removal", async () => {
+    await withUninstallFixture(async f => {
+      const before = f.bytes();
+      f.fixture.duringIntegrationCleanup = async () => { throw new Error("fixture integration conflict"); };
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("fixture integration conflict");
+      expect(f.fixture.calls.integrations).toBe(1);
       expect(f.fixture.calls.remove).toBe(0);
       expect(f.bytes()).toEqual(before);
     });
@@ -551,11 +575,181 @@ describe("uninstall client cleanup before owner-state deletion", () => {
       };
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps)).toEqual({ status: "removed", residualPaths: [] });
       expect(f.fixture.calls.cleanup).toBe(mode === "connected" ? 1 : 0);
+      expect(f.fixture.calls.integrations).toBe(1);
       expect(f.fixture.calls.remove).toBe(1);
       expect(existsSync(f.configDir)).toBe(false);
       expect(existsSync(f.lockPath)).toBe(true); // L is outside the directory being removed.
       expect(() => assertClientLifecycleHeld(removingLease!)).toThrow("client_lifecycle_lease_invalid");
       withClientLifecycleSync(held => assertClientLifecycleHeld(held), { lockPath: f.lockPath });
     });
+  });
+});
+
+describe("uninstall restores recorded third-party integrations before deleting recovery state", () => {
+  const models: ExportModel[] = [
+    { namespaced: "fixture/model", provider: "fixture", id: "model", contextWindow: 128_000 },
+  ];
+  const config = {
+    port: 10100,
+    hostname: "127.0.0.1",
+    defaultProvider: "fixture",
+    providers: { fixture: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as unknown as OcxConfig;
+
+  async function fixture() {
+    const root = mkdtempSync(join(tmpdir(), "ocx-uninstall-integrations-"));
+    const home = join(root, "home");
+    const configDir = join(root, "opencodex");
+    const lockPath = join(root, "runtime", "lifecycle.sqlite");
+    const env = {} as NodeJS.ProcessEnv;
+    mkdirSync(INTEGRATION_CLIENTS.pi.detectDir(env, home), { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    const clientConfig = INTEGRATION_CLIENTS.pi.configPath(env, home);
+    mkdirSync(dirname(clientConfig), { recursive: true });
+    writeFileSync(clientConfig, '{"userSetting":"keep"}\n');
+    const store = createIntegrationStateStore(join(configDir, "integrations"));
+    const input = { clientId: "pi" as const, models, config, port: config.port, env, home, store };
+    expect(applyIntegration(input).ok).toBe(true);
+    const deps: UninstallClientStateDeps = {
+      readConnection: () => ({ kind: "disconnected" }),
+      inspectDesktop: () => ({ kind: "absent" }),
+      readReceipt: () => ({ kind: "absent" }),
+      disconnect: async () => undefined,
+      withLifecycle: work => withClientLifecycle(work, { lockPath }),
+      cleanupIntegrations: () => cleanupOwnedIntegrationsBeforeUninstall({
+        createStore: () => store,
+        loadConfig: () => config,
+        loadModels: async () => models,
+        disable: value => disableIntegrationCoordinated(value),
+        env,
+        home,
+      }),
+      remove: () => {
+        rmSync(configDir, { recursive: true });
+        return { status: "removed", residualPaths: [] };
+      },
+      aclReapPending: () => false,
+    };
+    return { root, home, env, configDir, clientConfig, store, deps };
+  }
+
+  function addAsideProfiles(f: Awaited<ReturnType<typeof fixture>>) {
+    const asideRoot = join(f.home, ".aside");
+    const profiles = [0, 1].map(id => {
+      const detectDir = join(asideRoot, "u", String(id));
+      const configPath = join(detectDir, "models.json");
+      mkdirSync(detectDir, { recursive: true });
+      writeFileSync(configPath, '{"userSetting":"keep"}\n');
+      const store = id === 0 ? f.store
+        : createIntegrationStateStore(join(f.store.root, "aside-profiles", String(id)));
+      return { id, detectDir, configPath, store };
+    });
+    // The legacy owner is not the current profile; uninstall must use its recorded path.
+    writeFileSync(join(asideRoot, "accounts.json"), JSON.stringify({
+      currentAccountId: 1, accounts: profiles.map(({ id }) => ({ id })),
+    }));
+    for (const profile of profiles) {
+      expect(applyIntegration({ clientId: "aside", models, config, port: config.port,
+        env: f.env, home: f.home, store: profile.store,
+        resolvedPaths: { configPath: profile.configPath, detectDir: profile.detectDir },
+      }).ok).toBe(true);
+    }
+    return profiles;
+  }
+
+  test("restores the external file before removing the records that authorize restoration", async () => {
+    const f = await fixture();
+    try {
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(existsSync(f.configDir)).toBe(false);
+      const restored = JSON.parse(readFileSync(f.clientConfig, "utf8")) as Record<string, unknown>;
+      expect(restored.userSetting).toBe("keep");
+      expect((restored.providers as Record<string, unknown> | undefined)?.opencodex).toBeUndefined();
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a conflicting external edit retains both the file and recovery records", async () => {
+    const f = await fixture();
+    try {
+      const edited = JSON.parse(readFileSync(f.clientConfig, "utf8")) as {
+        providers: Record<string, Record<string, unknown>>;
+      };
+      edited.providers.opencodex!.baseUrl = "http://user-edited.invalid/v1";
+      writeFileSync(f.clientConfig, `${JSON.stringify(edited, null, 2)}\n`);
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("integration cleanup refused for pi");
+      expect(existsSync(f.configDir)).toBe(true);
+      expect(f.store.readRecordsStrict().pi).toBeDefined();
+      expect(readFileSync(f.clientConfig, "utf8")).toContain("user-edited.invalid");
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  test("restores legacy and child Aside profiles before deleting all recovery stores", async () => {
+    const f = await fixture();
+    try {
+      const profiles = addAsideProfiles(f);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(existsSync(f.configDir)).toBe(false);
+      for (const profile of profiles) {
+        expect(JSON.parse(readFileSync(profile.configPath, "utf8")))
+          .toEqual({ userSetting: "keep" });
+      }
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("an unreadable Aside child record prevents every disable and config removal", async () => {
+    const f = await fixture();
+    try {
+      const profiles = addAsideProfiles(f);
+      const originals = profiles.map(profile => readFileSync(profile.configPath, "utf8"));
+      const childRecords = join(profiles[1]!.store.root, "records.json");
+      writeFileSync(childRecords, "invalid JSON");
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("integration ownership is invalid for recovery");
+      expect(existsSync(f.configDir)).toBe(true);
+      expect(f.store.readRecordsStrict().pi).toBeDefined();
+      expect(profiles.map(profile => readFileSync(profile.configPath, "utf8"))).toEqual(originals);
+      expect(readFileSync(childRecords, "utf8")).toBe("invalid JSON");
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("a conflicted Aside child retains recovery state without undoing earlier disables", async () => {
+    const f = await fixture();
+    try {
+      const profiles = addAsideProfiles(f);
+      const child = profiles[1]!;
+      const edited = JSON.parse(readFileSync(child.configPath, "utf8"));
+      edited.providers.opencodex.baseUrl = "http://user-edited.invalid/v1";
+      writeFileSync(child.configPath, `${JSON.stringify(edited)}\n`);
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("integration cleanup refused for aside");
+      expect(existsSync(f.configDir)).toBe(true);
+      expect(child.store.readRecordsStrict().aside).toBeDefined();
+      expect(readFileSync(child.configPath, "utf8")).toContain("user-edited.invalid");
+      expect(f.store.readRecordsStrict().pi).toBeUndefined();
+      expect(f.store.readRecordsStrict().aside).toBeUndefined();
+      expect(JSON.parse(readFileSync(profiles[0]!.configPath, "utf8"))).toEqual({ userSetting: "keep" });
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("an unregistered owned Aside profile refuses cleanup rather than dropping its proof", async () => {
+    const f = await fixture();
+    try {
+      const profiles = addAsideProfiles(f);
+      writeFileSync(join(f.home, ".aside", "accounts.json"), JSON.stringify({
+        currentAccountId: 0, accounts: [{ id: 0 }],
+      }));
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("Aside profile ownership is missing or mismatched");
+      expect(existsSync(f.configDir)).toBe(true);
+      expect(f.store.readRecordsStrict().pi).toBeDefined();
+      expect(profiles[1]!.store.readRecordsStrict().aside).toBeDefined();
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 });

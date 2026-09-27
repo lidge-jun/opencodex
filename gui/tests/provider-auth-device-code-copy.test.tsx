@@ -122,11 +122,22 @@ test("shows the device code and copies it", async () => {
   await mountPanel({ provider: "claude", deviceCode: DEVICE_CODE });
 
   expect(host.textContent).toContain(DEVICE_CODE);
+  expect(host.querySelector(".login-hint-paste")).toBeNull();
 
   await clickCopy();
 
   expect(clipboardWrites).toEqual([DEVICE_CODE]);
   expect(host.textContent).toContain("Code copied");
+});
+
+test("a manual fallback replaces device instructions and restores the callback paste field", async () => {
+  await mountPanel({ provider: "claude", url: "https://auth.example.test/device", deviceCode: DEVICE_CODE });
+  expect(host.querySelector(".login-hint-paste")).toBeNull();
+
+  await mountPanel({ provider: "claude", url: "https://auth.example.test/manual", instructions: "Complete manual login" });
+  expect(host.querySelector(".pwi-device-code")).toBeNull();
+  expect(host.querySelector(".login-hint-paste-input")).not.toBeNull();
+  expect(host.textContent).toContain("Complete manual login");
 });
 
 test("copies through the legacy path in a non-secure context", async () => {

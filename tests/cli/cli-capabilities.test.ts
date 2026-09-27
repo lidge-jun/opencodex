@@ -46,13 +46,17 @@ describe("capability table is a leaf data module", () => {
     }
   });
 
-  test("a capability declaring routes marks mutation consistently", () => {
-    // A capability that drives only GETs must not claim to mutate, and one driving a
-    // write must not claim otherwise -- the flag is what --mutating-only filters on.
+  test("a capability declaring routes marks mutation consistently", async () => {
+    // A capability that drives only reads must not claim to mutate, and one driving a
+    // write must not claim otherwise -- the flag is what --mutating-only filters on. The
+    // registry's `mutates` decides, so a read-only POST (`POST /api/protocols/plan`, a
+    // preview that sends nothing) is a read; an undeclared route falls back to its method.
+    const { MANAGEMENT_ROUTES } = await import("../../src/server/management/route-registry");
+    const declared = new Map(MANAGEMENT_ROUTES.map(r => [`${r.method} ${r.path}`, r.mutates] as const));
     const wrong: string[] = [];
     for (const cap of CAPABILITIES) {
       if (cap.routes.length === 0) continue;
-      const anyWrite = cap.routes.some(r => r.method !== "GET");
+      const anyWrite = cap.routes.some(r => declared.get(`${r.method} ${r.path}`) ?? r.method !== "GET");
       if (anyWrite !== cap.mutates) wrong.push(capabilityInvocation(cap));
     }
     expect(wrong).toEqual([]);
@@ -127,6 +131,15 @@ describe("ocx capabilities output", () => {
     const parsed = JSON.parse(cap.lines.join("\n")) as { route: string; capabilities: { invocation: string }[] };
     expect(parsed.route).toBe(target);
     expect(parsed.capabilities.map(c => c.invocation)).toContain("ocx account list");
+  });
+
+  test("Claude config declares both management methods", () => {
+    const claudeConfig = capabilitiesForRoute("/api/claude-code")
+      .find(cap => capabilityInvocation(cap) === "ocx claude config");
+    expect(claudeConfig?.routes).toEqual([
+      { method: "GET", path: "/api/claude-code" },
+      { method: "PUT", path: "/api/claude-code" },
+    ]);
   });
 
   test("--route accepts the flag in any argv position", async () => {
@@ -210,7 +223,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "DELETE /api/providers/keys",
   "DELETE /api/routing-profiles",
   "GET /api/aliases",
-  "GET /api/claude-code",
   "GET /api/claude-desktop",
   "GET /api/claude/inbound-debug",
   "GET /api/client-integrations",
@@ -237,7 +249,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "GET /api/native-main-profiles/doctor",
   "GET /api/oauth/accounts",
   "GET /api/oauth/providers",
-  "GET /api/oauth/status",
   "GET /api/provider-context-caps",
   "GET /api/provider-presets",
   "GET /api/providers",
@@ -286,7 +297,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "POST /api/native-main-profiles/switch",
   "POST /api/oauth/accounts/clear-cooldown",
   "POST /api/oauth/accounts/import",
-  "POST /api/oauth/login",
   "POST /api/oauth/login/cancel",
   "POST /api/oauth/login/code",
   "POST /api/oauth/logout",
@@ -304,7 +314,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "POST /api/system/restart",
   "POST /api/update/run",
   "POST /api/windows-tray",
-  "PUT /api/claude-code",
   "PUT /api/claude-desktop",
   "PUT /api/client-integrations/{clientId}",
   "PUT /api/codex-auth/accounts/alias",
@@ -368,5 +377,14 @@ describe("capability/route parity is bidirectional", () => {
       return covered.has(k) || Boolean(route.exempt);
     });
     expect(stale).toEqual([]);
+  });
+
+  test("desktop snapshot has an explicit internal exemption, not an operator CLI verb", async () => {
+    // Only the Tauri shell holds signed-updater state; a CLI verb could only forge it.
+    const { MANAGEMENT_ROUTES } = await import("../../src/server/management/route-registry");
+    const row = MANAGEMENT_ROUTES.find(r => r.method === "POST"
+      && r.path === "/api/update/desktop-snapshot");
+    expect(row?.exempt?.reason).toBe("desktop-internal");
+    expect(capabilityRouteKeys().has("POST /api/update/desktop-snapshot")).toBe(false);
   });
 });

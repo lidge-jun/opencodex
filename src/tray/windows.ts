@@ -19,6 +19,9 @@ const TRAY_ICON_FILES = [
   "opencodex-tray-online.ico",
   "opencodex-tray-warning.ico",
   "opencodex-tray-offline.ico",
+  "opencodex-tray-online-update.ico",
+  "opencodex-tray-warning-update.ico",
+  "opencodex-tray-offline-update.ico",
 ] as const;
 
 export interface WindowsTrayEntry {
@@ -66,6 +69,25 @@ function installedTrayScriptPath(): string {
 
 function installedTrayIconPaths(): string[] {
   return TRAY_ICON_FILES.map(name => join(getConfigDir(), name));
+}
+
+/**
+ * Files an installed tray must still have for its registration to count as ours.
+ *
+ * The dotted update icons arrived after the tray shipped, so an install made by an older
+ * release has only the three base icons. Requiring all six here classified that install as
+ * stale, and the updater then stopped the tray without reinstalling it (trayWasInstalled was
+ * false). The dotted icons stay in the install, rollback and uninstall lists; the tray script
+ * falls back to the base icon when one is missing, and the next `tray install` adds them.
+ */
+export function windowsTrayRequiredFilesPresent(
+  state: Pick<WindowsTrayEntry, "bun" | "cli" | "script"> & { launcherPath?: string },
+  iconPaths: readonly string[],
+  exists: (path: string) => boolean = existsSync,
+): boolean {
+  const baseIcons = iconPaths.filter(path => !/-update\.ico$/i.test(path));
+  return [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...baseIcons]
+    .every(path => exists(path));
 }
 
 export function windowsTrayStatePathsOwned(
@@ -469,8 +491,7 @@ function trayStatusFrom(registered: string | null): WindowsTrayStatus {
   const running = heartbeatProcessAlive(heartbeat);
   const registrationOwned = state !== null
     && registered === state.runCommand
-    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths()]
-      .every(path => existsSync(path));
+    && windowsTrayRequiredFilesPresent(state, installedTrayIconPaths());
   const stale = windowsTrayRegistrationIsStale({
     registered: registered !== null,
     registrationOwned,

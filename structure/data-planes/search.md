@@ -5,7 +5,18 @@ The opt-in key-auth Responses hosted-search bridge follows the
 
 ## Serving the relay without ChatGPT auth
 
-`POST /v1/alpha/search` relays verbatim through a configured ChatGPT forward provider. When no
+`POST /v1/alpha/search` first resolves a non-empty body `model` with `previewRouteModel()`. A route whose
+effective adapter is `devin` uses `src/web-search/devin-executor.ts` and the active Devin OAuth
+snapshot to call Cognition's non-inference `GetWebSearchResults` RPC. The account snapshot supplies
+both the credential and its allowlisted tenant URL; the request rejects redirects and bounds timeout
+and response bytes. This decision uses the resolved route, not a model-name family, so current and
+future Devin-hosted model ids share the path without a model table. A round-robin preview copies
+its selection state instead of claiming or advancing the turn's sticky slot. The RPC receives the
+search query but no model id, and its decoded results return in the normal
+`{ encrypted_output: null, output, results }` envelope. A configured key's destination scope is
+checked against that resolved provider/model before dispatch.
+
+Other requests relay verbatim through a configured ChatGPT forward provider. When no
 forward candidate exists, an explicitly configured `webSearchSidecar.backend` of `anthropic`,
 `xai`, `gemini`, or `exa` serves the request instead, spending only that backend's own
 credential: `src/web-search/alpha-search.ts` runs the query through that backend's executor and

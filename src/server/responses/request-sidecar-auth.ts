@@ -53,9 +53,14 @@ export async function prepareResponsesSidecarAuth(
     && (!isCanonicalOpenAiForwardProvider(route.provider) || parsed._portableCompaction === true);
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
-  const needsOpenAiSearch = !routedCompaction && !transportState.adapter.runTurn
-    && (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
-      || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough));
+  // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
+  // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper
+  // credential for them too. The passthrough bridge stays fetch-only.
+  const needsOpenAiSearch = !routedCompaction
+    && (transportState.adapter.runTurn
+      ? shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
+      : (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
+        || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough)));
   if (needsOpenAiVision || needsOpenAiSearch) {
     try {
       const candidates = listOpenAiForwardSidecarCandidates(config);

@@ -15,14 +15,21 @@ import {
   connectClient,
 } from "../client/connect";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
+import { readClientLinkState } from "../client/link-state";
+import { teardownClientLink } from "../client/link-teardown";
+import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { linkKnownHostsPath } from "../link/paths";
+import { createSshRunner, type SshRunner } from "../link/ssh-runner";
+import type { OrphanTunnelResult } from "../client/link-tunnel";
 import { inspectRemoteDesktopStore } from "../claude/desktop-remote-store";
 import type { OcxConnectedClientId } from "../types";
 import {
   CliUsageError,
   csv,
   printData,
+  readSecretBytes,
   readSecretLine,
   rejectArgs,
   runCliAction,
@@ -37,6 +44,12 @@ import {
 export interface ClientCommandDeps extends RuntimeApiDeps {
   lifecycleLockDeps?: ClientLifecycleLockDeps;
   catalogProbeDeps?: ClientCatalogProbeDeps;
+  linkTeardownDeps?: {
+    runner?: Pick<SshRunner, "run">;
+    reapOrphanTunnel?: () => Promise<OrphanTunnelResult>;
+    knownHostsFile?: string;
+    timeoutMs?: number;
+  };
 }
 
 export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
@@ -54,6 +67,8 @@ export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
 }
 
 export const CONNECT_USAGE = `Usage:
+  ocx connect --link --key-stdin --tunnel-port <port> --link-id <id>
+      [--clients codex,claude] [--catalog-timeout <seconds>] [--no-sync]
   ocx connect <url> [--management-url <url>]
       (--pairing-code-stdin | --admin-token-stdin)
       [--clients codex,claude] [--management-transport direct|relay]
@@ -72,6 +87,8 @@ export type ClientConnectionStatus = {
   serverUrl?: string;
   managementUrl?: string;
   managementTransport?: "direct" | "relay";
+  transport?: "hub" | "link";
+  link?: { tunnelPort: number; linkId: string };
   protocolVersion?: number;
   apiKeyId?: string;
   selectedClients?: OcxConnectedClientId[];
@@ -199,6 +216,8 @@ export function collectClientConnectionStatus(
     serverUrl: state.value.serverUrl,
     managementUrl: state.value.managementUrl,
     managementTransport: state.value.managementTransport,
+    ...(state.value.transport ? { transport: state.value.transport } : {}),
+    ...(state.value.link ? { link: { ...state.value.link } } : {}),
     protocolVersion: state.value.protocolVersion,
     apiKeyId: state.value.apiKeyId,
     selectedClients: [...state.value.selectedClients],
@@ -219,6 +238,27 @@ function parseClients(raw: string | undefined): OcxConnectedClientId[] {
     throw new CliUsageError("--clients must contain codex and/or claude", CONNECT_USAGE);
   }
   return values as OcxConnectedClientId[];
+}
+
+async function readLinkCredential(deps: ClientCommandDeps): Promise<{ apiKeyId: string; key: string }> {
+  const raw = await readSecretBytes(deps, "link credential");
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(raw).trim();
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shape");
+    const record = parsed as Record<string, unknown>;
+    if (Object.keys(record).some(key => key !== "apiKeyId" && key !== "key")
+      || typeof record.apiKeyId !== "string" || !record.apiKeyId.trim()
+      || record.apiKeyId.length > 256 || typeof record.key !== "string"
+      || !/^ocx_data_[0-9a-f]{40}$/.test(record.key)) {
+      throw new Error("shape");
+    }
+    return { apiKeyId: record.apiKeyId, key: record.key };
+  } catch {
+    throw new CliUsageError("invalid link credential", CONNECT_USAGE);
+  } finally {
+    raw.fill(0);
+  }
 }
 
 /** Reads as a verdict, not a field dump: "ready" is the only word that means the client works. */
@@ -290,6 +330,8 @@ function statusLines(status: ClientConnectionStatus): string[] {
     // Second line on purpose. The whole of #4207 is that a reader stopped at "connected" and
     // believed the client was usable, so the local verdict has to arrive before the hub detail.
     readinessLine(status),
+    `Transport: ${status.transport ?? "hub"}`,
+    ...(status.link ? [`Link: ${status.link.linkId} via tunnel port ${status.link.tunnelPort}`] : []),
     `Hub: ${status.serverUrl}`,
     `Management: ${status.managementUrl} (${status.managementTransport})`,
     `Protocol: ${status.protocolVersion}`,
@@ -323,7 +365,7 @@ async function runRotate(argv: string[], deps: ClientCommandDeps): Promise<void>
   ]);
 }
 
-async function runConnect(argv: string[], deps: ClientCommandDeps): Promise<void> {
+async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<void> {
   const args = [...argv];
   const serverUrl = args.shift();
   if (!serverUrl || serverUrl.startsWith("--")) throw new CliUsageError("hub URL is required", CONNECT_USAGE);
@@ -375,6 +417,64 @@ async function runConnect(argv: string[], deps: ClientCommandDeps): Promise<void
   if (report.failure) throw new Error(report.failure);
 }
 
+async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<void> {
+  const args = [...argv];
+  const keyStdin = takeFlag(args, "--key-stdin");
+  const rawPort = takeIntegerOption(args, "--tunnel-port", { min: 1024 });
+  const linkId = takeOption(args, "--link-id");
+  const managementUrl = takeOption(args, "--management-url");
+  const managementTransport = takeOption(args, "--management-transport");
+  const pairing = takeFlag(args, "--pairing-code-stdin");
+  const admin = takeFlag(args, "--admin-token-stdin");
+  const clients = parseClients(takeOption(args, "--clients"));
+  const catalogTimeoutSeconds = takeIntegerOption(args, "--catalog-timeout", { min: 1 });
+  if (catalogTimeoutSeconds !== undefined && catalogTimeoutSeconds > 120) {
+    throw new CliUsageError("--catalog-timeout must be an integer between 1 and 120", CONNECT_USAGE);
+  }
+  const noSync = takeFlag(args, "--no-sync");
+  if (!keyStdin || rawPort === undefined || !linkId) {
+    throw new CliUsageError("link connect requires --key-stdin, --tunnel-port, and --link-id", CONNECT_USAGE);
+  }
+  if (managementUrl || managementTransport !== undefined || pairing || admin || args.some(value => !value.startsWith("--"))) {
+    throw new CliUsageError("link connect accepts no hub URL, management URL, management transport, pairing code, or admin token", CONNECT_USAGE);
+  }
+  if (rawPort > 65535 || !/^lnk_[0-9a-f]{16}$/.test(linkId)) {
+    throw new CliUsageError("invalid link transport", CONNECT_USAGE);
+  }
+  rejectArgs(args, CONNECT_USAGE, { redactValues: true });
+  const credential = await readLinkCredential(deps);
+  const connection = await connectClient({
+    serverUrl: `http://127.0.0.1:${rawPort}`,
+    managementUrl: `http://127.0.0.1:${rawPort}`,
+    credential: { kind: "link", ...credential },
+    selectedClients: clients,
+    managementTransport: "direct",
+    transport: "link",
+    link: { tunnelPort: rawPort, linkId },
+    noSync,
+    ...(catalogTimeoutSeconds === undefined ? {} : { catalogTimeoutMs: catalogTimeoutSeconds * 1_000 }),
+  }, {
+    fetchImpl: deps.fetchImpl,
+    lifecycleLockDeps: deps.lifecycleLockDeps,
+    catalogCompatibility: catalogObserver(deps.catalogProbeDeps),
+  }).catch((error: unknown) => {
+    throw terminalSafeError(error);
+  });
+  const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
+  const report = connectCompletionReport(connection, clients, readiness);
+  for (const line of report.lines) console.log(line);
+  if (report.failure) throw new Error(report.failure);
+}
+
+async function runConnect(argv: string[], deps: ClientCommandDeps): Promise<void> {
+  const args = [...argv];
+  if (takeFlag(args, "--link")) {
+    await runLinkConnect(args, deps);
+    return;
+  }
+  await runHubConnect(argv, deps);
+}
+
 async function runRevoke(argv: string[], deps: ClientCommandDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -408,15 +508,33 @@ export async function handleConnectCommand(argv: string[], deps: ClientCommandDe
   });
 }
 
-export async function handleDisconnectCommand(argv: string[], deps: Pick<ClientCommandDeps, "lifecycleLockDeps"> = {}): Promise<number> {
+export async function handleDisconnectCommand(
+  argv: string[],
+  deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> = {},
+): Promise<number> {
   return runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
+    const teardown = await teardownClientLink({
+      readSidecar: readClientLinkState,
+      connectedLinkId: () => {
+        const state = readClientConnectionState();
+        return state.kind === "connected" && state.value.transport === "link"
+          ? state.value.link?.linkId ?? null
+          : null;
+      },
+      reapOrphanTunnel: deps.linkTeardownDeps?.reapOrphanTunnel ?? (() => reapOrphanTunnel()),
+      runner: deps.linkTeardownDeps?.runner ?? createSshRunner(),
+      knownHostsFile: deps.linkTeardownDeps?.knownHostsFile ?? linkKnownHostsPath(),
+      timeoutMs: deps.linkTeardownDeps?.timeoutMs,
+    });
     const result = await disconnectClient({ keepCatalog }, deps);
     const payload = {
       ...result,
+      homeRevoke: teardown.homeRevoke,
+      tunnel: teardown.tunnel,
       revoke: {
         apiKeyId: result.apiKeyId,
         location: "Integrations → API Keys",
@@ -427,7 +545,13 @@ export async function handleDisconnectCommand(argv: string[], deps: Pick<ClientC
       ...(result.desktopRestoration === "standard_fallback"
         ? ["Previous Desktop settings were not recorded; the managed profile was switched to standard mode."] : []),
       ...(result.restartRequired ? ["Fully quit and reopen Claude Desktop; local cleanup cannot revoke an in-memory credential."] : []),
-      `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
+      ...(teardown.homeRevoke === "failed" && teardown.linkId
+        ? [`Home revoke failed; run ocx link revoke --link-id ${teardown.linkId} on the home.`] : []),
+      ...(teardown.tunnel?.tunnel === "unresolved"
+        ? [`A link tunnel (pid ${teardown.tunnel.pid}) may still be running; stop it if it is.`] : []),
+      teardown.homeRevoke === "revoked"
+        ? `The home revoked link ${teardown.linkId} and its key ${result.apiKeyId}.`
+        : `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
     ]);
   });
 }

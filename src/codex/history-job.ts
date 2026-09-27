@@ -24,6 +24,7 @@ import type {
   HistoryWorkerResult,
 } from "./history-worker";
 import { currentHistoryDbBusyTimeoutMs, resolveExistingHistoryBackupPath } from "./history-provider";
+import { spawnWorker } from "../lib/worker-embed";
 import type { CodexHistoryFailureReason, CodexHistoryVerifiedNoopProof } from "./history-provider";
 import { getCodexHome, resolveCodexStateDbPath } from "./paths";
 
@@ -345,7 +346,7 @@ export async function runCodexHistoryJob(
 
   let worker: Worker;
   try {
-    worker = new Worker(new URL("./history-worker.ts", import.meta.url).href);
+    worker = spawnWorker(new URL("./history-worker.ts", import.meta.url).href, "history-worker");
   } catch (error) {
     return {
       kind: "failed",

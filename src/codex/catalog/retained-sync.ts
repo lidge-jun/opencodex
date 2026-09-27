@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, websocketsEnabled } from "../../config";
+import { initializeConfigOwnership } from "../../lib/config-ownership";
+import { getConfigDir, loadConfig, websocketsEnabled } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
 import { getCodexHome } from "../paths";
@@ -11,6 +12,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { applyNativeAccessPrograms } from "./access-programs";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
@@ -265,6 +267,7 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+/** Merge retained rows, project confirmed account metadata, and publish only changed catalog bytes. */
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -289,6 +292,8 @@ function writeRetainedCatalogSync({
     // (later syncs would otherwise overwrite it with featured-modified priorities).
     const pristine = pristineCatalogBytes(read);
     if (pristine !== null) {
+      // Initialize metadata while the root is empty; never pre-claim the hashed path.
+      initializeConfigOwnership(getConfigDir());
       publishHashedCodexCatalogBackup(permit, owningCodexHome, {
         path: catalogBackupPathFor(catalogPath),
         content: pristine,
@@ -523,6 +528,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering

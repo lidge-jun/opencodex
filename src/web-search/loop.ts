@@ -337,12 +337,20 @@ export interface WebSearchLoopDeps {
    * `retryParsed` is the exact iteration-local request the retry will be built from. The loop
    * sends a shallow copy of the outer parsed request, so a rotation that rebinds only the outer
    * object never reaches the wire. Optional so existing callers keep compiling.
+   *
+   * A rotation may cross ACCOUNTS, not just keys, and the attempt row is where an operator reads
+   * which one happened. A rotator that knows which kind it performed returns it alongside the
+   * adapter -- the same `{ adapter, recoveryKind }` shape `onCredentialError` already uses below.
    */
   on429?: (
     retryAfterHeader: string | null,
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
-  ) => ProviderAdapter | null | Promise<ProviderAdapter | null>;
+    originalResponse?: Response,
+  ) =>
+    | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
+    | null
+    | Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null>;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
@@ -562,16 +570,18 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
-      while (prepared.response.status === 429 && deps.on429) {
-        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers, iterParsed);
+      while ((prepared.response.status === 429
+        || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
+        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
+          iterParsed, prepared.response);
         if (!rotated) break;
         // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
         // it, but proceed immediately to the rotated fetch under the SAME deadline signal.
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-        adapter = rotated;
+        adapter = rotated.adapter;
         // Stall-watchdog seam between bounded retry fetches (audit 011 B3).
         yield { type: "heartbeat" };
-        prepared = await fetchOnce(adapter, "key-429");
+        prepared = await fetchOnce(adapter, rotated.recoveryKind);
       }
 
       // Final headers have arrived. Clear only the deadline timer before ANY body read.

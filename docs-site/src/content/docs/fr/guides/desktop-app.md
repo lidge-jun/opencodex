@@ -60,7 +60,13 @@ Une utilisation indisponible ou explicitement non mesurée est affichée sous la
 
 ## Mises à jour
 
-Choisissez **Check for Updates…** dans le menu pour lancer immédiatement une recherche. Les versions publiées vérifient aussi automatiquement au démarrage, puis toutes les six heures. Les mises à jour sont vérifiées avec la clé publique signée de l’outil de mise à jour du projet avant installation. Sur macOS, les mises à jour intégrées téléchargent `OpenCodex-<version>-macos.app.tar.gz` ; le DMG sert à la première installation. Le manifeste de publication n’est généré que si le secret de la clé de mise à jour est configuré ; les quatre plateformes doivent alors être signées.
+Choisissez **Check for Updates…** dans le menu pour lancer immédiatement une recherche. Les versions publiées vérifient aussi automatiquement au démarrage, puis toutes les six heures.
+
+Quand l’updater Tauri trouve une version plus récente, un point bleu apparaît sur l’icône de la barre de menus macOS ou sur l’icône de la zone de notification Windows/Linux si un hôte de tray est disponible. Le tableau de bord intégré affiche le même signal. Un navigateur ordinaire connecté au même proxy affiche toujours l’état de mise à jour du paquet proxy. Si le shell cesse de signaler son état pendant environ trois minutes, le badge intégré devient unknown jusqu’à la reconnexion. Le point indique la disponibilité ; l’installation reste une action explicite.
+
+Dans l’application de bureau, le bouton de mise à jour du tableau de bord ouvre la page de mise à jour de l’application. Vous pouvez y vérifier à nouveau, installer une mise à jour signée en attente ou revenir au tableau de bord. La même installation est disponible dans le menu de la zone de notification. En cas d’échec, la mise à jour reste disponible pour une nouvelle tentative. Cette page fonctionne aussi sous Linux lorsque le bureau n’a pas d’icône de tray. Un tableau de bord ouvert dans un navigateur gère à la place l’installation du paquet sur ce proxy.
+
+Les mises à jour sont vérifiées avec la clé publique signée de l’outil de mise à jour du projet avant installation. Sur macOS, les mises à jour intégrées téléchargent `OpenCodex-<version>-macos.app.tar.gz` ; le DMG sert à la première installation. Le manifeste de publication n’est généré que si le secret de la clé de mise à jour est configuré ; les quatre plateformes doivent alors être signées.
 
 ## Widget
 

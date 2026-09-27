@@ -14,6 +14,7 @@ import type { Root } from "react-dom/client";
 import { DetailPanel } from "../src/components/combo-workspace-detail-panel";
 import { LanguageProvider } from "../src/i18n/provider";
 import { emptyDraft } from "../src/combo-workspace-data";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -118,6 +119,67 @@ test("roving tabindex keeps the tablist to one tab stop", async () => {
     expect(inOrder[0]!.id).toBe("cws-detail-tab-about");
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+test("an existing JEV combo exposes a lazy Stats tab", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL) => {
+      requests.push(String(input));
+      return Response.json({
+        range: "30d", comboId: "jev-auto", generatedAt: 1,
+        summary: {
+          decisions: 0, appliedDecisions: 0, failOpenDecisions: 0, successfulRequests: 0,
+          requestsWithModelFallback: 0, modelAttempts: 0, measuredModelAttempts: 0,
+          modelInputTokens: 0, modelOutputTokens: 0, modelReasoningTokens: 0,
+          modelCacheReadTokens: 0, modelCacheWriteTokens: 0, modelTotalTokens: 0,
+          decisionUsageReported: 0, decisionInputTokens: 0, decisionOutputTokens: 0,
+          decisionTotalTokens: 0, averageLatencyMs: null, averageConfidence: null,
+          averageChosenProbability: null,
+        },
+        gates: [], models: [], historyTruncated: false, entriesTruncated: false,
+      });
+    },
+  });
+  clearClientResourceStoresForTests();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(
+        <LanguageProvider>
+          <DetailPanel
+            baseline={{ ...emptyDraft("jev-auto"), strategy: "jev" }}
+            otherIds={[]}
+            otherAliases={[]}
+            providerMap={{}}
+            providerQuotaStates={{}}
+            providers={[]}
+            models={[]}
+            apiBase=""
+            onSaved={() => {}}
+            onSave={async () => ({ ok: true })}
+            onDirtyChange={() => {}}
+          />
+        </LanguageProvider>,
+      );
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(tabs(container).map(tab => tab.textContent?.trim())).toEqual(["Config", "Stats", "About"]);
+    expect(requests).toHaveLength(0);
+    await act(async () => { container.querySelector<HTMLButtonElement>("#cws-detail-tab-stats")!.click(); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain("comboId=jev-auto");
+  } finally {
+    await act(async () => root.unmount());
+    clearClientResourceStoresForTests();
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
   }
 });
 

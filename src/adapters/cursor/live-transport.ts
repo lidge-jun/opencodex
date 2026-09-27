@@ -1,3 +1,4 @@
+import { CursorForegroundShellOwner } from "./native-foreground-shell";
 import http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type OcxProviderConfig, type OcxUsage } from "../../types";
@@ -531,6 +532,8 @@ class LiveCursorTransport implements CursorTransport {
   private mcpPrepared?: Promise<void>;
   private releaseMcpObservation?: () => void;
   private blobRequestScope?: CursorBlobRequestScopeToken;
+  private readonly foregroundShellOwner = new CursorForegroundShellOwner();
+  private requestSignal?: AbortSignal;
   private shellCleanup?: Promise<BackgroundShellTerminationReport>;
   // Per-turn diagnostic counters/timestamps when provider debug is on (`ocx debug provider on`). Stamped in open(), cleared on
   // close; safe to read after a stream failure because open() owns the only writer before run().
@@ -610,6 +613,7 @@ class LiveCursorTransport implements CursorTransport {
   }
 
   async *run(request: CursorRunRequest, signal?: AbortSignal): AsyncIterable<CursorServerMessage> {
+    this.requestSignal = signal;
     const queue: Array<{ message: CursorServerMessage; bytes: number }> = [];
     let notify: (() => void) | undefined;
     let done = false;
@@ -947,10 +951,14 @@ class LiveCursorTransport implements CursorTransport {
   }
 
   private startShellCleanup(): Promise<BackgroundShellTerminationReport> {
-    return this.shellCleanup ??= terminateBackgroundShellsForSession(this.shellOwnerId);
+    return this.shellCleanup ??= Promise.all([
+      terminateBackgroundShellsForSession(this.shellOwnerId),
+      this.foregroundShellOwner.close(),
+    ]).then(([backgroundReport]) => backgroundReport);
   }
 
   async close(): Promise<void> {
+    const shellCleanup = this.startShellCleanup();
     if (this.heartbeat) clearInterval(this.heartbeat);
     if (this.turnEndedCloseTimer) clearTimeout(this.turnEndedCloseTimer);
     this.clearPendingFinalize();
@@ -963,10 +971,11 @@ class LiveCursorTransport implements CursorTransport {
     this.releaseMcpObservation?.();
     this.releaseMcpObservation = undefined;
     void this.mcpManager?.dispose();
-    await this.startShellCleanup();
+    await shellCleanup;
   }
 
   private cancelCursorRun(): void {
+    void this.startShellCleanup();
     this.expectedClose = true;
     this.clearPendingFinalize();
     if (this.heartbeat) clearInterval(this.heartbeat);
@@ -1164,6 +1173,7 @@ class LiveCursorTransport implements CursorTransport {
       fail,
       finish,
       clearTimer: () => {
+        void this.startShellCleanup();
         this.clearFirstFrameTimer();
         this.clearStreamHealthTimer();
       },
@@ -1403,6 +1413,8 @@ class LiveCursorTransport implements CursorTransport {
       failAndClear(realErr);
     };
     const onStreamEnd = () => {
+      // Native frameWork can be awaiting a shell; cancel before waiting for it to drain.
+      void this.startShellCleanup();
       this.clearFirstFrameTimer();
       debugProviderDiagnostic("cursor", "stream-end", {
         committed: this.committed,
@@ -1496,6 +1508,7 @@ class LiveCursorTransport implements CursorTransport {
       stream!.on("trailers", onTrailers);
       stream!.on("error", onStreamError);
       stream!.on("end", onStreamEnd);
+      stream!.on("close", () => { void this.startShellCleanup(); });
     }
 
     signal?.addEventListener("abort", () => {
@@ -1569,7 +1582,9 @@ class LiveCursorTransport implements CursorTransport {
       // an eventual invalid_argument cannot cause the adapter's fresh-conversation fallback to
       // run the same local action twice.
       push({ type: "local_side_effect" });
-      const replies = await handleCursorNativeExec(message.message.value, this.execContext);
+      const replies = await handleCursorNativeExec(message.message.value, {
+        ...this.execContext, foregroundShellOwner: this.foregroundShellOwner, signal: this.requestSignal,
+      });
       for (const reply of replies) this.writeConnectFrame(encodeConnectFrame(reply));
       return;
     }

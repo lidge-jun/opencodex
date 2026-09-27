@@ -8,6 +8,16 @@ promise is reversibility: apply snapshots first, writes atomically, records exac
 and refuses refresh, disable, or restore when the current file cannot be classified safely.
 Managed client targets are inspected without following a final symbolic link, and their atomic
 replacement addresses the named directory entry rather than resolving that link again at commit.
+Uninstall runs the same coordinated disable path for every strict ownership record before removing
+OpenCodex state, including the legacy Aside owner and every child profile store under
+`integrations/aside-profiles/<profileId>/`. `src/cli/uninstall-integrations.ts` validates all stores
+and registered Aside paths before mutation; `src/integrations/aside-profile-context.ts` supplies
+the guarded child stores. An unreadable record, conflict, or failed compensation aborts config
+removal and retains remaining recovery state. Earlier successful disables are not rolled back;
+failed compensation can leave an intermediate client file. Inspect the reported client files and
+retained snapshots before retrying; preserved recovery state does not prove restoration completed.
+
+> Decision record: [ADR-0107](../decisions/ADR-0107-uninstall-integration-recovery.md)
 
 Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
@@ -133,6 +143,9 @@ fan-out loads the filtered roster lazily once, leaves unowned clients alone, and
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
 rather than joining a write of a different catalog and reporting false success.
+On a sibling instance ([Codex home](../codex-home.md#codex-home)) `src/integrations/catalog-refresh.ts`
+and `syncEnabledClientIntegrations` in `src/server/management/config-routes.ts` refresh nothing: the
+client files name the live owner's port, and a refresh from the sibling would re-point them at its own.
 
 ## Fast model selectors
 
@@ -145,6 +158,14 @@ False or missing metadata never causes local inference, so old or disabled remot
 authoritative. Existing client configs receive the entries on export or managed refresh. A Dashboard
 save refreshes enabled native clients and already-owned file integrations when the running proxy port
 is available; otherwise the operator refreshes the integration or client catalog explicitly.
+
+## Model output limits
+
+OpenCode, Pi-family clients, OMP and Gajae export the explicit model `maxTokens` when valid (a catalog
+row's `maxOutputTokens`, carried by `toExportModel` in `src/server/management/model-rows.ts` and by
+`opencodeCatalogFromProxyRows` in `src/cli/opencode.ts`), otherwise the generated metadata limit for the provider and model ID (including provider aliases).
+Only unknown limits fall back to 32000. Every output limit is clamped to the authoritative
+context window; absent context still omits both limits. Fast rows preserve these limits.
 
 ## Model input capability exports
 

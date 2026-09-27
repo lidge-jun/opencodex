@@ -635,7 +635,22 @@ describe("GitHub Actions hardening", () => {
     expect(targetFreeness?.env?.INTENDED).toBe("${{ steps.target.outputs.version }}");
     expect(targetFreeness?.run).toContain("git fetch --force --tags origin");
     expect(targetFreeness?.run).toContain('npm view "@bitkyc08/opencodex@${INTENDED#v}" version');
-    expect(chosenFreeness?.run).toBe("bun test tests/ci-workflows/release-version-line.test.ts");
+    // The chosen version must fail on its own tag, not on the shared detector's
+    // release-commit exception. This job's HEAD is the workflow's main checkout while
+    // only package.json came from dev, so "the tag names HEAD" would wrongly allow a
+    // version that is already released. The explicit tag check must run before the
+    // detector sees the copied metadata.
+    expect(chosenFreeness?.env?.NEXT_VERSION).toBe("${{ steps.decide.outputs.version }}");
+    expect(chosenFreeness?.run).toContain('git rev-parse -q --verify "refs/tags/v${NEXT_VERSION#v}"');
+    expect(chosenFreeness?.run).toContain("git fetch --force --tags origin");
+    const tagCheck = chosenFreeness?.run?.indexOf('refs/tags/v${NEXT_VERSION#v}') ?? -1;
+    expect(tagCheck).toBeGreaterThanOrEqual(0);
+    expect(tagCheck).toBeLessThan(chosenFreeness?.run?.indexOf("cp dev-tree/package.json package.json") ?? -1);
+    // The trusted detector still runs against the bumped metadata copied out of the dev
+    // tree: the tag check proves the candidate's own tag is absent, the detector proves
+    // it is not behind any higher release tag.
+    expect(chosenFreeness?.run).toContain("cp dev-tree/package.json package.json");
+    expect(chosenFreeness?.run).toContain("bun test tests/ci-workflows/release-version-line.test.ts");
     expect(openPr?.env).toMatchObject({
       MODE: "${{ steps.target.outputs.mode }}",
       TARGET_VERSION: "${{ steps.target.outputs.version }}",
@@ -754,6 +769,33 @@ describe("GitHub Actions hardening", () => {
       .toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // The post-release bump has write authority, but dev is a mutable integration
+    // branch rather than the audited release input. Executable automation must stay
+    // on the exact caller SHA, and checkout credentials must remain absent until the
+    // final trusted push invocation.
+    const bumpWorkflow = await readText(".github/workflows/dev-version-bump.yml");
+    expect(bumpWorkflow).toContain("- name: Checkout trusted automation");
+    expect(bumpWorkflow).toContain("ref: ${{ github.sha }}");
+    expect(bumpWorkflow).toContain("- name: Checkout dev as data");
+    expect(bumpWorkflow).toContain("path: dev-tree");
+    expect(count(bumpWorkflow, "persist-credentials: false")).toBe(2);
+    expect(bumpWorkflow).toContain(
+      'bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" dev-tree/package.json',
+    );
+    expect(bumpWorkflow).toContain("cp dev-tree/package.json package.json");
+    expect(bumpWorkflow).toContain("working-directory: dev-tree");
+    // The credentialed push must be one command: a trailing line break runs
+    // `git -c` alone (usage, nonzero) and `push origin` as a bare shell word,
+    // so the branch never reaches the remote under `set -euo pipefail`.
+    expect(bumpWorkflow).toContain(
+      'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin "${branch}"',
+    );
+    // Version-source checks run from the trusted checkout against the dev tree;
+    // executing inside dev-tree would let mutable input steer the runtime, and
+    // GH_TOKEN is dropped for the check so the token outlives only the push.
+    expect(count(bumpWorkflow, 'env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree')).toBe(2);
+    expect(bumpWorkflow).not.toContain("bun ../scripts/release-version-sources.ts");
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).

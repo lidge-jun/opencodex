@@ -352,10 +352,10 @@ describe("cold persisted policy percentage ranges", () => {
     });
   }
 
-  test("valid short zero keeps priority over weekly99 after hydration", () => {
+  test("valid short zero cannot release a weekly99 block after hydration", () => {
     const disk = writeColdPolicy({ weeklyPercent: 99, shortPercent: 0 });
     expect(getMainPolicyQuota()).toEqual(disk);
-    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   });
 
   test("rejected short usage retains independently valid unknown-window metadata", () => {
@@ -363,7 +363,8 @@ describe("cold persisted policy percentage ranges", () => {
       shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, shortObservedAt: 1_700_000_000_000, resetCredits: 150 });
     expect(getMainPolicyQuota()).toEqual({ updatedAt: disk.updatedAt, weeklyPercent: 99,
       shortWindowSeconds: 18_000, shortResetAt: 2_000_000_000, shortObservedAt: 1_700_000_000_000, resetCredits: 150 });
-    expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "unknown" });
+    // The rejected 5h reading is unknown, but it cannot mask the valid weekly99 block.
+    expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "blocked" });
   });
 
   test.each([0, 150, 2_000_000_000])("metadata and credits retain nonnegative %s independently of usage ranges", value => {

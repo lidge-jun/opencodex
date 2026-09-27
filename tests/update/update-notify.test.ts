@@ -9,6 +9,7 @@ import {
   isSourceBuildVersion,
   readVersionCache,
   writeVersionCache,
+  writeFreshVersionCache,
   type VersionCache,
 } from "../../src/update/notify";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -90,6 +91,18 @@ describe("version cache I/O", () => {
     expect(readVersionCache("preview")).toBeNull();
   });
 
+  test("fresh write preserves dismissal only for the same version and channel", () => {
+    writeVersionCache({ ...base, dismissed_version: "2.7.0" });
+    writeFreshVersionCache("latest", "2.7.0", Date.parse("2026-09-24T00:00:00Z"));
+    expect(readVersionCache("latest")?.dismissed_version).toBe("2.7.0");
+    expect(readVersionCache("latest")?.last_checked_at).toBe("2026-09-24T00:00:00.000Z");
+    writeFreshVersionCache("latest", "2.7.1");
+    expect(readVersionCache("latest")?.dismissed_version).toBeUndefined();
+    writeVersionCache({ ...base, dismissed_version: "2.7.0" });
+    writeFreshVersionCache("preview", "2.7.0-preview.1");
+    expect(readVersionCache("preview")?.dismissed_version).toBeUndefined();
+  });
+
   test("missing cache reads as null", () => {
     expect(readVersionCache("latest")).toBeNull();
   });
@@ -123,6 +136,14 @@ describe("getUpgradeVersionForPopup", () => {
 describe("cli wiring", () => {
   const root = pathToFileURL(repoRoot() + "/");
   const readText = (p: string) => Bun.file(new URL(p, root)).text();
+
+  test("pre-bind prompt reads cache without launching a second refresh", async () => {
+    const source = await readText("src/update/notify.ts");
+    const body = source.split("export async function maybeShowUpdatePrompt(): Promise<void> {")[1];
+    expect(body).toBeDefined();
+    expect(body).toContain("readVersionCache(channel)");
+    expect(body).not.toContain("triggerBackgroundRefreshIfStale(channel, cache)");
+  });
 
   test("update prompt runs before the server binds a port", async () => {
     const cli = await readText("src/cli/index.ts");

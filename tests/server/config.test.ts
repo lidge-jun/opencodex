@@ -1156,6 +1156,7 @@ describe("opencodex config defaults", () => {
       model: "gpt-5.6-sol",
       timeoutMs: 45_000,
       cacheEntries: 200,
+      retries: 2,
     };
     writeConfig({ ...base, agentTaskRecovery: recovery });
     expect(loadConfig()).toMatchObject({ ...base, agentTaskRecovery: recovery });
@@ -1172,6 +1173,9 @@ describe("opencodex config defaults", () => {
       { enabled: true, timeoutMs: 120_001 },
       { enabled: true, cacheEntries: 0 },
       { enabled: true, cacheEntries: 513 },
+      { enabled: true, retries: -1 },
+      { enabled: true, retries: 3 },
+      { enabled: true, retries: 1.5 },
       { enabled: true, url: "https://attacker.example/responses" },
     ]) {
       writeConfig({ ...base, agentTaskRecovery: invalid });

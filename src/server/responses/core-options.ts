@@ -1,5 +1,7 @@
 import type { NativeResponseControl } from "./native-response-control";
-import type { OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { RouteResult } from "../../router";
+import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
@@ -16,12 +18,15 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
+import type { AccountLease } from "../../oauth/kiro-account-load";
 
 export interface ConsumedComboFailure {
   response: Response;
   classificationText: string;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /** Complete structured provider type, retained for conservative recovery classification. */
+  upstreamType?: string;
   /** Valid numeric/date value used only for cooldown calculation. */
   retryAfter?: string;
   /** Upstream Codex quota-window reset timestamps used for combo cooldowns. */
@@ -39,7 +44,29 @@ export interface ConsumedComboFailure {
 
 
 
+/**
+ * Direct client encoding for a translated Chat or Messages turn (PF-09). `model` is the model
+ * string the client asked for, which every client frame carries; `inputTokenFloor` is the
+ * Messages prompt estimate `message_start` reports when no usage arrived first (#4857).
+ */
+export interface ClientEncoderOption {
+  protocol: "chat" | "messages";
+  stream: boolean;
+  model: string;
+  inputTokenFloor?: number;
+}
+
 export interface HandleResponsesOptions {
+  /** Internal routed-compaction recovery: one logical request, one emergency target. */
+  compactionRecoveryAttempted?: boolean;
+  compactionRecoveryPermit?: SingleUseDispatchPermit;
+  compactionRecoveryKind?: "compaction-v1" | "compaction-v2";
+  onCompactionRecoveryRoute?: (route: RouteResult) => void;
+  onCompactionRecoveryAdapterEvent?: (event: AdapterEvent) => void;
+  /** Physical-send reports already delivered to the shared used setter, including booking settlement. */
+  onCompactionRecoverySendsReported?: (count: number) => void;
+  /** Private holder for the Kiro serving-account lease. */
+  accountLoad?: { lease: AccountLease | null };
   /** Internal Claude replay identity; consumed only by the final canonical Go transport. */
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */
@@ -94,6 +121,8 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
+  protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
   /**
@@ -147,6 +176,14 @@ export interface HandleResponsesOptions {
    * rebuilds headers and carries the fact through this flag.
    */
   visionDescribeTerminal?: boolean;
+  /**
+   * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
+   * the settled route is one non-Responses target. Adapter delivery then encodes the adapter
+   * events straight into the client's wire and returns a response marked with `markClientWire`.
+   * Passthrough, run-turn adapters, combo children and compaction turns ignore it and keep
+   * returning a Responses body, which the ingress converts as before.
+   */
+  clientEncoder?: ClientEncoderOption;
 }
 
 /** Values shared by the call, not a bag of mutable pipeline state. */

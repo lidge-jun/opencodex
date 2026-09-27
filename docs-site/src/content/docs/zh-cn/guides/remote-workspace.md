@@ -3,6 +3,8 @@ title: Remote Workspace
 description: 将 Codex、Claude Code、Pi 及其登录保留在同一个 OCX Hub，让仅安装 OCX 的计算机提供工作区和构建环境。
 ---
 
+有关 SSH 机器链接，请参阅[远程链接](/zh-cn/guides/remote-link/)。
+
 Remote Workspace 让一台 OpenCodex Hub 运行编程代理，由另一台计算机提供项目文件、命令、测试和构建算力。手机或第三台计算机可通过 Hub 仪表盘控制会话。
 
 ```text

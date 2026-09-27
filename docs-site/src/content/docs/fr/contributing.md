@@ -12,15 +12,15 @@ runtime Bun aux utilisateurs, mais les scripts de ce dépôt utilisent votre ins
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run setup:hooks  # installer post-merge et retirer l’ancien pre-push géré
+bun run setup:hooks  # retirer les anciens hooks gérés pre-push et post-merge
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
 bun run test        # suite complète (par défaut)
 ```
 
-`bun run setup:hooks` installe uniquement `post-merge` et supprime l’ancien hook `pre-push`
-géré s’il n’a pas été modifié, tout en préservant les hooks personnalisés. Le hook `pre-push`
+`bun run setup:hooks` supprime les anciens hooks gérés `pre-push` et `post-merge` non modifiés,
+tout en préservant les hooks personnalisés. Le hook `pre-push`
 n’est plus obligatoire. `bun run prepush` reste une vérification manuelle facultative.
 
 `bun run dev` reste un alias pour `bun run dev:proxy`. Le serveur de développement du tableau de bord est `bun run dev:gui` ;

@@ -169,8 +169,8 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
 | `GET /api/diagnostics/project-config` |キャッシュされたプロジェクト設定の読み取りに関する警告 | — |
 | `POST /api/sync` |現在のモデル カタログを Codex に同期する | 500 回の同期に失敗しました |
-| `GET /api/update/check` | `latest` または `preview` 更新チャネルを確認してください。 400 無効なタグ |
-| `POST /api/update/run` |更新ジョブを開始し、必要に応じて再起動します。 400 無効な本文。ジョブ固有の競合/エラーのステータス |
+| `GET /api/update/check` | `latest` または `preview` のパッケージ更新を非同期で確認し、成功時にキャッシュを更新する | 400 無効なタグ |
+| `POST /api/update/run` | 新しいパッケージ版を非同期で確認してから更新ジョブを開始し、必要に応じて再起動する | 400 無効な本文。ジョブ固有の競合/エラーのステータス |
 | `GET /api/update/status` | ID によって更新ジョブをポーリングする | 404 不明なジョブ |
 | `GET, PUT /api/sidecar-settings` | Web 検索およびビジョンのサイドカー モデル/バックエンド設定の読み取りまたは更新 | 400 無効な形状、バックエンド、または制限 |
 | `GET, PUT /api/shadow-call-settings` |シャドウ コール インターセプト設定の読み取りまたは更新 | 400 無効な形状または値 |
@@ -190,8 +190,8 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET /api/debug/usage-logs` |制限された使用法デバッグ エントリを読み取る | — |
 | `GET /api/debug/injection-logs` |制限付きガイダンス挿入デバッグ エントリを読み取る | — |
 | `GET /api/claude/inbound-debug` | Claude インバウンドのデバッグ状態とエントリを読む | — |
-| `GET /api/usage` |範囲とクライアント サーフェスごとの使用状況を要約する |ストレージを読み取れない場合は、`error: "read_failed"` 概要を返します。
-| `GET /api/metrics` | 論理リクエスト、物理送信、復旧種別、所要時間、TTFT のプロセスローカル Prometheus テキストメトリクスを返します。ラベルはプロトコル、結果、復旧クラスの閉じた集合のみで、リクエストや認証情報の識別子は出力しません。 | 起動時に `metricsExport.enabled` が true でなければ 404。通常の管理認証が必要で、データプレーン認証情報ではアクセスできません。 |
+| `GET /api/usage` |範囲とクライアント サーフェスごとの使用状況を要約する |ストレージを読み取れない場合は 500 `{ "error": "read_failed" }` を返します。
+| `GET /api/metrics` | 論理リクエスト、物理送信、復旧種別、所要時間、TTFT のプロセスローカル Prometheus テキストメトリクスを返します。リクエストメトリクスのラベルは閉じた集合を使い、Kiro ゲージには上限付きの不透明なアカウントラベルのみを追加し、リクエストや認証情報の識別子は出力しません。 Kiro の 4 つのクォータゲージ (`opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}`) はキャッシュのみを読み、最大 32 個の不透明なアカウントラベルを使います。収集時にネットワーク照会は行いません。 | 起動時に `metricsExport.enabled` が true でなければ 404。通常の管理認証が必要で、データプレーン認証情報ではアクセスできません。 |
 | `GET /api/storage` |バケットごとの Codex ストレージ使用量をスキャン |スキャン失敗時に `error: "scan_failed"` ペイロードを返します。
 | `POST /api/storage/cleanup/preview` |アーカイブされたセッションのクリーンアップをプレビューし、バインディング ダイジェストを返します。 400 `invalid_json` または `invalid_percent` |
 | `POST /api/storage/cleanup` |プレビューされたアーカイブ セットを隔離または完全に削除します。 400 無効な入力。 409 古い/ビジー/参照状態。 500 ファイルシステム/データベース障害 |
@@ -240,7 +240,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `POST /api/oauth/login/cancel` |進行中のパブリック OAuth フローをキャンセルする | 400 不明なプロバイダー |
 | `GET /api/oauth/status` | 1 つのプロバイダーの OAuth フローをポーリングする | 400 不明なプロバイダー |
 | `POST /api/oauth/logout` |選択したプロバイダー資格情報を削除します | 400 不明なプロバイダー。 `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` |マスクされたアカウントを一覧表示するか、アカウントを 1 つ削除する | 400 無効なプロバイダー/ID。 404 アカウントがありません。 `oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | マスクされたアカウントを一覧表示するか、アカウントを 1 つ削除する Kiro の行には自動選択の `autoSelectable` と、除外時には閉じた集合の `skipReason` が含まれます。アクティブな単一アカウントは送信を続けられ、クォータ取得は任意です。 | 400 無効なプロバイダー/ID。 404 アカウントがありません。 `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` |アクティブな OAuth アカウントを選択します | 400 無効なプロバイダー/アカウント。 `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth プール ポリシーの読み取りまたは更新 | 400 非 Anthropic プロバイダーまたは無効なポリシー |
 | `POST /api/oauth/accounts/clear-cooldown` | 1 つの OAuth アカウントのランタイム クールダウンをクリアする | 400 無効なプロバイダー/アカウント |
@@ -283,7 +283,12 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | --- | --- | --- |
 | `GET /api/github/star` |ユーザーの `gh` セッションを通じてリポジトリのスター ステータスを読み取ります。ステータス固有の固定結果コード |
 | `POST /api/github/star` |認証された人間のアクションからのみリポジトリにスターを付けます。 403 `agent_consent_required` ダッシュボード セッションの証拠がないエージェント主導の発信者向け |
-| `GET /api/update/badge` |安価なサイドバーの更新バッジの状態を読む | — |
+| `GET /api/update/badge` | レジストリに問い合わせずにキャッシュ済みパッケージのバッジを読む。キャッシュがない、チャネルが違う、または40時間以上古い場合は `unknown: true`。`surface=desktop&session=<id>` はそのデスクトップアプリのセッションだけを読む。 | 400 無効な surface。デスクトップセッションがない、または期限切れの場合は `unknown: true` |
+| `POST /api/update/desktop-snapshot` | デスクトップシェルが紐付けられたプロキシクライアント経由で Tauri updater の表示状態を送信する | `Origin` ヘッダーがある場合、または生の `admin-token` principal 以外は403。フィールドが無効なら400。1 KiB超は413 |
+
+デスクトップ snapshot は一時的な表示状態であり、インストール要求ではありません。プロキシはメモリ内に最大32セッションを保持し、最後の heartbeat から180秒で期限切れにします。surface=desktop を指定しない通常のブラウザは引き続きパッケージのバッジを読みます。
+
+対象のパッケージでは、起動後にキャッシュがないか20時間以上古い場合に確認し、その後は毎時鮮度を確認します。`OCX_DISABLE_UPDATE_CHECK=1` は自動確認だけを無効にします。明示的な確認と更新要求は引き続き使えます。
 
 :::caution
 管理認証はプロキシへのアクセスを証明します。ユーザーの ID を使用することに同意したことを証明するものではありません。エージェントは `agent_consent_required` を迂回してルーティングしてはなりません。ユーザーはリポジトリにスターを付けるかどうかを選択する必要があります。

@@ -169,7 +169,7 @@ Combo 失敗分為**跳轉**失敗與**終端**失敗。
 | 由行程內轉接器（`runTurn`）執行的 Responses 回合中，目前請求未宣告的第一個工具呼叫（在任何輸出與不可重播的副作用之前） | 讓該目標進入冷卻，並以相同的工具目錄跳轉到下一個目標。出現可見輸出或不可重播的副作用之後，拒絕即為最終結果。Chat Completions 與 Anthropic Messages 請求不受影響。 |
 | 任何其他未分類錯誤 | 停止並回傳錯誤。 |
 
-跳轉的目標預設進入 60 秒冷卻。若上游回應包含有效的 `Retry-After` 值，opencodex 改用它。接受數字秒與 HTTP-date 值。明確的上游 `Retry-After` 最長為 24 小時；重設推導、設定與預設冷卻最長為 10 分鐘。
+跳轉的目標在沒有設定 `cooldownMs` 時使用上游回退冷卻：請求速率限制代碼 `1302`/`1305` 為 5 秒，用量額度耗盡（不論 HTTP 狀態，包括 502）或憑證/計費失敗為 10 分鐘，其他情況為 60 秒。若上游回應包含有效的 `Retry-After` 值，opencodex 改用它；Codex 重設標頭與設定的 `cooldownMs` 優先於這些回退值。接受數字秒與 HTTP-date 值。明確的上游 `Retry-After` 最長為 24 小時；重設推導、設定與回退冷卻最長為 10 分鐘。
 
 目前請求永不重試同一已嘗試目標。後續請求會略過它直到冷卻到期。若無合格目標剩餘，代理回傳 HTTP 503 並帶 `error.code = "combo_unavailable"`。
 
@@ -270,7 +270,7 @@ Combo 儲存於頂層 `combos` 物件中，以 combo id 為 key：
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 已設定 `{ provider, model, weight? }` 目標的非空有序陣列。重複的供應商/模型對會被拒絕。 |
 | `targets[].weight` | 否 | `1` | 1 到 10,000 的整數。由 `round-robin` 與 `random` 使用；`failover`、`least-used` 與 `reset-window` 忽略。 |
-| `strategy` | 否 | `"failover"` | 可用值為 `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`。 |
+| `strategy` | 否 | `"failover"` | 可用值為 `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`、`"jev"`。JEV 只決定第一個符合條件的目標與 effort；後續嘗試由一般 Combo fallback 處理。 |
 | `stickyLimit` | 否 | `1` | 僅適用於 `round-robin`：每次選擇的成功請求數，1 到 100 的整數。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；僅在呼叫者省略 effort 且目標宣告支援時套用。 |
 | `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；選擇混合能力交集及目標層級控制正規化。 |
@@ -284,7 +284,7 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 
 ### 為什麼我得到 `combo_unavailable`？
 
-每個目標目前都不合格：例如其供應商已停用、冷卻中、已為此請求嘗試過，或加密 v2 任務排除它。檢查目標供應商狀態與近期上游錯誤。對於冷卻，等待 60 秒預設或上游 `Retry-After` 期間（明確的上游 `Retry-After` 最長 24 小時，其他冷卻最長 10 分鐘），然後重試。
+每個目標目前都不合格：例如其供應商已停用、冷卻中、已為此請求嘗試過，或加密 v2 任務排除它。檢查目標供應商狀態與近期上游錯誤。對於冷卻，先遵循觀察到的 `Retry-After` 值，再依序遵循 Codex 重設標頭與設定的 `cooldownMs`；兩者皆無則套用上游回退值（請求速率代碼 `1302`/`1305` 為 5 秒，用量額度耗盡——不論 HTTP 狀態——或憑證/計費失敗為 10 分鐘，其他情況為 60 秒）。明確的 `Retry-After` 最長 24 小時，其他冷卻最長 10 分鐘，然後重試。
 
 ### 為什麼我的別名被拒絕？
 

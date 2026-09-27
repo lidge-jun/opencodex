@@ -16,6 +16,7 @@ import {
   chatgptPublicEndpointHint,
   collectWslDualInstall,
   fetchServiceMemory,
+  formatResponseSpillLines,
   formatResponseTempLines,
   formatServiceMemoryLines,
   parseProcessEnvBlock,
@@ -819,6 +820,86 @@ describe("doctor abandoned response-state temps", () => {
     const lines = formatResponseTempLines(result({ removed: 1, failed: 2 }), true).join("\n");
     expect(lines).not.toContain("retried automatically");
     expect(lines).toContain("re-run this command");
+  });
+});
+
+describe("doctor response-state spill report", () => {
+  const result = (over: Partial<Parameters<typeof formatResponseSpillLines>[0]> = {}) => ({
+    scanned: 0, truncated: false, files: 0, bytes: 0,
+    ownedFiles: 0, ownedBytes: 0, orphanFiles: 0, orphanBytes: 0, ...over,
+  });
+
+  test("a clean directory says so", () => {
+    expect(formatResponseSpillLines(result({ files: 5, bytes: 48 * 1024 * 1024 })))
+      .toEqual(["  ok  No orphaned response-state spill files (5 file(s), 48MB on disk)."]);
+  });
+
+  test("orphan candidates are reported as reclaimable, never deleted", () => {
+    const lines = formatResponseSpillLines(result({
+      files: 10, bytes: 96 * 1024 * 1024,
+      ownedFiles: 6, ownedBytes: 72 * 1024 * 1024,
+      orphanFiles: 4, orphanBytes: 24 * 1024 * 1024,
+    }));
+    expect(lines[0]).toContain("4 unreferenced response-state spill file(s)");
+    expect(lines[0]).toContain("24MB");
+    const body = lines.join("\n");
+    expect(body).toContain("6 file(s), 72MB still owned");
+    expect(body).toContain("do not delete spill files manually");
+  });
+
+  test("a truncated scan says the total is a floor", () => {
+    const lines = formatResponseSpillLines(result({
+      scanned: 4096, truncated: true, files: 4096, bytes: 512 * 1024 * 1024,
+      orphanFiles: 4000, orphanBytes: 500 * 1024 * 1024,
+    })).join("\n");
+    expect(lines).toContain("the real total is higher");
+  });
+
+  test("a truncated scan with no orphans in the prefix is not reported clean", () => {
+    const lines = formatResponseSpillLines(result({
+      scanned: 4096, truncated: true, files: 4096, bytes: 512 * 1024 * 1024,
+    }));
+    expect(lines[0]).toStartWith("  !!");
+    expect(lines[0]).toContain("in the first 4096 entries");
+    expect(lines.join("\n")).toContain("the rest of the directory was not checked");
+  });
+});
+
+describe("doctor spill report wiring (end to end)", () => {
+  // The formatter tests above cannot observe the directory. This covers the call site:
+  // runDoctor must report a seeded orphan and must never delete it.
+  let tempHome: string;
+  let previousHome: string | undefined;
+  let logged: string[];
+  const realLog = console.log;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    tempHome = join(tmpdir(), `ocx-doctor-spill-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(join(tempHome, "responses-state-spill"), { recursive: true });
+    process.env.OPENCODEX_HOME = tempHome;
+    logged = [];
+    console.log = (...parts: unknown[]) => { logged.push(parts.join(" ")); };
+  });
+  afterEach(() => {
+    console.log = realLog;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(tempHome);
+  });
+
+  test("reports an unreferenced spill file and leaves it on disk", async () => {
+    const name = `resp-dead.${"a".repeat(12)}.${"b".repeat(24)}.1.1.spill.json`;
+    const path = join(tempHome, "responses-state-spill", name);
+    writeFileSync(path, "stale spill payload");
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+    utimesSync(path, old, old);
+
+    await runDoctor([]);
+    expect(existsSync(path)).toBe(true);
+    const out = logged.join("\n");
+    expect(out).toContain("Response-state spill files");
+    expect(out).toContain("1 unreferenced response-state spill file(s)");
   });
 });
 

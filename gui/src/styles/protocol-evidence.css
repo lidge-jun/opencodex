@@ -1,0 +1,52 @@
+/* Protocol evidence views (PF-11): the provider wire panel, compatibility protocol filters,
+   combo candidate paths and the deep links between them. Kept out of styles.css, which is at
+   its file-size cap. */
+
+/* ── Provider settings: upstream wire ─────────────────────── */
+.ppp-card {
+  display: flex; flex-direction: column; gap: 10px; padding: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.ppp-card h3, .ppp-card h4 { margin: 0; color: var(--text); font-size: var(--text-control); }
+.ppp-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin: 0; }
+.ppp-kv div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ppp-kv dt { color: var(--muted); font-size: var(--text-caption); }
+.ppp-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ppp-wire { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.ppp-pending { margin: 0; color: var(--text); font-size: var(--text-caption); }
+.ppp-overrides { width: 100%; border-collapse: collapse; font-size: var(--text-label); }
+.ppp-overrides th { color: var(--muted); font-weight: 500; text-align: left; }
+.ppp-overrides th, .ppp-overrides td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.ppp-overrides code { overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .ppp-overrides thead { display: none; }
+  .ppp-overrides tr { display: grid; grid-template-columns: 1fr; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
+  .ppp-overrides td { padding: 2px 0; border-bottom: 0; }
+}
+
+/* ── Compatibility matrix: protocol pair filter ───────────── */
+.lab-protocol-status { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.lab-protocol-status p { margin: 0; }
+.lab-protocol-unverified {
+  padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius-xs);
+  color: var(--text); font-size: var(--text-label);
+}
+
+/* ── Deep links between protocol views ────────────────────── */
+.protocol-deep-link { align-self: flex-start; margin-top: 6px; }
+.protocol-plan-links { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Combo detail: candidate paths ────────────────────────── */
+.combo-protocol-plan { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.combo-protocol-plan p { margin: 0; }
+
+/* Logs row badge: the model column is narrow, so a long path wraps inside the badge instead of
+   being clipped by the cell; the mode text must stay readable, not ellipsized away. */
+.protocol-path-badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-align: left;
+}

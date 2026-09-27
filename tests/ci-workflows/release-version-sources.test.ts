@@ -191,7 +191,7 @@ describe("every version move covers all four sources", () => {
     expect(restore).toBeLessThan(run.indexOf('git checkout -B "$' + '{branch}"'));
     // New-branch path: before anything is staged, committed or pushed.
     expect(checks[1]!).toBeLessThan(run.indexOf("git add --"));
-    expect(run.indexOf("git add --")).toBeLessThan(run.indexOf('git push origin "$' + '{branch}"'));
+    expect(run.indexOf("git add --")).toBeLessThan(run.indexOf('push origin "$' + '{branch}"'));
     // lastIndexOf: the step's own comments mention `gh pr create` before the command itself.
     expect(checks[1]!).toBeLessThan(run.lastIndexOf("gh pr create"));
   });

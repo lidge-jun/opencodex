@@ -9,7 +9,7 @@ import type { TKey } from "./i18n/shared";
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
 
-export type ComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
+export type ComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export const COMBO_EFFORTS: ComboEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -20,6 +20,7 @@ export const COMBO_STRATEGIES: readonly ComboStrategy[] = [
   "random",
   "least-used",
   "reset-window",
+  "jev",
 ] as const;
 
 export const COMBO_STRATEGY_LABEL_KEYS: Record<ComboStrategy, TKey> = {
@@ -28,6 +29,7 @@ export const COMBO_STRATEGY_LABEL_KEYS: Record<ComboStrategy, TKey> = {
   random: "cws.strategy.random",
   "least-used": "cws.strategy.leastUsed",
   "reset-window": "cws.strategy.resetWindow",
+  jev: "cws.strategy.jev",
 };
 
 export const COMBO_STRATEGY_HINT_KEYS: Record<ComboStrategy, TKey> = {
@@ -36,6 +38,7 @@ export const COMBO_STRATEGY_HINT_KEYS: Record<ComboStrategy, TKey> = {
   random: "cws.strategy.randomHint",
   "least-used": "cws.strategy.leastUsedHint",
   "reset-window": "cws.strategy.resetWindowHint",
+  jev: "cws.strategy.jevHint",
 };
 
 export const COMBO_TARGETS_HINT_KEYS: Record<ComboStrategy, TKey> = {
@@ -44,6 +47,7 @@ export const COMBO_TARGETS_HINT_KEYS: Record<ComboStrategy, TKey> = {
   random: "cws.targets.randomHint",
   "least-used": "cws.targets.leastUsedHint",
   "reset-window": "cws.targets.resetWindowHint",
+  jev: "cws.targets.jevHint",
 };
 
 const COMBO_STRATEGY_SET = new Set<string>(COMBO_STRATEGIES);
@@ -85,6 +89,8 @@ export interface ComboTarget {
   provider: string;
   model: string;
   weight?: number;
+  /** Exact efforts JEV may choose; omitted means every currently advertised effort. */
+  reasoningEfforts?: ComboEffort[];
   /** UI-only stable key for React lists; never sent to the API. */
   clientKey?: string;
 }
@@ -102,6 +108,9 @@ export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget 
     provider: partial.provider ?? "",
     model: partial.model ?? "",
     ...(partial.weight !== undefined ? { weight: partial.weight } : {}),
+    ...(partial.reasoningEfforts !== undefined
+      ? { reasoningEfforts: [...partial.reasoningEfforts] }
+      : {}),
     clientKey: partial.clientKey ?? `ct-${++comboTargetKeySeq}`,
   };
 }
@@ -209,6 +218,20 @@ export function normalizeWeight(raw: unknown): number | undefined {
     : undefined;
 }
 
+function normalizeTargetReasoningEfforts(raw: unknown): ComboEffort[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const efforts: ComboEffort[] = [];
+  const seen = new Set<ComboEffort>();
+  for (const value of raw) {
+    if (typeof value !== "string" || !(COMBO_EFFORTS as string[]).includes(value)) return undefined;
+    const effort = value as ComboEffort;
+    if (seen.has(effort)) return undefined;
+    seen.add(effort);
+    efforts.push(effort);
+  }
+  return efforts;
+}
+
 export function parseComboList(payload: unknown): ComboItem[] {
   if (!payload || typeof payload !== "object") return [];
   const rows = (payload as { combos?: unknown }).combos;
@@ -228,7 +251,13 @@ export function parseComboList(payload: unknown): ComboItem[] {
       const model = typeof tr.model === "string" ? tr.model.trim() : "";
       if (!provider || !model) continue;
       const weight = normalizeWeight(tr.weight);
-      targets.push(weight !== undefined ? newComboTarget({ provider, model, weight }) : newComboTarget({ provider, model }));
+      const reasoningEfforts = normalizeTargetReasoningEfforts(tr.reasoningEfforts);
+      targets.push(newComboTarget({
+        provider,
+        model,
+        ...(weight !== undefined ? { weight } : {}),
+        ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+      }));
     }
     out.push({
       id,
@@ -393,6 +422,14 @@ export function buildComboAttention(
   return out;
 }
 
+function targetReasoningEffortsEqual(a: ComboTarget, b: ComboTarget): boolean {
+  if (a.reasoningEfforts === undefined || b.reasoningEfforts === undefined) {
+    return a.reasoningEfforts === b.reasoningEfforts;
+  }
+  return a.reasoningEfforts.length === b.reasoningEfforts.length
+    && a.reasoningEfforts.every((effort, index) => effort === b.reasoningEfforts![index]);
+}
+
 export function draftEquals(a: ComboItem, b: ComboItem): boolean {
   if (
     a.id !== b.id
@@ -408,7 +445,10 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
   if (a.targets.length !== b.targets.length) return false;
   return a.targets.every((t, i) => {
     const o = b.targets[i]!;
-    return t.provider === o.provider && t.model === o.model && (t.weight ?? 1) === (o.weight ?? 1);
+    return t.provider === o.provider
+      && t.model === o.model
+      && (t.weight ?? 1) === (o.weight ?? 1)
+      && targetReasoningEffortsEqual(t, o);
   });
 }
 
@@ -432,9 +472,14 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     id: item.id.trim(),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
     combo: {
-      targets: item.targets.map((target) => weighted
-        ? { provider: target.provider.trim(), model: target.model.trim(), weight: target.weight ?? 1 }
-        : { provider: target.provider.trim(), model: target.model.trim() }),
+      targets: item.targets.map((target) => ({
+        provider: target.provider.trim(),
+        model: target.model.trim(),
+        ...(weighted ? { weight: target.weight ?? 1 } : {}),
+        ...(target.reasoningEfforts !== undefined
+          ? { reasoningEfforts: [...target.reasoningEfforts] }
+          : {}),
+      })),
       strategy: item.strategy,
       defaultEffort: item.defaultEffort,
       // The server preserves an omitted field from the stored combo (#5687), so the dashboard
@@ -469,6 +514,7 @@ export type ComboDraftError =
   | "duplicateTarget"
   | "invalidStickyLimit"
   | "invalidWeight"
+  | "invalidReasoningEfforts"
   | "noEnabledTarget";
 
 export function validateComboDraft(
@@ -513,6 +559,12 @@ export function validateComboDraft(
   for (const t of item.targets) {
     if (!t.provider.trim() || !t.model.trim()) return "incompleteTarget";
     if (!Object.hasOwn(options.providers, t.provider.trim())) return "unknownProvider";
+    if (t.reasoningEfforts !== undefined
+      && (t.reasoningEfforts.length === 0
+        || t.reasoningEfforts.some(effort => !COMBO_EFFORTS.includes(effort))
+        || new Set(t.reasoningEfforts).size !== t.reasoningEfforts.length)) {
+      return "invalidReasoningEfforts";
+    }
   }
 
   const targets = new Set<string>();
@@ -553,5 +605,32 @@ export function emptyDraft(id = ""): ComboItem {
     imageInput: "auto",
     reasoningEffortMode: "strict",
     targets: [newComboTarget()],
+  };
+}
+
+const JEV_AUTO_MODEL_IDS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"] as const;
+
+/** Build the opt-in JEV Combo template from models that are available right now. */
+export function jevAutoDraft(
+  models: readonly { provider: string; id: string }[],
+  eligibleProviders?: ReadonlySet<string>,
+): ComboItem {
+  const targets = JEV_AUTO_MODEL_IDS.flatMap((id) => {
+    const model = models.find((candidate) => candidate.id === id
+      && (eligibleProviders === undefined || eligibleProviders.has(candidate.provider)));
+    return model ? [newComboTarget({ provider: model.provider, model: model.id })] : [];
+  });
+  return {
+    id: "jev-auto",
+    model: "jev-auto",
+    alias: "jev-auto",
+    nativeAlias: false,
+    displayName: null,
+    strategy: "jev",
+    stickyLimit: 1,
+    defaultEffort: null,
+    imageInput: "auto",
+    reasoningEffortMode: "adaptive",
+    targets: targets.length > 0 ? targets : [newComboTarget()],
   };
 }

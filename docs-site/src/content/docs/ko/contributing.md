@@ -9,14 +9,14 @@ description: opencodex 개발 환경, 구조, 컨벤션, 프로바이더와 어�
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run setup:hooks  # post-merge 설치 및 기존 관리형 pre-push 제거
+bun run setup:hooks  # 기존 관리형 pre-push·post-merge 제거
 bun run dev:proxy    # 개발 모드 프록시 API
 bun run dev:gui      # 대시보드 dev 서버(다른 터미널)
 bun run typecheck    # bun x tsc --noEmit
 bun run test        # 전체 테스트 스위트 (기본)
 ```
 
-`bun run setup:hooks`는 `post-merge`만 설치하고, 수정되지 않은 기존 관리형 `pre-push` 훅을
+`bun run setup:hooks`는 수정되지 않은 기존 관리형 `pre-push`와 `post-merge` 훅을
 제거합니다. 사용자 정의 훅은 보존합니다. `pre-push` 훅은 더 이상 필수가 아니며,
 `bun run prepush`는 선택적으로 직접 실행할 수 있습니다.
 

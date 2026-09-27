@@ -19,7 +19,10 @@ import {
   readResponseStreamWithInactivity,
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
+import { noteKiroServedSuccess } from "../../providers/kiro-usage";
+import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -32,7 +35,7 @@ export async function deliverAdapterResponse(
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
-  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge">,
+  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge" | "sentOAuthSnapshot">,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
     ResponsesEffects,
@@ -42,7 +45,7 @@ export async function deliverAdapterResponse(
     | "notifyResponseComplete"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
-  adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort">,
+  adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort" | "localUpstream">,
   continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry">,
 ): Promise<Response> {
   const { logCtx, options, config } = requestContext;
@@ -53,7 +56,7 @@ export async function deliverAdapterResponse(
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
   } = requestState;
-  const { upstreamResponse, upstream, cleanupUpstreamAbort } = adapterExchange;
+  const { upstreamResponse, upstream, cleanupUpstreamAbort, localUpstream } = adapterExchange;
   const {
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
@@ -67,7 +70,7 @@ export async function deliverAdapterResponse(
     notifyResponseComplete,
   } = responseEffects;
   const { routedCompaction } = sidecarState;
-  const bodyInactivityMs = resolveStallTimeoutSec(config.stallTimeoutSec) * 1000;
+  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
 
 
   if (parsed.stream) {
@@ -75,12 +78,15 @@ export async function deliverAdapterResponse(
     // same mapping or the bridge catch reports this upstream timeout as a 500 proxy_error.
     const initialEventStream = (async function* (): AsyncGenerator<AdapterEvent> {
       try {
-        yield* readResponseStreamWithInactivity(
+        for await (const event of readResponseStreamWithInactivity(
           upstreamResponse,
           upstream.signal,
           bodyInactivityMs,
           response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
-        );
+        )) {
+          options.onCompactionRecoveryAdapterEvent?.(event);
+          yield event;
+        }
       } catch (error) {
         if (error instanceof ResponseBodyInactivityError) {
           yield {
@@ -114,6 +120,51 @@ export async function deliverAdapterResponse(
         })
       : eventStream;
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    // One completion owner for both deliveries: the bridge calls it from its terminal, the
+    // direct client encoder from the fold of the same events.
+    const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
+      const served = transportState.sentOAuthSnapshot;
+      if (transportState.activeAdapter.name === "kiro" && response.status === "completed" && served
+        && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
+      commitReasoningReplayServingRoute();
+      rememberKiroDeliveredFinalAnswer(transportState.activeAdapter.name, response);
+      // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
+      // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
+      // giant stale chain Codex just replaced.
+      if (!routedCompaction) {
+        rememberResponseState(
+          parsed._rawBody,
+          response,
+          continuationStateForResponse(providerState),
+          responseStateOptions(transportState.activeAdapter.name === "kiro"),
+        );
+      }
+      notifyResponseComplete(response);
+    };
+    const clientEncoder = clientEncoderForDelivery(options, logCtx, !!routedCompaction, transportState.activeAdapter.name);
+    if (clientEncoder) {
+      return deliverClientEncodedResponse({
+        encoder: clientEncoder,
+        events: guardedEventStream,
+        logCtx,
+        translatorBudget,
+        responseModelId: parsed._responseModelId ?? parsed.modelId,
+        adapterName: transportState.activeAdapter.name,
+        fold: {
+          replayCacheScope: parsed._reasoningReplayScope,
+          hideThinkingSummary: parsed.options.hideThinkingSummary,
+          toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames,
+        },
+        stallTimeoutSec: config.stallTimeoutSec,
+        localUpstream,
+        turnAdmissionLease: options.turnAdmissionLease,
+        ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+        stopUpstream: () => { cancelResponseCompletion(); upstream.abort(); },
+        onStreamDone: cleanupUpstreamAbort,
+        onCompletedResponse,
+        bindUsage: usage => transportState.bindKeyUsageFromBridge(usage),
+      });
+    }
     const sseStream = bridgeToResponsesSSE(
       guardedEventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => { cancelResponseCompletion(); upstream.abort(); }, 2_000,
@@ -122,6 +173,7 @@ export async function deliverAdapterResponse(
         replayCacheScope: parsed._reasoningReplayScope,
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
+        localUpstream,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         declaredToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
@@ -134,22 +186,7 @@ export async function deliverAdapterResponse(
           // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
           transportState.bindKeyUsageFromBridge(usage);
         },
-        onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
-          commitReasoningReplayServingRoute();
-          rememberKiroDeliveredFinalAnswer(transportState.activeAdapter.name, response);
-          // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
-          // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
-          // giant stale chain Codex just replaced.
-          if (!routedCompaction) {
-            rememberResponseState(
-              parsed._rawBody,
-              response,
-              continuationStateForResponse(providerState),
-              responseStateOptions(transportState.activeAdapter.name === "kiro"),
-            );
-          }
-          notifyResponseComplete(response);
-        },
+        onCompletedResponse,
       },
     );
     const bridgeTurnAc = new AbortController();
@@ -168,6 +205,7 @@ export async function deliverAdapterResponse(
         bodyInactivityMs,
         response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
       );
+      for (const event of initialEvents) options.onCompactionRecoveryAdapterEvent?.(event);
       let guardedEvents: AdapterEvent[];
       if (terminalGuardEnabled) {
         guardedEvents = [];
@@ -229,6 +267,9 @@ export async function deliverAdapterResponse(
     // #1926 gap 2: same buffered-path durability bound as the primary branch.
     await awaitThoughtSignatureDurability();
     if (adapterResponseReachedServingTerminal(events, json)) {
+      const served = transportState.sentOAuthSnapshot;
+      if (transportState.activeAdapter.name === "kiro" && json.status === "completed" && served
+        && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
       commitReasoningReplayServingRoute();
     }
     notifyResponseComplete(json);

@@ -108,7 +108,7 @@ aileleri kullanamaz.
 | Anahtar | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | gerekli | Sıralı somut rotalar. `weight` 1–10000 arasındadır ve varsayılan olarak `1`'dir. |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Seçim stratejisi. Hedef sırası `failover` önceliğini belirler; `weight` değerleri `round-robin` ve `random` seçimlerini biçimlendirir; `least-used` kaydedilen başarılı istekleri izler; `reset-window` en yakın kota sıfırlamasını izler. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | Seçim stratejisi. Hedef sırası `failover` önceliğini belirler; `weight` değerleri `round-robin` ve `random` seçimlerini biçimlendirir; `least-used` kaydedilen başarılı istekleri izler; `reset-window` en yakın kota sıfırlamasını izler; `jev` ilk uygun hedef ve effort için tek bir sınırlı karar verir, ardından normal sıralı fallback'i kullanır. |
 | `stickyLimit?` | `number` | `1` | Tek bir round-robin grubunda tutulan başarılı istekler. Aralık 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | ayarlanmamış | `defaultEffort`, combo varsayılanı null değilse ve hedefin desteklenen seviye listesi bilinen ve boş olmayan bir listeyse eksik `reasoning.effort` değerini doldurur. Yapılandırılmış değer destekleniyorsa korunur; değilse bu değeri aşmayan en yüksek desteklenen seviye, böyle bir seviye yoksa en düşük desteklenen seviye kullanılır. Liste bilinmiyor veya boşsa varsayılan eklenmez. |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"`, boş listeler dahil bilinen hedef seviye listelerinin kesişimini alır; `"adaptive"` boş listeleri çıkarır. Bilinmeyen listeler iki modda da kesişimi sınırlamaz. Gönderimde açıkça boş listeler iki modda effort/thinking denetimlerini kaldırır; bilinmeyen listeler bunu yalnızca adaptive modunda yapar. `reasoning.summary` korunur. Bilinen boş olmayan hedeflerin effort çözümü ve hedef seçimi/sırası değişmez. |
@@ -311,4 +311,3 @@ değişmeden ayrıştırılır. Geçmiş dizini tek kullanımlıktır -
 otomatik bir yeniden oluşturmayı tetikler; `ocx logs rebuild-index` bunu zorlar.
 Bu sistemdeki hiçbir şey ağırlıkları, bütçeleri veya aday kümelerini otomatik
 olarak ayarlamaz.
-

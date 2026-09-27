@@ -10,3 +10,4 @@
 - 선택한 방식: Require a regular executable lexical launcher, resolve it once during installation, preserve only `durableBunRuntime().source === "override"`, and keep token loading in the existing file-backed shell preamble.
 - 다른 대안 대신 이 방식을 선택한 이유: Resolving or pinning package paths recreates upgrade restart loops, existence-only selection can name a directory or non-executable file, and dropping a trusted override silently changes an operator's runtime.
 - 장점, 단점 및 영향: Mise/asdf-style upgrades keep working and explicit Bun selection survives; source installs still use the direct pair, while a removed or non-executable launcher requires `ocx service repair`.
+- 현재 적용 범위: This record still governs the systemd launcher only. macOS launchd no longer shares the launcher: it follows [ADR-0100](ADR-0100-stable-service-launcher-launchd-and-systemd.md) and pins the package-local Bun and CLI pair selected by the trusted install or repair invocation.

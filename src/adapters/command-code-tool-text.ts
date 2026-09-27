@@ -23,8 +23,8 @@ import { validatesRestoredValue } from "./command-code-restored-schema";
  * when a native call proves it is a duplicate, or restored on an eligible clean MiMo finish when
  * it names a declared tool with arguments that fit its schema. Other markup is released unchanged.
  * MiMo can also append the markup after ordinary prose inside one text block; once prose has
- * started, later markers stay presentation text rather than opening a held call, so a quoted
- * example can never reach the wire as an executable tool call.
+ * started, later markers stay presentation text rather than opening a held call. This protects
+ * prose-prefixed examples; a leading bare envelope remains eligible under the declared-tool rules.
  * A malformed envelope that still opens and closes around a declared function name, but that the
  * strict parser rejects, is dropped instead of released when the native call for that same function
  * arrives, and on the clean-finish path, so the echo never reaches the client.

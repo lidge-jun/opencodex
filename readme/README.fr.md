@@ -351,6 +351,20 @@ correspondance selon le motif du nom du modèle. Les identifiants de modèles du
 sont présentés avec leurs barres obliques internes remplacées par `-` ; la forme brute comportant toutes
 les barres obliques continue également de fonctionner. Détails : [documentation sur le routage des modèles](https://opencodex.me/fr/guides/model-routing/).
 
+### Routage JEV Auto (optionnel)
+
+TypeSafe JEV peut choisir le premier modèle et l'effort de raisonnement d'un Combo activé explicitement,
+sans rien changer au sélecteur de modèles ni aux routes directes. Ajoutez l'identifiant avec
+`ocx login jev`, depuis **Providers → TypeSafe JEV → Add API key**, ou via `TYPESAFE_API_KEY`/`JEV_API_KEY`.
+Ouvrez ensuite **Models → Combos → Create JEV Auto**, choisissez les modèles cibles autorisés et cochez
+les efforts exacts que JEV peut sélectionner pour chaque cible. Sans réglage d'effort, une cible autorise
+tous les efforts que le modèle annonce actuellement.
+
+JEV n'est consulté que pour `jev-auto`, et une seule fois par appel logique au modèle. Un identifiant
+manquant, une erreur réseau ou une décision invalide retombent sur la première cible éligible ;
+l'annulation par l'appelant annule toujours la requête. Les tests automatisés utilisent un point de
+terminaison TypeSafe simulé et ne valident pas un compte JEV réel.
+
 ## Fournisseurs et adaptateurs
 
 <!-- sponsors:main-first-mention -->

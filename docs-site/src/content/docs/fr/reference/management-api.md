@@ -194,8 +194,8 @@ Voir [Couches de prompt Codex](/fr/guides/codex-prompt/) pour le modèle de couc
 | `GET, POST /api/windows-tray` | Lire l'état de l'icône de notification Windows, ou l'installer, la démarrer, l'arrêter ou la désinstaller | 400 plateforme ou action non prise en charge ; 500 échec de l'opération |
 | `GET /api/diagnostics/project-config` | Lire les avertissements de configuration du projet mis en cache | — |
 | `POST /api/sync` | Synchroniser le catalogue de modèles actuel dans Codex | 500 échec de synchronisation |
-| `GET /api/update/check` | Vérifier le canal de mise à jour `latest` ou `preview` | 400 balise invalide |
-| `POST /api/update/run` | Démarrer une tâche de mise à jour, éventuellement suivie d'un redémarrage | 400 corps invalide ; état de conflit ou d'erreur propre à la tâche |
+| `GET /api/update/check` | Vérifier de façon asynchrone le canal `latest` ou `preview` et actualiser le cache du paquet en cas de succès | 400 balise invalide |
+| `POST /api/update/run` | Vérifier de façon asynchrone la dernière version du paquet, puis démarrer une tâche de mise à jour, suivie éventuellement d’un redémarrage | 400 corps invalide ; état de conflit ou d'erreur propre à la tâche |
 | `GET /api/update/status` | Interroger une tâche de mise à jour par identifiant | 404 tâche inconnue |
 | `GET, PUT /api/sidecar-settings` | Lire ou mettre à jour les paramètres de modèle et de moteur des services auxiliaires de recherche Web et de vision | 400 structure, moteur ou limite invalide |
 | `GET, PUT /api/shadow-call-settings` | Lire ou mettre à jour les paramètres d'interception d'appels fantômes | 400 forme ou valeur invalide |
@@ -215,8 +215,8 @@ par le fournisseur en amont, cette information reste absente : elle n'est pas d�
 | `GET /api/debug/usage-logs` | Lire un nombre limité d'entrées de débogage de l'utilisation | — |
 | `GET /api/debug/injection-logs` | Lire un nombre limité d'entrées de débogage de l'injection du guidage | — |
 | `GET /api/claude/inbound-debug` | Lire l'état et les entrées du débogage entrant | — |
-| `GET /api/usage` | Résumer l'utilisation par période et par interface cliente ; les réponses Codex comprennent aussi une ventilation `accounts` indexée par des libellés de journalisation stables ne contenant aucune donnée personnelle | Renvoie un résumé `error: "read_failed"` si le stockage ne peut pas être lu |
-| `GET /api/metrics` | Renvoyer les métriques texte Prometheus locales au processus : requêtes logiques, envois physiques, types de récupération, durée et TTFT. Les libellés sont limités au protocole, au résultat et à la classe de récupération ; aucun identifiant de requête ou d'identifiant secret n'est exporté. | 404 si `metricsExport.enabled` n'était pas vrai au démarrage ; l'authentification de gestion est obligatoire et les identifiants du plan de données ne donnent aucun accès |
+| `GET /api/usage` | Résumer l'utilisation par période et par interface cliente ; les réponses Codex comprennent aussi une ventilation `accounts` indexée par des libellés de journalisation stables ne contenant aucune donnée personnelle | Renvoie 500 `{ "error": "read_failed" }` si le stockage ne peut pas être lu |
+| `GET /api/metrics` | Renvoyer les métriques texte Prometheus locales au processus : requêtes logiques, envois physiques, types de récupération, durée et TTFT. Les métriques de requêtes utilisent des libellés fermés ; les jauges Kiro ajoutent uniquement un libellé de compte opaque et borné ; aucun identifiant de requête ou d'identifiant secret n'est exporté. Les quatre jauges `opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}` lisent uniquement le cache et utilisent au plus 32 étiquettes de compte opaques. Aucune sonde réseau lors de la collecte. | 404 si `metricsExport.enabled` n'était pas vrai au démarrage ; l'authentification de gestion est obligatoire et les identifiants du plan de données ne donnent aucun accès |
 | `GET /api/storage` | Analyser l'utilisation du stockage Codex par catégorie | Renvoie une charge utile `error: "scan_failed"` en cas d'échec de l'analyse |
 | `POST /api/storage/cleanup/preview` | Prévisualiser le nettoyage des sessions archivées et renvoyer une empreinte contraignante | 400 `invalid_json` ou `invalid_percent` |
 | `POST /api/storage/cleanup` | Mettre en quarantaine ou supprimer définitivement l'ensemble archivé prévisualisé | 400 saisie invalide ; 409 état obsolète, occupé ou référencé ; 500 échec du système de fichiers ou de la base de données |
@@ -278,7 +278,7 @@ Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT va
 | `POST /api/oauth/login/cancel` | Annuler un flux OAuth public en cours | 400 fournisseur inconnu |
 | `GET /api/oauth/status` | Sonder le flux OAuth d'un fournisseur | 400 fournisseur inconnu |
 | `POST /api/oauth/logout` | Supprimer les informations d'identification du fournisseur sélectionné | 400 fournisseur inconnu ; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | Répertorier les comptes masqués ou supprimer un compte | 400 invalide provider/id ; 404 compte manquant ; `oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | Répertorier les comptes masqués ou supprimer un compte Les lignes Kiro ajoutent `autoSelectable` et un `skipReason` fermé en cas d’exclusion de la sélection automatique ; un compte actif unique peut encore servir. Le quota reste facultatif. | 400 invalide provider/id ; 404 compte manquant ; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Sélectionnez le compte OAuth actif | 400 invalide provider/account ; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Lire ou mettre à jour la stratégie du pool OAuth Anthropic | 400 fournisseur non Anthropic ou stratégie invalide |
 | `POST /api/oauth/accounts/clear-cooldown` | Effacer le temps de recharge d'un compte OAuth | 400 invalide provider/account |
@@ -325,7 +325,12 @@ supprimer leur fournisseur.
 | --- | --- | --- |
 | `GET /api/github/star` | Lire le statut de l'étoile du référentiel via la session `gh` de l'utilisateur | Codes de résultat fixes spécifiques au statut |
 | `POST /api/github/star` | Ajouter une étoile au dépôt uniquement à la suite d'une action humaine authentifiée | 403 `agent_consent_required` pour les appelants pilotés par un agent sans preuve de session du tableau de bord |
-| `GET /api/update/badge` | Lire l'état, peu coûteux à calculer, du badge de mise à jour de la barre latérale | — |
+| `GET /api/update/badge` | Lire le badge du paquet mis en cache sans interroger le registre ; un cache absent, d’un autre canal ou vieux de 40 heures renvoie `unknown: true`. `surface=desktop&session=<id>` ne lit que cette session de l’application de bureau. | 400 surface invalide ; une session de bureau absente ou expirée renvoie `unknown: true` |
+| `POST /api/update/desktop-snapshot` | Le shell de bureau publie l’état d’affichage de son updater Tauri via le client proxy lié | 403 si l’en-tête `Origin` est présent ou sans le principal brut `admin-token` ; 400 champs invalides ; 413 au-delà de 1 KiB |
+
+Le snapshot de bureau est un état d’affichage temporaire, pas une demande d’installation. Le proxy conserve au plus 32 sessions en mémoire et en expire une 180 secondes après son dernier heartbeat. Un navigateur ordinaire sans surface=desktop continue de lire le badge du paquet.
+
+Le proxy vérifie les installations éligibles après le démarrage si le cache est absent ou vieux de plus de 20 heures, puis contrôle sa fraîcheur chaque heure. `OCX_DISABLE_UPDATE_CHECK=1` désactive uniquement les vérifications automatiques. Les demandes explicites de vérification et de mise à jour restent disponibles.
 
 :::caution
 L'authentification de gestion prouve l'accès au proxy, mais pas le consentement à engager

@@ -18,6 +18,7 @@ import {
   changedSelectionFailure,
   captureTestOutput,
   createIsolatedTestEnvironment,
+  LIVE_INSTALL_CREDENTIAL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
   resolveBunTestArgs,
@@ -325,6 +326,23 @@ describe("test runner isolation", () => {
       isolated.cleanup();
     }
     expect(existsSync(isolated.root)).toBe(false);
+  });
+
+  test("drops the developer's live install credentials and keeps the rest of the environment", () => {
+    const isolated = createIsolatedTestEnvironment({
+      PATH: "/test/bin",
+      FIXTURE: "unchanged",
+      OPENCODEX_API_AUTH_TOKEN: "live-data-token",
+      OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
+      OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
+    });
+    try {
+      for (const name of LIVE_INSTALL_CREDENTIAL_ENV) expect(name in isolated.env).toBe(false);
+      expect(isolated.env.FIXTURE).toBe("unchanged");
+      expect(isolated.env.PATH).toBe("/test/bin");
+    } finally {
+      isolated.cleanup();
+    }
   });
 
   test.if(process.platform === "win32")("gives the Windows sandbox a real profile shape", () => {

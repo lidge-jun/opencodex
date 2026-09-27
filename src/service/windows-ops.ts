@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { getConfigDir } from "../config";
 import { OCX_ELEVATED_STAGING_UNREADABLE, runWindowsElevatedScheduledTaskRegistration, WindowsSchtasksError, type StagedWindowsTaskXml } from "../lib/windows-elevation";
 import { defaultWinswEntry, installWinswService, statusWinswRaw, uninstallWinswService, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
-import { forgetEphemeralSecretDir, forgetEphemeralSecretPath, hardenSecretDir } from "../lib/windows-secret-acl";
+import { forgetEphemeralSecretDir, forgetEphemeralSecretPath, hardenElevatedStageDir, hardenElevatedStagePath, hardenSecretDir } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
@@ -192,19 +192,24 @@ export interface ElevatedSchedulerStagingDeps {
  * alone:
  *
  * - **Access.** The directory is created fresh by `mkdtemp`, then ACL-hardened before
- *   anything is written into it, so another local account cannot read or replace the
- *   payload while the UAC prompt is open. Hardening the directory first is what makes
- *   the file private from the moment it exists.
+ *   anything is written into it, so no non-administrator account can read or replace
+ *   the payload while the UAC prompt is open. Administrators get read — never write —
+ *   because an over-the-shoulder UAC prompt answered with a different administrator's
+ *   credentials runs the elevated process as that admin (#4779); tamper-evidence does
+ *   not depend on the DACL, it comes from the pinned handles and the digest below.
+ *   Hardening the directory first is what makes the file private from the moment it
+ *   exists.
  * - **No reparse point.** Each artifact is inspected with `lstat` and rejected unless it
  *   is what it claims to be. `wx` already refuses to create over an existing name, which
  *   is the atomic step here — there is no replace path to race, because every path is
  *   inside a directory that did not exist a moment ago. The explicit check is what keeps
  *   that guarantee from depending on a reading of `O_EXCL` semantics.
- * - **Tamper evidence.** The digest is taken over the exact bytes written, and the
- *   elevated script recomputes it over the bytes it reads. An ACL cannot cover this:
- *   a process running as the same user has the same SID and can rewrite the file, so
- *   the digest is the only thing that makes such a swap fail closed rather than
- *   silently register a different task definition.
+ * - **Pinned namespace and content.** Before UAC, the launcher opens every ancestor and
+ *   payload without following reparse points. Ancestor handles share read/write but
+ *   deny delete, so the namespace cannot be redirected while sibling payloads can
+ *   still be written; payload handles deny write/delete outright. Those handles stay
+ *   open until elevation exits. The digest then verifies the exact,
+ *   length-bounded bytes read by the elevated process.
  *
  * Payloads are UTF-16LE with no BOM, and the elevated process decodes them straight into
  * `Register-ScheduledTask`. What is hashed is therefore exactly what is registered, with
@@ -217,11 +222,11 @@ export function stageElevatedSchedulerRegistration(
 ): StagedElevatedSchedulerRegistration {
   const createStageDir = deps.createStageDir
     ?? (() => mkdtempSync(join(tmpdir(), WINDOWS_SCHEDULER_STAGE_PREFIX)));
-  const hardenDir = deps.hardenDir ?? ((path: string) => { hardenSecretDir(path, { required: true }); });
+  const hardenDir = deps.hardenDir ?? ((path: string) => { hardenElevatedStageDir(path, { required: true }); });
   const writePayload = deps.writePayload ?? ((path: string, bytes: Buffer) => {
     writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
   });
-  const hardenPath = deps.hardenPath ?? ((path: string) => { hardenSecretPath(path, { required: true }); });
+  const hardenPath = deps.hardenPath ?? ((path: string) => { hardenElevatedStagePath(path, { required: true }); });
   const inspect = deps.inspect ?? ((path: string) => lstatSync(path));
   const removeStageDir = deps.removeStageDir ?? ((path: string) => { rmdirSync(path); });
 
@@ -266,7 +271,7 @@ export function stageElevatedSchedulerRegistration(
         throw new Error(`Refusing to stage an elevated Task Scheduler payload through a redirected path: ${path}`);
       }
       hardenPath(path);
-      return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
+      return { path, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
     };
     return {
       xml: stage("register.xml", xml),
@@ -293,10 +298,9 @@ export function stageElevatedSchedulerRegistration(
  *
  * The elevated process runs hidden, so nothing it writes survives; only the exit code
  * crosses back. That makes an unexplained code the whole user-facing error, which is
- * exactly what made the ENAMETOOLONG in #4692 expensive to diagnose. Staging introduces
- * one new failure of its own — the payload is readable only by the account that created
- * it, so an elevation answered with a different administrator's credentials cannot open
- * it — and that one gets named along with its remedy rather than surfacing as a number.
+ * exactly what made the ENAMETOOLONG in #4692 expensive to diagnose. Staging has one
+ * failure of its own — the elevated process cannot open the payload — and that one
+ * gets named along with its remedy rather than surfacing as a number.
  */
 export function describeElevatedRegistrationFailure(
   failureLabel: string,
@@ -305,10 +309,10 @@ export function describeElevatedRegistrationFailure(
 ): string {
   if (exitCode === OCX_ELEVATED_STAGING_UNREADABLE) {
     return `${failureLabel}: the elevated process could not read the staged task definition in `
-      + `${stageDir}. That directory is readable only by the account that staged it, so this `
-      + "happens when the UAC prompt was answered with a different administrator account. "
-      + "Approve the prompt as the signed-in user, or run the command again from a session "
-      + "already elevated as that user.";
+      + `${stageDir}. That directory grants read access to the staging account and to `
+      + "administrators, so the hardening did not take effect there or the file was "
+      + "replaced. Retry the command; if it keeps failing, run it again from a session "
+      + "already elevated as an administrator.";
   }
   return `${failureLabel} with exit code ${exitCode}.`;
 }

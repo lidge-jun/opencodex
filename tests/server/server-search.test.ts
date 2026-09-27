@@ -8,6 +8,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
+import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
+import { clearComboSelectionState } from "../../src/combos";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
@@ -18,6 +20,9 @@ import {
   recordCodexUpstreamOutcome,
 } from "../../src/codex/routing";
 import { loadConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { saveCredential } from "../../src/oauth/store";
+import { routeModel } from "../../src/router";
 import { startServer } from "../../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import { handleSearch, SEARCH_RESPONSE_MAX_BYTES } from "../../src/server/search";
@@ -48,7 +53,7 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
@@ -62,6 +67,9 @@ afterEach(() => {
   clearAccountNeedsReauth("pool-b");
   clearAccountQuota();
   clearRequestLogsForTests();
+  // Credential writes start a Windows icacls harden of the home; it holds the directory open
+  // until it exits, so removing the home first answers EPERM on every later case.
+  await flushConfigDirHardeningForTests();
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 
@@ -484,6 +492,101 @@ test("returns an honest 400 when no ChatGPT forward provider is configured", asy
     expect(json.error.message).toContain("webSearchSidecar");
   } finally {
     await server.stop(true);
+  }
+});
+
+test("routes every Devin model family through the native search RPC without a search model", async () => {
+  const apiKey = "devin-native-search-key";
+  await saveCredential("devin", {
+    access: apiKey,
+    refresh: apiKey,
+    expires: Number.MAX_SAFE_INTEGER,
+    apiBaseUrl: "https://server.codeium.com",
+  });
+  const requests: Array<{ url: string; body: Buffer }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, body: Buffer.from(init?.body as Uint8Array) });
+    const item = Buffer.concat([
+      encodeString(3, "https://example.test"),
+      encodeString(4, "Result"),
+      encodeString(7, "Excerpt"),
+    ]);
+    return new Response(encodeMessage(1, item), {
+      status: 200,
+      headers: { "content-type": "application/proto" },
+    });
+  }) as typeof fetch;
+  const config = {
+    port: 0,
+    defaultProvider: "devin",
+    providers: {
+      devin: { adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com" },
+    },
+    webSearchSidecar: { backend: "exa", exaApiKey: "must-not-run" },
+  } as OcxConfig;
+
+  for (const model of ["devin/claude-sonnet-5", "devin/grok-4-7", "devin/swe-2"]) {
+    const response = await handleSearch(
+      alphaSearchRequest({ model, commands: { search_query: [{ q: "current docs" }] } }),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      encrypted_output: null,
+      results: [{ title: "Result", url: "https://example.test" }],
+    });
+  }
+  expect(requests).toHaveLength(3);
+  expect(requests.every(request => request.url.endsWith("/exa.api_server_pb.ApiServerService/GetWebSearchResults"))).toBe(true);
+  expect(requests.every(request => !request.body.includes(Buffer.from("claude-sonnet-5"))
+    && !request.body.includes(Buffer.from("grok-4-7"))
+    && !request.body.includes(Buffer.from("swe-2")))).toBe(true);
+});
+
+test("native search route preview does not claim a round-robin combo turn", async () => {
+  await saveCredential("devin", {
+    access: "devin-native-search-key",
+    refresh: "devin-native-search-key",
+    expires: Number.MAX_SAFE_INTEGER,
+    apiBaseUrl: "https://server.codeium.com",
+  });
+  globalThis.fetch = (async () => new Response(encodeMessage(1, Buffer.concat([
+    encodeString(3, "https://example.test"),
+    encodeString(4, "Result"),
+  ])), { status: 200 })) as typeof fetch;
+  const config = {
+    port: 0,
+    defaultProvider: "devin",
+    providers: {
+      devin: { adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com" },
+      other: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "test" },
+    },
+    combos: {
+      search: {
+        strategy: "round-robin",
+        stickyLimit: 1,
+        targets: [
+          { provider: "devin", model: "swe-2" },
+          { provider: "other", model: "other-model" },
+        ],
+      },
+    },
+  } as OcxConfig;
+  clearComboSelectionState();
+  try {
+    const first = routeModel(config, "combo/search");
+    expect(first.providerName).toBe("devin");
+    const response = await handleSearch(
+      alphaSearchRequest({ model: "combo/search", query: "current docs" }),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(response.status).toBe(200);
+    expect(routeModel(config, "combo/search").combo?.targetIndex).toBe(first.combo?.targetIndex);
+  } finally {
+    clearComboSelectionState();
   }
 });
 

@@ -14,7 +14,7 @@ const USAGE = `Usage:
   ocx combo [list] [--json]
   ocx combo show <id> [--json]
   ocx combo set <id> --targets <provider/model[:weight],...>
-      [--strategy <failover|round-robin|random|least-used|reset-window>] [--sticky <1-100>]
+      [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100>]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force>]
       (force overrides valid client effort and can increase cost/latency) [--alias <name|->]
       [--native-alias] [--display-name <label|->]
@@ -74,7 +74,7 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const targetsRaw = takeOption(args, "--targets");
   if (!targetsRaw) throw new CliUsageError("--targets is required", USAGE);
   const strategy = takeOption(args, "--strategy") ?? "failover";
-  if (strategy !== "failover" && strategy !== "round-robin" && strategy !== "random" && strategy !== "least-used" && strategy !== "reset-window") throw new CliUsageError("--strategy must be failover, round-robin, random, least-used, or reset-window", USAGE);
+  if (strategy !== "failover" && strategy !== "round-robin" && strategy !== "random" && strategy !== "least-used" && strategy !== "reset-window" && strategy !== "jev") throw new CliUsageError("--strategy must be failover, round-robin, random, least-used, reset-window, or jev", USAGE);
   const stickyLimit = takeIntegerOption(args, "--sticky", { min: 1 });
   if (stickyLimit !== undefined) {
     if (stickyLimit > 100) throw new CliUsageError("--sticky must be <= 100", USAGE);

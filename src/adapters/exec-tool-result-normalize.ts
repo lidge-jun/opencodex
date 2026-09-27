@@ -20,8 +20,11 @@
  * `function_call_output` is parsed with `isError: false`. Cursor combines this set with
  * `isFailedEmptyExecWrapper` below for Computer Use, where a failed wrapper is separately marked
  * `isError`.
+ *
+ * `(?=(X))\1` pins each wildcard run to its maximal match — without it, adjacent `\n+`/`\s*`
+ * runs can repartition a newline block combinatorially (the ReDoS shape this had before).
  */
-export const EMPTY_EXEC_OUTPUT_REGEX = /^(?:(?:Script completed|Command finished|Execution finished)[^\n]*\n+)?(?:Wall time[^\n]*\n+)?(?:Output:\s*)?(?:<empty>)?\s*$/;
+export const EMPTY_EXEC_OUTPUT_REGEX = /^(?:(?:Script completed|Command finished|Execution finished)(?=([^\n]*))\1(?=(\n+))\2)?(?:Wall time(?=([^\n]*))\3(?=(\n+))\4)?(?:Output:(?=(\s*))\5)?(?:<empty>)?(?=(\s*))\6$/;
 
 function skipFailedWrapperBlankSeparators(text: string, start: number): number {
   let index = start;

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync} from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { OAUTH_PROVIDERS, runLogin } from "../../src/oauth";
-import { getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
+import { appendKiroAccountFromDeviceLogin, getAccountCredential, getAccountSet, saveAccountCredential, saveCredential } from "../../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../../src/oauth/types";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
@@ -10,7 +11,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-oauth-reauth-bind");
+let TEST_DIR: string;
 const previousHome = process.env.OPENCODEX_HOME;
 
 function config(): OcxConfig {
@@ -42,8 +43,7 @@ const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 beforeEach(() => {
   setIcaclsRunnerForTests(() => ICACLS_OK);
   setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
-  removeTreeWithRetry(TEST_DIR);
-  mkdirSync(TEST_DIR, { recursive: true });
+  TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-oauth-reauth-bind-"));
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
 
@@ -105,6 +105,7 @@ describe("OAuth account-scoped reauth", () => {
       accountId: "acct-a",
     });
     const slotId = getAccountSet("xai")!.activeAccountId;
+    const loginId = getAccountSet("xai")!.accounts[0]!.loginId;
     const original = OAUTH_PROVIDERS.xai.login;
     OAUTH_PROVIDERS.xai.login = async () => ({
       access: "a2",
@@ -120,6 +121,29 @@ describe("OAuth account-scoped reauth", () => {
     }
     expect(getAccountCredential("xai", slotId)?.access).toBe("a2");
     expect(getAccountSet("xai")?.accounts).toHaveLength(1);
+    expect(getAccountSet("xai")?.accounts[0]?.loginId).not.toBe(loginId);
+  });
+
+  test("kiro-cli reauth refuses a native-origin slot before any CLI work", async () => {
+    const cred: OAuthCredentials = { access: "native-access", refresh: "native-refresh", expires: Date.now() + 60_000 };
+    await appendKiroAccountFromDeviceLogin(cred);
+    const slotId = getAccountSet("kiro")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.kiro.login;
+    let called = false;
+    OAUTH_PROVIDERS.kiro.login = async () => { called = true; throw new Error("CLI was started"); };
+    try {
+      await expect(runLogin("kiro", {} as OAuthController, { reauthAccountId: slotId })).rejects.toThrow(/remove and re-add/);
+    } finally { OAUTH_PROVIDERS.kiro.login = original; }
+    expect(called).toBe(false);
+    expect(getAccountSet("kiro")?.accounts[0]?.loginOrigin).toBe("kiro-device");
+  });
+
+  test("a refresh write keeps loginId", async () => {
+    const cred: OAuthCredentials = { access: "a", refresh: "r", expires: Date.now() + 60_000 };
+    await appendKiroAccountFromDeviceLogin(cred);
+    const before = getAccountSet("kiro")!.accounts[0]!;
+    await saveAccountCredential("kiro", before.id, { ...cred, access: "refreshed" });
+    expect(getAccountSet("kiro")?.accounts[0]?.loginId).toBe(before.loginId);
   });
 
   test("forced Kiro add-account preserves a legacy identity-less account", async () => {

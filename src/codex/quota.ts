@@ -354,7 +354,17 @@ function mergeAccountQuota(
     return stampCodexQuotaUsageObservation(next, quota, existing);
   }
 
-  if (snapshotHasWeekly(quota)) {
+  const existingWeeklyPercent = existing?.weeklyPercent;
+  // A reset-only weekly observation is not a lower reading. Policy mode keeps a blocking weekly
+  // tuple whole, exactly like preserveKnownShort; a governing monthly-primary observation still
+  // replaces it, so that release path does not depend on this guard.
+  const preserveKnownWeekly = policyEvidence
+    && quota.weeklyPercent === undefined
+    && quota.monthlyIsPrimaryWindow !== true
+    && finitePercent(existingWeeklyPercent)
+    && existingWeeklyPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingWeeklyPercent <= 100;
+  if (snapshotHasWeekly(quota) && !preserveKnownWeekly) {
     if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
     if (quota.weeklyResetAt !== undefined) next.weeklyResetAt = quota.weeklyResetAt;
   } else if (snapshotHasMonthly(quota)

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,8 +14,12 @@ import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../
 import { persistCommittedDesktopGateway } from "../../src/claude/desktop-gateway-state";
 import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config";
 import { ensureClaudeDesktopMatchesDesired } from "../../src/cli/ensure-desired-integrations";
+import { claudeInterceptCaCertPath } from "../../src/claude/intercept/local-ca";
+import { claudeInterceptProxyTokenPath, readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
+import { claudeInterceptProxyUrl } from "../../src/claude/intercept/settings";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
+import { firstPartyDesired } from "../../src/claude/first-party-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -31,6 +35,12 @@ function config(extra: Partial<OcxConfig> = {}): OcxConfig {
 
 function settings(): { env?: Record<string, string>; [key: string]: unknown } {
   return JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8")) as { env?: Record<string, string> };
+}
+
+function expectedProxyUrl(port: number): string {
+  const token = readClaudeInterceptProxyToken(root);
+  if (token === null) throw new Error("expected the proxy token to exist");
+  return claudeInterceptProxyUrl(port, token);
 }
 
 async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig = config(), deps: Parameters<typeof handleManagementAPI>[3] = {}) {
@@ -117,7 +127,7 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
   expect(written.theme).toBe("dark");
   expect(written.env).toEqual({
     FOO: "bar",
-    HTTPS_PROXY: "http://127.0.0.1:10200",
+    HTTPS_PROXY: expectedProxyUrl(10200),
     NODE_EXTRA_CA_CERTS: applied.env.NODE_EXTRA_CA_CERTS,
   });
   expect(inspectDesktopFirstParty(config()).applied).toBe(true);
@@ -128,9 +138,9 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
   expect(inspectDesktopFirstParty(config({ port: 10300 })).stale).toBe(true);
   const refreshed = applyDesktopFirstParty(config({ port: 10300 }));
   expect(refreshed.ok && refreshed.changed).toBe(true);
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10400");
+  expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10400));
 
-  const removed = removeDesktopFirstParty();
+  const removed = removeDesktopFirstParty(config());
   expect(removed).toMatchObject({ ok: true, changed: true });
   expect(settings()).toEqual({ theme: "dark", env: { FOO: "bar" } });
 });
@@ -140,7 +150,7 @@ test("first-party apply refuses foreign proxy env and disabled intercept", () =>
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } }));
   expect(applyDesktopFirstParty(config())).toMatchObject({ ok: false, reason: "foreign_env" });
   expect(settings().env).toEqual({ HTTPS_PROXY: "http://corp-proxy:3128" });
-  expect(removeDesktopFirstParty()).toMatchObject({ ok: true, changed: false });
+  expect(removeDesktopFirstParty(config())).toMatchObject({ ok: true, changed: false });
   expect(applyDesktopFirstParty(config({ runtimeRole: "client" }))).toMatchObject({ ok: false, reason: "intercept_disabled" });
 });
 
@@ -158,17 +168,17 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
 
   const first = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, afterDefault);
   expect(first.status).toBe(200);
-  expect(first.body).toMatchObject({
-    ok: true,
-    mode: "first-party",
-    applied: true,
-    changed: true,
-    proxyPort: 10200,
-    gatewayRemoved: true,
-    riskWarning: { code: "first_party_account_suspension_risk" },
-  });
-  expect(first.body.riskWarning.message).toContain("suspend the account");
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10200");
+    expect(first.body).toMatchObject({
+      ok: true,
+      mode: "first-party",
+      applied: true,
+      changed: true,
+      proxyPort: 10200,
+      gatewayRemoved: true,
+      riskWarning: { code: "first_party_account_suspension_risk" },
+    });
+    expect(first.body.riskWarning.message).toContain("suspend the account");
+    expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
   expect(saved.claudeCode?.desktopMode).toBe("first-party");
   expect(saved.clientIntegrations?.["claude-desktop"]).not.toBe(false);
@@ -196,7 +206,7 @@ test("POST /api/claude-desktop/apply defaults to gateway; first-party is explici
   const back = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, afterGateway);
   expect(back.status).toBe(200);
   expect(back.body).toMatchObject({ ok: true, mode: "first-party", applied: true, gatewayRemoved: true });
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10200");
+  expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
   const afterBack = await dispatch("/api/claude-desktop/status", {}, afterGateway);
   expect(afterBack.body).toMatchObject({ mode: "first-party", applied: true, stale: false, drift: false, desiredEnabled: true });
   expect(["not_installed", "no_owned_state", "standard"]).toContain(afterBack.body.observedKind);
@@ -228,7 +238,7 @@ test("native toggle: explicit first-party enable warns about the account risk an
   expect(enabled.status).toBe(200);
   expect(enabled.body).toMatchObject({ ok: true, changed: true, state: "current", desiredEnabled: true });
   expect(enabled.body.message).toContain("suspend the account");
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10200");
+  expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
 
   const list = await dispatch("/api/native-integrations", {}, chosen);
   const desktop = (list.body.clients as Array<{ clientId: string; state: string }>).find(client => client.clientId === "claude-desktop");
@@ -238,6 +248,16 @@ test("native toggle: explicit first-party enable warns about the account risk an
   expect(disabled.status).toBe(200);
   expect(disabled.body).toMatchObject({ ok: true, changed: true, state: "absent", desiredEnabled: false });
   expect(settings().env?.HTTPS_PROXY).toBeUndefined();
+});
+
+test("native first-party ON pins the committed mode on a stale live config", async () => {
+  writeFileSync(join(root, "config.json"), JSON.stringify(config({ claudeCode: { desktopMode: "first-party" } })));
+  const live = config({ claudeCode: { desktopMode: "gateway" } });
+  const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, live);
+  expect(enabled.status).toBe(200);
+  expect(enabled.body).toMatchObject({ ok: true, state: "current", desiredEnabled: true });
+  expect(live.claudeCode?.desktopMode).toBe("first-party");
+  expect(firstPartyDesired(live).desktop).toBe(true);
 });
 
 test("native toggle: enabling into explicit first-party pivots an applied gateway profile and saves the mode marker", async () => {
@@ -252,7 +272,7 @@ test("native toggle: enabling into explicit first-party pivots an applied gatewa
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, chosen);
   expect(enabled.status).toBe(200);
   expect(enabled.body).toMatchObject({ ok: true, changed: true, state: "current", desiredEnabled: true });
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10200");
+  expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
   expect(saved.claudeCode?.desktopMode).toBe("first-party");
   expect(saved.claudeCode?.desktopProfile?.appliedFingerprint).toBeUndefined();
@@ -436,7 +456,7 @@ test("failed committed gateway persistence does not adopt into the live snapshot
 test("ensure reconciles first-party env: refreshes when ON and stale, removes when OFF", async () => {
   const applied = applyDesktopFirstParty(config({ port: 10300 }));
   expect(applied.ok).toBe(true);
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10400");
+  expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10400));
 
   const logs: string[] = [];
   const deps = {
@@ -448,7 +468,7 @@ test("ensure reconciles first-party env: refreshes when ON and stale, removes wh
     error: (message: string) => { logs.push(message); },
   };
   await ensureClaudeDesktopMatchesDesired(deps);
-  expect(settings().env?.HTTPS_PROXY).toBe("http://127.0.0.1:10200");
+  expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10200));
   expect(logs.some(line => line.includes("first-party env refreshed"))).toBe(true);
 
   expect(setIntegrationEnabled("claude-desktop", false).ok).toBe(true);
@@ -587,3 +607,35 @@ for (const surface of ["api", "native", "cli"] as const) {
     expect(status.body.observedKind).toBe("gateway_ours");
   });
 }
+
+test("first-party inspection is read-only: an owned legacy env reads stale, no token is minted", () => {
+  // A pre-auth apply left a bare loopback URL anchored on our CA. Status must classify it
+  // stale without writing the credential file — inspection runs on read-only paths too.
+  mkdirSync(claudeDir, { recursive: true });
+  writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({
+    env: { HTTPS_PROXY: "http://127.0.0.1:10200", NODE_EXTRA_CA_CERTS: claudeInterceptCaCertPath(root) },
+  }));
+  const seen = inspectDesktopFirstParty(config());
+  expect(seen.applied).toBe(false);
+  expect(seen.stale).toBe(true);
+  expect(existsSync(claudeInterceptProxyTokenPath(root))).toBe(false);
+});
+
+test("a deleted token flips an applied env to stale and inspection does not recreate it", () => {
+  const applied = applyDesktopFirstParty(config());
+  expect(applied.ok).toBe(true);
+  expect(inspectDesktopFirstParty(config()).applied).toBe(true);
+  rmSync(claudeInterceptProxyTokenPath(root));
+  const seen = inspectDesktopFirstParty(config());
+  expect(seen.applied).toBe(false);
+  expect(seen.stale).toBe(true);
+  expect(existsSync(claudeInterceptProxyTokenPath(root))).toBe(false);
+});
+
+test("the status routes never mint the proxy token", async () => {
+  const status = await dispatch("/api/claude-desktop/status");
+  expect(status.status).toBe(200);
+  const list = await dispatch("/api/native-integrations");
+  expect(list.status).toBe(200);
+  expect(existsSync(claudeInterceptProxyTokenPath(root))).toBe(false);
+});

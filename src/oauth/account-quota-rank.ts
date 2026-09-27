@@ -11,7 +11,8 @@
  * serve the retry" — and within the healthy group a simple headroom sort is enough.
  */
 import { getCachedProviderAccountQuota, hasPassiveAccountQuota } from "../providers/quota";
-import { getKiroAccountExhaustion } from "../providers/kiro-usage";
+import { kiroAccountEvidence } from "../providers/kiro-usage";
+import type { ProviderAccount } from "./types";
 
 /** Antigravity hosts Gemini and Claude windows on one account; ranking must not mix them. */
 export type QuotaModelFamily = "gem" | "cla";
@@ -83,8 +84,11 @@ const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
 * The minimum wins: an account at 5% of its five-hour window is unusable right now even if
 * its monthly allowance is barely touched.
 */
-function headroomOf(provider: string, accountId: string, requestedModelId?: string | null): number | null {
-  const quota = getCachedProviderAccountQuota(provider, accountId);
+function headroomOf(provider: string, accountId: string, requestedModelId?: string | null, account?: ProviderAccount): number | null {
+  const evidence = provider === "kiro" && account ? kiroAccountEvidence(account) : null;
+  const quota = provider === "kiro"
+    ? evidence?.quotaPercent === undefined ? null : { monthlyPercent: evidence.quotaPercent, updatedAt: Date.now() }
+    : getCachedProviderAccountQuota(provider, accountId);
   if (!quota) return null;
   // Null, not a low rank: this must reproduce "no evidence" so a stale roster degrades to
   // the unranked ring rather than to a differently wrong answer.
@@ -119,8 +123,9 @@ export function accountHeadroomPercent(
   provider: string,
   accountId: string,
   requestedModelId?: string | null,
+  account?: ProviderAccount,
 ): number | null {
-  return headroomOf(provider, accountId, requestedModelId);
+  return headroomOf(provider, accountId, requestedModelId, account);
 }
 
 /** Unknown usage is not exhaustion; Kiro's explicit overage verdict is authoritative. */
@@ -128,10 +133,10 @@ export function isAccountQuotaExhausted(
   provider: string,
   accountId: string,
   requestedModelId?: string | null,
+  account?: ProviderAccount,
 ): boolean {
-  const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${accountId}`) : null;
-  if (exhaustion !== null) return exhaustion.exhausted;
-  const headroom = headroomOf(provider, accountId, requestedModelId);
+  if (provider === "kiro") return account ? kiroAccountEvidence(account).exhausted === true : false;
+  const headroom = headroomOf(provider, accountId, requestedModelId, account);
   return headroom !== null && headroom <= 0;
 }
 
@@ -145,6 +150,7 @@ export function rankAccountsByHeadroom(
   provider: string,
   ring: readonly string[],
   requestedModelId?: string | null,
+  accounts?: ReadonlyMap<string, ProviderAccount>,
 ): string[] {
   if (ring.length < 2) return [...ring];
 
@@ -158,11 +164,14 @@ export function rankAccountsByHeadroom(
   const ranked: Ranked[] = ring.map((id, index) => {
     // A provider-declared exhaustion verdict outranks the percentage: an account may sit at
     // 100% and still be servable when overage is enabled, and the verdict knows that.
-    const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${id}`) : null;
-    const headroom = headroomOf(provider, id, requestedModelId);
-    if (exhaustion !== null || headroom !== null) sawEvidence = true;
+    const account = accounts?.get(id);
+    const exhaustion = provider === "kiro" && account ? kiroAccountEvidence(account).exhausted : undefined;
+    const headroom = headroomOf(provider, id, requestedModelId, account);
+    if (exhaustion !== undefined || headroom !== null) sawEvidence = true;
 
-    if (isAccountQuotaExhausted(provider, id, requestedModelId)) return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
+    if (isAccountQuotaExhausted(provider, id, requestedModelId, account)
+      || (provider === "kiro" && exhaustion === undefined && headroom !== null && headroom <= 0))
+      return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
     if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
     return { id, bucket: RANK_HEALTHY, headroom, index };
   });
@@ -186,6 +195,7 @@ export function hasHeadroomEvidence(
   provider: string,
   ids: readonly string[],
   requestedModelId?: string | null,
+  accounts?: ReadonlyMap<string, ProviderAccount>,
 ): boolean {
   // A PASSIVE provider needs evidence for EVERY candidate, not any one of them.
   //
@@ -200,8 +210,9 @@ export function hasHeadroomEvidence(
     return ids.length > 0 && ids.every(id => headroomOf(provider, id, requestedModelId) !== null);
   }
   return ids.some(id =>
-    headroomOf(provider, id, requestedModelId) !== null
-    || (provider === "kiro" && getKiroAccountExhaustion(`${provider}\u0000${id}`) !== null));
+    headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null
+    || (provider === "kiro" && accounts?.get(id) !== undefined
+      && kiroAccountEvidence(accounts.get(id)!).exhausted !== undefined));
 }
 /**
  * How long to cool an account that just 429'd, when we know its allowance is spent.
@@ -213,10 +224,10 @@ export function hasHeadroomEvidence(
 const MIN_EXHAUSTED_COOLDOWN_MS = 5 * 60_000;
 const MAX_EXHAUSTED_COOLDOWN_MS = 24 * 60 * 60_000;
 
-export function exhaustedCooldownMs(provider: string, accountId: string, now = Date.now()): number | null {
+export function exhaustedCooldownMs(provider: string, accountId: string, now = Date.now(), account?: ProviderAccount): number | null {
   if (provider !== "kiro") return null;
-  const exhaustion = getKiroAccountExhaustion(`${provider}\u0000${accountId}`, now);
-  if (!exhaustion?.exhausted) return null;
-  const untilReset = exhaustion.nextResetAt === undefined ? MIN_EXHAUSTED_COOLDOWN_MS : exhaustion.nextResetAt - now;
+  const evidence = account ? kiroAccountEvidence(account, now) : {};
+  if (!evidence.exhausted) return null;
+  const untilReset = evidence.resetAt === undefined ? MIN_EXHAUSTED_COOLDOWN_MS : evidence.resetAt - now;
   return Math.min(Math.max(untilReset, MIN_EXHAUSTED_COOLDOWN_MS), MAX_EXHAUSTED_COOLDOWN_MS);
 }

@@ -150,10 +150,11 @@ account usable ([#5694](https://github.com/lidge-jun/opencodex/issues/5694)). Th
 Reserve: while the block is in force, Reserve on that main account cannot activate. To let the main
 account run to exhaustion and hand over to Reserve, turn the switch off.
 
-The policy uses the **5h window when present**, otherwise the weekly window. Monthly-only
-accounts use their monthly window. It does not take the highest percentage across windows.
-A fresh **0%** observation automatically releases the block while the switch stays on; the next
-98% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
+The **5h window and the weekly window each block on their own**: either one reaching 98% blocks
+immediately, even while the other still has headroom. Monthly-only accounts use their monthly
+window. The block releases automatically, with the switch still on, once every blocking window
+reports a fresh reading below 98% (a 0% reset counts); the next 98% observation blocks again.
+An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
 While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
 invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
@@ -225,20 +226,30 @@ List and switch provider accounts and API-key pools through the running proxy. T
 surface is:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons|import-orca> ...
+Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
+pause <provider> <id|alias|main>  Hold an account out of automatic selection.
+resume <provider> <id|alias|main>  Return a paused account to automatic selection.
+pause-exhausted <provider>  Pause every account whose quota is spent.
+clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
+sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
+priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
 grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
+import <provider> --format <format> (--file <path>|--stdin)  Import credentials from a named external format.
 import-orca --source <dir> --registry <file> [--apply]  Preview or apply imports from Orca-managed Codex homes.
+main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App login the pool calls 'main'.
 Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
 A selection-order change applies from the next unbound request and never moves a bound thread.
 ```
@@ -325,10 +336,12 @@ Without a provider, lists the Codex pool, OAuth accounts, and configured API-key
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
 Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chosen Codex row is marked
 `selected`. `PRIORITY` is the signed Codex selection order (`0` when unset) and shows `-` for rows
-where ordering does not apply, such as OAuth accounts and API keys. By default, with two or more eligible stored Kiro accounts, a 429 rotates automatically to
-another account and prefers the one with the most known remaining allowance; rotation is
-presence-driven and cannot be turned off — `oauthAccountFailover.enabled: false` declines the
-pre-dispatch account preference, not 429 recovery; `ocx account login kiro`
+where ordering does not apply, such as OAuth accounts and API keys. With two stored Kiro accounts,
+rate, confirmed monthly-quota, and suspension refusals can rotate to an eligible account
+before output; positive cached model-list evidence is preferred among eligible accounts before
+the ordinary pool strategy. Reactive rotation is
+presence-driven and cannot be turned off — `oauthAccountFailover.enabled: false` declines
+pre-dispatch account preference, not refusal recovery, and a provider override takes precedence; `ocx account login kiro`
 adds accounts to the pool one at a time. An empty result is still success. `--json`
 returns:
 
@@ -367,9 +380,32 @@ kiro      oauth  3f0a91c2  a***r@examp***.com  -        active  mo 15%
 kiro      oauth  8b24de70  k***1@examp***.net  -                mo 88%
 ```
 
-With two or more Kiro accounts logged in, a 429 rotates to another account automatically and
-prefers the one with the most remaining allowance. Accounts are added one at a time —
-`ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool.
+`ocx account list kiro` marks an account excluded from automatic selection as
+`not-auto-selected(<reason>)`. JSON carries `autoSelectable` and, when false, a closed
+`skipReason` (`needs_reauth`, `suspended`, `cooldown`, or `quota_exhausted`). An active
+singleton or all-excluded pool may still send. Kiro `providerCredits` comes from measured
+`meteringEvent` values: the last reading within a physical response is retained, and
+separately billed sends add to the request spend. Credits are never estimated from tokens.
+
+With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota, and
+confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
+that login until reset or evidence expiry; completed service clears an older verdict.
+Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
+`ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool. In the dashboard, Login and Add account also offer Builder ID, Google, and GitHub device login alongside the Kiro CLI choice; native device login adds an account without signing the CLI out.
+To add an account without the Kiro CLI, use `ocx account login kiro --method builder-id`,
+`--method google`, or `--method github`. Open the printed verification URL, enter the user
+code, and wait for approval. `--no-wait` prints the flow ID; cancel it with
+`ocx account cancel kiro --flow <flow-id>`. Native login only adds accounts. To reauthenticate
+one, remove it and add it again. A repeated social profile ARN creates another slot and prints
+`duplicate_profile_arn`; the slots each carry their own quota and load state.
+Kiro can opt into proactive `least-loaded` placement with `pool.kernel` and account preference enabled.
+Proactive model preference also requires that account preference be explicitly enabled globally
+or for Kiro; an unset or false setting leaves a healthy active account in place. Model lists are
+learned after an account serves, so an inactive sibling may initially have no evidence. A model
+ID absent from every cached list is still sent upstream.
+Its optional `maxConcurrentPerAccount` cap is a bounded per-account queue: a full selected account
+waits up to 250 ms, then returns 503 `account_capacity` with `Retry-After: 1`. The cap is local to
+each proxy process and does not move a request; reactive rotation remains available after a refusal.
 
 ### `ocx account current <provider> [--json]`
 
@@ -382,7 +418,9 @@ that state and still exits 0. `--json` returns:
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
+
+`auto` clears the manual selection so the pool places work by its own strategy again. Any Codex account can be named by the alias set with `ocx account alias` instead of its id; that holds for `priority`, `pause`, `resume`, `clear-cooldown`, `remove` and `alias` too. For Codex accounts, `auto`, `main` and `__main__` are reserved regardless of case and cannot be assigned as aliases. OAuth and API-key display names keep their existing rules.
 
 Selects an existing Codex account, OAuth account, or API key. For `openai`, `main` selects the Codex
 App login. A Codex Pool selection clears process-local affinity and applies to the next request,
@@ -425,7 +463,7 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Reads or sets one Codex pool account's selection order: **higher is used earlier**, the default is
 `0`, and the range is `-100` through `100`. Only the `openai` Codex pool is ordered, so other
@@ -486,7 +524,7 @@ machine"** checkbox on the add-account modal. That setting already means the ope
 sitting at the proxy host, which is exactly when a callback URL is useless — so ticking it
 switches the Codex login to the device flow and shows a copyable code instead.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
 This guarded, non-interactive deletion requires `--yes`. Before deleting, it verifies that the id
 exists; a missing id exits 1 without sending DELETE. The main Codex App login cannot be removed, so
@@ -639,7 +677,7 @@ proxy to be running (`ocx start`, or an installed service).
 | `provider <name> <on\|off>` | `--json` | Enable or disable every model of one provider in a single write. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. `value <tokens> --set-all` also re-points every routed provider (like the dashboard toggle); without it the value only becomes the default. `provider ... on --value <tokens>` sets an explicit cap for that provider only (`--value` is valid with `on` only). |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-6-luna`, `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now
