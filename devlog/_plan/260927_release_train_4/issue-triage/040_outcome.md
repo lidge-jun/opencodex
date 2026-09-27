@@ -19,3 +19,15 @@ At finalization, replace this section with a table of exact issue comment URLs, 
 2. Compare `gh pr list --limit 300 --json number,headRefOid` with the 21 requested PR IDs, then check `020_pr_actions.md` and the posted comment receipts; all must be present exactly once.
 3. Confirm no `gui/` asset or screenshot entered the branch, no version/tag changed, no other lane worktree or excluded item was modified, and the only non-devlog code delta is the isolated standalone fix and its owning doc/test.
 4. Run privacy and structure gates on the final report, then confirm required CI on the actual head after push and on `dev` after merge.
+
+## wp1 issue comment receipts
+
+All five comments were posted once from the reviewed English drafts while remote `dev` was `24b2f39b77a2`, with open-state and latest-comment checks before the write and exact body readback afterward. No owned issue was closed; all 12 retain unmet acceptance.
+
+| Issue | Comment |
+|---|---|
+| #5745 | [status and next step](https://github.com/lidge-jun/opencodex/issues/5745#issuecomment-5856932574) |
+| #5493 | [status and next step](https://github.com/lidge-jun/opencodex/issues/5493#issuecomment-5856933033) |
+| #4198 | [status and next step](https://github.com/lidge-jun/opencodex/issues/4198#issuecomment-5856933529) |
+| #4173 | [status and next step](https://github.com/lidge-jun/opencodex/issues/4173#issuecomment-5856934021) |
+| #2834 | [status and next step](https://github.com/lidge-jun/opencodex/issues/2834#issuecomment-5856934492) |
