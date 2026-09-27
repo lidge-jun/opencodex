@@ -283,7 +283,7 @@ test("pnpm owner resolution failure is unavailable, not an unowned PATH lookup",
 
 test("pnpm read probes ignore caller project hooks from a trusted directory", () => {
   const input = { npm_config_ignore_pnpmfile: "false", NPM_CONFIG_IGNORE_PNPMFILE: "false", SECRET: "retained" };
-  expect(pnpmReadEnvironment(input)).toEqual({ npm_config_ignore_pnpmfile: "true", SECRET: "retained" });
+  expect(pnpmReadEnvironment(input)).toEqual({ npm_config_ignore_pnpmfile: "true", pnpm_config_ignore_pnpmfile: "true", SECRET: "retained" });
   expect(input.npm_config_ignore_pnpmfile).toBe("false");
   expect(PNPM_READ_CWD).toBe(dirname(fileURLToPath(new URL("../../src/update/pnpm-read-policy.mjs", import.meta.url))));
 });
