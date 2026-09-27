@@ -425,7 +425,10 @@ export async function executeResponsesRunTurn(
         }
         sendBudgetState.pendingHopPermit = hop.permit;
         return true;
-      } catch {
+      } catch (err) {
+        // Applying the alternate can still fail, e.g. when a newer manual selection points back
+        // at the flagged account; the client then needs the login instruction, not the raw 401.
+        Object.assign(error, { errorType: "authentication_error", message: publicOAuthAuthenticationErrorMessage(err) });
         hop.permit?.release();
         return false;
       }

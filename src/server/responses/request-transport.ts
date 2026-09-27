@@ -196,9 +196,10 @@ export async function prepareResponsesTransport(
   };
   const refreshResolvedOAuthSelection = async (sent: OAuthAccessSnapshot): Promise<OAuthAccessSnapshot> => {
     const current = captureOAuthAccountSelection(route.providerName);
-    const unchanged = current?.accountId === oauthSelection?.accountId
-      && current?.revision === oauthSelection?.revision;
-    const candidate = unchanged ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
+    // Keyed on the account, not the selection revision: a selection that moved away and back
+    // (A -> B -> A) before the 401 landed still serves the rejected credential, and skipping
+    // the refresh would replay it and spend the one recovery attempt.
+    const candidate = current?.accountId === sent.accountId ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
     if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
