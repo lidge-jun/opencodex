@@ -272,16 +272,17 @@ const SOURCE_BY_ROLE: Record<string, number> = {
 /**
  * Collapse `role:'system'` entries that follow the conversation start into the
  * immediately-following user message. The leading run of system messages never
- * reaches here; it is the request's #2 system prompt.
+ * reaches here; it is the request's #2 system prompt. With S0 already sent as #2:
  *
- *   [{system: "S1"}, {system: "S2"}, {user: "U1"}, {assistant: "A1"}, {user: "U2"}]
+ *   [{user: "U1"}, {assistant: "A1"}, {system: "S1"}, {system: "S2"}, {user: "U2"}]
  *
  * becomes
  *
- *   [{user: "<system>\nS1\nS2\n</system>\nU1"}, {assistant: "A1"}, {user: "U2"}]
+ *   [{user: "U1"}, {assistant: "A1"}, {user: "<system>\nS1\nS2\n</system>\nU2"}]
  *
  * If there's no following user message, the trailing system messages get
- * appended as a synthesized user turn.
+ * appended as a synthesized user turn. A request made only of system messages
+ * keeps no #2 and comes through here whole, so its prompt list is never empty.
  */
 function collapseSystemIntoUser(messages: ChatHistoryItem[]): ChatHistoryItem[] {
   const out: ChatHistoryItem[] = [];
