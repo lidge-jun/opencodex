@@ -13,7 +13,8 @@ import { readClientConnectionState, clearClientConnection } from "../../src/clie
 import { HubClientError } from "../../src/client/hub-client";
 import { RuntimeApiError } from "../../src/cli/runtime-api";
 import type { DesktopPickerStatus } from "../../src/claude/desktop-picker";
-import { ensurePickerCa, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
+import { ensurePickerCa, pickerCaFingerprints, PICKER_CA_COMMON_NAME } from "../../src/claude/intercept/picker-ca";
+import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../../src/codex/desired-state";
 import { resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
 import { resetBundledCatalogCacheForTests, setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
@@ -679,6 +680,25 @@ test("picker trust installs the file only when it matches the server-reported CA
     expect(result).toBe(0);
     expect(trusted).toEqual(["pem-matched"]);
   } finally { error.mockRestore(); log.mockRestore(); }
+});
+
+test("picker trust rejects an unconstrained CA even when the server reports its fingerprint", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const ca = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME });
+  const caSha256 = pickerCaFingerprints(ca.certPem).sha256;
+  const trusted: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: null, port: 10100, hostname: "127.0.0.1", source: "config" }),
+      ensurePickerCaImpl: () => ({ ...ca, fingerprint: caSha256 }),
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => { trusted.push("trust"); return { ok: true }; },
+      runtimeRequestImpl: async () => ({ ok: true, picker: pickerStatus("restart_required", caSha256) }),
+    });
+    expect(result).toBe(1);
+    expect(trusted).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("ca_unverified");
+  } finally { error.mockRestore(); }
 });
 
 test("picker off offline persists the preference and removes local artifacts", async () => {

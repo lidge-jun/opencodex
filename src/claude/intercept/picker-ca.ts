@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, stat
 import { join } from "node:path";
 import { withClientLifecycleSync } from "../../client/lifecycle-lock";
 import {
+  ALL_IP_ADDRESS_BASES,
   createCertificateAuthority,
   issueServerLeaf,
   type LocalInterceptCa,
@@ -34,6 +35,78 @@ export function pickerCaFingerprints(certPem: string): { sha1: string; sha256: s
     sha1: createHash("sha1").update(der).digest("hex").toUpperCase(),
     sha256: createHash("sha256").update(der).digest("hex").toUpperCase(),
   };
+}
+
+interface DerItem { tag: number; body: Buffer; next: number }
+
+function readDer(bytes: Buffer, at: number): DerItem | null {
+  if (at + 2 > bytes.length) return null;
+  const tag = bytes[at]!;
+  let length = bytes[at + 1]!;
+  let cursor = at + 2;
+  if (length & 0x80) {
+    const width = length & 0x7f;
+    if (width === 0 || width > 4 || cursor + width > bytes.length) return null;
+    length = 0;
+    for (let i = 0; i < width; i++) length = length * 256 + bytes[cursor++]!;
+  }
+  if (cursor + length > bytes.length) return null;
+  return { tag, body: bytes.subarray(cursor, cursor + length), next: cursor + length };
+}
+
+function children(bytes: Buffer): DerItem[] | null {
+  const out: DerItem[] = [];
+  for (let cursor = 0; cursor < bytes.length;) {
+    const item = readDer(bytes, cursor);
+    if (!item) return null;
+    out.push(item);
+    cursor = item.next;
+  }
+  return out;
+}
+
+function constrainedToPickerHost(value: Buffer): boolean {
+  const root = readDer(value, 0);
+  if (!root || root.tag !== 0x30 || root.next !== value.length) return false;
+  const fields = children(root.body);
+  if (!fields || fields.length !== 2 || fields[0]!.tag !== 0xa0 || fields[1]!.tag !== 0xa1) return false;
+  const excluded = children(fields[1]!.body);
+  const excludesAllIps = excluded?.length === ALL_IP_ADDRESS_BASES.length && excluded.every((subtree, index) => {
+    const base = subtree.tag === 0x30 ? children(subtree.body) : null;
+    return base?.length === 1 && base[0]!.tag === 0x87
+      && base[0]!.body.equals(Buffer.from(ALL_IP_ADDRESS_BASES[index]!));
+  });
+  if (!excludesAllIps) return false;
+  const subtrees = children(fields[0]!.body);
+  const subtree = subtrees?.length === 1 && subtrees[0]!.tag === 0x30 ? children(subtrees[0]!.body) : null;
+  return subtree?.length === 1 && subtree[0]!.tag === 0x82
+    && subtree[0]!.body.equals(Buffer.from(PICKER_HOST, "ascii"));
+}
+
+/** Independently authorize a root before installing it as system trust. */
+export function acceptsPickerAuthority(certPem: string): boolean {
+  try {
+    const cert = new X509Certificate(certPem);
+    if (!cert.subject.split("\n").includes(`CN=${PICKER_CA_COMMON_NAME}`)) return false;
+    const root = readDer(cert.raw, 0);
+    const certificate = root?.tag === 0x30 && root.next === cert.raw.length ? children(root.body) : null;
+    const tbs = certificate?.[0]?.tag === 0x30 ? children(certificate[0].body) : null;
+    const extensionField = tbs?.find(item => item.tag === 0xa3);
+    const wrapped = extensionField && readDer(extensionField.body, 0);
+    const extensions = wrapped?.tag === 0x30 && wrapped.next === extensionField!.body.length
+      ? children(wrapped.body) : null;
+    const matches = extensions?.filter(item => {
+      const fields = item.tag === 0x30 ? children(item.body) : null;
+      return fields?.[0]?.tag === 0x06 && fields[0].body.equals(Buffer.from([0x55, 0x1d, 0x1e]));
+    });
+    if (matches?.length !== 1) return false;
+    const fields = children(matches[0]!.body);
+    return fields?.length === 3 && fields[1]!.tag === 0x01
+      && fields[1]!.body.equals(Buffer.from([0xff])) && fields[2]!.tag === 0x04
+      && constrainedToPickerHost(fields[2]!.body);
+  } catch {
+    return false;
+  }
 }
 
 /** Atomically publish a public certificate; these files carry no key material. */
