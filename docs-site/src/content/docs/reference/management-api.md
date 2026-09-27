@@ -84,6 +84,7 @@ route-specific results rather than repeating this table.
 | `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
+| `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 local dashboard required for POST; 409 stale, busy, or incomplete state |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
 
@@ -684,6 +685,28 @@ deferred catalog attempt never rolls back the durable account mutation and never
 provider, account, path, or credential details; clients receive only the completion boolean. Deleting
 an account retains its selector binding so exact routes fail closed while the account is absent and the
 same selector is restored if that account id is added again.
+
+## Windows compatibility certificate setup
+
+`GET /api/codex/desktop-compatibility/certificate` returns public certificate status:
+support, state, fingerprint, expiry, renewal notice, trust observation and any active operation.
+It never generates a key, decrypts private material or registers OS trust. Certificate trust alone
+does not mean a compatibility relay is running or the private key has been verified in this process.
+
+POST accepts `action: "prepare" | "trust" | "remove-trust"` and `confirmed: true`.
+Trust actions also require the exact uppercase SHA-256 `fingerprint` returned by status.
+These mutations require a GUI-session principal from trusted loopback ingress; an admin token alone
+receives 403. They are intended for a local confirmation flow, not unattended certificate enrollment.
+
+Prepare stores a constrained 30-day authority with a Windows CurrentUser-DPAPI-protected private key.
+Subsequent preparations reuse it. Trust actions never create missing state or silently replace an
+expired root. Removal refuses while Codex is running or process ownership cannot be established.
+Cancellation or uncertain OS command completion is checked against the actual certificate store.
+Unknown state remains an error rather than authorizing an automatic retry. Replies contain no PEM,
+private keys, account data or subprocess output.
+
+This setup API does not enable a relay, change login, alter usage, restart Codex or install a watcher.
+CurrentUser protection does not isolate secrets from other processes running as the same OS user.
 
 ## Choosing a client
 

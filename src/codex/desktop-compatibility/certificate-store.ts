@@ -36,6 +36,29 @@ export interface StoredDesktopAuthority {
   reused: boolean;
 }
 
+export type DesktopAuthorityInspection =
+  | { status: "missing" | "invalid" }
+  | { status: "present" | "expired"; certPem: string; fingerprint: string; expiresAt: number; renewalDue: boolean };
+
+/** Read-only public metadata for status: no key decryption, ACL write, lock or generation. */
+export function inspectDesktopCompatibilityAuthority(directory: string, now = Date.now()): DesktopAuthorityInspection {
+  if (!isAbsolute(directory) || !Number.isFinite(now)) return { status: "invalid" };
+  const path = join(directory, FILE);
+  try {
+    if (!pathPresent(directory)) return { status: "missing" };
+    assertPath(directory, true);
+    if (!pathPresent(path)) return { status: "missing" };
+    assertPath(path, false);
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    if (saved.version !== 1 || saved.protection !== "windows-current-user-dpapi" || typeof saved.certPem !== "string"
+      || typeof saved.sealed !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(saved.sealed) || saved.sealed.length > MAX_FILE) return { status: "invalid" };
+    const certificate = new X509Certificate(saved.certPem), expiresAt = Date.parse(certificate.validTo);
+    if (!certificate.ca || !Number.isFinite(expiresAt)) return { status: "invalid" };
+    return { status: expiresAt <= now ? "expired" : "present", certPem: saved.certPem,
+      fingerprint: certificate.fingerprint256.replaceAll(":", ""), expiresAt, renewalDue: expiresAt - now <= 7 * DAY };
+  } catch { return { status: "invalid" }; }
+}
+
 function assertPath(path: string, directory: boolean): void {
   const stat = lstatSync(path);
   if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1 || stat.size > MAX_FILE)) {
@@ -51,7 +74,7 @@ function pathPresent(path: string): boolean {
   }
 }
 
-function validatedAuthority(certPem: string, keyPem: string, commonName: string, now: number, reused: boolean): StoredDesktopAuthority {
+function validatedAuthority(certPem: string, keyPem: string, commonName: string, now: number, reused: boolean, allowExpired = false): StoredDesktopAuthority {
   try {
     const certificate = new X509Certificate(certPem);
     const privateKey = createPrivateKey(keyPem), publicKey = createPublicKey(keyPem);
@@ -63,7 +86,7 @@ function validatedAuthority(certPem: string, keyPem: string, commonName: string,
     const expiresAt = Date.parse(certificate.validTo), startsAt = Date.parse(certificate.validFrom);
     if (!Number.isFinite(expiresAt) || !Number.isFinite(startsAt) || startsAt > now
       || expiresAt - startsAt > (VALIDITY_DAYS + 1) * DAY) throw new Error("invalid");
-    if (expiresAt <= now) throw new DesktopAuthorityError("expired");
+    if (expiresAt <= now && !allowExpired) throw new DesktopAuthorityError("expired");
     return { authority: { certPem, keyPem, privateKey, publicKey }, commonName,
       fingerprint: certificate.fingerprint256.replaceAll(":", ""), expiresAt,
       renewalDue: expiresAt - now <= 7 * DAY, reused };
@@ -73,7 +96,7 @@ function validatedAuthority(certPem: string, keyPem: string, commonName: string,
   }
 }
 
-async function readAuthority(path: string, protection: AuthorityKeyProtection, now: number): Promise<StoredDesktopAuthority> {
+async function readAuthority(path: string, protection: AuthorityKeyProtection, now: number, allowExpired = false): Promise<StoredDesktopAuthority> {
   assertPath(path, false);
   await hardenSecretPathAsync(path, { required: true });
   assertPath(path, false);
@@ -87,12 +110,23 @@ async function readAuthority(path: string, protection: AuthorityKeyProtection, n
     const secret = JSON.parse(Buffer.from(cleartext).toString("utf8"));
     if (secret.policy !== POLICY || secret.certSha256 !== digest(saved.certPem)
       || typeof secret.keyPem !== "string" || typeof secret.commonName !== "string") throw new Error("invalid");
-    return validatedAuthority(saved.certPem, secret.keyPem, secret.commonName, now, true);
+    return validatedAuthority(saved.certPem, secret.keyPem, secret.commonName, now, true, allowExpired);
   } catch (error) {
     if (error instanceof DesktopAuthorityError) throw error;
     // A corrupt or foreign-user key never silently regenerates a new root or trust prompt.
     throw new DesktopAuthorityError("unreadable");
   } finally { cleartext?.fill(0); }
+}
+
+/** Loads only existing state. Expired keys may be loaded solely to remove their OS trust. */
+export async function loadDesktopCompatibilityAuthority(options: DesktopAuthorityStoreOptions, allowExpiredForRemoval = false): Promise<StoredDesktopAuthority> {
+  if (!isAbsolute(options.directory)) throw new DesktopAuthorityError("unsafe_path");
+  const now = options.now?.() ?? Date.now();
+  if (!Number.isFinite(now)) throw new DesktopAuthorityError("unreadable");
+  assertPath(options.directory, true);
+  const path = join(options.directory, FILE);
+  if (!pathPresent(path)) throw new DesktopAuthorityError("unreadable");
+  return readAuthority(path, options.protection ?? windowsAuthorityKeyProtection, now, allowExpiredForRemoval);
 }
 
 /** Reuses one user-protected root across restarts; never installs, rotates or removes trust. */

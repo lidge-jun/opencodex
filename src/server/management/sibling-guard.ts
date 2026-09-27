@@ -30,6 +30,7 @@ export const SIBLING_REFUSED_MANAGEMENT_PATHS: readonly { readonly path: string;
   { path: "/api/client-integrations", children: true },
   { path: "/api/native-integrations", children: true },
   { path: "/api/claude-desktop", children: true },
+  { path: "/api/codex/desktop-compatibility", children: true },
   { path: "/api/claude-code", children: false },
   { path: "/api/grok/apply", children: false },
   { path: "/api/grok/selection", children: false },

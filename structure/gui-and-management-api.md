@@ -56,6 +56,8 @@ unsupported; deployments that previously relied on such embedding must open it a
 
 ## Authentication boundaries
 
+Codex compatibility certificate setup follows the [certificate setup API](clients/codex-desktop.md#certificate-setup-api): status is read-only; key/trust mutations require the actual local GUI-session principal, explicit confirmation and an exact fingerprint for trust changes. The endpoint does not enable a relay, change Codex login or restart the app.
+
 Kiro management login starts the native device flow only when `POST /api/oauth/login`
 supplies `method: "builder-id"`, `"google"`, or `"github"`. A method-less request retains
 the Kiro CLI flow used by the dashboard chooser. The KiroDeviceLoginDialog and useKiroDeviceLogin GUI modules own the native chooser and polling. The kiro-device-login-finalizer GUI module continues terminal status reads after dialog unmount; a provisional cancel result is never treated as confirmed success. Native status and cancellation require `flowId`;

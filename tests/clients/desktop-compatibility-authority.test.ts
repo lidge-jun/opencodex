@@ -3,7 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureDesktopCompatibilityAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
+import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
 import { windowsAuthorityKeyProtection, type AuthorityKeyProtection } from "../../src/codex/desktop-compatibility/windows-key-protection";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
@@ -34,6 +34,27 @@ function protector(): AuthorityKeyProtection {
 }
 
 describe("Codex Desktop compatibility authority lifecycle", () => {
+  test("public status neither creates missing state nor repairs a malformed envelope", async () => {
+    const root = directory(), absent = join(root, "not-created");
+    expect(inspectDesktopCompatibilityAuthority(absent)).toEqual({ status: "missing" }); expect(existsSync(absent)).toBe(false);
+    const prepared = await ensureDesktopCompatibilityAuthority({ directory: root, protection: protector() });
+    const path = join(root, "authority.json"), original = readFileSync(path, "utf8");
+    expect(inspectDesktopCompatibilityAuthority(root)).toMatchObject({ status: "present", fingerprint: prepared.fingerprint });
+    expect(readFileSync(path, "utf8")).toBe(original);
+    const malformed = JSON.parse(original); delete malformed.sealed; writeFileSync(path, JSON.stringify(malformed));
+    const before = readFileSync(path, "utf8"); expect(inspectDesktopCompatibilityAuthority(root)).toEqual({ status: "invalid" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("an expired key can be loaded for exact trust removal without minting a replacement", async () => {
+    const root = directory(), protection = protector();
+    const prepared = await ensureDesktopCompatibilityAuthority({ directory: root, protection });
+    const options = { directory: root, protection, now: () => prepared.expiresAt + 1 };
+    await expect(loadDesktopCompatibilityAuthority(options)).rejects.toMatchObject({ code: "expired" });
+    const loaded = await loadDesktopCompatibilityAuthority(options, true);
+    expect(loaded.fingerprint).toBe(prepared.fingerprint); expect(loaded.authority.keyPem).toBe(prepared.authority.keyPem);
+  });
+
   test("reuses the exact certificate and key after reopening; disk never contains the private PEM", async () => {
     const root = directory(), protection = protector();
     const first = await ensureDesktopCompatibilityAuthority({ directory: root, protection });

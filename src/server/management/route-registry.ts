@@ -158,6 +158,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/claude-desktop-picker-routes
   { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
   { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },
+  { method: "GET", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Certificate status is available over authenticated HTTP while the desktop compatibility runtime/CLI status contract is integrated." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Certificate setup requires a confirmed local dashboard session; raw admin tokens cannot enroll or remove OS trust." } },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/grok/selection", module: "server/management/agent-settings-routes", mutates: true },

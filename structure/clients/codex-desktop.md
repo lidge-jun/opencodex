@@ -38,10 +38,35 @@ Reopening reuses the same key and fingerprint. Corrupt, foreign-user and expired
 refuses instead of silently replacing a trusted identity. Renewal is reported within
 the last seven days. The store does not register certificates, start listeners, enable
 compatibility settings or change the running app. Management enable/disable and renewal
-remain a separate integration layer.
+remain a separate integration layer from certificate preparation.
 
 `src/codex/desktop-compatibility/windows-key-protection.ts` uses trusted PowerShell
 and bounded stdin/stdout, never command-line secrets or plaintext fallback. CurrentUser
 protects against other OS identities, not another process using the same credentials.
 `tests/clients/desktop-compatibility-authority.test.ts` covers persistence, refusal,
 and a real Windows DPAPI round trip with synthetic data.
+
+## Certificate setup API
+
+`src/server/management/desktop-compatibility-routes.ts` exposes the authenticated
+`/api/codex/desktop-compatibility/certificate` setup endpoint. GET is read-only public metadata and OS-trust inspection;
+it does not decrypt a key, create a file, acquire a lease or register trust. POST
+requires a GUI-session principal on trusted loopback ingress and explicit confirmation.
+Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens cannot
+substitute browser provenance; this does not protect against arbitrary same-user code.
+
+`src/codex/desktop-compatibility/certificate-service.ts` serializes setup and refuses
+busy operations. Only prepare may generate a key. Trust/removal load existing validated
+state, recheck its fingerprint, and never repair missing state by creating a new root.
+Removal refuses while the app is running or its process state cannot be established.
+An expired key is loadable only for removal, not for renewed trust.
+
+`src/codex/desktop-compatibility/windows-certificate-trust.ts` uses the CurrentUser Root
+store and exact certificate bytes. Mutations require the matching private key from the
+protected store, not status metadata. Idempotent actions skip repeated OS changes;
+uncertain command completion is resolved by an independent readback. Unknown readback
+remains unknown. Public responses contain no PEM, private-key objects or subprocess output.
+
+Sibling instances refuse certificate mutations because OS trust is shared user state.
+The registry declares the certificate-status CLI verb as deferred to the desktop
+compatibility integration owner; it currently has an authenticated HTTP contract only.
