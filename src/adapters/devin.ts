@@ -15,7 +15,7 @@ import { getCachedCatalog, type CacheEntry, type ModelCatalogEntry } from "./dev
 import { collapseDevinModelUid, devinFamiliesOf, devinFamilyBaseId, selectDevinFamilyMember, type DevinVariantRequest } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
-import { isProviderIssuedThinkingSignature } from "../responses/reasoning-envelope";
+import { devinAssistantReasoning, encodeDevinSignature } from "./devin/reasoning-signature";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { devinContextOverflowEvent, isDevinHistoryOverflow } from "./devin/context-overflow";
 
@@ -452,42 +452,10 @@ function assistantText(message: OcxAssistantMessage): string {
     // Thinking stays out of the replayed TEXT: folding chain-of-thought into
     // assistant text sends it back as visible prior output, which the model
     // then treats as something it said to the user. It is replayed in its own
-    // field instead — see assistantThinking below.
+    // field instead — see devinAssistantReasoning.
     .map((part) => (part.type === "text" ? part.text : ""))
     .filter(Boolean)
     .join("\n");
-}
-
-/**
- * The assistant turn's own reasoning, for replay in ChatMessagePrompt #11.
- *
- * This adapter previously asserted that Cognition has no reasoning-replay
- * field and dropped the thinking outright, so a reasoning model restarted its
- * chain on every turn of a tool loop. The field exists: two independent
- * clients of the same service write #11 thinking with #12 signature and #18
- * signature_type on the assistant prompt.
- *
- * Field #12 attests the exact text at #11, and the wire has room for one pair.
- * Every block that carries text is replayed, so the chain stays intact; the
- * signature rides along only when the text being replayed IS the text it
- * attests, which is exactly the single-block case. Several independently signed
- * blocks send an unsigned prompt rather than pairing one block's attestation
- * with another block's words. A signature-only block attests encrypted thinking
- * that is not being replayed at all, so it is not one of these blocks and
- * cannot contribute the pair.
- */
-function assistantThinking(
-  message: OcxAssistantMessage,
-): { thinking?: string; signature?: string } {
-  const blocks = message.content.filter(
-    (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
-  ).filter(part => Boolean(part.thinking));
-  if (blocks.length === 0) return {};
-  const signature = blocks.length === 1 ? blocks[0]!.signature : undefined;
-  return {
-    thinking: blocks.map(part => part.thinking).join("\n"),
-    ...(isProviderIssuedThinkingSignature(signature) ? { signature } : {}),
-  };
 }
 
 export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
@@ -527,10 +495,10 @@ function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
   if (message.role === "assistant") {
     const toolCalls = assistantToolCalls(message);
     const text = assistantText(message);
-    const reasoning = assistantThinking(message);
+    const reasoning = devinAssistantReasoning(message);
     // A turn that produced only reasoning is still worth replaying: dropping it
     // is what makes the next turn re-derive the same chain.
-    if (!text && toolCalls.length === 0 && !reasoning.thinking) return undefined;
+    if (!text && toolCalls.length === 0 && !reasoning.thinking && !reasoning.signature) return undefined;
     return {
       role: "assistant",
       content: text || "",
@@ -792,7 +760,7 @@ export function createDevinAdapter(
           if (event.kind === "reasoning_signature") {
             // Carried back out so the next turn can replay it in the prompt's
             // signature field; an unsigned replay is what the service ignores.
-            emit({ type: "thinking_signature", signature: event.signature });
+            emit({ type: "thinking_signature", signature: encodeDevinSignature(event.signature, event.signatureType) });
             continue;
           }
           if (event.kind === "tool_call_start") {

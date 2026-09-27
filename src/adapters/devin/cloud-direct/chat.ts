@@ -494,7 +494,7 @@ export type CloudChatEvent =
    * turn produced. Without decoding it there is nothing to put in the prompt's
    * #12 on the next turn, so the replay would always be unsigned.
    */
-  | { kind: 'reasoning_signature'; signature: string }
+  | { kind: 'reasoning_signature'; signature: string; signatureType?: string }
   | { kind: 'tool_call_start'; id: string; name: string }
   | {
       kind: 'tool_call_args';
@@ -817,6 +817,10 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
     }
   }
   if (authoritativeUsage) yield authoritativeUsage;
+  let signatureType: string | undefined;
+  for (const f of iterFields(proto)) {
+    if (f.num === 21 && f.wire === 2 && Buffer.isBuffer(f.value)) signatureType = (f.value as Buffer).toString('utf8') || undefined;
+  }
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       // Visible delta_text — what the user should SEE in the chat.
@@ -842,7 +846,8 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       if (s) yield { kind: 'reasoning', text: s };
     } else if (f.num === 10 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       const s = (f.value as Buffer).toString('utf8');
-      if (s) yield { kind: 'reasoning_signature', signature: s };
+      // #21 delta_signature_type arrives in the same frame; the prompt replays it as #18.
+      if (s) yield { kind: 'reasoning_signature', signature: s, ...(signatureType ? { signatureType } : {}) };
     } else if (f.num === 6 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       let id: string | undefined;
       let name: string | undefined;
