@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
-import { loadOcxPlugins, pluginDirectoryTrustError, pluginFileTrustError } from "../../src/plugins/loader";
+import { loadOcxPlugins, macAclListingTrustError, macAclProbeTrustError, pluginDirectoryTrustError, pluginFileTrustError } from "../../src/plugins/loader";
 import {
   hasUpstreamRewriters,
   resetUpstreamRewritersForTests,
@@ -110,6 +110,74 @@ test.skipIf(process.platform === "win32")("a group- or world-writable plugin is 
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
+test("recorded macOS ls output accepts harmless runner ancestor ACLs", () => {
+  // `ls -lebd` shape from macOS: system-owned denial, an owner grant, and a
+  // read-only entry do not let another principal replace a checked path.
+  const root = "drwxr-xr-x+ 23 root wheel 736 Sep 27 07:50 /\n 0: group:everyone deny delete\n";
+  const runnerTemp = "drwx------@ 3 runner staff 96 Sep 27 07:50 /private/var/folders/ab/tmp\n"
+    + " 0: user:runner allow add_file\n 1: group:everyone allow list,search,readattr\n";
+  const inheritOnly = "drwx------@ 3 runner staff 96 Sep 27 07:50 /private/var/folders/ab\n"
+    + " 0: group:everyone allow add_file,file_inherit,directory_inherit,only_inherit\n";
+  const systemParent = "drwxr-xr-x+ 5 root wheel 160 Sep 27 07:50 /private/var/folders\n"
+    + " 0: user:runner allow add_file\n 1: user:root allow delete_child\n";
+  expect(macAclListingTrustError(root)).toBeNull();
+  expect(macAclListingTrustError(runnerTemp)).toBeNull();
+  expect(macAclListingTrustError(inheritOnly)).toBeNull();
+  expect(macAclListingTrustError(systemParent, "runner")).toBeNull();
+});
+
+test("recorded macOS ls output rejects effective non-owner write grants", () => {
+  const pluginDir = "drwx------@ 2 runner staff 64 Sep 27 07:50 /private/var/folders/ab/tmp/plugins\n"
+    + " 0: group:everyone allow add_file\n";
+  const ownedAncestor = "drwx------@ 3 runner staff 96 Sep 27 07:50 /private/var/folders/ab/tmp\n"
+    + " 0: group:everyone allow delete_child\n";
+  const inheritedChild = "drwxr-xr-x@ 2 runner staff 64 Sep 27 07:50 /private/var/folders/ab/tmp/child\n"
+    + " 0: group:everyone inherited allow add_file,file_inherit,directory_inherit\n";
+  const pluginFile = "-rw-------@ 1 runner staff 64 Sep 27 07:50 /private/var/folders/ab/tmp/plugins/plugin.ts\n"
+    + " 0: group:everyone allow write\n";
+  const ownerNamedGroup = "drwx------@ 2 runner staff 64 Sep 27 07:50 /private/var/folders/ab/tmp/plugins\n"
+    + " 0: group:runner allow add_file\n";
+  for (const listing of [pluginDir, ownedAncestor, inheritedChild, pluginFile, ownerNamedGroup]) {
+    expect(macAclListingTrustError(listing)).toBe("has an access control list");
+  }
+  expect(macAclListingTrustError("drwxr-xr-x+ 23 root wheel 736 Sep 27 07:50 /\n 0: unrecognized ACL entry\n"))
+    .toBe("access control list inspection failed");
+  expect(macAclListingTrustError(`${pluginDir.split("\n")[0]}\n 0: group:everyone allow future_permission\n`))
+    .toBe("has an access control list");
+});
+
+test("a transient macOS ACL inspection timeout retries once and still fails closed", () => {
+  const timedOut = { status: null, stdout: "", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) };
+  const safe = { status: 0, stdout: "drwxr-xr-x+ 23 root wheel 736 Sep 27 07:50 /\n 0: group:everyone deny delete\n" };
+  let calls = 0;
+  expect(macAclProbeTrustError(() => ++calls === 1 ? timedOut : safe)).toBeNull();
+  expect(calls).toBe(2);
+  calls = 0;
+  expect(macAclProbeTrustError(() => { calls++; return timedOut; })).toBe("access control list inspection failed");
+  expect(calls).toBe(2);
+});
+
+test("a timed-out macOS ACL probe cannot discard an observed unsafe grant", () => {
+  const timedOut = { status: null, stdout: "drwx------@ 2 runner staff 64 Sep 27 07:50 /plugins\n"
+    + " 0: group:everyone allow add_file\n", error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) };
+  const safe = { status: 0, stdout: "drwx------ 2 runner staff 64 Sep 27 07:50 /plugins\n" };
+  let calls = 0;
+  expect(macAclProbeTrustError(() => ++calls === 1 ? timedOut : safe)).toBe("has an access control list");
+  expect(calls).toBe(1);
+  calls = 0;
+  const malformed = { ...timedOut, stdout: "partial listing\n 0: group:everyone allow add_file\n" };
+  expect(macAclProbeTrustError(() => ++calls === 1 ? malformed : safe)).toBe("has an access control list");
+  expect(calls).toBe(1);
+  calls = 0;
+  const safeButIncomplete = { ...timedOut, stdout: "drwxr-xr-x+ 23 root wheel 736 Sep 27 07:50 /\n 0: group:everyone deny delete\n" };
+  expect(macAclProbeTrustError(() => ++calls === 1 ? safeButIncomplete : safe)).toBe("access control list inspection failed");
+  expect(calls).toBe(1);
+  calls = 0;
+  const unparseable = { ...timedOut, stdout: "partial listing\n" };
+  expect(macAclProbeTrustError(() => ++calls === 1 ? unparseable : safe)).toBe("access control list inspection failed");
+  expect(calls).toBe(1);
+});
+
 test.skipIf(process.platform !== "darwin")("ACL trust uses macOS ls when PATH contains incompatible ls", () => {
   const file = writePlugin("redirect.ts", REDIRECT_PLUGIN);
   const fakeLs = join(dir, "ls");
@@ -145,6 +213,22 @@ test.skipIf(process.platform !== "darwin")("an ACL on an ancestor directory bloc
     expect(result?.error).toBe("ancestor_untrusted");
     expect(hasUpstreamRewriters()).toBe(false);
   } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform !== "darwin")("a deny-only ACL on an owned ancestor still allows loading", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "ocx-plugin-acl-benign-"));
+  const nested = join(parent, "plugins");
+  try {
+    mkdirSync(nested);
+    writeFileSync(join(nested, "redirect.ts"), REDIRECT_PLUGIN);
+    execFileSync("/bin/chmod", ["+a", "everyone deny delete", parent]);
+    const [result] = await loadOcxPlugins(nested);
+    expect(result?.loaded).toBe(true);
+    expect(hasUpstreamRewriters()).toBe(true);
+  } finally {
+    execFileSync("/bin/chmod", ["-N", parent]);
     rmSync(parent, { recursive: true, force: true });
   }
 });

@@ -22,6 +22,7 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { userInfo } from "node:os";
 import { getConfigDir } from "../config/paths";
 import { registerOptionalShutdownHook } from "../lib/optional-shutdown-hooks";
 import { registerUpstreamRewriter, type UpstreamRewriter } from "./upstream-hooks";
@@ -60,28 +61,84 @@ const PLUGIN_EXTENSIONS = [".ts", ".js", ".mjs"];
 const SETUP_TIMEOUT_MS = 5_000;
 const ACL_PROBE_TIMEOUT_MS = 2_000;
 
+const MAC_ACL_BENIGN_TOKENS = new Set([
+  "read", "list", "search", "execute", "readattr", "readextattr", "readsecurity",
+  "file_inherit", "directory_inherit", "limit_inherit", "only_inherit",
+]);
+
+/**
+ * A deny, trusted-user grant, or read-only ACL does not let another user replace a checked path.
+ * `only_inherit` is not effective on this object; inherited grants on descendants are checked
+ * when those descendants are visited. Unknown allow rights and malformed entries fail closed.
+ */
+export function macAclListingTrustError(listing: string, currentUser = userInfo().username): string | null {
+  const [header, ...lines] = listing.split("\n");
+  const owner = /^\S+\s+\d+\s+(\S+)\s+/.exec(header ?? "")?.[1];
+  let unparseable = !owner;
+  for (const line of lines) {
+    if (!/^\s*\d+:/.test(line)) continue;
+    const entry = /^\s*\d+:\s+(.+?)\s+(?:inherited\s+)?(allow|deny)\s+([a-z_,]+)\s*$/.exec(line);
+    if (!entry) { unparseable = true; continue; }
+    if (entry[2] === "deny") continue;
+    const principal = entry[1]!;
+    // The file owner, this process's user, and root already control the path without an ACE.
+    // Require the `user:` prefix: a bare or group principal might include other users.
+    if (principal.startsWith("user:")
+      && [owner, currentUser, "root", "0"].includes(principal.slice(5))) continue;
+    const rights = entry[3]!.split(",");
+    if (rights.includes("only_inherit")) continue;
+    if (rights.some(right => !MAC_ACL_BENIGN_TOKENS.has(right))) return "has an access control list";
+  }
+  return unparseable ? "access control list inspection failed" : null;
+}
+
+interface MacAclProbeResult {
+  status: number | null;
+  stdout: string;
+  error?: Error;
+}
+
+/** A failed inspection never grants trust, even if a subsequent probe is attempted. */
+export function macAclProbeTrustError(probe: () => MacAclProbeResult): string | null {
+  try {
+    const first = probe();
+    // A timeout may carry partial stdout. Its unsafe ACEs are authoritative even if a retry
+    // would be clean; any other partial listing is incomplete and therefore also refused.
+    // Retry only when the first probe produced no ACL evidence at all.
+    let result = first;
+    if ((first.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      if (first.stdout.trim()) {
+        return macAclListingTrustError(first.stdout) ?? "access control list inspection failed";
+      }
+      result = probe();
+    }
+    if (result.error || result.status !== 0) return "access control list inspection failed";
+    return macAclListingTrustError(result.stdout);
+  } catch {
+    return "access control list inspection failed";
+  }
+}
+
 /** Refuse extended ACLs: mode bits alone cannot prove who can rewrite a plugin path. */
 function aclTrustError(path: string): string | null {
   if (process.platform !== "darwin" && process.platform !== "linux") return null;
   const mac = process.platform === "darwin";
   // CI and operator PATHs may put GNU coreutils ahead of the macOS tool.
   // GNU ls does not support -e, so pin the OS ACL inspector.
-  const result = spawnSync(mac ? "/bin/ls" : "getfacl", mac
-    ? ["-lebd", "--", path]
-    : ["-cp", "--", path], {
+  const probe = () => spawnSync(mac ? "/bin/ls" : "getfacl", mac
+    ? ["-lebd", "--", path] : ["-cp", "--", path], {
     encoding: "utf8",
     timeout: ACL_PROBE_TIMEOUT_MS,
     maxBuffer: 64 * 1024,
     env: { ...process.env, LC_ALL: "C" },
   });
+  if (mac) return macAclProbeTrustError(probe);
+  const result = probe();
   // getfacl is optional on Linux. Without it, the POSIX owner/mode checks below remain;
   // the documented Linux ACL limitation must be visible to operators.
-  if (!mac && (result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
   if (result.error || result.status !== 0) return "access control list inspection failed";
-  const lines = result.stdout.split("\n").slice(mac ? 1 : 0);
-  return lines.some(line => mac
-    ? /^\s*\d+:\s/.test(line)
-    : /^(?:user:[^:]+:|group:[^:]+:|mask::|default:)/.test(line))
+  return result.stdout.split("\n").some(line => /^(?:user:[^:]+:|group:[^:]+:|mask::|default:)/.test(line))
     ? "has an access control list" : null;
 }
 

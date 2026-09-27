@@ -29,8 +29,10 @@ Put plugin files in `plugins/` inside the opencodex home (`~/.opencodex/plugins/
   symbolic links. Every directory above `plugins/`, up to `/`, must also be owned by you or root and
   not writable by group or others, unless it is sticky like `/tmp`. Fix permissions with
   `chmod go-w ~/.opencodex/plugins ~/.opencodex/plugins/*`; on systems whose default umask is
-  `002`, check the parent directories too. On macOS, any ACL on the file or a path directory also
-  blocks loading, even if its mode is `0600`; inspect with `ls -le`. On Linux, extended ACLs are
+  `002`, check the parent directories too. On macOS, an ACL grant to another user or group that
+  can write, delete, change permissions, or add/remove path entries blocks loading, even if the
+  mode is `0600`; inspect with `ls -le`. Read-only, deny, inheritance-only, and grants only to
+  the path owner, the running user, or root do not block loading. On Linux, extended ACLs are
   checked when `getfacl` is installed. Without it, only owner and mode bits are verified.
 - On Windows automatic plugin loading is disabled until an ACL trust check is available.
 
