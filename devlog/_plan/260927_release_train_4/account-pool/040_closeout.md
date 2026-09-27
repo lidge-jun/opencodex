@@ -1,23 +1,32 @@
-# wp4: current-dev integration and issue/PR closeout
+# wp4: PR gates and issue/PR closeout
 
 ## Change and PR shape
 
-One ordinary `dev` PR will contain the audited wp1 pause carry, the narrower wp3 auth rotation, updated docs/tests, and this lane record. Before push, fetch latest `origin/dev`, replay the branch onto it without overwriting another branch, inspect the union for file-size ratchet and closed unions/locales/counts, and rerun affected tests. The PR is not a native stack. Its Summary/Verification/Checklist sections follow `.github/PULL_REQUEST_TEMPLATE.md`; the GUI screenshot is uploaded to the separate `pr-assets` branch at a commit SHA and linked in the description, not committed on this branch. Include both exact `Co-authored-by` trailers in the branch commit(s) or PR body so squash preserves contributor credit.
+Two ordinary `dev` PRs carry this lane, each with its own gate. Neither is a native stack.
 
-## Verification and merge gate
+- **PR-1 (closes wp1):** branch `codex/t4-account-pool-pause` with the audited #6087 carry, its review fixes, docs/tests and this lane record. Trailer: `Co-authored-by: chilung-cgu` with the donor commit email. It merges as soon as its own gate passes and does not wait on wp3.
+- **PR-2 (closes wp3):** branch `codex/t4-account-pool-auth-rotation` cut from `dev` after PR-1 merged, with the Antigravity 401/validated-403 slice. Trailer: `Co-authored-by: MerryEcho` with the donor commit email. It is opened only if the wp3 audit and security review pass.
 
-- Run exact focused regression files from [010_pause.md](010_pause.md) and [030_auth_failover.md](030_auth_failover.md), plus `bun run test:changed` from a same-commit `/private/tmp/t4-account-pool-verify` checkout, `bun run typecheck`, `bun run lint:gui`, `bun run build:gui`, `bun run privacy:scan`, `bun run structure:check`, and `bun run skill:surface:check`. Record each command, exit, pass/fail counts and scope. If full local `bun run test` is disproportionate during seven concurrent lanes, say so in Verification and rely on the actual required hosted CI, never an unrun suite. Any full local suite also runs in that `/private/tmp` checkout; do not bypass the test cleanup guard under `~/.codex`.
-- Confirm `origin/dev` is an ancestor of the PR head at merge time; otherwise rebase and revalidate. Inspect `git diff origin/dev...HEAD` for mixed PR union, ratchet overages and exhaustive union/locale/count consumers.
-- Obtain an explicit independent auth/security review and resolve correct Codex/CodeRabbit findings. A review finding still open is not treated as approved by self-integration.
-- Inspect required checks by head SHA, event, run id/attempt and individual job conclusions. Missing, skipped, cancelled, approval-blocked, pending and old-head results are not success. Record the maintainer-integration decision and exact-head evidence if using the authorized `dev` exception; never direct-push to `dev`.
-- Merge the PR only when every required check is successful at that exact head. Read back merge SHA and `origin/dev`; inspect post-merge `dev` CI and repair a regression from this lane before closing.
+Before each push, fetch latest `origin/dev`, rebase without overwriting another branch, inspect the union for file-size ratchet and closed unions/locales/counts, and rerun that PR's affected tests. Summary/Verification/Checklist follow `.github/PULL_REQUEST_TEMPLATE.md`. PR-1's GUI screenshot is uploaded to the separate `pr-assets` branch at a commit SHA and linked in the description, never committed on the lane branch.
+
+## Per-PR gate
+
+- **Tests.** PR-1 runs the focused files from [010_pause.md](010_pause.md) plus the hard-lock/reset-credit files; PR-2 runs those from [030_auth_failover.md](030_auth_failover.md) plus the pause selection files it consumes. Each also runs `bun run test:changed` from a same-commit `/private/tmp/t4-account-pool-verify` checkout, `bun run typecheck`, `bun run privacy:scan`, `bun run structure:check` and `bun run skill:surface:check`; PR-1 adds `bun run lint:gui` and `bun run build:gui`. Record each command, exit and counts. If a full local `bun run test` is disproportionate during seven concurrent lanes, say so and rely on the actual hosted CI; never describe an unrun suite as passing. Never bypass the test cleanup guard under `~/.codex`.
+- **Base.** `origin/dev` must be an ancestor of the PR head at merge time; otherwise rebase and revalidate.
+- **Review.** An explicit independent auth/security review, and correct Codex/CodeRabbit findings resolved. An open correct finding blocks self-integration.
+- **CI.** Inspect required checks by head SHA, event, run id/attempt and job conclusions. Missing, skipped, cancelled, approval-blocked, pending and old-head results are not success. Record the maintainer-integration decision; never push directly to `dev`.
+- **After merge.** Read back the merge SHA, dispatch `ci.yml` on `dev`, confirm the run's head SHA equals the merge SHA and that it succeeds, and repair any regression from this lane. A PR whose CI fails and cannot be repaired stays open and unmerged with a status comment.
 
 ## GitHub disposition writes
 
-After the change is on `dev`, thank and close #6087 as fully carried, linking our PR and `dev` SHA. Thank #5099's author and comment that only its bounded Antigravity status-rotation slice landed; keep #5099 open because its proposed persistent health/recovery remains independent and unmerged. Explain why the dynamic 15-rotation change was rejected for this train. Leave #5956, #5879 and #3738 open after posting specific English hold comments; avoid posting duplicate comments if another lane already changed their premise. Comment on all nine lane issues with a link to the relevant fix or the concrete reason and next evidence needed. #4878 has its P1 comment in wp2; do not close it without a controlled both-exhausted fix. #3375 and #3376 are umbrella issues and remain open unless every recorded requirement is demonstrably on `dev`.
+After PR-1 is on `dev`: thank chilung-cgu and close #6087 as fully carried, linking PR-1 and the `dev` SHA; comment on #6013 that generic pause landed and why the Anthropic pool pause and per-account threshold remain a separate slice.
 
-Read back every posted comment/state and record links. Do not close a source PR merely because a related subfeature landed if its remaining contract is still intended for review; if a source author materially updates a held head during this lane, re-evaluate before posting a stale verdict.
+After the PR-2 outcome: if it merged, thank MerryEcho on #5099, state that only the bounded Antigravity pre-output slice landed, keep #5099 open for its persistent health/recovery proposal, and explain why the dynamic 15-rotation cap was not taken; comment on #3375 with the link and the remaining items. If PR-2 was not opened or not merged, post a hold comment on #5099 naming the concrete blocker and leave #3375 unchanged apart from a status note.
+
+Independent of either PR: leave #5956, #5879 and #3738 open with specific English hold comments, avoiding duplicates if another lane already changed their premise. Comment on the remaining lane issues (#5649, #5616, #5561, #4961, #4869, #3376) with the concrete reason and the next evidence needed. #4878 gets its P1 comment in wp2 and stays open without a controlled both-exhausted fix. #3375 and #3376 are umbrella issues and remain open unless every recorded requirement is demonstrably on `dev`.
+
+Read back every posted comment/state and record links. If a source author materially updates a held head during this lane, re-evaluate before posting a stale verdict.
 
 ## Final report
 
-Give merged PR number and `dev` merge SHA; for each candidate state as-is/cherry-pick/squash/batch/reimplementation/hold; link closed source PRs/issues and hold comments; list local commands/results and exact-head/merge CI run URLs; name residual client, security or provider behavior that was not proven and files likely to collide with other lanes.
+Give merged PR numbers and `dev` merge SHAs; for each candidate state as-is/cherry-pick/squash/batch/reimplementation/hold; link closed source PRs/issues and hold comments; list local commands/results and exact-head/merge CI run URLs; name residual client, security or provider behavior that was not proven and files likely to collide with other lanes.
