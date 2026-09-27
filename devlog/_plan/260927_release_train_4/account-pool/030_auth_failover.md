@@ -44,3 +44,7 @@ This amendment replaces the MODIFY map above wherever the two disagree.
 - **One switch, not one send.** The sibling request keeps the adapter's ordinary transient retries, and every physical send is charged to the request's shared send budget.
 
 The #5099 disposition becomes: the 401 slice landed, 403 rotation is held for the telemetry decision, and pausing the failing account (#6106) is the workaround for a persistent `Verify your account` 403.
+
+## Outcome (2026-09-28)
+
+A gpt-6-sol worker implemented the narrowed slice. An independent sol reviewer passed it after three rounds; the fixes from the failing rounds are in the amendment above. Local verification on the union with `dev` at `555ef68ac6` (isolated homes, files run one at a time) passed with 0 failures: `google-errors` 18, `google-vertex-http` 40, `generic-oauth-failover` 62, Antigravity 401 replay 29, `terminal-guard-server` 15, `oauth-store-multi` 62, Kiro leased responses 18, main-account hard lock policy 32 and recovery 19, reset-credit recovery 68, and layout, layout tooling and file-size ratchet. `typecheck`, `structure:check`, `privacy:scan` and `skill:surface:check` passed. The new tests were checked red-green by mutating the source; the transient-refresh test failed before the terminal-only guard (a 503 was sent on the sibling). Per the coordinator's train rule, hosted Cross-platform CI runs once on the final `dev`.

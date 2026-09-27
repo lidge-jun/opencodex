@@ -11,3 +11,7 @@ Next: wp1 on branch `codex/t4-account-pool-pause`.
 ## 2026-09-28 original thread (stopped)
 
 Stopped on coordinator instruction on branch `codex/t4-account-pool-roadmap` at base `24b2f39b77`. No PR was opened and no GitHub comment was posted. Round 1 audit returned FAIL with five blockers; the amended plan was not re-audited before the stop. Baseline `bun run typecheck` and `bun run privacy:scan` passed after `bun install --frozen-lockfile`. No proxy was started and no real home files were touched.
+
+## 2026-09-28 close-out
+
+#6106 (pause carry of #6087) merged as `555ef68ac6`. PR-2 carries the narrowed #5099 slice on `codex/t4-account-pool-auth-rotation`. The PR and issue comments are listed in [020_desktop.md](020_desktop.md) and in the final lane report. Deferred to the next train: validated-403 rotation (needs a telemetry kind across GUI locales), the Anthropic pool pause (#6013), threshold actions (#5649/#5956), and post-output continuation (#5616).
