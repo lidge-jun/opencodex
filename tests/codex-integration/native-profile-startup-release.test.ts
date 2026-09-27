@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { nativeMainOwnerSnapshot } from "../../src/codex/native-main-owner";
 import { withNativeMainExclusiveClaim } from "../../src/codex/native-main-claim";
 import { NativeProfileManager } from "../../src/codex/native-profile-manager";
 import type {
@@ -133,6 +134,44 @@ function startLifecycle(deps: NativeMainStartupGateDeps): NativeMainStartupLifec
 }
 
 describe("a released native-main startup entry cannot leave the process fenced", () => {
+  test("hard-lock-off recovery completion keeps the convergence drain and owner until the sweep ends", async () => {
+    const f = fabricatedHome("complete-before-release-drain");
+    writeFileSync(join(process.env.OPENCODEX_HOME!, "config.json"), JSON.stringify({ codexMainAccountHardLock: false }));
+    const recovery = barrier(), recoveryEntered = barrier(), sweep = barrier(), sweepEntered = barrier();
+    let state: NativeProfileRecoveryState = "journal";
+    const lifecycle = startLifecycle({
+      manager: fabricatedManager(f.context, { sweepStages: async () => {
+        sweepEntered.open(); await sweep.promise; return { plaintextMayRemain: false };
+      } }),
+      probeRecoveryState: () => state,
+      beforeRecovery: async () => { recoveryEntered.open(); await recovery.promise; state = "none"; },
+      owner: OWNER,
+    });
+    let flight: Promise<void> | undefined;
+    let released = false;
+    try {
+      await within(recoveryEntered.promise, "recovery entry");
+      const convergence = lifecycle.settled;
+      expect(blockNativeMainRecovery(f.homeId, "manual")).toBe(true);
+      expect(completeNativeMainRecovery(f.homeId)).toBe(true);
+      expect(lifecycle.settled).toBe(convergence);
+      flight = lifecycle.release().then(() => { released = true; });
+      expect(nativeMainStartupGateSnapshot()).toEqual({ status: "ready", homeId: null });
+      expect(nativeMainOwnerSnapshot(f.context)?.status).toBe("held");
+      recovery.open();
+      await within(sweepEntered.promise, "the post-recovery sweep");
+      expect(released).toBe(false);
+      expect(nativeMainOwnerSnapshot(f.context)?.status).toBe("held");
+      sweep.open();
+      await within(flight, "release after the sweep");
+      expect(released).toBe(true);
+      expect(nativeMainOwnerSnapshot(f.context)).toBeNull();
+    } finally {
+      recovery.open(); sweep.open();
+      await within(flight ?? lifecycle.release(), "final release");
+    }
+  });
+
   test("a release preserves a recovery fence published after startup", async () => {
     const f = fabricatedHome("transaction-recovery-home");
     const lifecycle = startLifecycle({ manager: f.manager, probeRecoveryState: () => "none", owner: OWNER });

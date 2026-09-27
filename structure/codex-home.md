@@ -141,6 +141,7 @@ convergence cannot leave the process fenced for the servers that follow it. A sa
 fence published independently by a profile transaction survives release. An entry created
 afterwards for the same home arms its own gate, and the retired generation's late convergence
 writes are ignored.
+Recovery-completion provenance is separate from the convergence promise: release retains the owner through the pending recovery and its following stage sweep.
 `tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
 The native main slot also accepts one same-identity device reauth (#3898):

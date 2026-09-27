@@ -78,6 +78,8 @@ interface StartupEntry {
   recoveryStarted: boolean;
   policyBindingPending: boolean;
   settled: Promise<NativeMainStartupGateSnapshot>;
+  /** Publication provenance only; never substitutes for the live convergence drain. */
+  snapshotSettled?: Promise<NativeMainStartupGateSnapshot>;
   resolveAcquisition?: (value: NativeMainStartupGateSnapshot) => void;
   deps: NativeMainStartupGateDeps;
   manager: NativeProfileManager;
@@ -424,7 +426,7 @@ export function startNativeMainStartupLifecycle(
     // afterwards re-arms its own gate and cannot be clobbered by this release. The epoch bump
     // retires any in-flight convergence write from the released generation.
     if (snapshot.homeId === homeId && !startupEntries.has(homeId)
-      && (epoch === releasedEpoch || settled === entry!.settled)) {
+      && (epoch === releasedEpoch || settled === entry!.settled || settled === entry!.snapshotSettled)) {
       epoch += 1;
       snapshot = ready(null);
       settled = Promise.resolve(snapshot);
@@ -735,10 +737,9 @@ export function completeNativeMainRecovery(homeId: string): boolean {
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   snapshot = ready(homeId);
   settled = Promise.resolve(snapshot);
-  // Keep the live entry provably the snapshot's owner: the global epoch just advanced past it,
-  // so without this rebind a release mistakes a later entry-published cleanup fence for an
-  // independent transaction snapshot and orphans it behind 503s.
-  if (entry) entry.settled = settled;
+  // Remember who published this snapshot without replacing an in-flight recovery/sweep
+  // promise: last-reference release must still drain that original convergence chain.
+  if (entry) entry.snapshotSettled = settled;
   return true;
 }
 
