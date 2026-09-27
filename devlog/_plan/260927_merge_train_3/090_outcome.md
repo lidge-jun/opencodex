@@ -1,6 +1,6 @@
 # Merge train round 3 — outcome
 
-Re-queried after B9; B10 was added afterwards. Round 3 started at 61 open issues and 80 open PRs; it ends at 40 open issues (goal met)
+Re-queried after B9; B10 and B11 were added afterwards. #6076 (Remote Link join requires pairing) stays open: pairing-issued sessions exist only on hubs while join runs on a standalone, so as written join becomes unreachable; the lane commented with the fix direction. #6077 is a new draft feature. Round 3 started at 61 open issues and 80 open PRs; it ends at 40 open issues (goal met)
 and about 50 open PRs (goal of 40 not met by this lane; every remaining PR is listed below with its reason).
 
 ## Landed
@@ -16,7 +16,8 @@ and about 50 open PRs (goal of 40 not met by this lane; every remaining PR is li
 | #6070 (B7) | #6025 #6010 #6007 (screenshot from an isolated home) | #6021 #6009 |
 | #6071 (B8) | #6064 #6068 #6067 #6065 | — |
 | #6073 (B9) | #6072, plus the legacy picker key removed on every intercept start; this outcome record | — |
-| B10 | #6074 (Codex Desktop 26.924 config rewrite no longer makes OpenCodex stand down; drift is healed on the refresh tick), plus honest heal reporting and a tick test | — |
+| #6075 (B10) | #6074 (Codex Desktop 26.924 config rewrite no longer makes OpenCodex stand down; drift is healed on the refresh tick), plus honest heal reporting and a tick test | — |
+| B11 | #6078 (`[1m]` marker for million-token routes in the Desktop picker) | — |
 
 Closed without landing, with evidence: #6056 (superseded by #6020), #4728 (29k-line out-of-scope draft), issues
 #3377 #5443 #1213 #3191 (implemented earlier; closed by the coordinator), #5917 (fixed in v2.63.0), #3433 (identifiers

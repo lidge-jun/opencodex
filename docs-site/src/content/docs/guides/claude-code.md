@@ -902,3 +902,7 @@ An explicit first-party apply recreates a missing token and refreshes the owned 
 requiring a proxy restart; existing tunnels are not revoked. Invalid, linked, oversized or
 non-token files are refused rather than overwritten. Inspect such an entry before removing only
 the confirmed obsolete token file and applying first-party mode again; never delete its link target.
+
+### First-party picker context markers
+
+The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens, so Claude uses its 1M accounting instead of the smaller custom-model fallback. Labels, profile order, and provider routes stay unchanged. Unknown and sub-million windows remain unmarked, including native long-window opt-ins: the picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
