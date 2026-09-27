@@ -278,7 +278,7 @@ const SOURCE_BY_ROLE: Record<string, number> = {
  *
  * becomes
  *
- *   [{user: "U1"}, {assistant: "A1"}, {user: "<system>\nS1\nS2\n</system>\nU2"}]
+ *   [{user: "U1"}, {assistant: "A1"}, {user: "<system>\nS1\n\nS2\n</system>\nU2"}]
  *
  * If there's no following user message, the trailing system messages get
  * appended as a synthesized user turn. A request made only of system messages
