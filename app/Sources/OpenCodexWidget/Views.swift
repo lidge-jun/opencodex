@@ -283,8 +283,12 @@ struct OpenCodexWidgetView: View {
     }
 
     private func updated(_ snapshot: WidgetSnapshot) -> some View {
-        let text = snapshot.lastUpdated.map { "Updated \(Format.age(Date(timeIntervalSince1970: $0)))" } ?? "Not updated"
-        return Text(text).font(.caption2).foregroundStyle(entry.stale ? .orange : .secondary).lineLimit(1)
+        // A relative date keeps counting while the widget is visible, so the age stays true between
+        // reloads instead of freezing at whatever it was when the timeline entry was made.
+        let text = snapshot.lastUpdated.map {
+            Text("Updated ") + Text(Date(timeIntervalSince1970: $0), style: .relative) + Text(" ago")
+        } ?? Text("Not updated")
+        return text.font(.caption2).foregroundStyle(entry.stale ? .orange : .secondary).lineLimit(1)
     }
 
     private func failureView(_ failure: ReadFailure) -> some View {

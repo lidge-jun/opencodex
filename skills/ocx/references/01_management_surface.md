@@ -678,6 +678,25 @@ JSON mode: `payload`.
 - `show` (the default) reads settings; `set key=value ...` updates selected settings; `reset` restores defaults.
 - Values accepted by `set` are parsed as JSON when valid, so booleans, numbers, arrays, objects, and null can be passed directly.
 
+### `ocx account login`
+
+Log in to an OAuth provider; Kiro can add a native device account.
+
+| Method | Route |
+|---|---|
+| POST | `/api/oauth/login` |
+| GET | `/api/oauth/status` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--method` | string | For Kiro: builder-id, google, or github device login (add only). |
+| `--reauth` | boolean | Reauthenticate a selected existing account. |
+| `--id` | string | Account id for reauthentication. |
+| `--no-wait` | boolean | Return after the login flow starts. |
+| `--json` | boolean | Emit flow state as JSON. |
+
+JSON mode: `payload`.
+
 ### `ocx account main reauth`
 
 Reauthenticate the native main Codex login with a device code (#3898); headless hubs need no Codex App or keyring.
@@ -1139,6 +1158,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 64
-- of those, state-changing: 34
+- declared capabilities: 65
+- of those, state-changing: 35
 - head-resolved invocations: 2

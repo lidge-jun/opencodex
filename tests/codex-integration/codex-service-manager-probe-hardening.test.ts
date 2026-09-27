@@ -552,6 +552,9 @@ describe("Windows ownership probe hardening regressions", () => {
       winswStatus: () => "nonexistent",
       statePaths: [statePath],
       currentHomes: { codexHome: currentCodexHome, opencodexHome: configDir },
+      // Keep the foreign-vs-current comparison lexical: the fixture paths are
+      // intentionally not on disk, and a real ENOENT is "unknown", not "different".
+      realpathSync: (path: string) => path,
     });
 
     expect(result.ownership).toBe("unknown");
@@ -687,6 +690,7 @@ describe("Windows ownership probe hardening regressions", () => {
       winswStatus: () => "started",
       statePaths: [statePath],
       currentHomes: { codexHome, opencodexHome: configDir },
+      realpathSync: (path: string) => path,
     });
 
     expect(result.ownership).toBe("unknown");

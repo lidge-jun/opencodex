@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyWindowsServiceStop, installedServiceRespawnRisk, isServiceOwnershipError, ServiceOwnershipError } from "../../../src/service";
+import { decideStartExitTeardown } from "../../../src/cli/dispatch";
 import { repoPath } from "../../helpers/repo-root";
 
 const CLI_SOURCE = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
@@ -103,9 +104,10 @@ describe("Grok fence lifecycle wiring", () => {
 
     expect(stopFn).toContain("isServiceOwnershipError(err)");
     expect(stopFn).toContain("ownershipBlocked = true");
-    // Ownership is now one of two reasons to skip the restore; the other is an inherited
-    // obligation whose proxy could not be confirmed down (#3008).
-    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy;");
+    // Ownership is one reason to skip the restore; others are an inherited obligation whose
+    // proxy could not be confirmed down (#3008) and a sibling runtime, whose shared client
+    // routing belongs to the live proxy it ran beside.
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;");
     expect(stopFn).toContain("if (!restoreBlocked) {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop()");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");
@@ -353,10 +355,13 @@ describe("Grok fence lifecycle wiring", () => {
 
   test("the daemon's exit cleanup keeps the OCX_SERVICE exclusion and adds the ownership check", () => {
     const startFn = sliceFn(CLI_SOURCE, "const syncCleanup = () => {", "let shuttingDown = false;");
-    // Crash/respawn under a service manager must still keep the fence.
-    expect(startFn).toContain('process.env.OCX_SERVICE === "1"');
+    // Crash/respawn under a service manager must still keep the fence. The exact-"1" sentinel
+    // lives in decideStartExitTeardown (src/cli/dispatch.ts), which the cleanup feeds the raw
+    // environment value and whose whole matrix runs in tests/cli/cli-dispatch.test.ts.
+    expect(startFn).toContain("ocxService: process.env.OCX_SERVICE");
+    expect(decideStartExitTeardown({ sibling: false, recycling: false, ocxService: "1" }).stripGrokConfig).toBe(false);
     expect(startFn).not.toContain("OCX_KEEP_ROUTING");
-    expect(startFn).toContain("!preserveRouting && serviceEnvironmentOwnedHere()");
+    expect(startFn).toContain("teardown.stripGrokConfig && serviceEnvironmentOwnedHere()");
   });
 
   test("signal shutdown reports and exits nonzero when native Codex restore is incomplete", () => {
@@ -408,6 +413,13 @@ describe("POST /api/stop teardown", () => {
     const refusalAt = handler.indexOf("409");
     const shutdownAt = handler.indexOf("drainAndShutdown");
     expect(refusalAt).toBeLessThan(shutdownAt);
+  });
+
+  test("a sibling's stop never asks the service manager, which belongs to the live owner", () => {
+    const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    expect(handler).toContain("const sibling = siblingOfLivePort() !== null;");
+    expect(handler).toContain('const respawnRisk = holdsReceipt || sibling ? "none" : installedServiceRespawnRisk();');
+    expect(handler).toContain('serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();');
   });
 
   test("strips the Grok fence on an accepted stop", () => {
@@ -478,7 +490,7 @@ describe("POST /api/stop teardown", () => {
     // Stopping the Task Scheduler task and then returning 409 left the proxy running with
     // its manager stopped — worse than either outcome, and the dashboard's Stop button
     // sends a bare request on every backend.
-    expect(handler).toContain('const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();');
+    expect(handler).toContain('const respawnRisk = holdsReceipt || sibling ? "none" : installedServiceRespawnRisk();');
     expect(handler).toContain('code: "respawnable_service"');
     expect(handler.indexOf("installedServiceRespawnRisk()")).toBeLessThan(handler.indexOf("stopServiceIfInstalledDetailed()"));
     // The refusal must say nothing was changed, because nothing was.

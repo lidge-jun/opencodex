@@ -3,6 +3,15 @@ import MenuBarCore
 
 enum WidgetSnapshotSuite {
     static func run(_ t: TestRunner) {
+        t.test("widget: a snapshot turns stale two heartbeats after it was written") {
+            let written = WidgetSnapshot(
+                schemaVersion: 1, generatedAt: 1_000, state: "running", stateTitle: "Running", detail: nil,
+                endpointDisplay: "127.0.0.1:10100", menuTitle: nil, today: nil, quotas: [], chart: nil, lastUpdated: 1_000)
+            t.equal(WidgetSnapshot.staleAfter, 1_800)
+            t.equal(written.staleDate, Date(timeIntervalSince1970: 2_800))
+            t.expect(!written.isStale(now: Date(timeIntervalSince1970: 2_799)), "fresh one second before the boundary")
+            t.expect(written.isStale(now: Date(timeIntervalSince1970: 2_800)), "stale at the boundary")
+        }
         t.test("widget: hidden usage and quota respect the same projection as the menu title") {
             let report = try! JSONDecoder().decode(UsageReport.self, from: Data(#"{"summary":{"requests":99,"totalTokens":99},"models":[{"provider":"hidden","model":"m","requests":97,"totalTokens":94},{"provider":"visible","model":"m","requests":2,"totalTokens":5,"estimatedCostUsd":0.25}]}"#.utf8))
             let quotas = try! JSONDecoder().decode([QuotaReport].self, from: Data(#"[{"provider":"hidden","quota":{"weeklyPercent":1}},{"provider":"visible","quota":{"weeklyPercent":75}}]"#.utf8))

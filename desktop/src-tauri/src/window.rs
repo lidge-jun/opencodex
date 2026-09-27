@@ -91,6 +91,11 @@ fn is_update_page_url(url: &Url) -> bool {
     is_app_origin(url) && url.path() == "/update.html"
 }
 
+/// Whether the window currently shows the bundled update page. An unreadable URL reads as not.
+pub fn shows_update_page(window: &WebviewWindow) -> bool {
+    window.url().is_ok_and(|url| is_update_page_url(&url))
+}
+
 pub fn show(window: &WebviewWindow) {
     let _ = window.show();
     let _ = window.set_focus();
@@ -255,5 +260,44 @@ mod tests {
             serde_json::from_str(include_str!("../capabilities/default.json"))
                 .expect("default capability is JSON");
         assert!(default.get("remote").is_none());
+    }
+
+    /// The overlay title bar is moved and zoomed from the page: the dashboard's top strips call
+    /// `plugin:window|start_dragging` and `plugin:window|toggle_maximize` from the loopback
+    /// origin, and the bundled pages do the same from the app origin. The dashboard also reads
+    /// the window's native scale so its traffic-light clearance survives page zoom. Grants are
+    /// pinned to `main`; the app origin needs only the two window commands.
+    #[test]
+    fn the_titlebar_commands_are_granted_on_each_origin() {
+        let titlebar: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/dashboard-titlebar.json"))
+                .expect("dashboard-titlebar capability is JSON");
+        assert_eq!(titlebar["windows"], serde_json::json!(["main"]));
+        assert_eq!(
+            titlebar["remote"]["urls"],
+            serde_json::json!(["http://127.0.0.1:*"])
+        );
+        assert_eq!(
+            titlebar["permissions"],
+            serde_json::json!([
+                "core:window:allow-start-dragging",
+                "core:window:allow-toggle-maximize",
+                "core:window:allow-scale-factor"
+            ])
+        );
+
+        let default: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("default capability is JSON");
+        let permissions = default["permissions"].as_array().expect("permissions list");
+        for permission in [
+            "core:window:allow-start-dragging",
+            "core:window:allow-toggle-maximize",
+        ] {
+            assert!(
+                permissions.contains(&serde_json::json!(permission)),
+                "default capability grants {permission}"
+            );
+        }
     }
 }

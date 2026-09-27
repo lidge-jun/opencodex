@@ -15,7 +15,8 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
-import UsageCompanionPanel from "./usage-companion-panel";
+import UsageCompanionView from "./usage-companion-view";
+import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -933,8 +934,7 @@ function UsageCoveragePanel({
 }
 
 /**
- * Workspace layout for Usage: left rail picks one report section so Overview /
- * Models / Providers / Coverage do not stack into a long scroll.
+ * Workspace layout for Usage: report sections remain mounted in one scrollable column.
  */
 function UsageWorkspaceBody({
   data,
@@ -948,7 +948,6 @@ function UsageWorkspaceBody({
   range,
   locale,
   t,
-  apiBase,
 }: {
   data: UsageResponse | null;
   heatmap: ReturnType<typeof buildHeatmap>;
@@ -961,10 +960,8 @@ function UsageWorkspaceBody({
   range: Range | null;
   locale: Locale;
   t: TFn;
-  apiBase: string;
 }) {
   const empty = !!data && data.summary.requests === 0;
-  const [companionMetric, setCompanionMetric] = useState<string | null>(null);
   const sections = [
     {
       id: "overview",
@@ -998,20 +995,6 @@ function UsageWorkspaceBody({
       label: t("usage.section.coverage"),
       meta: data ? formatPct(data.summary.coverageRatio) : "—",
       body: data ? <UsageCoveragePanel summary={data.summary} t={t} workspace /> : null,
-    },
-    {
-      id: "companion",
-      label: t("usage.section.companion"),
-      meta: companionMetric
-        ? t(`usage.companion.menu${companionMetric[0]!.toUpperCase()}${companionMetric.slice(1)}` as never)
-        : "—",
-      body: (
-        <UsageCompanionPanel
-          apiBase={apiBase}
-          providers={data?.providers ?? []}
-          onSettingsLoaded={setCompanionMetric}
-        />
-      ),
     },
   ];
   return (
@@ -1061,6 +1044,12 @@ function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, co
 
 export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBase: string; connected?: boolean; apiKeyId?: string }) {
   const { t, locale } = useI18n();
+  const [tab, setTab] = useState(readUsageTab);
+  useEffect(() => {
+    const onHash = () => setTab(readUsageTab());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [scope, setScope] = useState<UsageScope>("machine");
@@ -1138,8 +1127,24 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />
+        {tab === "report" && <UsageFilters surface={surface} range={customWindow ? null : range} onSurface={setSurface} onRange={selectRange} t={t} />}
       </div>
+      <div className="page-tabs" role="tablist" aria-label={t("nav.usage")}>
+        {(["report", "companion"] as const).map(item => (
+          <button key={item} type="button" role="tab" id={`usage-tab-${item}`}
+            aria-selected={tab === item} aria-controls={`usage-panel-${item}`}
+            tabIndex={tab === item ? 0 : -1}
+            className={`page-tab${tab === item ? " page-tab--active" : ""}`}
+            onClick={() => selectUsageTab(item)} onKeyDown={usageTabKeyDown}>
+            {t(item === "report" ? "usage.workspace.report" : "usage.section.companion")}
+          </button>
+        ))}
+      </div>
+      {tab === "companion" ? (
+        <div role="tabpanel" id="usage-panel-companion" aria-labelledby="usage-tab-companion">
+          <UsageCompanionView apiBase={apiBase} providers={data?.providers ?? []} />
+        </div>
+      ) : <div role="tabpanel" id="usage-panel-report" aria-labelledby="usage-tab-report">
       <p className="page-sub">{t("usage.subtitle")}</p>
       {/*
         An explicit interval is the rare path — the presets answer the question almost every
@@ -1287,10 +1292,10 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             range={customWindow ? null : range}
             locale={locale}
             t={t}
-            apiBase={apiBase}
           />
         </>
       )}
+      </div>}
     </>
   );
 }

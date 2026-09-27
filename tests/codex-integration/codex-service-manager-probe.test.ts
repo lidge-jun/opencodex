@@ -819,7 +819,7 @@ describe("ownership refuses what it cannot prove", () => {
    * homedir(), which no test sandbox moves. Left alone, these fixtures would
    * read the developer's real installation and call their own machine foreign.
    */
-  function own(extra: { run: ProbeRunner }) {
+  function own(extra: { run: ProbeRunner; realpathSync?: (path: string) => string }) {
     const codexHome = join(home, ".codex");
     const opencodexHome = join(home, ".opencodex");
     return {
@@ -861,7 +861,57 @@ describe("ownership refuses what it cannot prove", () => {
     const { opencodexHome } = useHomes();
     writeState(opencodexHome, "/elsewhere/.codex", "/elsewhere/.opencodex");
     const { run } = recorder(() => ({ status: 113 }));
-    expect(inspectNativeCodexOwnership(own({ run })).ownership).toBe("foreign");
+    // Identity resolution keeps this comparison lexical so it proves "different", not "unknown".
+    const realpathSync = (path: string) => path;
+    expect(inspectNativeCodexOwnership(own({ run, realpathSync })).ownership).toBe("foreign");
+  });
+
+  /*
+   * A realpath failure (EACCES, EPERM, a directory that vanished mid-compare,
+   * transient I/O) is not evidence the home is different. Collapsing it to
+   * "different" would make the unattended preflight report a definitive
+   * foreign install — and wrongly block stop, repair, uninstall, and native
+   * writes with incorrect recovery guidance — on nothing but an I/O hiccup.
+   */
+  test("an unresolvable recorded home is unknown, not foreign", () => {
+    const { codexHome, opencodexHome } = useHomes();
+    const recordedHome = join(home, "recorded-alias");
+    writeState(opencodexHome, recordedHome, opencodexHome);
+    const { run } = recorder(() => ({ status: 113 }));
+    const realpathSync = (path: string) => {
+      if (path === recordedHome) throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      return path;
+    };
+
+    const result = inspectNativeCodexOwnership(own({ run, realpathSync }));
+    expect(result.ownership).toBe("unknown");
+    expect(result.reason).toContain("could not be resolved");
+    expect(result.reason).not.toContain("foreign");
+  });
+
+  // A differently spelled recorded home that no longer exists cannot be an alias of the current
+  // home. It stays foreign, so a stale mount keeps refusing restore and startup writes.
+  test("a vanished, differently spelled recorded home stays foreign", () => {
+    const { opencodexHome } = useHomes();
+    const recordedHome = join(home, "unmounted-home");
+    writeState(opencodexHome, recordedHome, opencodexHome);
+    const { run } = recorder(() => ({ status: 113 }));
+    const realpathSync = (path: string) => {
+      if (path === recordedHome) throw Object.assign(new Error("absent"), { code: "ENOENT" });
+      return path;
+    };
+    expect(inspectNativeCodexOwnership(own({ run, realpathSync })).ownership).toBe("foreign");
+  });
+
+  // An older install may have recorded a junction or symlink spelling of the
+  // home this process now knows canonically — same directory, different name.
+  test("state spelling the current home through an alias is owned", () => {
+    const { codexHome, opencodexHome } = useHomes();
+    const aliasHome = join(home, "codex-alias");
+    writeState(opencodexHome, aliasHome, opencodexHome);
+    const { run } = recorder(() => ({ status: 113 }));
+    const realpathSync = (path: string) => path === aliasHome ? codexHome : path;
+    expect(inspectNativeCodexOwnership(own({ run, realpathSync })).ownership).toBe("owned");
   });
 
   /*
@@ -876,7 +926,10 @@ describe("ownership refuses what it cannot prove", () => {
     writePlist("/elsewhere/.codex", "/elsewhere/.opencodex");
     const { run } = recorder(() => ({ status: 113 }));
 
-    const result = inspectNativeCodexOwnership(own({ run }));
+    // Identity resolution keeps the claim comparison lexical: the fixture
+    // intends a genuinely different home, not an unresolvable one.
+    const realpathSync = (path: string) => path;
+    const result = inspectNativeCodexOwnership(own({ run, realpathSync }));
     expect(result.ownership).toBe("unknown");
     expect(result.reason).toContain("different homes");
   });

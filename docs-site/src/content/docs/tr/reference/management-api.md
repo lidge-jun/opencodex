@@ -229,7 +229,7 @@ gelmezse bu alan boş kalır; istenen modelden çıkarım yapılmaz.
 | `GET /api/debug/injection-logs` | Sınırlı rehberlik enjeksiyonu hata ayıklama girdilerini okuyun | — |
 | `GET /api/claude/inbound-debug` | Claude gelen hata ayıklama durumunu ve girdilerini okuyun | — |
 | `GET /api/usage` | Kullanımı aralığa ve istemci yüzeyine göre özetleyin; Codex yanıtları ayrıca kararlı PII olmayan günlük etiketlerine göre anahtarlanan bir `accounts` dökümü içerir | Depolama okunamıyorsa 500 `{ "error": "read_failed" }` döndürür |
-| `GET /api/metrics` | Mantıksal istekler, fiziksel gönderimler, kurtarma türleri, süre ve TTFT için süreç yerel Prometheus metin metriklerini döndürür. Etiketler kapalı protokol, sonuç ve kurtarma sınıfı kümeleriyle sınırlıdır; istek veya kimlik bilgisi tanımlayıcıları dışa aktarılmaz. | Başlangıçta `metricsExport.enabled` true değilse 404; olağan yönetim kimlik doğrulaması gerekir ve veri düzlemi kimlik bilgileri erişim sağlamaz |
+| `GET /api/metrics` | Mantıksal istekler, fiziksel gönderimler, kurtarma türleri, süre ve TTFT için süreç yerel Prometheus metin metriklerini döndürür. İstek metriklerinin etiketleri kapalı kümelerdir; Kiro göstergeleri yalnızca sınırlı opak hesap etiketleri ekler; istek veya kimlik bilgisi tanımlayıcıları dışa aktarılmaz. Dört `opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}` göstergesi yalnızca önbelleği okur ve en fazla 32 opak hesap etiketi kullanır. Toplama sırasında ağ sorgusu yapılmaz. | Başlangıçta `metricsExport.enabled` true değilse 404; olağan yönetim kimlik doğrulaması gerekir ve veri düzlemi kimlik bilgileri erişim sağlamaz |
 | `GET /api/storage` | Sepete göre Codex depolama kullanımını tarayın | Tarama hatasında bir `error: "scan_failed"` yükü döndürür |
 | `POST /api/storage/cleanup/preview` | Arşivlenmiş oturum temizliğini önizleyin ve bağlayıcı bir özet döndürün | 400 `invalid_json` veya `invalid_percent` |
 | `POST /api/storage/cleanup` | Önizlenen arşivlenmiş kümeyi karantinaya alın veya kalıcı olarak kaldırın | 400 geçersiz girdi; 409 eski/meşgul/başvurulan durum; 500 dosya sistemi/veritabanı hatası |
@@ -296,7 +296,7 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `POST /api/oauth/login/cancel` | Devam eden bir genel OAuth akışını iptal edin | 400 bilinmeyen sağlayıcı |
 | `GET /api/oauth/status` | Bir sağlayıcının OAuth akışını yoklayın | 400 bilinmeyen sağlayıcı |
 | `POST /api/oauth/logout` | Seçilen sağlayıcı kimlik bilgisini kaldırın | 400 bilinmeyen sağlayıcı; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın Kiro satırları otomatik seçimden dışlandığında `autoSelectable` ve kapalı bir `skipReason` taşır; tek etkin hesap yine istek gönderebilir. Kota isteğe bağlıdır. | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth havuz politikasını okuyun veya güncelleyin | 400 Anthropic olmayan sağlayıcı veya geçersiz politika |
 | `POST /api/oauth/accounts/clear-cooldown` | Bir OAuth hesabının çalışma zamanı soğuma süresini temizleyin | 400 geçersiz sağlayıcı/hesap |

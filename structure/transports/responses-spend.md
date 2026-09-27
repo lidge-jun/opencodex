@@ -11,6 +11,21 @@ budget before it knows whether a rotation is even possible, because the reservat
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
 
+Generic OAuth snapshots the eligible roster at request ingress before dispatch. Its rotation ceiling
+is `max(3, min(eligibleCount, 6) - 1)`; live selection still removes accounts in cooldown, so the snapshot
+sets the number of possible moves without making a cooled account selectable. Only the ingress-owned
+default execution budget expands when at least two accounts are eligible: its base and total ceilings
+cover up to `TRANSIENT_RETRY_MAX_ATTEMPTS` sends per eligible account (currently three), for at most
+`GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST` (six) accounts, so the default ingress ceiling is 18 sends
+whatever the roster size. A single
+eligible account keeps the existing base ceiling of three and total ceiling of four. Explicit caller
+ceilings and combo-derived scopes keep their existing limits.
+
+A helper recovery's prepaid hop remains part of the full leg attempt allowance. An adapter-owned
+pending hop reconciles the actual target synchronously: a regional endpoint change refunds the old
+reservation and re-reserves the new transition, so the transition cap is enforced without charging
+or sending twice. Diagnostic key changes alone are not transitions; a real destination change is.
+
 The hop pays for a replay that some *other* layer dispatches, so which layer settles the
 reservation follows the dispatcher, not the ladder. A helper-routed replay reports the same
 physical send back through `onSendsConsumed`; that is what `countedExternally: true` names, and the
@@ -94,7 +109,9 @@ during this process's lifetime can still be released for free.
 Settlement follows what the request learned. The terminal usage belongs to the last send that
 left, so that one settles with the real figure; every earlier send failed without reporting usage
 of its own and may still have been billed, so it becomes unresolved spend rather than free. A
-request that reports no usage at all leaves all of them unresolved. If deferred settlement reaches a tracker with reserved sends after its ledger lease ends, only `SPEND_LEDGER_OWNER_NOT_HELD` is dropped with the discarded ledger. Other owner and storage failures propagate with pending send IDs intact so settlement can be retried.
+request that reports no usage at all leaves all of them unresolved. A pre-output Grok/Devin 429
+binds usage carried by its error event before returning the HTTP refusal, just as the ordinary
+streaming and buffered bridges bind terminal usage. If deferred settlement reaches a tracker with reserved sends after its ledger lease ends, only `SPEND_LEDGER_OWNER_NOT_HELD` is dropped with the discarded ledger. Other owner and storage failures propagate with pending send IDs intact so settlement can be retried.
 
 Replay resolves what nobody is left to settle, and resolves it as unresolved spend whatever state
 it was in. Giving an undispatched one its tokens back would assume the journal is complete up to

@@ -1768,16 +1768,13 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
   });
 
   test("1M-context models map to 1_000_000", () => {
-    for (const id of ["claude-sonnet-5", "claude-opus-5.5", "claude-opus-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"]) {
+    for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-sonnet-5", "claude-opus-5.5", "claude-opus-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"]) {
       expect(kiro.models ?? []).toContain(id);
       expect(cw[id]).toBe(1_000_000);
     }
   });
 
   test("smaller-context models match Kiro's published limits", () => {
-    expect(cw["gpt-5.6-sol"]).toBe(272_000);
-    expect(cw["gpt-5.6-terra"]).toBe(272_000);
-    expect(cw["gpt-5.6-luna"]).toBe(272_000);
     expect(cw["claude-opus-4.5"]).toBe(200_000);
     expect(cw["claude-sonnet-4.5"]).toBe(200_000);
     expect(cw["claude-sonnet-4.0"]).toBe(200_000);

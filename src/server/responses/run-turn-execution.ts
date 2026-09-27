@@ -13,7 +13,7 @@ import {
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
 import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
-import { waitForProviderRequestSlot, RequestPacingQueueOverloadError } from "../../providers/request-pacing";
+import { releaseProviderRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { providerFetch } from "./fetch-helpers";
@@ -22,7 +22,6 @@ import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuat
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -92,6 +91,7 @@ export async function executeResponsesRunTurn(
     | "replayOAuthCredentialSnapshot"
     | "genericFailoverAccountId"
     | "genericFailovers"
+    | "genericFailoverLimit"
     | "applyFailoverSnapshot"
     | "resolveSelectionAdapter"
     | "adapter"
@@ -187,8 +187,9 @@ export async function executeResponsesRunTurn(
     };
     // Initial admission must settle before the streaming Response commits HTTP 200.
     // Let the outer Responses facade preserve the local retryable-429 contract.
+    let initialPacingSlot: ProviderRequestSlot;
     try {
-      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+      initialPacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
     } catch (error) {
       cleanupRunTurnAbort();
       queue.close();
@@ -214,11 +215,17 @@ export async function executeResponsesRunTurn(
       // rounds carry the grown message history and adjusted tool list while
       // selection/replay binding stays on the request's own parsed object.
       turnParsed: PreparedResponsesRequest["parsed"] = parsed,
+      preacquiredSlot?: ProviderRequestSlot,
     ): Promise<void> => {
       const attemptSeq = ++runTurnAttemptSeq;
+      let pacingSlot = preacquiredSlot;
+      const emit = (event: AdapterEvent) => {
+        options.onCompactionRecoveryAdapterEvent?.(event);
+        targetQueue.push(event);
+      };
       try {
         if (!pacingSlotAcquired) {
-          await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+          pacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
         // LOCAL PATCH (runturn-websearch): refreshRunTurnSelection binds route
@@ -244,6 +251,8 @@ export async function executeResponsesRunTurn(
             // Cursor HTTP/1.1 consumes it for RunSSE; every BidiAppend and redial then waits on
             // the same provider queue through this stateful wrapper.
             pacingSlotAcquired: true,
+            pacingSlot,
+            turnScopedPacing: true,
           },
         );
         await transportState.runTurnAdapter.runTurn?.(
@@ -251,8 +260,10 @@ export async function executeResponsesRunTurn(
           {
             headers: requestState.selectedForwardHeaders,
             abortSignal: runTurnAbort.signal,
+            comboAttempt: options.comboAttempt === true,
             translatorBudget,
             providerFetch: runTurnProviderFetch,
+            pacingSlot,
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
             ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
@@ -265,7 +276,7 @@ export async function executeResponsesRunTurn(
             ),
             onRecoveryWithheld: noteAdapterRecoveryWithheld,
           },
-          targetQueue.push,
+          emit,
         );
         // LOCAL PATCH (runturn-websearch): adapters may write conversation/
         // continuation state onto the object they received; merge it back so
@@ -279,7 +290,7 @@ export async function executeResponsesRunTurn(
           Object.assign(parsed, routeState);
         }
       } catch (err) {
-        targetQueue.push(err instanceof RequestPacingQueueOverloadError
+        emit(err instanceof RequestPacingQueueOverloadError
           ? {
               type: "error",
               status: 429,
@@ -304,6 +315,7 @@ export async function executeResponsesRunTurn(
                 message: err instanceof Error ? err.message : String(err),
               });
       } finally {
+        releaseProviderRequestSlot(pacingSlot);
         // Cursor assigns a stable conversation id inside runTurn on the first headerless
         // turn; backfill so Logs can filter/total that opening request (#330 / #522).
         if (!logCtx.conversationId && parsed._cursorConversationId) {
@@ -316,7 +328,7 @@ export async function executeResponsesRunTurn(
     // synthetic web_search tool; later iterations get their own queue so the
     // search loop can buffer each turn's events before deciding to intercept.
     const wsFirstParsed = wsPlan ? runTurnWebSearchInitialParsed(parsed) : parsed;
-    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed);
+    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed, initialPacingSlot);
     const runTurnFailoverArmed = () =>
       route.provider.authMode === "oauth"
       || !!(transportState.genericFailoverAccountId
@@ -348,7 +360,7 @@ export async function executeResponsesRunTurn(
       if (
         status !== 429
         || !transportState.genericFailoverAccountId
-        || transportState.genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        || transportState.genericFailovers >= transportState.genericFailoverLimit
         || !isGenericOAuthFailoverEnabled(config, route.providerName)
       ) return false;
       // Intersection with the request's shared budget: the roster bound above answers "may this
@@ -435,6 +447,47 @@ export async function executeResponsesRunTurn(
         return false;
       }
     };
+    const streamAfterPreflight = (
+      initialSource: AsyncIterable<AdapterEvent>,
+      replayParsed: PreparedResponsesRequest["parsed"],
+      initiallyReplayUnsafe: boolean,
+    ): AsyncIterable<AdapterEvent> => (async function* () {
+      let source = initialSource;
+      let replayUnsafe = initiallyReplayUnsafe;
+      let firstMeaningfulSeen = false;
+      while (true) {
+        let rotated = false;
+        for await (const event of source) {
+          if (!firstMeaningfulSeen && event.type === "heartbeat") {
+            replayUnsafe ||= event.replayUnsafe === true;
+            yield event;
+            continue;
+          }
+          if (!firstMeaningfulSeen && !replayUnsafe && event.type === "error"
+            && await rotateRunTurnAdapterOnPreflight429(event)) {
+            const retryQueue = createAdapterEventQueue({
+              onBacklogExceeded: () => runTurnAbort.abort(),
+            });
+            const pendingPermit = sendBudgetState.pendingHopPermit;
+            const retryAttempt = runTurnAttempt(retryQueue, "oauth-account-429", false, replayParsed);
+            if (pendingPermit) {
+              const releaseIfUnclaimed = () => {
+                if (sendBudgetState.pendingHopPermit !== pendingPermit) return;
+                sendBudgetState.pendingHopPermit = undefined;
+                pendingPermit.release();
+              };
+              void retryAttempt.then(releaseIfUnclaimed, releaseIfUnclaimed);
+            }
+            source = retryQueue.stream();
+            rotated = true;
+            break;
+          }
+          firstMeaningfulSeen = true;
+          yield event;
+        }
+        if (!rotated) return;
+      }
+    })();
     const preflightRunTurnFailover = async (
       firstSource: AsyncIterable<AdapterEvent>,
       // LOCAL PATCH (runturn-websearch): replayed attempts re-dispatch this
@@ -448,9 +501,10 @@ export async function executeResponsesRunTurn(
       let deferPendingPermitCleanup = false;
       try {
         while (true) {
-          const preflight = await preflightAdapterEvents(source, undefined, deadlineAt === undefined
-            ? undefined
-            : { maxWaitMs: deadlineAt - Date.now() });
+          const preflight = await preflightAdapterEvents(source, undefined, {
+            ...(deadlineAt === undefined ? {} : { maxWaitMs: deadlineAt - Date.now() }),
+            honorReady: replayParsed.stream,
+          });
           if (preflight.timedOut) {
             const pendingPermit = sendBudgetState.pendingHopPermit;
             if (pendingPermit && latestRetryAttempt) {
@@ -465,8 +519,9 @@ export async function executeResponsesRunTurn(
               };
               void latestRetryAttempt.then(releaseIfUnclaimed, releaseIfUnclaimed);
             }
-            return preflight.stream;
+            return streamAfterPreflight(preflight.stream, replayParsed, preflight.replayUnsafe);
           }
+          if (preflight.ready) return streamAfterPreflight(preflight.stream, replayParsed, preflight.replayUnsafe);
           if (preflight.replayUnsafe
             || !preflight.error
             || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
@@ -519,6 +574,7 @@ export async function executeResponsesRunTurn(
       if (preflight.replayUnsafe || preflight.error?.status !== 429
         || preflight.error.code === SEND_BUDGET_EXHAUSTED_CODE) return;
       const { httpStatus, error } = adapterFailureFromEvent(preflight.error);
+      transportState.bindKeyUsageFromBridge(preflight.error.usage);
       cancelResponseCompletion();
       runTurnAbort.abort();
       queue.close();
@@ -553,7 +609,9 @@ export async function executeResponsesRunTurn(
         if (refusal) return refusal;
       }
       if (options.comboAttempt) {
-        const preflight = await preflightAdapterEvents(eventSource, classifyUndeclaredFirstTool);
+        const preflight = await preflightAdapterEvents(
+          eventSource, classifyUndeclaredFirstTool, { honorReady: false },
+        );
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();
@@ -672,7 +730,9 @@ export async function executeResponsesRunTurn(
       )) runTurnEvents.push(event);
     }
     if (grokDevinPreflight) {
-      const preflight = await preflightAdapterEvents((async function* () { yield* runTurnEvents; })());
+      const preflight = await preflightAdapterEvents(
+        (async function* () { yield* runTurnEvents; })(), undefined, { honorReady: false },
+      );
       const refusal = grokRateLimitResponse(preflight);
       if (refusal) return refusal;
     }

@@ -9,8 +9,8 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
  * other OAuth provider the generic failover module admits; its settings persist on
  * `providers.<name>.oauthAccountFailover`.
  *
- * `strategy` and `autoSwitchThreshold` are still a declared contract the selector does not
- * consume — that is what `inert` reports. `enabled` is NOT inert any more: an explicit
+ * `strategy` and `autoSwitchThreshold` are consumed only when `pool.kernel` is on — that
+ * is what `inert` reports. `enabled` is NOT inert: an explicit
  * `true` enables pre-dispatch exhaustion avoidance (`preferredInitialAccount`); absence is off.
  * Healthy manual selections remain authoritative. What the switch can
  * no longer do is refuse reactive 429 rotation, which activates on account presence and is not
@@ -18,7 +18,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
  */
 export type PoolSettingsKind = "codex" | "anthropic" | "generic";
 
-export const GENERIC_POOL_STRATEGIES = ["quota", "round-robin", "fill-first"] as const;
+export const GENERIC_POOL_STRATEGIES = ["quota", "round-robin", "fill-first", "least-loaded"] as const;
 export type GenericPoolStrategy = typeof GENERIC_POOL_STRATEGIES[number];
 
 export function poolSettingsCapability(name: string, provider: OcxProviderConfig | undefined): PoolSettingsKind | null {
@@ -28,12 +28,14 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
   return isGenericFailoverProvider(name, provider) ? "generic" : null;
 }
 
-export function parseGenericPoolStrategy(value: unknown): GenericPoolStrategy | null {
-  // Delegated, not re-implemented. Three pools accepting the same three names from three
-  // private copies of the same check is how they drift apart: the Codex and Anthropic kinds
-  // already shared this parser while the generic kind carried its own. The names and the
-  // 1..100 bound live in pool-kernel.ts, once.
-  return parseAccountPoolStrategy(value) as GenericPoolStrategy | null;
+export function parseGenericPoolStrategy(value: unknown, providerName?: string): GenericPoolStrategy | null {
+  // Keep the common three names in the shared parser; the fourth is Kiro-specific.
+  if (value === "least-loaded") return providerName === "kiro" ? value : null;
+  return parseAccountPoolStrategy(value);
+}
+
+export function parseKiroAccountCap(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100 ? value : null;
 }
 
 export function parseGenericAutoSwitchThreshold(value: unknown): number | null {
@@ -46,7 +48,7 @@ export function parseGenericStickyLimit(value: unknown): number | null {
 
 /** Fields the unified pool-settings contract can carry, per kind. */
 export const POOL_SETTINGS_FIELDS = [
-  "enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow",
+  "enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "maxConcurrentPerAccount",
 ] as const;
 export type PoolSettingsField = typeof POOL_SETTINGS_FIELDS[number];
 
@@ -78,6 +80,7 @@ export interface PoolSettingsDto {
   stickyLimit: number | null;
   autoSwitchThreshold: number | null;
   quotaWindow: string | null;
+  maxConcurrentPerAccount: number | null;
 }
 
 
@@ -88,6 +91,8 @@ export interface GenericPoolSettingsDto {
   strategy: GenericPoolStrategy | null;
   autoSwitchThreshold: number | null;
   stickyLimit: number | null;
+  /** Present only for Kiro; other generic providers keep their original legacy shape. */
+  maxConcurrentPerAccount?: number | null;
   /**
    * Marker for `strategy`, `autoSwitchThreshold` and `stickyLimit` only: true while they are
    * persisted but not consumed by the selector, false once `pool.kernel` is on and they
@@ -113,7 +118,8 @@ export function genericPoolSettingsDto(
     provider: name,
     kind: "generic",
     enabled: typeof failover.enabled === "boolean" ? failover.enabled : null,
-    strategy: parseGenericPoolStrategy(failover.strategy),
+    strategy: parseGenericPoolStrategy(failover.strategy, name),
+    ...(name === "kiro" ? { maxConcurrentPerAccount: parseKiroAccountCap(failover.maxConcurrentPerAccount) } : {}),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
     stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
     inert: kernelEnabled !== true,
@@ -139,7 +145,8 @@ export function unifiedPoolSettingsDto(
   provider: string,
   kind: PoolSettingsKind,
 ): PoolSettingsDto {
-  const base = { provider, kind, supported: SUPPORTED_BY_KIND[kind] };
+  const base = { provider, kind, supported: provider === "kiro"
+    ? [...SUPPORTED_BY_KIND.generic, "maxConcurrentPerAccount" as const] : SUPPORTED_BY_KIND[kind] };
   if (kind === "codex") {
     return {
       ...base,
@@ -151,6 +158,7 @@ export function unifiedPoolSettingsDto(
       stickyLimit: parseGenericStickyLimit(config.accountPoolStickyLimit) ?? 1,
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(config.autoSwitchThreshold) ?? 80,
       quotaWindow: null,
+      maxConcurrentPerAccount: null,
     };
   }
   if (kind === "anthropic") {
@@ -164,6 +172,7 @@ export function unifiedPoolSettingsDto(
       stickyLimit: parseGenericStickyLimit(pool.stickyLimit) ?? 1,
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(pool.autoSwitchThreshold) ?? 80,
       quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
+      maxConcurrentPerAccount: null,
     };
   }
   const failover = config.providers?.[provider]?.oauthAccountFailover ?? {};
@@ -176,10 +185,10 @@ export function unifiedPoolSettingsDto(
     // inherited one. Config only -- the roster quorum the dispatch predicate also applies is a
     // different question and stays out of a settings field.
     enabledEffective: stored ?? (config.oauthAccountFailover?.enabled === true),
-    strategy: parseGenericPoolStrategy(failover.strategy),
+    strategy: parseGenericPoolStrategy(failover.strategy, provider),
     stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
     quotaWindow: null,
+    maxConcurrentPerAccount: provider === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
   };
 }
-

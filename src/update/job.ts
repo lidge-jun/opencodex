@@ -62,6 +62,7 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { guiUpdateWorkerCommand } from "./worker-launch";
 import type { WorkerLaunchContext } from "./worker-launch";
+import { withoutSiblingMarker } from "../codex/sibling-start";
 
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
 const UPDATE_JOB_FILENAME = "update-job.json";
@@ -936,7 +937,8 @@ function spawnDetachedStart(
   launcher = packageLauncherPath(),
 ): ChildProcess {
   const cmd = restartCommand(false, installer, launcher, port);
-  const env = { ...process.env };
+  // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
+  const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);
   delete env.OCX_SERVICE;
   updateJob(job, {}, `$ ${cmd.display}`);
   let stdio: "ignore" | [ "ignore", number, number ] = "ignore";

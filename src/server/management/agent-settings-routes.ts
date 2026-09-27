@@ -44,6 +44,7 @@ import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
+import { siblingOfLivePort } from "../../codex/sibling-start";
 import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../codex/multi-agent-mode-policy";
 import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
@@ -210,6 +211,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
 
   /** Best-effort Desktop 3P config auto-reconcile when providers change. */
   async function autoApplyDesktopBestEffort(): Promise<void> {
+    if (siblingOfLivePort() !== null) return;
     try {
       const { claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
       const admitted = loadConfig();
@@ -226,9 +228,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (["not_installed", "no_owned_state", "foreign", "unsafe", "broken"].includes(beforeKind)) return;
       const { filterCatalogVisibleModels, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
       const allModels = await (deps.fetchAllModels ?? fetchAllModels)(admitted);
+      if (siblingOfLivePort() !== null) return;
       // Serialized with Desktop mode transitions: a first-party switch cannot interleave with this write.
       const { runPickerTransition } = await import("./claude-desktop-picker-routes");
       await runPickerTransition(admitted, async () => {
+        if (siblingOfLivePort() !== null) return undefined;
         const current = loadConfig();
         // This is the real guard: the catalog await admits a concurrent explicit OFF.
         if (!claudeDesktopIntegrationEnabled(current)) return undefined;
@@ -1554,7 +1558,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       catch { return jsonResponse({ error: "Claude settings are unreadable", code: "unreadable" }, 500); }
       type FirstPartyMutation =
         | { refusal: { error: string; code: "intercept_disabled" | "intercept_unavailable" } }
-        | { claudeCode: OcxConfig["claudeCode"]; previous: { present: boolean; value: boolean }; pinnedMode: "first-party" | "gateway" | undefined };
+        | { claudeCode: OcxConfig["claudeCode"]; previous: { present: boolean; value: boolean };
+            pinnedMode: "first-party" | "gateway" | undefined; retainedAmbiguous: boolean };
       let outcome: ReturnType<typeof mutatePersistedConfig<FirstPartyMutation>>;
       try {
         outcome = mutatePersistedConfig<FirstPartyMutation>(persisted => {
@@ -1569,14 +1574,23 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const before = structuredClone(persisted);
         const previous = { present: Object.hasOwn(persisted.claudeCode ?? {}, "cliFirstParty"),
           value: persisted.claudeCode?.cliFirstParty === true };
-        const pinnedMode = body.cliFirstParty && persisted.claudeCode?.desktopMode === undefined
-          ? resolveClaudeDesktopMode(before, observeClaudeDesktopMode(before)) : undefined;
+        // Pin the mode Desktop resolves to *after* this mutation: while cliFirstParty is set the
+        // shared env is suppressed as Desktop evidence, so an opt-out observed with the flag still
+        // on would pin gateway and disconnect a Desktop install that predates the marker.
+        const observedBefore = structuredClone(before);
+        if (!body.cliFirstParty) delete observedBefore.claudeCode?.cliFirstParty;
+        const pinnedMode = persisted.claudeCode?.desktopMode === undefined
+          ? resolveClaudeDesktopMode(before, observeClaudeDesktopMode(observedBefore)) : undefined;
         const nextBlock = { ...(persisted.claudeCode ?? {}) };
         if (body.cliFirstParty) nextBlock.cliFirstParty = true;
         else delete nextBlock.cliFirstParty;
         if (pinnedMode) nextBlock.desktopMode = pinnedMode;
         commitClaudeCodeBlock(persisted, nextBlock);
-        return { changed: true, value: { claudeCode: structuredClone(persisted.claudeCode), previous, pinnedMode } };
+        // An opt-out that pins first-party from the shared env cannot tell whether that env was
+        // Desktop's or a hand-configured CLI-only one; the env is retained (Desktop keeps its
+        // route) and the caller is warned so it can pin gateway explicitly to release it.
+        const retainedAmbiguous = !body.cliFirstParty && previous.value && pinnedMode === "first-party";
+        return { changed: true, value: { claudeCode: structuredClone(persisted.claudeCode), previous, pinnedMode, retainedAmbiguous } };
         });
       } catch { return jsonResponse({ error: "Could not save Claude settings", code: "write_failed" }, 500); }
       if (outcome.status === "unavailable") return jsonResponse({ error: "Could not save Claude settings", code: "write_failed" }, 500);
@@ -1626,7 +1640,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const residual = !finalDesired.desktop && !finalDesired.cli
         && readFirstPartyProxyStatus(config, bound?.proxyPort ?? null) !== "none";
       return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
-        cliFirstParty: body.cliFirstParty, warnings: residual ? ["settings_residual"] : [] });
+        cliFirstParty: body.cliFirstParty,
+        warnings: [
+          ...(committed.retainedAmbiguous ? ["shared_proxy_retained"] : []),
+          ...(residual ? ["settings_residual"] : []),
+        ] });
     }
     for (const field of ["webSearchSidecar", "visionSidecar"] as const) {
       const section = body[field];

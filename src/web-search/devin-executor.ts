@@ -126,7 +126,7 @@ export async function resolveDevinWebSearchSnapshot(
   try {
     const selection = captureOAuthAccountSelection(credentialProvider);
     if (!selection) return { error: "devin web search auth failed: no signed-in account" };
-    const snapshot = await getValidAccessTokenSnapshot(credentialProvider);
+    const snapshot = await getValidAccessTokenSnapshot(credentialProvider, { oauthProvider: "devin" });
     const committed = await commitOAuthAccountSelection(credentialProvider, snapshot.accountId, {
       expectedSelection: selection,
       expectedCredentialGeneration: snapshot.generation,

@@ -460,7 +460,7 @@ function translateAnthropicRequest(
   if (Array.isArray(raw.stop_sequences) && raw.stop_sequences.length > 0) {
     body.stop = raw.stop_sequences.filter((s): s is string => typeof s === "string");
   }
-  const outputConfigFormat = formatFromOutputConfig(raw.output_config);
+  const outputConfigFormat = formatFromOutputConfig(raw.output_config, body.model as string);
   if (outputConfigFormat) body.text = { format: outputConfigFormat };
   let cacheKeySource: ClaudeCacheKeySource = null;
   if (isRec(raw.metadata) && typeof raw.metadata.user_id === "string") {
@@ -513,7 +513,7 @@ function translateAnthropicRequest(
     // value, so do not attach the similarly named internal catalog sentinel.
     body.reasoning = { effort: "none" };
   } else if (isRec(thinking) || outputConfigEffort !== undefined) {
-    const reasoning: Rec = { summary: "auto" };
+    const reasoning: Rec = { summary: isRec(thinking) && thinking.display === "omitted" ? "none" : "auto" };
     if (outputConfigEffort !== undefined) {
       // Adaptive wire: /effort arrives as output_config.effort (devlog 080).
       reasoning.effort = outputConfigEffort;

@@ -273,6 +273,8 @@ describe("membership oracle", () => {
       "ci-structure-gate.test.ts": "ci-workflows",
       "responses-code-mode-patch-compile.test.ts": "responses",
       "gui-codex-usage-score-parity.test.ts": "gui",
+      "server-combo-cooldown-fallback.test.ts": "server",
+      "claude-estimate-projection.test.ts": "claude-integration",
     } as const;
     const classified = Object.fromEntries(
       Object.keys(owners).map(name => [name, layout.explicit[name] ?? null]),

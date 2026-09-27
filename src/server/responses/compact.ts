@@ -583,7 +583,9 @@ export async function bufferCompactResponse(
     const result = await readBoundedResponseBytes(upstream, {
       signal,
       maxBytes: COMPACT_RESPONSE_MAX_BYTES,
-      inactivityTimeoutMs: resolveStallTimeoutMs(stallTimeoutSec, { localUpstream }),
+      // Compaction buffers the complete body while holding an active-turn lease. Keep its
+      // default bounded even for local destinations so silent bodies cannot exhaust that gate.
+      inactivityTimeoutMs: resolveStallTimeoutMs(stallTimeoutSec),
     });
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     if (result.oversized) return compactResponseTooLargeError();
@@ -1433,7 +1435,7 @@ export async function handleResponsesCompact(
   // The routed compaction turn is a handoff inside the same logical request, so it draws the
   // REMAINDER. Minting here is what let a native attempt spend three sends and the routed
   // fallback spend four more.
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRoutingOverride: options.compactionRoutingOverride, ...(admission ? { admission } : {}) });
+  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {

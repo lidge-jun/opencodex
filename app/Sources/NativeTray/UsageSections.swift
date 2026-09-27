@@ -3,25 +3,27 @@ import Charts
 
 struct NativeTrayProviderView: View {
     let provider: NativeTrayProvider
+    var pendingSwitch: String? = nil
+    var onUse: ((NativeTrayProvider.Account) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(provider.label).font(.subheadline.weight(.semibold))
+            HStack(spacing: 6) {
+                NativeTrayProviderMark(provider: provider)
+                Text(provider.label).font(.subheadline.weight(.semibold))
+            }
             if provider.unavailable || provider.accounts.isEmpty {
                 Text(provider.unavailable ? "Account limits unavailable" : "No quota data")
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(provider.accounts) { account in
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(account.label).lineLimit(1).help(account.label)
-                        Spacer()
-                        if let plan = account.plan { Text(plan).foregroundStyle(.secondary) }
-                        if account.active {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                .accessibilityLabel("Active account").help("Active account")
-                        }
-                    }.font(.caption)
+                    NativeTrayAccountHeader(
+                        account: account,
+                        switchable: provider.switchable == true && onUse != nil,
+                        pending: pendingSwitch == account.id,
+                        busy: pendingSwitch != nil,
+                        onUse: { onUse?(account) })
                     if let email = account.email, email != account.label {
                         Text(email).font(.caption2).foregroundStyle(.secondary)
                     }
@@ -31,11 +33,9 @@ struct NativeTrayProviderView: View {
                     ForEach(account.windows) { window in
                         HStack(spacing: 8) {
                             Text(window.label).lineLimit(1).frame(width: 96, alignment: .leading)
-                            Text(window.value.map { $0.formatted(.number.precision(.fractionLength(0))) + "%" } ?? "—")
+                            Text(NativeTrayFormat.percentText(window.value))
                                 .monospacedDigit().frame(width: 36, alignment: .trailing)
-                            ProgressView(value: window.fill).tint(.green)
-                                .accessibilityLabel(window.label)
-                                .accessibilityValue(window.value.map { $0.formatted(.number.precision(.fractionLength(0))) + " percent" } ?? "Unavailable")
+                            NativeTrayQuotaBar(window: window)
                             Text(NativeTrayFormat.reset(window.resetAt)).monospacedDigit()
                                 .frame(width: 70, alignment: .trailing)
                                 .help(window.resetDate?.formatted(date: .complete, time: .standard) ?? "Reset time unavailable")

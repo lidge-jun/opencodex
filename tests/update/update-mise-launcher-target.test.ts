@@ -38,18 +38,19 @@ function plan(overrides: MiseLauncherTargetDeps = {}, running = join(toolRoot, "
   });
 }
 
-beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-mise-launcher-")));
-  toolRoot = join(root, "installs", "opencodex");
-  mkdirSync(toolRoot, { recursive: true });
-  writeFileSync(join(toolRoot, ".mise.backend.toml"), 'short = "opencodex"\nfull = "npm:@bitkyc08/opencodex"\n');
-});
+// The launcher watch runs only on Linux; a native Windows path cannot model its POSIX layout.
+describe.skipIf(process.platform === "win32")("mise launcher target plan", () => {
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-mise-launcher-")));
+    toolRoot = join(root, "installs", "opencodex");
+    mkdirSync(toolRoot, { recursive: true });
+    writeFileSync(join(toolRoot, ".mise.backend.toml"), 'short = "opencodex"\nfull = "npm:@bitkyc08/opencodex"\n');
+  });
 
-afterEach(() => {
-  removeTreeWithRetry(root);
-});
+  afterEach(() => {
+    removeTreeWithRetry(root);
+  });
 
-describe("mise launcher target plan", () => {
   test("follows `latest` from the running version to the upgraded one", () => {
     const running = installVersion("2.65.0");
     const next = installVersion("2.66.0");
@@ -93,10 +94,6 @@ describe("mise launcher target plan", () => {
   });
 
   test.each([
-    ["macOS, whose launchd services run pinned package paths", { platform: "darwin" as const }],
-    ["Windows, whose services have no launcher", { platform: "win32" as const }],
-    ["a proxy carrying only OCX_SERVICE=1", { env: { OCX_SERVICE: "1" } }],
-    ["a foreground proxy with a service record on disk", { env: {} }],
     ["no recorded launcher", { launcherPath: () => undefined }],
     ["a non-mise install", { ownership: () => ({ installer: "npm" as const }) }],
     ["unverifiable mise ownership", { ownership: () => ({ installer: "mise" as const, owner: null, error: "metadata_inconsistent" as const }) }],
@@ -131,4 +128,16 @@ describe("mise launcher target plan", () => {
     pointLatestAt("2.66.0");
     expect(plan()).toBeNull();
   });
+});
+
+test.each([
+  ["macOS, whose launchd services run pinned package paths", { platform: "darwin" as const }],
+  ["Windows, whose services have no launcher", { platform: "win32" as const }],
+  ["a proxy carrying only OCX_SERVICE=1", { env: { OCX_SERVICE: "1" } }],
+  ["a foreground proxy with a service record on disk", { env: {} }],
+])("is disabled for %s before reading install paths", (_label, overrides) => {
+  expect(plan({
+    ...overrides,
+    runningRoot: () => { throw new Error("must not inspect this install"); },
+  })).toBeNull();
 });

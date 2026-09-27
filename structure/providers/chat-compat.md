@@ -280,8 +280,8 @@ prompt failed before the model answered, because Codex's hosted declaration trav
 provider nobody has classified can now describe itself in config.
 
 The declaration is additive to that table, not a replacement for it. The table is for destinations that reject a tool regardless of configuration, so an operator who never heard of the field stays protected;
-a declaration can only deny more, never re-enable a known-broken pairing. The table is currently empty: its only row removed hosted search for grok-4.6 on OpenCode Go,
-but that destination refuses two OpenAI-private fields rather than the tool, and `src/adapters/xai-web-search.ts` now normalizes those fields for every Grok model there.
+a declaration can only deny more, never re-enable a known-broken pairing. The table denies `web_search` and `web_search_preview` for `xiaomimimo.com` and its subdomains, including the public API and token-plan hosts (#5501), independent of model name. Matching uses the parsed URL hostname, so unrelated hosts with MiMo names in paths or queries are unaffected.
+OpenCode Go keeps hosted search: it refuses two OpenAI-private fields rather than the tool, and `src/adapters/xai-web-search.ts` normalizes those fields for every Grok model there.
 
 Two properties are deliberate. Spelling variants of one capability are aliased, so declaring
 `web_search` also denies `web_search_preview` — the rest of the proxy already folds that pair into
@@ -439,18 +439,15 @@ family shared by unrelated upstreams.
 
 ## Anthropic structured-output compatibility
 
-The Anthropic adapter lowers Responses `text.format` and Chat Completions `response_format` JSON
-Schema requests to `output_config.format`. The local transform follows Anthropic's TypeScript SDK
-subset so upstream rejects neither OpenAI-only envelope fields nor unsupported schema constraints.
-The adapter merges `format` into an existing adaptive-thinking `output_config` rather than replacing
-it, so a compatible `output_config.effort` remains alongside the structured-output format.
-Routed Anthropic Messages input carries `output_config.format` through internal `text.format`, so
-stored-OAuth requests regain the same native format when the Anthropic adapter rebuilds the wire body.
-Unsupported constraints remain in `description` as model guidance instead of disappearing. Root
-`$defs` stay beside a root `$ref`, intentionally differing from the current SDK transform's early
-`$ref` return so local references remain resolvable.
+The Anthropic adapter lowers Responses `text.format` and Chat Completions `response_format` JSON Schema requests to `output_config.format`, following Anthropic's TypeScript SDK subset.
+It merges `format` into the existing adaptive-thinking `output_config`, preserving compatible `output_config.effort`. Unsupported constraints remain in `description` as model guidance; root `$defs` remain beside a root `$ref` so local references resolve.
+Routed Anthropic Messages input carries `output_config.format` through internal `text.format`; stored-OAuth requests regain that format when the Anthropic adapter rebuilds the wire body.
+In that inbound direction, `src/adapters/anthropic-output-schema.ts` checks the original schema, not the normalized acceptance clone. Strict mode requires an object root without a root union, and every object must supply a property map, `additionalProperties: false`, and exactly matching `required` names.
+The check traverses schema-valued properties, array items, unions and definitions; property names and literal enum/const values are not schema nodes. It admits only documented schema keywords for the node's declared type, so incomplete objects, unknown constraints and invalid keyword values retain their original schema with explicit `strict: false` instead of waiting for a denylist update. Fine-tuned `ft:` targets use OpenAI's narrower model-specific keyword subset after Claude alias/model-map resolution; later provider/combo routing remains outside this ingress proof. Anthropic's native acceptance still includes `uri`; only the translated OpenAI strict claim uses the narrower set.
+`tests/claude-integration/claude-output-schema-strict.test.ts` covers the acceptance probe, inbound format, translated Responses parser, recursive object controls and caller-schema preservation.
 
 > Decision record: [ADR-0066](../decisions/ADR-0066-anthropic-structured-output-compatibility.md)
+> Decision record: [ADR-5901](../decisions/ADR-5901-translated-output-schema-strict-eligibility.md)
 
 ## Reasoning display parity (hideThinkingSummary)
 

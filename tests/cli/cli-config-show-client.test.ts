@@ -13,7 +13,7 @@
  * that leaked into a round trip would be a worse bug than the one it fixes.
  */
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -30,15 +30,33 @@ import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 const isolatedCodexHome = mkdtempSync(join(tmpdir(), "ocx-config-client-codex-"));
+const CLI_CHILD_DEADLINE_MS = SPAWN_BUDGET_MS - 5_000;
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
-function runCli(args: string[], home: string) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
-    cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: isolatedCodexHome, OPENCODEX_HOME: home },
-    encoding: "utf8",
-    timeout: SPAWN_BUDGET_MS - 5_000,
+function runCli(args: string[], home: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: isolatedCodexHome, OPENCODEX_HOME: home },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+    const deadline = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`ocx config child exceeded ${CLI_CHILD_DEADLINE_MS}ms`));
+    }, CLI_CHILD_DEADLINE_MS);
+    child.once("error", error => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.once("close", status => {
+      clearTimeout(deadline);
+      resolve({ status, stdout, stderr });
+    });
   });
 }
 
@@ -157,10 +175,10 @@ describe("remoteHubConfigNote", () => {
 });
 
 describe("ocx config show on a client", () => {
-  test("leads with _remoteHub and omits the priorCatalog blob", () => {
+  test("leads with _remoteHub and omits the priorCatalog blob", async () => {
     const home = clientHome();
     try {
-      const result = runCli(["config", "show"], home);
+      const result = await runCli(["config", "show"], home);
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       // First key: it must be read before the empty providers map, not after it.
@@ -180,10 +198,14 @@ describe("ocx config show on a client", () => {
     }
   });
 
-  test("config get on the blob is omitted too, not printed through a side door", () => {
+  test("config get on the blob is omitted too, not printed through a side door", async () => {
     const home = clientHome();
     try {
-      const result = runCli(["config", "get", "client.priorCatalog"], home);
+      // A synchronous spawn blocked this timer and left the Linux batch deadline as the first signal.
+      let eventLoopAdvanced = false;
+      setTimeout(() => { eventLoopAdvanced = true; }, 0);
+      const result = await runCli(["config", "get", "client.priorCatalog"], home);
+      expect(eventLoopAdvanced).toBe(true);
       expect(result.status).toBe(0);
       expect(result.stdout.trim()).toBe(`<omitted: ${PRIOR_CATALOG.length} bytes>`);
     } finally {
@@ -191,11 +213,11 @@ describe("ocx config show on a client", () => {
     }
   });
 
-  test("config export carries the real config and stays validate-clean", () => {
+  test("config export carries the real config and stays validate-clean", async () => {
     const home = clientHome();
     const exported = join(home, "exported.json");
     try {
-      const result = runCli(["config", "export", exported], home);
+      const result = await runCli(["config", "export", exported], home);
       expect(result.status).toBe(0);
       const text = readFileSync(exported, "utf8");
       // A synthetic annotation that leaked into an export would break the round trip.
@@ -203,7 +225,7 @@ describe("ocx config show on a client", () => {
       // And the export is the REAL config: the omission marker is a display concern only.
       const parsed = JSON.parse(text);
       expect(parsed.client.priorCatalog).toBe(PRIOR_CATALOG);
-      const validated = runCli(["config", "validate", exported], home);
+      const validated = await runCli(["config", "validate", exported], home);
       expect(validated.status).toBe(0);
       expect(validated.stdout).toContain("Config is valid.");
     } finally {
@@ -211,12 +233,12 @@ describe("ocx config show on a client", () => {
     }
   });
 
-  test("a client holding no data-plane token is not reported as connected", () => {
+  test("a client holding no data-plane token is not reported as connected", async () => {
     // End to end, because the hardcoded `true` lived at the call site's expense: `ocx config
     // show` is what an agent reads, and this is the machine that cannot reach its hub at all.
     const home = clientHome({ token: null });
     try {
-      const result = runCli(["config", "show"], home);
+      const result = await runCli(["config", "show"], home);
       expect(result.status).toBe(0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed._remoteHub.connected).toBe(false);
@@ -227,10 +249,10 @@ describe("ocx config show on a client", () => {
     }
   });
 
-  test("a standalone machine's output is unannotated", () => {
+  test("a standalone machine's output is unannotated", async () => {
     const home = standaloneHome();
     try {
-      const result = runCli(["config", "show"], home);
+      const result = await runCli(["config", "show"], home);
       expect(result.status).toBe(0);
       expect(result.stdout).not.toContain("_remoteHub");
       expect(Object.keys(JSON.parse(result.stdout))).not.toContain("_remoteHub");

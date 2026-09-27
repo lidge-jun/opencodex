@@ -17,11 +17,11 @@ The app shows its startup progress in a window when you open it. It enables **St
 
 ## Menu bar and usage panel
 
-The menu bar headline shows today's total tokens by default. In the dashboard's **Menu bar & widget** settings, you can choose requests, tokens, estimated cost, quota, or icon only.
+The menu bar headline shows today's total tokens by default. In the dashboard, open **Usage → Menu bar & widget** (or `#usage/companion`) to choose requests, tokens, estimated cost, quota, or icon only.
 
 Use **Show Usage** in the tray menu to open the native panel. The panel shows today's and 30-day totals, a usage chart, a model list, and provider and account limits according to your display settings. Totals include tokens and requests, with estimated cost when enabled. Quota rows show their window, percentage, and reset time. Missing measurements appear as `—`, and partial usage is marked as incomplete.
 
-The panel has **Refresh**, **Dashboard**, and **Settings** controls. **Dashboard** opens the usage view in the desktop window; **Settings** opens the companion settings there. The tray menu also offers **Open Dashboard**, **Open in Browser**, **Start at Login**, **Stop proxy**, **Check for Updates…**, an **Install update** item when one is available, and **Quit**. **Stop proxy** is always listed but is enabled only when the app started the proxy itself; a proxy you started separately keeps running. Closing the window or using Command-Q hides the app when its tray is available; use the tray's **Quit** to exit it.
+The panel has **Refresh**, **Dashboard**, and **Settings** controls. **Dashboard** opens the usage view in the desktop window; **Settings** opens the **Menu bar & widget** tab under Usage. The tray menu also offers **Open Dashboard**, **Open in Browser**, **Start at Login**, **Stop proxy**, **Check for Updates…**, an **Install update** item when one is available, and **Quit**. **Stop proxy** is always listed but is enabled only when the app started the proxy itself; a proxy you started separately keeps running. Closing the window or using Command-Q hides the app when its tray is available; use the tray's **Quit** to exit it.
 
 The desktop dashboard's update button opens the app's own update page; it checks and installs the same signed update as the tray menu.
 

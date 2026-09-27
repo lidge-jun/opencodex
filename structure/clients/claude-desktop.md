@@ -137,6 +137,12 @@ event loop. Injected probes may return a state or a promise, so isolated callers
 
 ### Picker mode: the Desktop egress proxy
 
+The shared CONNECT primitive accepts optional `allowedTargets` authorities. It snapshots and
+normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
+before tunnel selection or dialing. Authentication and loopback refusal remain in force.
+Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
+
 When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
@@ -146,6 +152,10 @@ Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
 login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
+Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
+factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
+avoiding the false reservation created by probing and closing a port pair before the ephemeral TLS
+listener starts. The injected factory does not change production port selection.
 The User-Agent is a routing hint, not a trust boundary: a client that fakes it reaches only what
 any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,

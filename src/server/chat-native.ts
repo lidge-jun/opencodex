@@ -38,11 +38,14 @@ import {
   UpstreamRetryEvidenceError,
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+  wrapWithZeroOutputRefetch,
 } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
+import { authorizeResendForRecovery } from "../lib/request-resend-gate";
+import { ambiguousResendAllowanceFor, selfContainedChatBody } from "./responses/reset-replay";
 import {
   hasKeyPoolFailover,
   selectProactiveApiKeyTransport,
@@ -369,7 +372,37 @@ export async function runNativeChatAttempt(
   );
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
 
-  const send = async (request: AdapterRequest, recovery?: "rate-limit-429" | "key-429"): Promise<Response> => {
+  /**
+   * The operator's replacement grant for THIS logical request, read per leg because
+   * `activeProvider` is reassigned by credential rotation inside the send loop.
+   *
+   * A combo child already holds the request's send ledger, so the grant comes from it and every
+   * ambiguous stage of the request draws on the same counter. A direct Chat request opens no such
+   * ledger -- it accounts through a spend tracker instead -- so it keeps the single grant locally,
+   * which is the same ceiling for the same one attempt.
+   */
+  const requestIsSelfContained = (() => {
+    let memo: boolean | undefined;
+    return (): boolean => memo ??= selfContainedChatBody(execution.chatBody);
+  })();
+  let localAmbiguousResendSpent = false;
+  const claimAmbiguousResend = (limit: number): boolean => {
+    if (sendBudget?.claimAmbiguousResend) return sendBudget.claimAmbiguousResend(limit);
+    if (localAmbiguousResendSpent || limit <= 0) return false;
+    localAmbiguousResendSpent = true;
+    return true;
+  };
+  const ambiguousResend = () => ambiguousResendAllowanceFor(
+    activeProvider,
+    requestIsSelfContained,
+    claimAmbiguousResend,
+  );
+
+  const send = async (
+    request: AdapterRequest,
+    recovery?: "rate-limit-429" | "key-429" | UpstreamSendRecovery,
+    singleShot = false,
+  ): Promise<Response> => {
     try {
       // #2643: opted-in key-auth openai-chat providers retry pre-stream transient statuses on
       // the native chat lane too; everyone else keeps reset-only semantics.
@@ -378,74 +411,81 @@ export async function runNativeChatAttempt(
       if (requestTransientPolicy && remaining <= 0) {
         throw new Error("native Chat transient send budget exhausted before recovery dispatch");
       }
+      const dispatch = (transportRecovery?: UpstreamSendRecovery) => {
+        const effectiveRecovery = transportRecovery
+          ?? (recovery === "connection-reset" ? "connection-reset" : undefined);
+        return fetchWithHeaderTimeout(
+          request.url,
+          applyUpstreamRecoveryInit({
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+          }, effectiveRecovery),
+          upstream.signal,
+          connectMs,
+          requestedStream,
+          providerFetch(activeProvider, undefined, {
+            providerName: route.providerName,
+            modelId: route.modelId,
+            dispatchOverride: async (_input, init, execute) => {
+              if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
+                const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
+                if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
+                  throw new Error("Provider key selection is no longer available for native Chat");
+                }
+                activeProvider = current;
+                stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
+                activeAdapter = createOpenAIChatAdapter(current);
+                activeRequest.releaseBodyObservation?.();
+                releaseRetainedRequest();
+                activeRequest = buildActiveRequest();
+                try { retainRequest(activeRequest); }
+                catch (error) { activeRequest.releaseBodyObservation?.(); throw error; }
+              }
+              // The retry closure may still hold a pre-pacing request. Replace its entire
+              // wire shape, not just Authorization, and retain transport recovery flags.
+              request = activeRequest;
+              const headers = new Headers(request.headers);
+              const encoding = new Headers(init.headers).get("accept-encoding");
+              if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
+              if (init.signal?.aborted) throw init.signal.reason;
+              if (sendBudget) {
+                // Backstop for sends the helper cannot see coming (a reset replay). The first
+                // report settles the combo's booking; each later one is charged and booked.
+                if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
+                  throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+                }
+                physicalSends += 1;
+                sendBudget.used += 1;
+              } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
+              noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+              // A reselected provider transport is still a physical send: the connection policy
+              // and manual-redirect ownership wrap the selected implementation (#4992).
+              const dispatched = await sendWithConnectionPolicy(
+                (activeProvider as OcxProviderTransport).fetch ?? execute,
+                request.url,
+                applyUpstreamRecoveryInit({
+                  ...init, method: request.method, headers, body: request.body,
+                }, transportRecovery),
+                // Reselection can replace the provider transport and the wire shape, so the
+                // egress route is bound to the provider this send actually uses. Omitting it
+                // here would let a provider transport bypass its configured route entirely,
+                // because that transport wins over the executor that carries the binding.
+                { providerName: route.providerName, provider: activeProvider },
+              );
+              if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
+              return dispatched;
+            },
+          }),
+        );
+      };
+      // A replacement bought by an ambiguous reset is ONE send. Routing it back through a retry
+      // helper would let that helper spend sends the operator allowance never granted, which is
+      // the duplicated inference the allowance exists to bound.
+      if (singleShot) return await dispatch("connection-reset");
       const fetchWithPolicy = requestTransientPolicy ? fetchWithTransientRetry : fetchWithResetRetry;
       return await fetchWithPolicy(
-        (transportRecovery?: UpstreamSendRecovery) => {
-          return fetchWithHeaderTimeout(
-            request.url,
-            applyUpstreamRecoveryInit({
-              method: request.method,
-              headers: request.headers,
-              body: request.body,
-            }, transportRecovery),
-            upstream.signal,
-            connectMs,
-            requestedStream,
-            providerFetch(activeProvider, undefined, {
-              providerName: route.providerName,
-              modelId: route.modelId,
-              dispatchOverride: async (_input, init, execute) => {
-                if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
-                  const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
-                    throw new Error("Provider key selection is no longer available for native Chat");
-                  }
-                  activeProvider = current;
-                  stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-                  activeAdapter = createOpenAIChatAdapter(current);
-                  activeRequest.releaseBodyObservation?.();
-                  releaseRetainedRequest();
-                  activeRequest = buildActiveRequest();
-                  try { retainRequest(activeRequest); }
-                  catch (error) { activeRequest.releaseBodyObservation?.(); throw error; }
-                }
-                // The retry closure may still hold a pre-pacing request. Replace its entire
-                // wire shape, not just Authorization, and retain transport recovery flags.
-                request = activeRequest;
-                const headers = new Headers(request.headers);
-                const encoding = new Headers(init.headers).get("accept-encoding");
-                if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
-                if (init.signal?.aborted) throw init.signal.reason;
-                if (sendBudget) {
-                  // Backstop for sends the helper cannot see coming (a reset replay). The first
-                  // report settles the combo's booking; each later one is charged and booked.
-                  if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
-                    throw new SendBudgetExhaustedError(safeHostLabel(request.url));
-                  }
-                  physicalSends += 1;
-                  sendBudget.used += 1;
-                } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
-                noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
-                // A reselected provider transport is still a physical send: the connection policy
-                // and manual-redirect ownership wrap the selected implementation (#4992).
-                const dispatched = await sendWithConnectionPolicy(
-                  (activeProvider as OcxProviderTransport).fetch ?? execute,
-                  request.url,
-                  applyUpstreamRecoveryInit({
-                    ...init, method: request.method, headers, body: request.body,
-                  }, transportRecovery),
-                  // Reselection can replace the provider transport and the wire shape, so the
-                  // egress route is bound to the provider this send actually uses. Omitting it
-                  // here would let a provider transport bypass its configured route entirely,
-                  // because that transport wins over the executor that carries the binding.
-                  { providerName: route.providerName, provider: activeProvider },
-                );
-                if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
-                return dispatched;
-              },
-            }),
-          );
-        },
+        dispatch,
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(request.url),
@@ -630,7 +670,34 @@ export async function runNativeChatAttempt(
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
     let terminalStatus: number | undefined;
-    const stream = nativeChatSse(response.body, {
+    const resilientBody = wrapWithZeroOutputRefetch(
+      response.body,
+      // One physical send, not one more trip through a retry helper: the allowance below buys a
+      // single replacement, so the send must not be able to spend more than it granted.
+      async () => {
+        try {
+          return await send(activeRequest, "connection-reset", true);
+        } finally {
+          // Reselection can charge the rebuilt request after the initial send settled.
+          releaseRetainedRequest();
+        }
+      },
+      {
+        abortSignal: upstream.signal,
+        label: safeHostLabel(activeRequest.url),
+        attempts: remainingTransientSends(),
+        // The origin returned a head and may already be running the turn, so this is the
+        // ambiguous row of the stage table. Only the operator allowance the Responses stream
+        // also draws on can authorise it; without one the original failure stands.
+        authorize: () => authorizeResendForRecovery("headers-only", "connection-reset", ambiguousResend()).allowed,
+        // A replacement must satisfy the contract already promised to the client. A 200 that is
+        // not an event stream would reach the SSE translator as a non-SSE body and surface as a
+        // malformed-stream error instead of the reset that actually happened.
+        acceptResponse: replacement =>
+          (replacement.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream"),
+      },
+    );
+    const stream = nativeChatSse(resilientBody, {
       requestedModel,
       translatorBudget,
       signal: upstream.signal,

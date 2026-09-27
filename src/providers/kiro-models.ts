@@ -28,12 +28,13 @@ export const KIRO_MODELS = [
 ];
 
 // Per-model context windows as documented on Kiro's official model catalog
-// (https://kiro.dev/docs/models/ — "Quick comparison", page updated 2026-07-14).
+// (https://kiro.dev/docs/models/ — "Quick comparison", page updated 2026-09-25).
 // "Auto" is a router with no fixed window on Kiro's table, so it is intentionally omitted.
+// GPT-5.6 accepts 1M tokens; requests above 272K bill at double the listed rate (two-tier pricing).
 export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  "gpt-5.6-sol": 272_000,
-  "gpt-5.6-terra": 272_000,
-  "gpt-5.6-luna": 272_000,
+  "gpt-5.6-sol": 1_000_000,
+  "gpt-5.6-terra": 1_000_000,
+  "gpt-5.6-luna": 1_000_000,
   "gpt-6-sol": 272_000,
   "gpt-6-luna": 272_000,
   "claude-sonnet-5": 1_000_000,

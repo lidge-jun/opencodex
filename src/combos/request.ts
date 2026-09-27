@@ -1,5 +1,5 @@
 import type { OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboTarget, OcxConfig } from "../types";
-import { isCodexReasoningEffort, resolveEffortAtOrBelow } from "../reasoning-effort";
+import { isCodexReasoningEffort, isDeclaredReasoningEffort, resolveEffortAtOrBelow } from "../reasoning-effort";
 import { resolveComboId } from "./types";
 
 const warnedUnsupportedDefaults = new Set<string>();
@@ -54,6 +54,11 @@ function responsesInputNodeHasImage(value: unknown): boolean {
   return false;
 }
 
+/**
+ * Clone a logical combo request for one concrete target and apply the combo's reasoning policy.
+ * Force mode overrides every valid declared caller effort only when the target ladder proves the
+ * configured default is representable; unknown capabilities stay conservative.
+ */
 export function concreteComboRequestBody(
   body: unknown,
   target: Pick<OcxComboTarget, "provider" | "model">,
@@ -79,9 +84,12 @@ export function concreteComboRequestBody(
   const hasEffort = reasoningRecord !== undefined
     && Object.prototype.hasOwnProperty.call(reasoningRecord, "effort");
   const callerEffort = reasoningRecord?.effort;
-  const validCallerEffort = typeof callerEffort === "string" && isCodexReasoningEffort(callerEffort);
+  const declaredCallerEffort = typeof callerEffort === "string" && isDeclaredReasoningEffort(callerEffort);
   const needsDefault = reasoning === undefined || (reasoningRecord !== undefined && !hasEffort);
-  const shouldForce = defaultEffortMode === "force" && validCallerEffort;
+  // `none` and `minimal` are valid request sentinels even though they are outside the ranked
+  // low..ultra Codex ladder. Force mode means the combo policy wins over any valid declared
+  // caller effort, including those sentinels.
+  const shouldForce = defaultEffortMode === "force" && declaredCallerEffort;
   if (!needsDefault && !shouldForce) return clone;
   // Picker availability treats an unknown ladder as a wildcard, but runtime
   // injection stays fail-closed until this concrete target advertises support.

@@ -35,6 +35,8 @@ modelProfile:
 
 保留所选的 `modelProfile.default`，使普通 `gjc` 启动时应用它。托管集成只管理 `models.yml` 中的 `providers.opencodex`；刷新或禁用该提供商不会改写预设选择。更改导出的模型选择后，请刷新集成。
 
+具有受支持推理强度梯度的 GJC 模型会导出 `reasoning: true`、`thinking.levels` 和 `compat.supportsReasoningEffort`，让 GJC 提供强度选择。原生 Codex 模型即使未在目录中列出梯度，也会获得标准梯度。没有已知梯度的模型会省略这些字段；`none` 不发送强度，而 `ultra` 在传输时折叠为 `max`，因此不会列为选项。刷新集成即可更新模型选项。
+
 托管 OpenCode 集成管理两个片段：`provider.opencodex`（opencode V1）和 `providers.opencodex`（opencode V2）。只有 V2 配置块包含各模型的推理强度变体，因此两者都会写入并保持同步；它们使用相同的提供商与模型 id，opencode V2 会将它们合并为一个提供商条目。Apply、Refresh、Disable 和 Restore 都作用于两个片段；其他提供商、代理、快捷键与 MCP 条目保持不变。
 
 托管 DSH 支持的最低兼容版本为 **DSH 0.1.0-rc.6**。OpenCodex 只管理 `llm-pi-ai.providers.opencodex`；Apply 和 Refresh 替换该片段，Disable 只移除该片段，Restore 恢复已记录的快照。DSH 会热重载提供商变更。这些操作不会改变用户的默认模型或原生 `deepseek-official` 提供商。托管 DSH 集成目前仅支持回环地址，绝不会写入真实凭据。

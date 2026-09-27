@@ -10,7 +10,7 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { diagnoseService } from "./diagnostics";
 import type { ServiceDiagnostic } from "./diagnostics";
-import { currentCodexHome, currentOpenCodexHome, normalizePathForCompare, resolveServiceState, serviceCodexHomeMatchesInstall } from "./state";
+import { currentCodexHome, currentOpenCodexHome, resolveServiceState, serviceCodexHomeMatchesInstall, servicePathMatchesInstall } from "./state";
 import { resolveCodexSqliteHome } from "../codex/paths";
 import type { CodexHomeDeps } from "../codex/home";
 import { isLoopbackHostname } from "../codex/loopback-target";
@@ -58,9 +58,8 @@ export function assertServiceEnvironmentMatchesInstall(deps: CodexHomeDeps = {})
         `Rerun with CODEX_HOME=${state.codexHome} so native Codex restore updates the recorded home.`,
     );
   }
-  const expectedOpenCodexHome = normalizePathForCompare(state.opencodexHome);
-  const actualOpenCodexHome = normalizePathForCompare(currentOpenCodexHome());
-  if (expectedOpenCodexHome !== actualOpenCodexHome) {
+  const actualOpenCodexHome = currentOpenCodexHome();
+  if (!servicePathMatchesInstall(state.opencodexHome, actualOpenCodexHome, deps)) {
     throw new ServiceOwnershipError(
       `Service was installed with OPENCODEX_HOME=${state.opencodexHome}, but current OPENCODEX_HOME=${currentOpenCodexHome()}. ` +
         "Run the service command from the same OpenCodex home so service state and secrets match.",
@@ -68,7 +67,7 @@ export function assertServiceEnvironmentMatchesInstall(deps: CodexHomeDeps = {})
   }
   if (state.codexSqliteHome !== undefined) {
     const actualCodexSqliteHome = resolveCodexSqliteHome({ codexHome: actualCodexHome });
-    if (normalizePathForCompare(state.codexSqliteHome) !== normalizePathForCompare(actualCodexSqliteHome)) {
+    if (!servicePathMatchesInstall(state.codexSqliteHome, actualCodexSqliteHome, deps)) {
       throw new ServiceOwnershipError(
         `Service was installed with Codex SQLite home=${state.codexSqliteHome}, but the current Codex SQLite home=${actualCodexSqliteHome}. ` +
           "Run the service command with the same sqlite_home configuration and CODEX_SQLITE_HOME so native Codex history restore updates the correct database.",

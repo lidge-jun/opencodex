@@ -24,9 +24,9 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Responses admission and finalization are composed through the
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](transports/responses.md#core-module-ownership). Kiro's optional account-load admission is process-local and request-owned; its slot ends with the response body or cancellation. Other providers retain their admission path.
 
-Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing). CLI model lists expose shared catalog estimates as `price`; `models price` retains the saved override in `cost` and adds `effectiveCost`. Explicit zero overrides win; unknown prices remain null, and automatic defaults are never persisted to `modelCosts`. Covered by `tests/cli/cli-models.test.ts` and `tests/cli/cli-models-price.test.ts`.
 
 OAuth refresh coordination follows the [refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a fresh unreadable lock remains held, and release requires matching descriptor identity. A failed path-identity probe preserves the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
 
@@ -140,7 +140,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
-| `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. Elevated Task Scheduler repair stages bounded payloads; the unelevated launcher pins every namespace ancestor and payload with non-reparse handles that deny write/delete sharing on the payload and delete sharing on each ancestor until UAC processing exits. |
+| `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. Codex-home ownership accepts either the recorded path or the same existing physical directory so path aliases remain compatible across upgrades. Elevated Task Scheduler repair stages bounded payloads; the unelevated launcher pins every namespace ancestor and payload with non-reparse handles that deny write/delete sharing on the payload and delete sharing on each ancestor until UAC processing exits. |
 
 `src/cli/provider.ts` accepts the Google-only `--google-tool-schema-policy` creation flag and rejects
 an unknown value or non-Google effective adapter before persistence. The persisted field and default
@@ -185,7 +185,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
-until shutdown. Normal shutdown restores native Codex. Service mode sets
+until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected and no pending connect marker owns the newly issued key. `src/client/connect.ts` publishes that fingerprint marker before the key, then clears it with the connection commit or rollback under the client lifecycle and config mutation locks. Connected, invalid, or mismatched client state retains an existing token. A valid pending marker retains only its matching fingerprint; an older marker does not own a replacement service key. An absent token is reported as absent; unsafe, malformed, or unreadable markers and lock, state-read, or deletion failures leave cleanup unverified.
 The package-tree integrity fence for live package replacement follows the
@@ -198,11 +198,11 @@ lost probe deletes this home's pid record and then binds a second listener that 
 records and re-points Codex at itself. `probePortOwner` in `src/server/proxy-liveness.ts` asks the
 busy port directly, on both loopback families, independent of the pid and runtime records; the
 outcome is the pure decision `decideBusyPreferredPort` in `src/cli/dispatch.ts`. An opencodex
-holder is refused with the same message the owner check prints (exit 0 instead under
-`OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
+holder is refused with the same message the owner check prints (intentional stay-out under
+`OCX_SERVICE=1`, using the [Windows wrapper protocol](ops/docs-and-release.md#windows-service-wrapper-and-incomplete-updates)), and a holder that does not identify as opencodex
 is reported as such rather than called foreign, because an identity probe cannot distinguish a
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
-pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS". A restart replacement that finds its own draining parent waits for it instead ([restart handoff](ops/service-and-sidecars.md#restart-handoff)).
 
 Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
 for its resolved OpenCodex state directory before loading configuration or binding a listener.
@@ -232,7 +232,7 @@ GUI, session bootstrap/exchange, and `/api/*`.
 The `hub-link` socket is HTTP-only and default-denies all but the fixed data routes, catalog, hub-state,
 usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
 `/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
-key ids recorded by `links.json`, never the environment token. `ensureStarted()` is single-flight,
+key ids recorded by `links.json`, never the environment token. Context relays rebuild that policy for their post-body admission check, so key revocation stops an in-flight request before dispatch. `ensureStarted()` is single-flight,
 final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
@@ -248,7 +248,7 @@ still believes it talks to Anthropic. The proxy splices `CONNECT api.anthropic.c
 listener, relays every other CONNECT target blind, and refuses unauthenticated clients, plain proxied HTTP, and loopback targets. The per-install proxy token is stored owner-only under `<OPENCODEX_HOME>/claude-intercept/` (0600 plus a real per-user NTFS ACL on Windows, via `src/lib/windows-secret-acl.ts`, and re-pinned on every read-through `ensure`), and the settings file carrying it is written through the same hardened atomic writer. Every start runs `migrateClaudeInterceptSettings` (`src/claude/intercept/settings.ts`), which rewrites an owned env that no longer matches — e.g. a pre-auth URL left by an upgrade — while never creating an absent env or touching a foreign one, so a service restart cannot strand clients on 407s. Status/inspection reads the token without minting it; only apply and intercept startup create it.
 The TLS listener rewrites `POST /v1/messages` and `POST /v1/messages/count_tokens` to a loopback origin and dispatches them under the `claude-intercept` ingress; other paths relay to the configured upstream.
 The pair is on by default on a hub (`claudeCode.intercept.enabled`); its proxy port defaults to public port + 100 (`claudeCode.intercept.port`). Bind failure warns, and stop joins both sockets. With an ephemeral public port (`startServer(0)`), an explicit intercept port is required.
-This ingress honours first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode adds a second Desktop CONNECT proxy on the next port; see [Claude Desktop](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
+This ingress honours first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode and the primitive's optional `allowedTargets` restriction are described under [Desktop egress proxy](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
 
 `src/claude/intercept/client-class.ts` classifies each request by its Claude Code `User-Agent` entrypoint: `claude-desktop`, `claude-desktop-3p`, and `local-agent` are Desktop; other well-formed `claude-cli/<v> (external, <entrypoint>)` values are CLI; absent or malformed values are unknown.
 Only a client with its own first-party intent enabled (Desktop mode or `claudeCode.cliFirstParty`) enters the router for Messages paths; other paths use the configured upstream relay.
@@ -342,7 +342,7 @@ field for every tool. Only bare or `default.`-prefixed `exec` and `apply_patch` 
 one recognized alternate body field or remove one complete outer Markdown fence; ambiguous
 alternate fields and every other freeform grammar pass through unchanged.
 
-The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
+The server exposes `POST /api/stop` which restores native Codex config (a sibling instance answers `sharedTeardown: "not-owned"` instead), stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
 
 > Decision record: [ADR-0004](decisions/ADR-0004-lifecycle.md)
@@ -448,7 +448,7 @@ following a final symlink, so an exchange during a mutation cannot redirect the 
 Config JSON preserves the boolean; only literal true activates the role-changing transform. Claude skill-bundle marker parsing follows the [bounded inbound contract](data-planes/inbound-compat.md#claude-skill-marker-path-bound).
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
-Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination.
+Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination. Native Devin alpha search likewise resolves OAuth from the routed provider name that admission checked, rather than borrowing the canonical `devin` slot for a custom Devin-adapter row.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.

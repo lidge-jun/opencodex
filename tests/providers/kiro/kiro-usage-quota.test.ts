@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { ProviderAccount } from "../../../src/oauth/types";
+import { kiroEvidenceIdentity } from "../../../src/providers/kiro-account-state-disk";
 import {
   clearKiroAccountUsageState,
   commitKiroAccountUsageState,
   fetchKiroUsageSnapshot,
   getKiroAccountExhaustion,
   kiroUsageManagementUrl,
+  kiroManagementHost,
   reconcileKiroAccountUsageState,
 } from "../../../src/providers/kiro-usage";
 
@@ -28,7 +31,9 @@ function stubUsageResponse(payload: unknown, status = 200): { calls: Request[] }
   return { calls };
 }
 
-const baseContext = { accountId: "acct-1", access: "tok-1" };
+const baseContext = { accountId: "acct-1", access: "tok-1",
+  profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/TEST" };
+const storedAccount: ProviderAccount = { id: "acct-1", credential: { access: "tok-1", refresh: "refresh", expires: 0 } };
 
 function breakdown(extra: Record<string, unknown> = {}) {
   return {
@@ -43,6 +48,16 @@ function breakdown(extra: Record<string, unknown> = {}) {
 }
 
 describe("Kiro usage limits", () => {
+  test("Builder ID management host ignores service ARN region", () => {
+    expect(kiroManagementHost({ ...baseContext, builderIdFallback: true,
+      apiRegion: "eu-west-1" })).toBe("https://management.eu-west-1.kiro.dev/");
+  });
+
+  test("Kiro management host follows account region", () => {
+    expect(kiroManagementHost({ ...baseContext,
+      profileArn: "arn:aws:codewhisperer:ap-southeast-2:123456789012:profile/TEST",
+      apiRegion: "eu-west-1" })).toBe("https://management.ap-southeast-2.kiro.dev/");
+  });
   test("maps an agentic-request breakdown onto the monthly window", async () => {
     stubUsageResponse({
       usageBreakdownList: [breakdown()],
@@ -51,6 +66,8 @@ describe("Kiro usage limits", () => {
     });
     const snapshot = await fetchKiroUsageSnapshot(baseContext);
     expect(snapshot?.quota.monthlyPercent).toBeCloseTo(14.782, 3);
+    expect(snapshot?.quota.kiroCreditsUsed).toBe(147.82);
+    expect(snapshot?.quota.kiroCreditsLimit).toBe(1000);
     expect(snapshot?.quota.monthlyResetAt).toBe(1785542400 * 1000);
     expect(snapshot?.exhausted).toBe(false);
   });
@@ -65,6 +82,14 @@ describe("Kiro usage limits", () => {
     const snapshot = await fetchKiroUsageSnapshot(baseContext);
     // Index 0 would report 90%; selecting by resourceType reports the credit pool.
     expect(snapshot?.quota.monthlyPercent).toBe(10);
+  });
+
+  test("a negative or non-finite used reading yields no quota", async () => {
+    for (const used of [-1, "Infinity", "NaN"]) {
+      stubUsageResponse({ usageBreakdownList: [breakdown({ currentUsageWithPrecision: used,
+        currentUsage: used })] });
+      expect(await fetchKiroUsageSnapshot(baseContext)).toBeNull();
+    }
   });
 
   test("reports unknown when no recognised resource type is present", async () => {
@@ -194,43 +219,43 @@ describe("Kiro exhaustion state", () => {
   const key = "kiro\u0000acct-1";
 
   test("a fresh exhausted verdict is readable", () => {
-    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true, nextResetAt: Date.now() + 60_000 });
-    expect(getKiroAccountExhaustion(key)?.exhausted).toBe(true);
+    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true, nextResetAt: Date.now() + 60_000 }, kiroEvidenceIdentity(storedAccount));
+    expect(getKiroAccountExhaustion(key, storedAccount)?.exhausted).toBe(true);
   });
 
   test("a verdict older than the account TTL degrades to unknown", () => {
     const now = Date.now();
-    commitKiroAccountUsageState(key, { quota: { updatedAt: now }, exhausted: true, nextResetAt: now + 60 * 60_000 });
-    expect(getKiroAccountExhaustion(key, now + 11 * 60_000)).toBeNull();
+    commitKiroAccountUsageState(key, { quota: { updatedAt: now }, exhausted: true, nextResetAt: now + 60 * 60_000 }, kiroEvidenceIdentity(storedAccount));
+    expect(getKiroAccountExhaustion(key, storedAccount, now + 11 * 60_000)).toBeNull();
   });
 
   test("a verdict whose reset has passed degrades to unknown", () => {
     const now = Date.now();
-    commitKiroAccountUsageState(key, { quota: { updatedAt: now }, exhausted: true, nextResetAt: now + 1_000 });
-    expect(getKiroAccountExhaustion(key, now + 2_000)).toBeNull();
+    commitKiroAccountUsageState(key, { quota: { updatedAt: now }, exhausted: true, nextResetAt: now + 1_000 }, kiroEvidenceIdentity(storedAccount));
+    expect(getKiroAccountExhaustion(key, storedAccount, now + 2_000)).toBeNull();
   });
 
   test("a null snapshot clears any previous verdict", () => {
-    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true });
+    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true }, kiroEvidenceIdentity(storedAccount));
     commitKiroAccountUsageState(key, null);
-    expect(getKiroAccountExhaustion(key)).toBeNull();
+    expect(getKiroAccountExhaustion(key, storedAccount)).toBeNull();
   });
 
   test("clearing by provider prefix drops that provider's rows", () => {
-    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true });
+    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true }, kiroEvidenceIdentity(storedAccount));
     clearKiroAccountUsageState("kiro\u0000");
-    expect(getKiroAccountExhaustion(key)).toBeNull();
+    expect(getKiroAccountExhaustion(key, storedAccount)).toBeNull();
   });
 
   test("reconciliation drops rows for accounts that no longer exist", () => {
-    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true });
+    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true }, kiroEvidenceIdentity(storedAccount));
     expect(reconcileKiroAccountUsageState(new Set())).toBe(1);
-    expect(getKiroAccountExhaustion(key)).toBeNull();
+    expect(getKiroAccountExhaustion(key, storedAccount)).toBeNull();
   });
 
   test("reconciliation keeps rows for live accounts", () => {
-    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true });
+    commitKiroAccountUsageState(key, { quota: { updatedAt: Date.now() }, exhausted: true }, kiroEvidenceIdentity(storedAccount));
     expect(reconcileKiroAccountUsageState(new Set([key]))).toBe(0);
-    expect(getKiroAccountExhaustion(key)?.exhausted).toBe(true);
+    expect(getKiroAccountExhaustion(key, storedAccount)?.exhausted).toBe(true);
   });
 });

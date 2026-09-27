@@ -49,6 +49,8 @@ describe("Responses fetch-helper import boundary", () => {
       "../../lib/proxy-env",
       "../../lib/redact",
       "../../lib/upstream-http-version",
+      // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
+      "../../plugins/upstream-hooks",
       "../../providers/request-pacing",
       "./ws-upstream",
     ]);

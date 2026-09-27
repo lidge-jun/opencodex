@@ -323,3 +323,202 @@ describe("provider request pacing queue", () => {
     expect(pacingWaited).toBe(1);
   });
 });
+
+describe("provider request concurrency", () => {
+  test("Cursor counts overlapping RunSSE and BidiAppend as one held turn", async () => {
+    let sends = 0;
+    const fetchImpl = Object.assign(async () => {
+      sends += 1;
+      return new Response("ok");
+    }, { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = { ...provider({ enabled: true, maxConcurrentRequests: 1 }), fetch: fetchImpl };
+    const turnSlot = await waitForProviderRequestSlot("cursor", configured, "model-a");
+    const turnFetch = providerFetch(configured, undefined, {
+      providerName: "cursor", modelId: "model-a", pacingSlotAcquired: true,
+      pacingSlot: turnSlot, turnScopedPacing: true,
+    });
+    const otherTurnFetch = providerFetch(configured, undefined, { providerName: "cursor", modelId: "model-a" });
+    try {
+      expect(await (await turnFetch("https://example.test/RunSSE")).text()).toBe("ok");
+      expect(providerRequestPacingStatus("cursor", configured).inFlight).toBe(1);
+      expect(await (await turnFetch("https://example.test/BidiAppend")).text()).toBe("ok");
+      expect(sends).toBe(2);
+      const otherTurn = otherTurnFetch("https://example.test/other", { signal: AbortSignal.timeout(500) });
+      await Bun.sleep(0);
+      expect(providerRequestPacingStatus("cursor", configured).queued).toBe(1);
+      turnSlot.release();
+      expect(await (await otherTurn).text()).toBe("ok");
+      expect(sends).toBe(3);
+    } finally {
+      turnSlot.release();
+    }
+  });
+
+  test("an active body holds capacity until cancellation", async () => {
+    let sends = 0;
+    const fetchImpl = Object.assign(async () => {
+      sends += 1;
+      return new Response(new ReadableStream({ start() {} }));
+    }, { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = { ...provider({ enabled: true, maxConcurrentRequests: 1 }), fetch: fetchImpl };
+    const executor = providerFetch(configured, undefined, { providerName: "demo", modelId: "a" });
+    const first = await executor("https://example.test/first");
+    const second = executor("https://example.test/second", { signal: AbortSignal.timeout(250) });
+    await Bun.sleep(0);
+    expect(sends).toBe(1);
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    await first.body!.cancel();
+    const resumed = await second;
+    expect(sends).toBe(2);
+    await resumed.body!.cancel();
+  });
+
+  test("an errored body and failed send return their leases", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let sends = 0;
+    const fetchImpl = Object.assign(async () => {
+      sends += 1;
+      if (sends === 2) throw new Error("send failed");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller; },
+      }));
+    }, { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = { ...provider({ enabled: true, maxConcurrentRequests: 1 }), fetch: fetchImpl };
+    const executor = providerFetch(configured, undefined, { providerName: "demo", modelId: "a" });
+    const first = await executor("https://example.test/first");
+    const reading = first.text();
+    streamController!.error(new Error("body failed"));
+    await expect(reading).rejects.toThrow("body failed");
+    await expect(executor("https://example.test/failed", { signal: AbortSignal.timeout(250) })).rejects.toThrow("send failed");
+    const third = await executor("https://example.test/third", { signal: AbortSignal.timeout(250) });
+    expect(sends).toBe(3);
+    await third.body!.cancel();
+  });
+
+  test("a pre-acquired lease transfers to the response body", async () => {
+    const fetchImpl = Object.assign(async () => new Response("ok"), { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = { ...provider({ enabled: true, maxConcurrentRequests: 1 }), fetch: fetchImpl };
+    const pacingSlot = await waitForProviderRequestSlot("demo", configured, "a");
+    const executor = providerFetch(configured, undefined, {
+      providerName: "demo", modelId: "a", pacingSlotAcquired: true, pacingSlot,
+    });
+    expect(await (await executor("https://example.test/first")).text()).toBe("ok");
+    expect(await (await executor("https://example.test/second", { signal: AbortSignal.timeout(250) })).text()).toBe("ok");
+  });
+
+  test("completed streamed response returns capacity for the next physical send", async () => {
+    let sends = 0;
+    const fetchImpl = Object.assign(async () => {
+      sends += 1;
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("ok"));
+          controller.close();
+        },
+      }));
+    }, { preconnect() {} }) as typeof globalThis.fetch;
+    const configured = {
+      ...provider({ enabled: true, maxConcurrentRequests: 1 }),
+      fetch: fetchImpl,
+    } as OcxProviderConfig & { fetch: typeof globalThis.fetch };
+    const executor = providerFetch(configured, undefined, { providerName: "demo", modelId: "a" });
+    const first = await fetchWithHeaderTimeout("https://example.test/v1/first", {}, new AbortController().signal, 1_000, false, executor);
+    expect(await first.text()).toBe("ok");
+
+    const secondSignal = AbortSignal.timeout(250);
+    const second = await fetchWithHeaderTimeout("https://example.test/v1/second", {}, secondSignal, 1_000, false, executor);
+    expect(await second.text()).toBe("ok");
+    expect(sends).toBe(2);
+  });
+
+  test("caps all models together and release is idempotent", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 2 });
+    const first = await waitForProviderRequestSlot("demo", configured, "a");
+    const second = await waitForProviderRequestSlot("demo", configured, "b");
+    const third = waitForProviderRequestSlot("demo", configured, "c");
+    const fourth = waitForProviderRequestSlot("demo", configured, "d");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    first.release();
+    first.release();
+    const releaseThird = await third;
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    second.release();
+    const releaseFourth = await fourth;
+    releaseThird.release();
+    releaseFourth.release();
+  });
+
+  test("model limit tightens provider cap without blocking eligible siblings", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 3,
+      models: { slow: { maxConcurrentRequests: 1 }, fast: { maxConcurrentRequests: 10 } } });
+    const slow = await waitForProviderRequestSlot("demo", configured, "slow");
+    const queuedSlow = waitForProviderRequestSlot("demo", configured, "slow");
+    const fast = await waitForProviderRequestSlot("demo", configured, "fast");
+    const anotherFast = await waitForProviderRequestSlot("demo", configured, "fast");
+    const queuedFast = waitForProviderRequestSlot("demo", configured, "fast");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    fast.release();
+    const lastFast = await queuedFast;
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    slow.release();
+    (await queuedSlow).release();
+    anotherFast.release();
+    lastFast.release();
+  });
+
+  test("model-only cap leaves other models and providers independent", async () => {
+    const configured = provider({ enabled: true, models: { slow: { maxConcurrentRequests: 1 } } });
+    const first = await waitForProviderRequestSlot("demo", configured, "slow");
+    const queued = waitForProviderRequestSlot("demo", configured, "slow");
+    (await waitForProviderRequestSlot("demo", configured, "other")).release();
+    (await waitForProviderRequestSlot("other-provider", configured, "slow")).release();
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    first.release();
+    (await queued).release();
+  });
+
+  test("aborting an active request frees exactly one slot", async () => {
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1 });
+    const controller = new AbortController();
+    const release = await waitForProviderRequestSlot("demo", configured, "a", controller.signal);
+    const next = waitForProviderRequestSlot("demo", configured, "a");
+    controller.abort();
+    const releaseNext = await next;
+    release.release();
+    const last = waitForProviderRequestSlot("demo", configured, "a");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    releaseNext.release();
+    (await last).release();
+  });
+
+  test("concurrency wait expires without spinning and preserves active capacity", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: 25, maxQueueDepth: 1 });
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1 });
+    const release = await waitForProviderRequestSlot("demo", configured);
+    const queued = waitForProviderRequestSlot("demo", configured);
+    await expect(waitForProviderRequestSlot("demo", configured)).rejects.toMatchObject({ reason: "queue_full" });
+    expect(clock.pendingTimerCount()).toBe(1);
+    clock.advanceBy(25);
+    await expect(queued).rejects.toMatchObject({ reason: "queue_expired" });
+    expect(clock.pendingTimerCount()).toBe(0);
+    const next = waitForProviderRequestSlot("demo", configured);
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    release.release();
+    (await next).release();
+  });
+
+  test("releasing capacity still honors the start interval", async () => {
+    const clock = fakePacingClock();
+    setProviderRequestPacingRuntimeForTest(clock.runtime);
+    const configured = provider({ enabled: true, maxConcurrentRequests: 1, minIntervalMs: 100 });
+    const release = await waitForProviderRequestSlot("demo", configured);
+    const next = waitForProviderRequestSlot("demo", configured);
+    release.release();
+    clock.advanceBy(99);
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    clock.advanceBy(1);
+    (await next).release();
+  });
+});

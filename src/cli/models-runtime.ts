@@ -18,6 +18,7 @@ import { isValidProviderName } from "../config/provider-name";
 import { isValidModelDiscoveryModelId } from "../providers/model-discovery-limits";
 import { redactSecretString } from "../lib/redact";
 import type { ProviderCostOverlay } from "../types";
+import { resolveMatchedPrice } from "../usage/cost";
 import { MAX_COST4_RATE } from "../usage/expected-prices";
 import { isValidCost4Rate } from "../usage/user-cost-overlays";
 
@@ -124,8 +125,12 @@ async function priceRequest(write: boolean, argv: string[], deps: RuntimeApiDeps
       if (!validPriceCost(stored)) throw new Error("Invalid model price response");
       cost = { ...stored };
     }
-    printData({ provider, modelId, cost }, wantsJson, [
-      cost === null ? `${selector}: automatic pricing` : `${selector}: ${JSON.stringify(cost)} USD per 1M tokens`,
+    // The API map owns manual overrides; bundled defaults remain derived rather
+    // than being persisted as overrides that would mask later catalog updates.
+    const effectiveCost = cost ?? resolveMatchedPrice(provider, modelId, undefined, [])?.cost4 ?? null;
+    printData({ provider, modelId, cost, effectiveCost }, wantsJson, [
+      effectiveCost === null ? `${selector}: automatic pricing (unknown)`
+        : `${selector}: ${JSON.stringify(effectiveCost)} USD per 1M tokens${cost === null ? " (automatic estimate)" : ""}`,
     ]);
     return;
   }
