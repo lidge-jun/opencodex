@@ -110,6 +110,7 @@ If both publication and temporary-file cleanup fail, the cleanup-required error 
 three-minute, explicitly confirmed account-UI trial after a fresh supported exhaustion
 snapshot. They cannot assert selected-provider isolation. Two usage gate booleans may
 change; quota windows, credits, spending limits and other responses remain original.
+Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
 `usage-refresh.ts` closes only usage streams bound by validated original account records.

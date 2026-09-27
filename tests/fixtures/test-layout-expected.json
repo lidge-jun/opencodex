@@ -734,6 +734,7 @@
   "desktop-app-restart.test.ts": "clients",
   "desktop-cli-contracts.test.ts": "clients",
   "desktop-compatibility-authority.test.ts": "clients",
+  "desktop-compatibility-native-identity.test.ts": "clients",
   "desktop-compatibility-build-probe.test.ts": "clients",
   "desktop-compatibility-connection-store.test.ts": "clients",
   "desktop-compatibility-routing.test.ts": "clients",

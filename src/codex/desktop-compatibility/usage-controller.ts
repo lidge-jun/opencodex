@@ -2,11 +2,12 @@ import { UsageActivation, type ApplyScope } from './usage-activation';
 import { UsageRefreshRegistry } from './usage-refresh';
 import { evaluateUsageRewrite, type UsageRewriteContext } from './usage-policy';
 
-export type UsageIdentity = NonNullable<UsageRewriteContext['account']>;
+export type UsageIdentity = NonNullable<UsageRewriteContext['account']> & { credentialGeneration?: string };
 type Registration = NonNullable<ReturnType<UsageRefreshRegistry['register']>>;
 type Exchange = { method: string; pathname: string; status: number };
 const same = (a: UsageIdentity | null, b: UsageIdentity) => a !== null
-  && a.id === b.id && a.userId === b.userId && a.plan === b.plan && a.structure === b.structure;
+  && a.id === b.id && a.userId === b.userId && a.plan === b.plan && a.structure === b.structure
+  && a.credentialGeneration === b.credentialGeneration;
 const object = (value: unknown): value is Record<string, unknown> => value !== null
   && typeof value === 'object' && !Array.isArray(value);
 
@@ -24,7 +25,7 @@ export class UsageRelayController {
       throw new Error('A verified supported identity and finite safety deadline are required');
     }
     this.account = { ...account };
-    this.key = JSON.stringify([account.id, account.userId, account.plan]);
+    this.key = JSON.stringify([account.id, account.userId, account.plan, account.credentialGeneration ?? null]);
     this.activation = new UsageActivation(this.key, key => this.refresh.refresh(key), async () => {
       return same(await verifyFreshIdentity(), this.account) ? this.key : null;
     }, clock, timeoutMs);

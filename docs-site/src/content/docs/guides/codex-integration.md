@@ -941,6 +941,9 @@ observation startup. This check does not determine a conversation's selected mod
 that project-local overrides are absent. If routing or the installed app build changes during
 a trial, correction is refused before the next usage response; periodic checks also return
 an idle trial to observation. Original responses and other app traffic continue to relay.
+Native login-file replacement or token rotation also invalidates the trial, even when the
+same account returns. Stop and start observation to bind the current login before another
+explicit trial; old responses cannot authorize the replacement session.
 
 After certificate preparation and a successful manual start, enable **Resume observation when
 OpenCodex starts** in the same panel. The optional OpenCodex configuration
