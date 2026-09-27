@@ -8,8 +8,7 @@ export interface KiroImage {
   source: { bytes: string }; // pure base64, no "data:...;base64," prefix
 }
 
-// Codex sends each image as a `data:` URL (base64) or a remote https URL. Only data URLs can be
-// inlined as bytes here; remote URLs are not fetchable at request-build time.
+/** Parse inline image bytes; remote URLs are not fetched at request-build time. */
 function parseDataUrlImage(imageUrl: string): KiroImage | undefined {
   if (!imageUrl.startsWith("data:")) return undefined;
   const comma = imageUrl.indexOf(",");

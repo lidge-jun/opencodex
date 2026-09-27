@@ -16,6 +16,7 @@ import type { OcxContentPart, OcxParsedRequest } from "../../../src/types";
 const DATA_IMAGE = "data:image/png;base64,TkVX";
 const REMOTE = "https://example.test/private.png?sig=SECRETTOKEN";
 
+/** Build a wire payload from the minimal parsed request used by image-marker tests. */
 function payloadWith(messages: unknown[], tools?: unknown[]): Record<string, unknown> {
   const parsed = {
     modelId: "claude-sonnet-4.5", stream: true, options: {}, context: { messages, ...(tools ? { tools } : {}) },

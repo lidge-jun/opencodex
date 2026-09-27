@@ -104,6 +104,7 @@ export function kiroCompletionTool(): Record<string, unknown> {
   };
 }
 
+/** Build the Kiro wire request, retaining markers for images that cannot be inlined. */
 export function buildKiroPayload(
   parsed: OcxParsedRequest,
   profileArn: string | undefined,
