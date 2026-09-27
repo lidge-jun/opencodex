@@ -565,6 +565,15 @@ stable ceiling without making a cooled account eligible. Same-provider auth reco
 physical target, rather than a diagnostic key, and a real send is charged once even when recovery
 rebuilds the request.
 
+On primary Antigravity inference through the Google adapter, a pre-output 401 first refreshes and
+replays the same account. A second 401, or a terminal refresh failure, may send once on an eligible
+live sibling under the same request rotation and credential-hop budgets. The initial pool activation
+is captured before the refused send, so marking the failed account for reauthentication does not
+remove an already eligible sibling. The failed credential generation gets a 60-second process-local
+cooldown; a newer credential generation is not cooled by stale refusal evidence. The sibling's bearer
+and Cloud Code Assist project travel as one snapshot. This path does not alter native Responses
+passthrough, image or web-search sidecars, or committed output.
+
 Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes
 denial evidence; ordinary malformed requests and committed stream errors do not authorize another

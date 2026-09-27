@@ -84,7 +84,7 @@ const EXCLUDED_PROVIDERS = new Set(["openai", "anthropic"]);
 
 interface AccountHealth {
   cooldownUntil: number;
-  cooldownSource: "retry-after" | "default" | "kiro-suspension";
+  cooldownSource: "retry-after" | "default" | "kiro-suspension" | "auth";
   identity?: string;
 }
 
@@ -117,6 +117,13 @@ export function quarantineKiroSuspendedAccount(accountId: string, generation?: s
 function isCooled(provider: string, accountId: string, now: number, family?: QuotaModelFamily): boolean {
   const entry = health.get(healthKey(provider, accountId, family));
   if (!entry) return false;
+  if (provider === "google-antigravity" && entry.cooldownSource === "auth") {
+    const live = getAccountSet(provider)?.accounts.find(row => row.id === accountId);
+    if (!live || entry.identity !== credentialGeneration(live.credential)) {
+      health.delete(healthKey(provider, accountId, family));
+      return false;
+    }
+  }
   if (provider === "kiro" && entry.cooldownSource === "kiro-suspension") {
     const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
     if (!live || entry.identity !== kiroEvidenceIdentity(live)) {
@@ -290,6 +297,34 @@ export function hasEligibleGenericOAuthFailoverTarget(
   if (!set || set.accounts.length < 2) return false;
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
   return eligibleIdsIn(set, providerName, now, family).some(id => id !== failedAccountId);
+}
+
+/** Select a live Antigravity sibling using activation captured before the refused send. */
+export function rotateAntigravityAccountOnAuthRefusal(
+  poolActivated: boolean,
+  failedAccountId: string,
+  sentGeneration: string,
+  requestedModelId: string | null | undefined,
+  now = Date.now(),
+): string | null {
+  if (!poolActivated) return null;
+  const set = getAccountSet("google-antigravity");
+  if (!set || set.accounts.length < 2) return null;
+  const family = classifyModelFamilyForQuota("google-antigravity", requestedModelId);
+  const failed = set.accounts.find(row => row.id === failedAccountId);
+  if (failed && credentialGeneration(failed.credential) === sentGeneration) {
+    health.set(healthKey("google-antigravity", failedAccountId, family), {
+      cooldownUntil: now + DEFAULT_COOLDOWN_MS,
+      cooldownSource: "auth",
+      identity: sentGeneration,
+    });
+    sweepExpiredOnWrite(now);
+  }
+  const eligible = new Set(eligibleIdsIn(set, "google-antigravity", now, family));
+  const order = set.accounts.map(row => row.id);
+  const start = order.indexOf(failedAccountId);
+  const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
+  return ring.find(id => id !== failedAccountId && eligible.has(id)) ?? null;
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */

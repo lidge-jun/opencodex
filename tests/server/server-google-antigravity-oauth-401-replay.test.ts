@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
-import { getAccountSet, saveCredential, setAccountPaused } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -49,6 +49,16 @@ async function seedOAuth(expires = Date.now() + 3_600_000, projectId?: string | 
     ...(projectId !== undefined ? (projectId ? { projectId } : {}) : { projectId: "initial-project-id" }),
     source: "oauth",
   });
+}
+
+async function seedSibling(): Promise<string> {
+  const initial = getAccountSet("google-antigravity")!.activeAccountId;
+  await saveCredential("google-antigravity", {
+    access: "access-b", refresh: "refresh-b", expires: Date.now() + 3_600_000,
+    accountId: "account-b", projectId: "project-b", source: "oauth",
+  }, { addAccount: true });
+  await setActiveAccount("google-antigravity", initial);
+  return getAccountSet("google-antigravity")!.accounts.find(row => row.credential.access === "access-b")!.id;
 }
 
 function antigravityConfig(): OcxConfig {
@@ -274,6 +284,81 @@ function installOAuthFetch(
 }
 
 describe("Google Antigravity OAuth upstream 401 replay", () => {
+  test("same-account refresh succeeds without pool rotation", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("replayed 401 sends once on the sibling with its paired project", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 401, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id", "project-b"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("terminal refresh failure uses the sibling while the failed row needs reauth", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200], { tokenErrorDescription: "invalid grant" });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "project-b"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("a sibling's 401 does not trigger another account hop", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 401, 401, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(401);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id", "project-b"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("a sibling paused after the first send is never used", async () => {
+    await seedOAuth();
+    const sibling = await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 401], {
+      beforeFirstUnauthorized: async () => { await setAccountPaused("google-antigravity", sibling, true); },
+    });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(401);
+      expect(observed.chatAuth).toHaveLength(2);
+      expect(observed.chatAuth).not.toContain("Bearer access-b");
+    } finally { await server.stop(true); }
+  });
   test("paused OAuth account returns a non-retryable permission error for CCA image generation", async () => {
     await seedOAuth();
     const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;

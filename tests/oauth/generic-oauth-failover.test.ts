@@ -14,9 +14,11 @@ import {
   noteGenericPoolSelection,
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
+  rotateAntigravityAccountOnAuthRefusal,
 } from "../../src/oauth/generic-account-failover";
 import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
-import { getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { credentialGeneration, getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
 import { subscribeAccountSelections } from "../../src/lib/account-selection-events";
 import { resolveCopilotApiBaseUrl } from "../../src/oauth/github-copilot";
@@ -419,9 +421,9 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
-    // Seven includes Kiro-specific adapter and continuation branches plus native passthrough.
+    // Eight includes Antigravity auth rotation, Kiro branches and native passthrough.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
-    expect(snapshotUses.length).toBe(7);
+    expect(snapshotUses.length).toBe(8);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
@@ -846,5 +848,49 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
 
     const next = rotateGenericOAuthAccountOn429(cfg, "xai", sorted[0]!, null);
     expect(next).toBe(sorted[1]!);
+  });
+});
+
+describe("Antigravity authentication refusal selection", () => {
+  test("captured activation survives a failed row becoming needsReauth", async () => {
+    const [a, b] = await seedProvider("google-antigravity", 2);
+    const generation = credentialGeneration(getAccountSet("google-antigravity")!.accounts[0]!.credential);
+    await markAccountNeedsReauth("google-antigravity", a!, true);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, a!, generation, "gemini-3.8-flash")).toBe(b);
+    expect(eligibleFailoverAccounts("google-antigravity")).toEqual([b!]);
+  });
+
+  test("one account and uncaptured activation cannot rotate", async () => {
+    const [a] = await seedProvider("google-antigravity", 1);
+    const generation = credentialGeneration(getAccountSet("google-antigravity")!.accounts[0]!.credential);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, a!, generation, null)).toBeNull();
+    await seedProvider("google-antigravity", 1, 1);
+    expect(rotateAntigravityAccountOnAuthRefusal(false, a!, generation, null)).toBeNull();
+  });
+
+  test("another OAuth provider's roster cannot activate Antigravity auth rotation", async () => {
+    const [a] = await seedProvider("xai", 2);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, a!, "sent-generation", null)).toBeNull();
+    expect(eligibleFailoverAccounts("xai")).toHaveLength(2);
+  });
+
+  test("paused and cooled siblings are skipped in stable roster order", async () => {
+    const [a, b, c] = await seedProvider("google-antigravity", 3);
+    const generation = credentialGeneration(getAccountSet("google-antigravity")!.accounts[0]!.credential);
+    await setAccountPaused("google-antigravity", b!, true);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, a!, generation, null)).toBe(c);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, c!,
+      credentialGeneration(getAccountSet("google-antigravity")!.accounts[2]!.credential), null)).toBeNull();
+  });
+
+  test("a replaced failed credential is not cooled by stale evidence", async () => {
+    const [a, b] = await seedProvider("google-antigravity", 2);
+    const old = credentialGeneration(getAccountSet("google-antigravity")!.accounts[0]!.credential);
+    await saveCredential("google-antigravity", {
+      access: "new-access", refresh: "new-refresh", expires: Date.now() + 3_600_000,
+      accountId: "uuid-0",
+    } as never);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, a!, old, null)).toBe(b);
+    expect(eligibleFailoverAccounts("google-antigravity")).toContain(a!);
   });
 });

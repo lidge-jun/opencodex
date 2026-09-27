@@ -948,6 +948,13 @@ Rotation carries the alternate account's **full** credential snapshot, not just 
 provider that pairs routing metadata with its token — Antigravity's Cloud Code Assist project id,
 for example — cannot end up sending one account's token with another account's metadata.
 
+For primary Antigravity inference through the Google adapter, a 401 first refreshes and replays the
+same account. If that replay is still 401, or refresh fails terminally, an eligible live sibling may
+receive one budgeted attempt. Paused, reauthentication-required and cooling accounts are skipped;
+the failed credential gets a 60-second in-process cooldown only while its generation is current.
+This does not apply to native Responses passthrough, image or web-search sidecars, or output already
+sent to the client.
+
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter
 events rather than an HTTP status, and the standalone Antigravity image endpoint has its own
 request path; neither rotates yet.

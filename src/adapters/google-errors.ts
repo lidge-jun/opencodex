@@ -1,5 +1,29 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isLocationUnsupportedMessage } from "../lib/errors";
+import { readBoundedResponseBody } from "../lib/bounded-body";
+
+export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
+
+function hasAntigravityValidationReason(payloadText: string): boolean {
+  const payload = parseUpstreamJsonPayload(payloadText);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const error = (payload as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  const details = (error as { details?: unknown }).details;
+  return Array.isArray(details) && details.some(detail =>
+    detail !== null && typeof detail === "object" && !Array.isArray(detail)
+    && (detail as { reason?: unknown }).reason === "VALIDATION_REQUIRED");
+}
+
+export async function isAntigravityValidationRequiredResponse(response: Response, signal?: AbortSignal): Promise<boolean> {
+  if (response.status !== 403) return false;
+  const body = await readBoundedResponseBody(response.clone(), {
+    maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
+    inactivityTimeoutMs: 2000, signal,
+  });
+  return body.displaySafe && !body.truncated
+    && body.text.startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`);
+}
 
 /** Pull the human detail out of the Google API error envelope `{error:{message,status,code}}`. */
 function googleErrorDetail(payloadText: string): { message?: string; status?: string } {
@@ -98,7 +122,9 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
  */
 export function safeGoogleHttpErrorMessage(label: string, status: number, payloadText: string): string {
   const { message, status: enumStatus } = googleErrorDetail(payloadText);
-  const prefix = classifyGoogle(label, status, enumStatus, [message, enumStatus].filter(Boolean).join(" "));
+  const prefix = label === "Antigravity" && status === 403 && hasAntigravityValidationReason(payloadText)
+    ? ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX
+    : classifyGoogle(label, status, enumStatus, [message, enumStatus].filter(Boolean).join(" "));
   const detail = message ? sanitizeUpstreamErrorText(message).slice(0, 500) : `HTTP ${status}`;
   return `${prefix}: ${detail}`;
 }
