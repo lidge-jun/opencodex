@@ -130,12 +130,8 @@ async function handleResponsesInner(
       responseEffects,
       sendBudgetState,
     );
-    if (sidecarPlans instanceof Response) {
-      // A streamed sidecar result (web search / media bridge) still owns the probe: the loop
-      // releases it when the stream settles. Only a rejection is terminal here.
-      if (!sidecarPlans.ok) sidecarState.openAiSidecar?.releaseProbeLease?.();
-      return sidecarPlans;
-    }
+    if (sidecarPlans instanceof Response && !sidecarPlans.ok) sidecarState.openAiSidecar?.releaseProbeLease?.();
+    if (sidecarPlans instanceof Response) return sidecarPlans;
     const completionPolicy = createResponsesCompletionPolicy(requestContext, sidecarState);
     if (transportState.adapter.runTurn) return await executeResponsesRunTurn(
       requestContext,

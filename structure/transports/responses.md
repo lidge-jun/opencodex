@@ -61,6 +61,13 @@ the code let a provider-scoped transport past it is what #4992 recorded, and it 
 regression for this policy has to enter through `handleResponses` rather than through a
 hand-written override that cooperates by calling the executor it was handed.
 
+### Search-probe lifetime
+
+`src/server/responses/core.ts` releases the search probe for a rejected sidecar response.
+`src/server/responses/sidecar-execution.ts` retains it across successful streaming search
+and image responses until completion or cancellation, and releases bodyless responses
+before returning. Releasing an already-settled probe is generation-bound and idempotent.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
