@@ -214,8 +214,8 @@ Kiro's wire inlines base64 bytes only, so a remote `https` image reference canno
 sent. It used to be dropped with neither bytes nor any marker, so the payload and the
 evidence that an attachment existed both disappeared.
 
-`countKiroUninlinableImages` reports how many parts `parseDataUrlImage` could not
-inline, and the payload builder appends a bounded marker to that turn's text. The
+`countKiroUninlinableImages` counts non-`data:` image references, and the payload
+builder appends a bounded marker to that turn's text. The
 marker is appended before `rawGroupText` is computed, because adjacency grouping
 rebuilds a turn's content from its collected texts and would otherwise discard it.
 
