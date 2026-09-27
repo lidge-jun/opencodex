@@ -69,6 +69,14 @@ region-matched `/v1/api/openplatform/coding_plan/remains` endpoint. It publishes
 model's consumed 5-hour percentage and, when active, weekly percentage with their reset times;
 video quota rows are unrelated and omitted.
 
+Devin account quota in `src/providers/quota/devin.ts` reads Cognition's unary
+`SeatManagementService/GetUserStatus` with the default cloud-direct Metadata, against the
+credential's allowlisted api-server host with redirects refused. It publishes only dated daily
+and weekly windows the plan does not hide, because a credit-billed plan leaves those percents at
+a zero default that would read as exhausted. Prompt plus flex credits form one monthly pool
+measured against the server balance, and a negative balance is the unlimited sentinel. A 4xx
+other than 408/429 is terminal; a decoded status with nothing measurable is authoritative-empty.
+
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one
 opaque account key and a non-secret login identity. Hydration admits only matching live
 accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed
