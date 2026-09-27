@@ -19,6 +19,36 @@ const stopped: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const stop of stopped.splice(0)) await stop(); resetOptionalShutdownHooksForTests(); });
 
 describe("bounded compatibility usage controller", () => {
+  test("returning to observation supersedes activation during its asynchronous context check", async () => {
+    let release!: (value: boolean) => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const ctl = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000, 180000,
+      () => { entered(); return new Promise(resolve => { release = resolve; }); });
+    await ctl.rewriteJson(frame(), exchange);
+    const activation = ctl.activate(consent); await waiting; await ctl.observeOnly(); release(true);
+    expect((await activation).accepted).toBe(false); expect(ctl.snapshot().mode).toBe("observe");
+  });
+  test("observation avoids build probes and pending async checks cannot cross a trial or account change", async () => {
+    for (const change of ["observe", "account", "expiry"] as const) {
+      let now = 1000, current: UsageIdentity | null = account, checks = 0, waiting = false;
+      let entered!: () => void, release!: (value: boolean) => void;
+      const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+      const ctl = new UsageRelayController(account, async () => current, async () => current, () => now, 100000, 180000, () => {
+        checks++; if (!waiting) return true;
+        entered(); return new Promise(resolve => { release = resolve; });
+      });
+      expect(await ctl.rewriteJson(frame(), exchange)).toBeNull(); expect(checks).toBe(0);
+      expect((await ctl.activate(consent)).accepted).toBe(true); expect(checks).toBe(1);
+      waiting = true; const response = ctl.rewriteJson(frame(), exchange);
+      await enteredPromise;
+      // The event loop remains usable while a package query is pending.
+      let ticked = false; await new Promise<void>(resolve => setTimeout(() => { ticked = true; resolve(); }, 0)); expect(ticked).toBe(true);
+      if (change === "observe") await ctl.observeOnly();
+      if (change === "account") current = null;
+      if (change === "expiry") now = 100001;
+      release(true); expect(await response).toBeNull(); expect(ctl.snapshot().outputs).toBe(0);
+    }
+  });
   test("observes first, refreshes only bound streams and preserves actual quota values", async () => {
     let closed = 0;
     const ctl = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000);
@@ -52,14 +82,14 @@ describe("bounded compatibility usage controller", () => {
   });
 });
 
-function fixture(trusted = true, connectionStore?: DesktopConnectionStore) {
+function fixture(trusted = true, connectionStore?: DesktopConnectionStore, buildProbe?: () => boolean | Promise<boolean>) {
   const authority = createCertificateAuthority({ commonName: "runtime-fixture", validityDays: 1 });
   const cert = new X509Certificate(authority.certPem);
   const identity = { readCurrentIdentity: async () => account, verifyFreshIdentity: async () => account };
   const calls: { path: string; method: string; bytes: number; cookie: string | null }[] = [];
   let streamSequence = 0, cancelledStreams = 0, buildSupported = true, routingSupported = true;
   let connection: DesktopConnectionIdentity | null = null;
-  const runtime = createDesktopCompatibilityRuntime({ platform: "win32", testOnly: true, identity, buildSupported: () => buildSupported,
+  const runtime = createDesktopCompatibilityRuntime({ platform: "win32", testOnly: true, identity, buildSupported: () => buildProbe ? buildProbe() : buildSupported,
     routingSupported: () => routingSupported,
     connectionStore: connectionStore ?? { read: () => connection, publish: async value => (connection ??= value) },
     loadAuthority: async () => ({ authority, commonName: "runtime-fixture", fingerprint: cert.fingerprint256.replaceAll(":", ""),
@@ -82,6 +112,16 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore) {
 }
 
 describe("optional native compatibility runtime", () => {
+  test("observation cancels a pending apply request before its build preflight can finish", async () => {
+    let pending = false, entered!: () => void, release!: (value: boolean) => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const io = fixture(true, undefined, () => pending ? (entered(), new Promise(resolve => { release = resolve; })) : true);
+    await io.runtime.start();
+    const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+    await fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
+    pending = true; const applying = io.runtime.apply(true); await waiting; await io.runtime.observe(); release(true);
+    expect((await applying).accepted).toBe(false); expect(io.runtime.status().usage?.mode).toBe("observe");
+  });
   test("construction/status are inert and untrusted certificates cannot start listeners", async () => {
     let effects = 0;
     const dormant = createDesktopCompatibilityRuntime({ loadAuthority: async () => { effects++; throw new Error(); } });

@@ -56,10 +56,16 @@ export function captureWindowsCompatibilityContext(processes: readonly DesktopPr
 
 export function activateWindowsCodexCompatibility(exec: DesktopExec, install: DesktopAppInstall, pacUrl: string): { pid: number; packageFullName: string } {
   const script = compatibilityActivationScript(install, pacUrl);
-  const text = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], { timeout: 15_000, windowsHide: true });
-  const result = JSON.parse(text);
-  if (result.verified !== true || !Number.isSafeInteger(result.pid) || result.pid <= 0
-    || typeof result.packageFullName !== "string" || !result.packageFullName.startsWith(install.id.split("_")[0]! + "_")
-    || !result.packageFullName.endsWith("_" + install.id.split("_")[1]!)) throw new Error("desktop_compatibility_activation_unverified");
-  return { pid: result.pid, packageFullName: result.packageFullName };
+  let text: string;
+  try { text = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], { timeout: 15_000, windowsHide: true }); }
+  catch { throw new Error("desktop_compatibility_activation_unverified"); }
+  let result: unknown;
+  try { result = JSON.parse(text.trim().split(/\r?\n/).at(-1) ?? ""); }
+  catch { throw new Error("desktop_compatibility_activation_unverified"); }
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("desktop_compatibility_activation_unverified");
+  const value = result as Record<string, unknown>;
+  if (value.verified !== true || !Number.isSafeInteger(value.pid) || Number(value.pid) <= 0
+    || typeof value.packageFullName !== "string" || !value.packageFullName.startsWith(install.id.split("_")[0]! + "_")
+    || !value.packageFullName.endsWith("_" + install.id.split("_")[1]!)) throw new Error("desktop_compatibility_activation_unverified");
+  return { pid: Number(value.pid), packageFullName: value.packageFullName };
 }

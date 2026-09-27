@@ -15,6 +15,10 @@ test("desktop HTTP and WS choose explicit NO_PROXY, supported proxies, or a clos
   const url = new URL("https://chatgpt.com/");
   expect(desktopProxyFor(url, {})).toBe(false);
   expect(desktopProxyFor(url, { HTTPS_PROXY: "http://127.0.0.1:4444" })).toBe("http://127.0.0.1:4444");
+  expect(desktopProxyFor(url, { ALL_PROXY: "http://127.0.0.1:4444" })).toBe("http://127.0.0.1:4444");
+  expect(desktopProxyFor(url, { all_proxy: "https://127.0.0.1:4444" })).toBe("https://127.0.0.1:4444");
+  expect(desktopProxyFor(url, { HTTPS_PROXY: "http://127.0.0.1:4444", ALL_PROXY: "http://127.0.0.1:5555" })).toBe("http://127.0.0.1:4444");
+  expect(() => desktopProxyFor(url, { HTTPS_PROXY: "bad", ALL_PROXY: "http://127.0.0.1:5555" })).toThrow("proxy_invalid");
   expect(desktopProxyFor(url, { HTTPS_PROXY: "http://127.0.0.1:4444", NO_PROXY: "chatgpt.com" })).toBe(false);
   expect(desktopProxyFor(url, { HTTPS_PROXY: "http://127.0.0.1:4444", ALL_PROXY: "socks5://127.0.0.1:5555" })).toBe("socks5://127.0.0.1:5555");
   expect(() => desktopProxyFor(url, { HTTPS_PROXY: "ftp://127.0.0.1:4444" })).toThrow("proxy_invalid");
@@ -43,7 +47,7 @@ for (const kind of ["http", "https", "socks5"] as const) test(`verified TLS thro
   } finally { socket?.destroy(); await proxy.close(); await origin.close(); }
 }, 15000);
 
-for (const kind of ["http", "https", "socks5"] as const) test(`desktop HTTP fetch uses the same authenticated ${kind} egress and validates upstream TLS`, async () => {
+for (const kind of ["http", "https", "socks5", "http-all", "https-all"] as const) test(`desktop HTTP fetch uses the same authenticated ${kind} egress and validates upstream TLS`, async () => {
   const ca = createCertificateAuthority({ commonName: "fetch-egress-fixture", validityDays: 1 });
   const leaf = issueServerLeaf(ca, "fetch-egress-fixture", ["chatgpt.com"]), proxyLeaf = issueServerLeaf(ca, "fetch-egress-fixture", ["localhost"]);
   let actual: Buffer | undefined;
@@ -52,12 +56,13 @@ for (const kind of ["http", "https", "socks5"] as const) test(`desktop HTTP fetc
       actual = Buffer.concat(chunks); res.end("fixture-fetch-response");
     });
   });
-  const origin = await listenFixture(upstream), proxy = await forwardProxy(kind, origin.port, proxyLeaf);
+  const transport = kind === "http-all" ? "http" : kind === "https-all" ? "https" : kind;
+  const origin = await listenFixture(upstream), proxy = await forwardProxy(transport, origin.port, proxyLeaf);
   const root = mkdtempSync(join(tmpdir(), "ocx-desktop-fetch-")), certificate = join(root, "fixture-ca.pem");
   writeFileSync(certificate, ca.certPem);
   const child = Bun.spawn([process.execPath, repoPath("tests/helpers/desktop-egress-worker.ts")], {
     cwd: repoRoot(), stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, NODE_EXTRA_CA_CERTS: certificate, HTTPS_PROXY: proxy.url, https_proxy: "", HTTP_PROXY: "", http_proxy: "", ALL_PROXY: "", all_proxy: "", NO_PROXY: "", no_proxy: "" },
+    env: { ...process.env, NODE_EXTRA_CA_CERTS: certificate, HTTPS_PROXY: kind.endsWith("-all") ? "" : proxy.url, https_proxy: "", HTTP_PROXY: "", http_proxy: "", ALL_PROXY: kind.endsWith("-all") ? proxy.url : "", all_proxy: "", NO_PROXY: "", no_proxy: "" },
   });
   const timer = setTimeout(() => child.kill(), 10000);
   try {

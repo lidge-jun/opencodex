@@ -1,4 +1,5 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,25 @@ setIcaclsRunnerForTests(success); setAsyncIcaclsRunnerForTests(async () => succe
 afterAll(() => { setIcaclsRunnerForTests(null); setAsyncIcaclsRunnerForTests(null); for (const root of roots) rmSync(root, { recursive: true }); });
 function fixture() { const path = mkdtempSync(join(tmpdir(), "ocx-desktop-endpoint-")); roots.push(path); return { path, store: createDesktopConnectionStore(path) }; }
 const identity = () => ({ version: 1 as const, id: randomUUID(), connectPort: 40001, pacPort: 40002 });
+
+test("failed temporary cleanup preserves the publication error as well as the residue", async () => {
+  const { path, store } = fixture(), primary = new Error("fixture publication failure"), cleanup = new Error("fixture cleanup failure");
+  const realLink = fs.linkSync, realUnlink = fs.unlinkSync;
+  const link = spyOn(fs, "linkSync").mockImplementation((source, destination) => {
+    if (String(destination) === join(path, "connection.json")) throw primary;
+    return realLink(source, destination);
+  });
+  const unlink = spyOn(fs, "unlinkSync").mockImplementation(target => {
+    if (String(target).startsWith(join(path, "connection-")) && String(target).endsWith(".tmp")) throw cleanup;
+    return realUnlink(target);
+  });
+  try {
+    const error = await store.publish(identity()).catch(value => value);
+    expect(error).toBeInstanceOf(Error); expect(error.message).toBe("desktop_compatibility_connection_cleanup_required");
+    expect(error.cause).toBeInstanceOf(AggregateError); expect(error.cause.errors).toEqual([primary, cleanup]);
+    expect(store.read()).toBeNull(); expect(readdirSync(path).some(value => value.endsWith(".tmp"))).toBe(true);
+  } finally { link.mockRestore(); unlink.mockRestore(); }
+});
 
 test("one public endpoint identity survives reopening without rewriting the file", async () => {
   const { path, store } = fixture(), value = identity(); expect(store.read()).toBeNull();

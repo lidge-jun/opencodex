@@ -22,7 +22,7 @@ afterEach(async () => {
   for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
 });
 const requests: { url: string; method: string; body?: unknown }[] = [];
-function server(uncertain = false) {
+function server(uncertain = false, certificateState?: string) {
   requests.length = 0; let trusted = false, startup = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input), method = init?.method ?? "GET";
@@ -32,7 +32,7 @@ function server(uncertain = false) {
       return Response.json({ ok: true, settings: { startOnProxyStart: startup, revision: (startup ? "b" : "a").repeat(64) } });
     }
     if (method === "POST") { trusted = true; if (uncertain) throw new TypeError("uncertain response"); return Response.json({ ok: true }); }
-    return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: trusted ? "trusted" : "prepared", busy: null,
+    return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: trusted ? "trusted" : certificateState ?? "prepared", busy: null,
       fingerprint: (url.startsWith("/second") ? "B" : "A").repeat(64) } } : { ok: true, runtime: { supported: true, phase: "off", running: false } });
   }) as typeof fetch;
 }
@@ -66,6 +66,15 @@ test("StrictMode status reads are inert and a fingerprint-bound action needs exp
   await act(async () => button(container, "Start observation").click());
   expect(requests.filter(req => req.method === "POST").at(-1)?.body).toEqual({ action: "start", confirmed: true });
   expect(container.querySelector("fieldset")).toBeNull();
+});
+
+test.each([
+  ["prepared", false, true], ["trusted", true, true], ["expired", true, true], ["unknown", true, false], ["invalid", false, false],
+] as const)("certificate state %s exposes only supported cleanup and renewal actions", async (state, remove, renew) => {
+  server(false, state); const container = await mount();
+  const labels = [...container.querySelectorAll("button")].map(value => value.textContent);
+  expect(labels.includes("Remove trust")).toBe(remove); expect(labels.includes("Renew certificate")).toBe(renew);
+  expect(requests.filter(value => value.method === "POST")).toHaveLength(0);
 });
 test("a lost write response disables replay until a fresh read proves the actual state", async () => {
   server(true); const container = await mount(); await chooseAndConfirm(container);

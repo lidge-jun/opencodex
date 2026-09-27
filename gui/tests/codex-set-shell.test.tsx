@@ -149,6 +149,10 @@ test("desktop compatibility deep link mounts only its read-only status surface",
   expect(resolveAppHashChange("codex-set/desktop").replaceTo).toBeNull();
   expect(panel(container, "desktop")?.hasAttribute("hidden")).toBe(false);
   expect(panel(container, "multiauth")).toBeNull(); expect(panel(container, "prompt")).toBeNull();
+  expect(new Set(calls.map(call => call.url))).toEqual(new Set([
+    "/machine/api/codex/desktop-compatibility/settings", "/machine/api/codex/desktop-compatibility/certificate",
+    "/machine/api/codex/desktop-compatibility/runtime",
+  ]));
   expect(calls.every(call => call.method === "GET" && call.url.startsWith("/machine/api/codex/desktop-compatibility/"))).toBe(true);
   await act(async () => { root.unmount(); });
 });

@@ -5,7 +5,7 @@ import { WINDOWS_ACTIVATION_SOURCE } from "../../src/codex/desktop-compatibility
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import type { DesktopExec } from "../../src/codex/desktop-app/types";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
-import { captureWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
+import { activateWindowsCodexCompatibility, captureWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
 
 const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 const install = { id: "OpenAI.Codex_fixture", root: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_fixture", relaunch: "OpenAI.Codex_fixture!App" };
@@ -26,6 +26,14 @@ function executor(options: { running?: string; probeFailure?: boolean; output?: 
 }
 
 describe("Codex Desktop compatibility package launch", () => {
+  test("activation tolerates a BOM and preceding warnings but normalizes invalid or timed-out output", () => {
+    const io = executor({ output: `\uFEFFwarning: fixture\r\n${JSON.stringify({ pid: 123, packageFullName, verified: true })}\r\n` });
+    expect(activateWindowsCodexCompatibility(io.exec, install, pac)).toEqual({ pid: 123, packageFullName });
+    for (const output of ["", "null", "[]", "warning only"]) {
+      expect(() => activateWindowsCodexCompatibility(executor({ output }).exec, install, pac)).toThrow("desktop_compatibility_activation_unverified");
+    }
+    expect(() => activateWindowsCodexCompatibility(() => { throw new Error("fixture timeout"); }, install, pac)).toThrow("desktop_compatibility_activation_unverified");
+  });
   test("the shipped Windows restart adapter captures and reapplies an active compatibility PAC", () => {
     const commandLine = `"${install.root}\\app\\ChatGPT.exe" --proxy-pac-url=${pac}`;
     const io = executor({ running: `100 50 2026-01-01T00:00:00Z ${install.root}\\app\\ChatGPT.exe\t${Buffer.from(commandLine).toString("base64")}` });

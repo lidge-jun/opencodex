@@ -931,6 +931,8 @@ Current support is limited to the assessed Windows build `26.924.2738.0`, native
 login. HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
 outbound policy; NO_PROXY can explicitly select a direct route. Failed proxy connections do not
 fall back to direct egress. OpenCodex managed client mode is not yet supported by these controls.
+For this desktop relay, HTTP(S) `ALL_PROXY` also applies when `HTTPS_PROXY` is unset. An invalid
+`HTTPS_PROXY` refuses the operation instead of falling back to `ALL_PROXY`.
 Unknown app builds refuse correction; the integration does not patch application files or
 switch to login-free mode.
 The native root config and its selected profile must route `openai_base_url` to this process's
@@ -955,14 +957,14 @@ an app updater can omit the managed connection argument. Save drafts, close Code
 After a Codex update, an unassessed app version refuses correction until its compatibility is
 reviewed; reinstalling the certificate does not make an unassessed build supported.
 
-## Routed models during Codex reserve mode
-
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
 compatibility PAC argument and launches Codex through Windows package activation. It checks the
 package identity and routing argument after launch; conflicting main-app routing arguments cause
 a refusal before the restart. This does not enable a compatibility mode, install a certificate,
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.
+
+## Routed models during Codex reserve mode
 
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make

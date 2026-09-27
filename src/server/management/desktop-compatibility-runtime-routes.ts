@@ -33,7 +33,7 @@ export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementCon
       return jsonResponse({ ok: result.accepted, activation: result, runtime: service.status() }, result.accepted ? 202 : 409);
     }
     if (action === "launch") {
-      const result = service.launch();
+      const result = await service.launch();
       return jsonResponse({ ok: result.status === "started", launch: result, runtime: service.status() }, result.status === "started" ? 200 : 409);
     }
     const result = action === "start" ? await service.start() : action === "stop" ? await service.stop()

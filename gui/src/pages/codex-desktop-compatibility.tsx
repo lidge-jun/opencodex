@@ -62,7 +62,9 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     if (idle && cert.state === "missing") actions.push({ target: "certificate", action: "prepare" });
     if (idle && cert.fingerprint) {
       if (cert.state === "prepared") actions.push({ target: "certificate", action: "trust", fingerprint: cert.fingerprint });
-      actions.push({ target: "certificate", action: "remove-trust", fingerprint: cert.fingerprint }, { target: "certificate", action: "renew", fingerprint: cert.fingerprint });
+      // Unknown trust may still need fingerprint-verified cleanup; invalid keys cannot be acted on.
+      if (["trusted", "expired", "unknown"].includes(cert.state)) actions.push({ target: "certificate", action: "remove-trust", fingerprint: cert.fingerprint });
+      if (["prepared", "trusted", "expired"].includes(cert.state)) actions.push({ target: "certificate", action: "renew", fingerprint: cert.fingerprint });
     }
     if (idle && cert.state === "trusted") actions.push({ target: "runtime", action: "start" });
     if (running) actions.push({ target: "runtime", action: "launch" }, { target: "runtime", action: "observe" }, { target: "runtime", action: "apply" });

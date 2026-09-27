@@ -51,8 +51,7 @@ function isMemberExecutable(executable: string, root: string): boolean {
  * changes between builds, so a literal AUMID would silently stop matching and
  * then either do nothing or — worse — match a package we did not mean.
  */
-function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
-  const script = [
+export const WINDOWS_PACKAGE_DISCOVERY_SCRIPT = [
     "$ErrorActionPreference='SilentlyContinue'",
     "Import-Module Appx -ErrorAction SilentlyContinue",
     "$p = Get-AppxPackage -Name OpenAI.Codex",
@@ -61,17 +60,23 @@ function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
     "  $p.PackageFamilyName; $p.InstallLocation; \"$($p.PackageFamilyName)!App\"",
     "}",
   ].join("; ");
-  let stdout: string;
-  try {
-    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], POWERSHELL_PROBE_OPTIONS);
-  } catch {
-    return null;
-  }
+
+export function parseWindowsDesktopPackage(stdout: string): DesktopAppInstall | null {
   const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
   if (lines.length < 3 || lines[0] === "MISS") return null;
   const [family, installLocation, aumid] = lines;
   if (!family || !installLocation || !aumid) return null;
   return { id: family, root: installLocation, relaunch: aumid };
+}
+
+function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
+  let stdout: string;
+  try {
+    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PACKAGE_DISCOVERY_SCRIPT], POWERSHELL_PROBE_OPTIONS);
+  } catch {
+    return null;
+  }
+  return parseWindowsDesktopPackage(stdout);
 }
 
 /**

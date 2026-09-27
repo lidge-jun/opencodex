@@ -379,7 +379,9 @@ The [compaction routing override](responses-failover.md#compaction-routing-overr
 
 `src/lib/desktop-proxy-route.ts` binds desktop HTTP fetch and raw upgraded sockets to the
 same explicit proxy decision. NO_PROXY may choose direct; otherwise HTTPS_PROXY or a
-selected SOCKS5 ALL_PROXY is carried explicitly. Present but unsupported proxy configuration
+selected SOCKS5 ALL_PROXY is carried explicitly. With no HTTPS_PROXY, the desktop relay also
+binds HTTP(S) ALL_PROXY explicitly to its supported CONNECT transport. An invalid HTTPS_PROXY
+never falls through to ALL_PROXY. Present but unsupported proxy configuration
 refuses. A failed selected route never retries directly. Identity verification uses this same
 HTTP path, while provider inference retains its separate existing provider-egress policy.
 

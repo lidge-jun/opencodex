@@ -18,7 +18,7 @@ export class UsageRelayController {
   private readonly activation: UsageActivation;
   constructor(account: UsageIdentity, private readonly readCurrentIdentity: () => Promise<UsageIdentity | null>,
     verifyFreshIdentity: () => Promise<UsageIdentity | null>, private readonly clock: () => number,
-    private readonly expiresAt: number, timeoutMs = 180000, private readonly contextValid: () => boolean = () => true) {
+    private readonly expiresAt: number, timeoutMs = 180000, private readonly contextValid: () => boolean | Promise<boolean> = () => true) {
     if (!account.id || !account.userId || !['plus', 'pro'].includes(account.plan)
       || account.structure !== 'personal' || !Number.isFinite(expiresAt) || expiresAt <= clock()) {
       throw new Error('A verified supported identity and finite safety deadline are required');
@@ -30,8 +30,11 @@ export class UsageRelayController {
     }, clock, timeoutMs);
   }
   snapshot() { return { ...this.activation.snapshot(), trackedStreams: this.refresh.size, expired: this.clock() >= this.expiresAt }; }
+  private async checkContext() { try { return await this.contextValid(); } catch { return false; } }
   async activate(options: { scope: ApplyScope; accountWideConsent: boolean }) {
-    if (!this.contextValid()) { this.activation.invalidateIdentity(); return { accepted: false, reason: 'native-context-changed', ...this.snapshot() }; }
+    const generation = this.activation.snapshot().generation, valid = await this.checkContext();
+    if (generation !== this.activation.snapshot().generation) return { accepted: false, reason: 'superseded', ...this.snapshot() };
+    if (!valid) { this.activation.invalidateIdentity(); return { accepted: false, reason: 'native-context-changed', ...this.snapshot() }; }
     if (this.clock() >= this.expiresAt) { this.activation.invalidateIdentity(); return { accepted: false, reason: 'safety-deadline', ...this.snapshot() }; }
     return this.activation.activate(options);
   }
@@ -52,7 +55,6 @@ export class UsageRelayController {
     if (!same(current, this.account)) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
     // Do not apply an activation that raced this response's identity read.
     if (observedGeneration !== this.activation.snapshot().generation) return null;
-    if (!this.contextValid()) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
     if (this.clock() >= this.expiresAt) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
     if (Buffer.byteLength(text, 'utf8') > 262144) { stream?.exclude(); return null; }
     let parsed: unknown;
@@ -77,7 +79,17 @@ export class UsageRelayController {
     const state = this.activation.snapshot();
     if (state.mode !== 'apply') return null;
     const result = evaluateUsageRewrite(original, { ...context, mode: 'apply' });
-    if (!result.changed || !this.activation.recordOutput(this.key, state.generation)) return null;
+    if (!result.changed) return null;
+    // Observe and unchanged responses never spawn an installed-package probe.
+    const valid = await this.checkContext();
+    if (state.generation !== this.activation.snapshot().generation) return null;
+    if (!valid) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
+    // A native account or trial can change while the asynchronous build check runs.
+    try { current = await this.readCurrentIdentity(); } catch { current = null; }
+    if (state.generation !== this.activation.snapshot().generation) return null;
+    if (!same(current, this.account)) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
+    if (this.clock() >= this.expiresAt) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
+    if (!this.activation.recordOutput(this.key, state.generation)) return null;
     return JSON.stringify(envelope ? { ...envelope, usage: result.value } : result.value);
   }
 }

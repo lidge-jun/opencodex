@@ -18,12 +18,14 @@ this boundary. `tests/clients/desktop-app-restart.test.ts` covers the contract.
 PAC from the main package process. Helpers cannot override it and conflicting main
 processes refuse before termination. No other process arguments are carried forward.
 Captured command lines stay internal, outside restart results and diagnostic logs.
+Capture failures return `relaunch_context_failed` and release the restart lock before any process is signalled; the CLI reports that the app was not stopped.
 
 `src/codex/desktop-compatibility/windows-package-command.ts` validates the canonical
 loopback URL shape, rechecks the discovered package manifest, activates with
 `IApplicationActivationManager`, and verifies the package identity and actual PAC
 argument. Normal launches keep the existing AppsFolder route. A standalone compatibility
 launch refuses an already running app; it never quits an app or installs a watcher.
+Activation reads the final non-empty JSON line after trimming a BOM or preceding warnings. Invalid output and executor failures remain unverified, without automatic relaunch retries.
 `tests/clients/desktop-compatibility-launch.test.ts` covers restart integration and the
 real Windows parser/COM service without launching the user's app.
 
@@ -101,6 +103,7 @@ publication before exposing a launch URL. A conflict or malformed file fails wit
 port allocation. Existing cached PACs can reconnect after a service restart using the same
 authority and endpoints; correction always restarts in Observe. Certificate renewal still
 requires a closed app, so its next launch fetches the new certificate-relative PAC deadline.
+If both publication and temporary-file cleanup fail, the cleanup-required error retains both causes; cleanup never throws from a `finally` block or reports the residue as removed.
 
 `usage-controller.ts`, `usage-activation.ts` and `usage-policy.ts` implement a maximum
 three-minute, explicitly confirmed account-UI trial after a fresh supported exhaustion
@@ -117,9 +120,13 @@ unregisters only its matching owner. `routing-preflight.ts` verifies bounded nat
 TOML and any selected root profile against those ports, rejecting foreign providers,
 remote destinations, authless mode, unknown profiles and process-level app overrides.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
-Each eligible usage record checks routing and the assessed installed build after asynchronous
-identity verification, before any correction. During Apply, a ten-second context check also
-disarms and refreshes bound usage streams on failure. Native update/routing failures are
+Each record that would be corrected checks routing and the assessed installed build asynchronously,
+then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares
+the Windows adapter's discovery parser, coalesces concurrent probes without caching a positive
+result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
+unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
+every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
+disarm Apply. Native update/routing failures are
 public diagnostic codes; originals continue to relay and no app/config repair is automatic.
 
 `runtime-ownership.ts` serializes certificate mutations against active/starting runtimes.
@@ -147,6 +154,7 @@ response; a fresh status read is required. Changing the API target remounts the 
 pending consent. `useClientResource` owns bounded, visibility-aware reads and invalidates earlier
 reads when a mutation result is published. Certificate status is not repeatedly polled; runtime
 status polls only while the tab is active. Consent copy exists in all ten locale catalogs.
+The panel offers renewal only for prepared, trusted or expired identities. Unknown trust permits fingerprint-verified removal but not renewal; invalid keys expose neither action.
 Running-state help distinguishes a listening service from a connected native app: ordinary app launches or updates can omit the managed PAC argument. It points to explicit package launch after the user closes Codex and states that a certificate reinstall cannot authorize an unassessed build.
 
 ## Proxy startup preference

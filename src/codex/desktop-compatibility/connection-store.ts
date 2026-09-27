@@ -15,7 +15,7 @@ export interface DesktopConnectionStore {
   publish(value: DesktopConnectionIdentity): Promise<DesktopConnectionIdentity>;
 }
 const FILE = "connection.json";
-const fail = (reason: "invalid" | "changed" | "cleanup_required") => new Error(`desktop_compatibility_connection_${reason}`);
+const fail = (reason: "invalid" | "changed" | "cleanup_required", cause?: unknown) => new Error(`desktop_compatibility_connection_${reason}`, { cause });
 const port = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 1024 && Number(value) <= 65535;
 function validate(value: unknown): DesktopConnectionIdentity {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw fail("invalid");
@@ -77,8 +77,10 @@ export function createDesktopConnectionStore(directory: string): DesktopConnecti
         unlinkSync(temporary); created = false;
         const published = verifyExisting(value); if (!published) throw fail("changed");
         return published;
-      } finally {
-        if (created && present(temporary)) { try { unlinkSync(temporary); } catch { throw fail("cleanup_required"); } }
+      } catch (error) {
+        try { if (created && present(temporary)) unlinkSync(temporary); }
+        catch (cleanupError) { throw fail("cleanup_required", new AggregateError([error, cleanupError], "Endpoint publication and cleanup failed")); }
+        throw error;
       }
     }, { lockPath: join(directory, "connection-publication.sqlite") });
   } };

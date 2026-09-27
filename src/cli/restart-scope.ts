@@ -173,6 +173,9 @@ export async function handleDesktopAppRestart(
         + "Quit and relaunch the desktop app manually to refresh the model picker.",
       );
       return result;
+    case "relaunch_context_failed":
+      log.error("Codex desktop launch options could not be preserved safely, so the app was not stopped. Review its current launch options before retrying.");
+      return result;
     case "no_targets":
       log.log("Codex desktop app is not running; nothing to restart.");
       return result;
@@ -189,4 +192,3 @@ export async function handleDesktopAppRestart(
       return result;
   }
 }
-
