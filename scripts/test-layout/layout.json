@@ -684,6 +684,7 @@
     "codex-model-denial-evidence.test.ts": "codex-integration",
     "codex-model-entitlement-admission.test.ts": "codex-integration",
     "codex-model-entitlements-program-shape.test.ts": "codex-integration",
+    "codex-native-availability-nux.test.ts": "codex-integration",
     "codex-model-entitlements.test.ts": "codex-integration",
     "codex-models-cache-invalidate.test.ts": "codex-integration",
     "codex-native-residue.test.ts": "codex-integration",
