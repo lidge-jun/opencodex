@@ -759,6 +759,7 @@
   "devin-provider-merge-migration.test.ts": "providers",
   "devin-stated-reset-hardening.test.ts": "providers",
   "devin-stated-reset-retry.test.ts": "providers",
+  "devin-anthropic-signature-fallback.test.ts": "providers",
   "devin-reasoning-continuation.test.ts": "providers",
   "devin-stream-deadline.test.ts": "providers",
   "digitalocean-scaleway-provider.test.ts": "providers",

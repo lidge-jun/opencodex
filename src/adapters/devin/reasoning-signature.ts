@@ -46,16 +46,13 @@ export function decodeDevinSignature(stored: string): { signature: string; signa
  * Any other mix (two signed blocks, a signed block beside unsigned text) has no
  * single attestation for the joined text, so the turn is replayed unsigned.
  *
- * An Anthropic signature is never replayed. Cognition streams Claude's thinking
- * as a summary while the signature covers the original, so the pair fails
- * validation: live on claude-opus-5-5 the next turn was refused with
- * `invalid_argument` in 5 of 6 signed replays and 0 of 3 text-only ones. The
- * text still goes back. A stored signature from before the type was recorded
- * falls back to the model being called.
+ * `withholdAnthropic` drops an Anthropic signature and keeps the text: the
+ * fallback for a Claude turn Cognition refused (see hasAnthropicSignature).
  */
 export function devinAssistantReasoning(
   message: OcxAssistantMessage,
   modelId = "",
+  withholdAnthropic = false,
 ): { thinking?: string; signature?: string; signature_type?: string } {
   const blocks = message.content.filter(
     (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
@@ -70,10 +67,28 @@ export function devinAssistantReasoning(
     stored = signatureOnly[0]!.signature;
   }
   let decoded = stored ? decodeDevinSignature(stored) : undefined;
-  if (decoded && (decoded.signatureType ?? (/claude/i.test(modelId) ? "anthropic" : undefined)) === "anthropic") decoded = undefined;
+  if (decoded && withholdAnthropic && signatureTypeFor(decoded, modelId) === "anthropic") decoded = undefined;
   return {
     ...(text ? { thinking: text } : {}),
     ...(decoded ? { signature: decoded.signature } : {}),
     ...(decoded?.signatureType ? { signature_type: decoded.signatureType } : {}),
   };
+}
+
+/** A stored signature from before its type was recorded falls back to the model being called. */
+function signatureTypeFor(decoded: { signatureType?: string }, modelId: string): string | undefined {
+  return decoded.signatureType ?? (/claude/i.test(modelId) ? "anthropic" : undefined);
+}
+
+/**
+ * True when the mapped history replays a Claude signature. Cognition streams
+ * Claude's thinking as a summary while the signature covers the original, so
+ * the pair can fail validation: live on claude-opus-5-5 a signed replay of a
+ * visible-thinking turn was refused with `invalid_argument` in 5 of 6 tries and
+ * a text-only one in none, while a signed replay that is accepted is what lets
+ * the model recall its earlier reasoning. The adapter therefore sends the
+ * signature and retries a refusal once without it.
+ */
+export function hasAnthropicSignature(items: ReadonlyArray<{ signature?: string; signature_type?: string }>, modelId: string): boolean {
+  return items.some(item => Boolean(item.signature) && signatureTypeFor({ signatureType: item.signature_type }, modelId) === "anthropic");
 }

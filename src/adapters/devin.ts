@@ -15,7 +15,7 @@ import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog"
 import { collapseDevinModelUid } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
-import { devinAssistantReasoning, encodeDevinSignature } from "./devin/reasoning-signature";
+import { devinAssistantReasoning, encodeDevinSignature, hasAnthropicSignature } from "./devin/reasoning-signature";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 
 /**
@@ -370,7 +370,10 @@ function assistantText(message: OcxAssistantMessage): string {
     .join("\n");
 }
 
-export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
+export function mapOcxMessagesToDevin(
+  parsed: OcxParsedRequest,
+  options: { withholdAnthropicSignatures?: boolean } = {},
+): ChatHistoryItem[] {
   const items: ChatHistoryItem[] = [];
   // Cognition is not an OpenAI host, and this adapter does advertise a real
   // client tool catalog (proto #10 via `mapOcxToolsToDevin`), so the same
@@ -389,13 +392,17 @@ export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem
   if (system) items.push({ role: "system", content: system });
 
   for (const message of parsed.context.messages) {
-    const mapped = mapOneMessage(message, parsed.modelId);
+    const mapped = mapOneMessage(message, parsed.modelId, options);
     if (mapped) items.push(mapped);
   }
   return items;
 }
 
-function mapOneMessage(message: OcxMessage, modelId: string): ChatHistoryItem | undefined {
+function mapOneMessage(
+  message: OcxMessage,
+  modelId: string,
+  options: { withholdAnthropicSignatures?: boolean },
+): ChatHistoryItem | undefined {
   if (message.role === "user" || message.role === "developer") {
     const content = mapOcxContentToWire(message.content);
     // An image with no caption text is a complete user message on its own.
@@ -407,7 +414,7 @@ function mapOneMessage(message: OcxMessage, modelId: string): ChatHistoryItem | 
   if (message.role === "assistant") {
     const toolCalls = assistantToolCalls(message);
     const text = assistantText(message);
-    const reasoning = devinAssistantReasoning(message, modelId);
+    const reasoning = devinAssistantReasoning(message, modelId, options.withholdAnthropicSignatures === true);
     // A turn that produced only reasoning is still worth replaying: dropping it
     // is what makes the next turn re-derive the same chain.
     if (!text && toolCalls.length === 0 && !reasoning.thinking && !reasoning.signature) return undefined;
@@ -616,12 +623,20 @@ export function createDevinAdapter(
         // An admitted HTTP turn owns globally shared capacity until this call
         // emits. Without an explicit wait allowance, preserve the typed reset
         // delay in generated diagnostic wording and return immediately.
-        for await (const event of streamChatEventsWithResetRetry({
+        const signedMessages = mapOcxMessagesToDevin(parsed);
+        // A Claude signature is replayed because it is what carries the reasoning into this
+        // turn, but Cognition streams Claude's thinking as a summary the signature does not
+        // cover, and some replays are refused with invalid_argument before any output. That
+        // refusal is retried once with the Anthropic signatures withheld and the text kept.
+        const unsignedMessages = hasAnthropicSignature(signedMessages, parsed.modelId)
+          ? mapOcxMessagesToDevin(parsed, { withholdAnthropicSignatures: true })
+          : undefined;
+        const request = (messages: ChatHistoryItem[]) => streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
           modelUid,
           catalog,
-          messages: mapOcxMessagesToDevin(parsed),
+          messages,
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
           // Input and output ceilings are separate wire fields. Omitting the
@@ -643,7 +658,20 @@ export function createDevinAdapter(
             onPhysicalSend: incoming.onPhysicalSend,
             onRecoveryWithheld: incoming.onRecoveryWithheld,
           },
-        })) {
+        });
+        async function* withSignatureFallback() {
+          let produced = false;
+          try {
+            for await (const event of request(signedMessages)) {
+              produced ||= event.kind === "text" || event.kind === "reasoning" || event.kind === "tool_call_start" || event.kind === "tool_call_args";
+              yield event;
+            }
+          } catch (error) {
+            if (!unsignedMessages || produced || !(error instanceof CloudChatError && error.code === "invalid_argument")) throw error;
+            yield* request(unsignedMessages);
+          }
+        }
+        for await (const event of withSignatureFallback()) {
           if (incoming.abortSignal?.aborted) {
             // Emitting nothing here left the bridge to synthesize adapter_eof.
             // Say what happened instead, the way the other runTurn-only adapter

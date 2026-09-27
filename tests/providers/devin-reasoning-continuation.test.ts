@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mapOcxMessagesToDevin } from "../../src/adapters/devin";
 import { buildGetChatMessageRequestForTests, decodeChatFrame } from "../../src/adapters/devin/cloud-direct/chat";
 import { encodeString, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
-import { decodeDevinSignature, encodeDevinSignature } from "../../src/adapters/devin/reasoning-signature";
+import { decodeDevinSignature, encodeDevinSignature, hasAnthropicSignature } from "../../src/adapters/devin/reasoning-signature";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { parseRequest } from "../../src/responses/parser";
 
@@ -109,10 +109,8 @@ describe("Devin reasoning continuation across turns", () => {
     expect(assistant?.signature).toBeUndefined();
   });
 
-  test("an Anthropic signature is never replayed, only the thinking text", () => {
-    // Cognition streams Claude's thinking as a summary while the signature covers the
-    // original; live, a signed replay was refused with invalid_argument 5 of 6 times.
-    const turn = (sig: string, model: string) => mapOcxMessagesToDevin(parseRequest({
+  test("an Anthropic signature is replayed by default and withheld only for the fallback", () => {
+    const parsed = (sig: string, model: string) => parseRequest({
       model,
       input: [
         { role: "user", content: [{ type: "input_text", text: "go" }] },
@@ -120,13 +118,19 @@ describe("Devin reasoning continuation across turns", () => {
         { type: "function_call", call_id: "call_1", name: "get_time", arguments: "{}" },
         { type: "function_call_output", call_id: "call_1", output: "12:00" },
       ],
-    })).find(m => m.role === "assistant");
-    const typed = turn(encodeDevinSignature("EpcBClaude", "anthropic"), "devin/claude-opus-5-5");
-    expect(typed?.thinking).toBe("summarised thought");
-    expect(typed?.signature).toBeUndefined();
-    expect(typed?.signature_type).toBeUndefined();
+    });
+    const typed = parsed(encodeDevinSignature("EpcBClaude", "anthropic"), "devin/claude-opus-5-5");
+    const signed = mapOcxMessagesToDevin(typed);
+    expect(signed.find(m => m.role === "assistant")?.signature).toBe("EpcBClaude");
+    expect(hasAnthropicSignature(signed, typed.modelId)).toBe(true);
+    const unsigned = mapOcxMessagesToDevin(typed, { withholdAnthropicSignatures: true }).find(m => m.role === "assistant");
+    expect(unsigned?.thinking).toBe("summarised thought");
+    expect(unsigned?.signature).toBeUndefined();
     // A signature stored before its type was recorded falls back to the model being called.
-    expect(turn("EpcBClaude", "devin/claude-opus-5-5")?.signature).toBeUndefined();
-    expect(turn(SEALED, "devin/swe-2")?.signature).toBe(SEALED);
+    const legacy = parsed("EpcBClaude", "devin/claude-opus-5-5");
+    expect(hasAnthropicSignature(mapOcxMessagesToDevin(legacy), legacy.modelId)).toBe(true);
+    const sealed = parsed(SEALED, "devin/swe-2");
+    expect(hasAnthropicSignature(mapOcxMessagesToDevin(sealed), sealed.modelId)).toBe(false);
+    expect(mapOcxMessagesToDevin(sealed, { withholdAnthropicSignatures: true }).find(m => m.role === "assistant")?.signature).toBe(SEALED);
   });
 });
