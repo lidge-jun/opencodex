@@ -18,33 +18,75 @@ export function isDevinGeminiModelUid(modelUid: string): boolean {
 /** Keys whose values are instance data, not subschemas. */
 const DATA_KEYS = new Set(['enum', 'const', 'default', 'examples', 'example']);
 /** Keys whose values map arbitrary names (which may be "enum" or "default") to subschemas. */
-const SCHEMA_MAP_KEYS = new Set(['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas']);
+const SCHEMA_MAP_KEYS = new Set(['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas', 'dependencies']);
+/** Keys that describe the whole node and stay on it rather than moving into each branch. */
+const ANNOTATION_KEYS = new Set(['description', 'title', 'default', 'examples', 'example', '$comment', 'deprecated']);
 
 function rewriteMap(map: unknown): unknown {
   if (!map || typeof map !== 'object' || Array.isArray(map)) return map;
-  return Object.fromEntries(Object.entries(map).map(([name, schema]) => [name, rewrite(schema)]));
+  // A draft-7 `dependencies` entry may be a list of property names, which is data.
+  return Object.fromEntries(Object.entries(map).map(([name, schema]) => [name, Array.isArray(schema) ? schema : rewrite(schema)]));
+}
+
+type Schema = Record<string, unknown>;
+const isSchema = (value: unknown): value is Schema => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * `{type: [T, "null"], ...rest}` becomes `{anyOf: [{...rest, type: T}, {type: "null"}]}`,
+ * so type-specific keywords (items, properties, ...) stay attached to their type.
+ * An existing anyOf is folded in branch by branch rather than nested under allOf.
+ */
+function splitTypeArray(node: Schema, types: unknown[]): Schema {
+  const annotations: Schema = {};
+  const rest: Schema = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'type' || key === 'anyOf') continue;
+    Object.defineProperty(ANNOTATION_KEYS.has(key) ? annotations : rest, key, { value, enumerable: true, writable: true, configurable: true });
+  }
+  const concrete = types.filter((type) => type !== 'null');
+  const allowsNull = concrete.length < types.length;
+  const existing = Array.isArray(node.anyOf) ? node.anyOf : undefined;
+  const branches: unknown[] = [];
+  let nullReachable = allowsNull && !existing;
+  if (!existing) {
+    for (const type of concrete) branches.push({ ...rest, type });
+  } else {
+    for (const branch of existing) {
+      if (!isSchema(branch)) continue;
+      if (branch.type === undefined) {
+        for (const type of concrete) branches.push({ ...rest, ...branch, type });
+        if (allowsNull) nullReachable = true;
+      } else if (branch.type === 'null') {
+        if (allowsNull) nullReachable = true;
+      } else if (concrete.includes(branch.type)) {
+        branches.push({ ...rest, ...branch });
+      }
+    }
+  }
+  if (nullReachable) branches.push({ type: 'null' });
+  // Nothing satisfies both unions; keep the existing anyOf rather than emit an empty one.
+  if (branches.length === 0) return { ...annotations, ...rest, anyOf: existing };
+  if (branches.length === 1 && isSchema(branches[0])) return { ...annotations, ...branches[0] };
+  return { ...annotations, anyOf: branches };
 }
 
 function rewrite(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(rewrite);
-  if (!node || typeof node !== 'object') return node;
+  if (!isSchema(node)) return node;
   // fromEntries defines own properties, so a "__proto__" key stays data.
-  const out: Record<string, unknown> = Object.fromEntries(
-    Object.entries(node as Record<string, unknown>).map(([key, value]) => [
+  const out: Schema = Object.fromEntries(
+    Object.entries(node).map(([key, value]) => [
       key,
       DATA_KEYS.has(key) ? value : SCHEMA_MAP_KEYS.has(key) ? rewriteMap(value) : rewrite(value),
     ]),
   );
   if (!Array.isArray(out.type)) return out;
   const types = out.type as unknown[];
-  delete out.type;
-  if (types.length === 1) return { ...out, type: types[0] };
-  if (types.length === 0) return out;
-  const union = types.map((type) => ({ type }));
-  if (out.anyOf === undefined) return { ...out, anyOf: union };
-  // Both constraints must hold, so an existing anyOf is kept beside the new one.
-  const allOf = Array.isArray(out.allOf) ? out.allOf : [];
-  return { ...out, allOf: [...allOf, { anyOf: union }] };
+  if (types.length === 0) {
+    delete out.type;
+    return out;
+  }
+  return splitTypeArray(out, types);
 }
 
 /** Rewrite type arrays for Gemini uids; every other model gets the schema unchanged. */

@@ -522,9 +522,14 @@ change sign-in, the conversation's ordinary model, Codex's provider ID, or the d
 
 Recovery does not replay after cancellation, semantic output, tool side effects, an exhausted
 send budget, or an authentication, admission or policy refusal. Generic `400` errors do not
-enable fallback. The separately opted-in Devin `invalid_argument` case applies only to an
-identified compaction failure from that adapter. The emergency attempt shares the original
-request's send budget and never starts a second recovery attempt.
+enable fallback. Devin answers an oversized history with an opaque pre-output
+`invalid_argument`; when the request's estimated size is at or near the model's input window,
+the adapter reports it as `context_length_exceeded` instead, so Codex compacts on an ordinary
+turn and a failed compaction qualifies as a context overflow without any Devin-specific option.
+A smaller request that gets the same code stays a plain `400`. The separately opted-in
+`allowDevinInvalidArgument` case covers only those remaining `invalid_argument` failures, and
+only on an identified compaction request. The emergency attempt shares the original request's
+send budget and never starts a second recovery attempt.
 
 Native encrypted compaction is outside this recovery path: its original error is retained.
 There is no automatic local truncation mode. A response being accepted is not proof that a

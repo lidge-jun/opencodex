@@ -60,6 +60,12 @@ describe("system prompt channel", () => {
     expect(ps.map(text)).toEqual(["U1", "A1", "<system>\nLATE\n</system>\nU2"]);
   });
 
+  test("a request with only system text keeps it as a user prompt", () => {
+    const buf = build([{ role: "system", content: "ONLY" }]);
+    expect((topFields(buf).find((f) => f.num === 2)!.value as Buffer).length).toBe(0);
+    expect(prompts(buf).map(text)).toEqual(["<system>\nONLY\n</system>"]);
+  });
+
   test("#2 stays present and empty with no system text", () => {
     const system = topFields(build([{ role: "user", content: "hi" }])).find((f) => f.num === 2)!;
     expect((system.value as Buffer).length).toBe(0);
@@ -79,10 +85,10 @@ describe("tool_result_is_error (#9)", () => {
     options: {},
   } as OcxParsedRequest);
 
-  test("a failed tool result sets #9=1 and keeps its text unprefixed", () => {
+  test("a failed tool result sets #9=1 and keeps the in-band marker", () => {
     const tool = prompts(build(mapOcxMessagesToDevin(parsed(true)))).at(-1)!;
     expect(Number(tool.find((f) => f.num === 9)?.value)).toBe(1);
-    expect(text(tool)).toBe("ENOENT");
+    expect(text(tool)).toBe("ERROR:\nENOENT");
   });
 
   test("a successful tool result carries no #9", () => {
@@ -107,6 +113,7 @@ describe("Gemini tool schema type arrays", () => {
   test("gemini uids get anyOf unions everywhere, including under a property named default", () => {
     const out = normalizeDevinToolParameters("gemini-3-8-flash-medium", schema) as any;
     expect(out.properties.q).toEqual({ description: "query", anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(out.type).toBe("object");
     expect(out.properties.default).toEqual({ anyOf: [{ type: "integer" }, { type: "null" }] });
     expect(out.properties.tags.items).toEqual({ anyOf: [{ type: "string" }, { type: "null" }] });
     expect(out.properties.mode).toEqual(schema.properties.mode);
@@ -114,12 +121,43 @@ describe("Gemini tool schema type arrays", () => {
     expect(JSON.stringify(out)).not.toContain('"type":[');
   });
 
-  test("an existing anyOf is kept beside the new union", () => {
+  test("type-specific keywords stay on their typed branch", () => {
+    const out = normalizeDevinToolParameters("gemini-3-8-flash-medium", {
+      type: "object",
+      properties: {
+        list: { type: ["array", "null"], description: "d", items: { type: "string" }, minItems: 1 },
+        obj: { type: ["object", "null"], properties: { a: { type: "string" } }, required: ["a"] },
+      },
+    }) as any;
+    expect(out.properties.list).toEqual({
+      description: "d", anyOf: [{ type: "array", items: { type: "string" }, minItems: 1 }, { type: "null" }],
+    });
+    expect(out.properties.obj).toEqual({
+      anyOf: [{ type: "object", properties: { a: { type: "string" } }, required: ["a"] }, { type: "null" }],
+    });
+  });
+
+  test("an existing anyOf is folded in, never nested under allOf", () => {
     const out = normalizeDevinToolParameters("MODEL_GOOGLE_GEMINI_2_5_PRO", {
       type: ["object", "null"], anyOf: [{ required: ["a"] }, { required: ["b"] }],
     }) as any;
-    expect(out.anyOf).toEqual([{ required: ["a"] }, { required: ["b"] }]);
-    expect(out.allOf).toEqual([{ anyOf: [{ type: "object" }, { type: "null" }] }]);
+    expect(out.allOf).toBeUndefined();
+    expect(out.anyOf).toEqual([
+      { required: ["a"], type: "object" }, { required: ["b"], type: "object" }, { type: "null" },
+    ]);
+    const typed = normalizeDevinToolParameters("gemini-x", {
+      type: ["string", "null"], anyOf: [{ type: "string", format: "date" }, { type: "integer" }],
+    }) as any;
+    expect(typed).toEqual({ type: "string", format: "date" });
+  });
+
+  test("draft-7 dependencies: schema values are rewritten, name lists are left alone", () => {
+    const out = normalizeDevinToolParameters("gemini-x", {
+      type: "object",
+      dependencies: { a: ["b", "c"], enum: { properties: { x: { type: ["string", "null"] } } } },
+    }) as any;
+    expect(out.dependencies.a).toEqual(["b", "c"]);
+    expect(out.dependencies.enum.properties.x).toEqual({ anyOf: [{ type: "string" }, { type: "null" }] });
   });
 
   test("non-gemini uids and the encoded request for them are untouched", () => {
@@ -132,11 +170,20 @@ describe("Gemini tool schema type arrays", () => {
 });
 
 describe("oversized history classification", () => {
-  const history = (chars: number): ChatHistoryItem[] => [{ role: "user", content: "x".repeat(chars) }];
-  const base = { code: "invalid_argument", producedOutput: false, modelUid: "swe-1-6", tools: undefined };
+  // One word piece per "word ", so `words` is the estimate.
+  const history = (words: number): ChatHistoryItem[] => [{ role: "user", content: "word ".repeat(words) }];
+  const base = { code: "invalid_argument", producedOutput: false, tools: undefined };
 
-  test("large against the catalog window is an overflow", () => {
-    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(1_200_000) })).toBe(true);
+  test("at the catalog window is an overflow; 60% of it is not", () => {
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(200_000) })).toBe(true);
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(120_000) })).toBe(false);
+  });
+
+  test("dense JSON at the window is caught even though its characters per token are low", () => {
+    // Measured live: 443k chars of this shape was 200,345 real tokens on swe-1-6.
+    let json = "";
+    for (let i = 0; json.length < 443_000; i++) json += JSON.stringify({ id: i, vals: [i % 97, -i], ok: i % 3 === 0 }) + ",\n";
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: [{ role: "user", content: json }] })).toBe(true);
   });
 
   test("the same code on a small request stays a plain refusal", () => {
@@ -144,13 +191,13 @@ describe("oversized history classification", () => {
   });
 
   test("other codes, or a turn that already produced output, are never reclassified", () => {
-    expect(isDevinHistoryOverflow({ ...base, code: "permission_denied", contextWindow: 200_000, messages: history(1_200_000) })).toBe(false);
-    expect(isDevinHistoryOverflow({ ...base, producedOutput: true, contextWindow: 200_000, messages: history(1_200_000) })).toBe(false);
+    expect(isDevinHistoryOverflow({ ...base, code: "permission_denied", contextWindow: 200_000, messages: history(240_000) })).toBe(false);
+    expect(isDevinHistoryOverflow({ ...base, producedOutput: true, contextWindow: 200_000, messages: history(240_000) })).toBe(false);
   });
 
   test("with no known window the byte threshold decides, and image bytes do not count", () => {
-    expect(isDevinHistoryOverflow({ ...base, contextWindow: undefined, messages: history(600 * 1024) })).toBe(true);
-    expect(isDevinHistoryOverflow({ ...base, contextWindow: undefined, messages: history(100 * 1024) })).toBe(false);
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: undefined, messages: history(120 * 1024) })).toBe(true);
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: undefined, messages: history(20 * 1024) })).toBe(false);
     const image: ChatHistoryItem[] = [{ role: "user", content: [{ type: "text", text: "see" }, { type: "image", mimeType: "image/png", base64Data: "A".repeat(2_000_000) }] }];
     expect(isDevinHistoryOverflow({ ...base, contextWindow: undefined, messages: image })).toBe(false);
   });
