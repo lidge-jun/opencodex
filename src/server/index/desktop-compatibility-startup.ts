@@ -2,6 +2,7 @@ import type { OcxConfig } from "../../types";
 import { siblingOfLivePort } from "../../codex/sibling-start";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import type { DesktopCompatibilityRuntime } from "../../codex/desktop-compatibility/runtime";
+import { bindNativeCompatibilityOwner } from "../../codex/desktop-compatibility/routing-binding";
 
 type RuntimeModule = { getDesktopCompatibilityRuntime(): DesktopCompatibilityRuntime; shutdownDesktopCompatibility(): Promise<void> };
 interface StartupIo {
@@ -10,10 +11,13 @@ interface StartupIo {
   sibling?: boolean;
   load?: () => Promise<RuntimeModule>;
   warn?: (message: string) => void;
+  boundPort?: number;
+  loopbackPort?: number;
 }
 /** Core-safe gate: off installs do not load the optional runtime, read credentials or start timers. */
 export function scheduleDesktopCompatibilityStartup(config: OcxConfig, io: StartupIo = {}): { shutdown(): Promise<void> } {
   let stopped = false, module: RuntimeModule | undefined;
+  const unbind = io.boundPort === undefined ? () => {} : bindNativeCompatibilityOwner({ config, port: io.boundPort, loopbackPort: io.loopbackPort });
   const enabled = config.desktopCompatibility?.startOnProxyStart === true && (io.platform ?? process.platform) === "win32"
     && !(io.testGuard ?? isTestHomeGuardArmed()) && !(io.sibling ?? siblingOfLivePort() !== null)
     && config.runtimeRole !== "client";
@@ -24,7 +28,7 @@ export function scheduleDesktopCompatibilityStartup(config: OcxConfig, io: Start
     await module.getDesktopCompatibilityRuntime().start();
   }).catch(() => { (io.warn ?? console.warn)("Desktop compatibility observation did not start. Inspect Desktop compatibility status; no automatic trust or correction was applied."); }) : Promise.resolve();
   return { async shutdown() {
-    stopped = true; await pending;
+    stopped = true; unbind(); await pending;
     if (module) await module.shutdownDesktopCompatibility();
   } };
 }

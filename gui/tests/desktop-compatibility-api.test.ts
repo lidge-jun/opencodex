@@ -9,6 +9,8 @@ test("status projection excludes private/unknown data and rejects coerced states
   expect(() => parseCompatibilityCertificate({ supported: true, state: ["trusted"], busy: null })).toThrow();
   expect(() => parseCompatibilityRuntime({ supported: true, phase: "off", running: true })).toThrow();
   expect(() => parseCompatibilityRuntime({ supported: true, phase: ["running"], running: true })).toThrow();
+  expect(parseCompatibilityRuntime({ supported: true, phase: "running", running: true, contextFailure: "native_routing_unverified" }).contextFailure).toBe("native_routing_unverified");
+  expect(() => parseCompatibilityRuntime({ supported: true, phase: "running", running: true, contextFailure: "untrusted-arbitrary-message" })).toThrow();
 });
 test("certificate actions bind the displayed fingerprint and never retry uncertain writes", async () => {
   const calls: RequestInit[] = [];

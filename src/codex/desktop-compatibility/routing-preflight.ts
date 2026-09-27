@@ -1,0 +1,38 @@
+import { lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { nativeCompatibilityOwner, type NativeCompatibilityOwner } from "./routing-binding";
+
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+/** Validates the effective root/profile routing only; it does not prove a thread's selected provider. */
+export function matchesNativeCompatibilityRouting(text: string, owner: NativeCompatibilityOwner | null): boolean {
+  if (!owner || owner.config.codexDesktopAuthless === true || owner.config.runtimeRole === "client") return false;
+  try {
+    const root: unknown = Bun.TOML.parse(text);
+    if (!record(root)) return false;
+    let effective = root;
+    if (root.profile !== undefined) {
+      if (typeof root.profile !== "string" || !record(root.profiles)) return false;
+      const profile = root.profiles[root.profile];
+      if (!record(profile)) return false;
+      effective = { ...root, ...profile };
+    }
+    if ((effective.model_provider ?? "openai") !== "openai" || effective.forced_login_method === "api") return false;
+    if (typeof effective.openai_base_url !== "string") return false;
+    const url = new URL(effective.openai_base_url);
+    if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || url.username || url.password
+      || url.search || url.hash || !["/v1", "/v1/"].includes(url.pathname) || !url.port) return false;
+    return [owner.port, owner.loopbackPort].some(port => Number.isInteger(port) && Number(port) > 0 && Number(port) === Number(url.port));
+  } catch { return false; }
+}
+export function createNativeRoutingVerifier(codexHome: string, readOwner = nativeCompatibilityOwner) {
+  const path = join(codexHome, "config.toml");
+  return () => {
+    try {
+      // Process-level overrides could put the app on another transport despite its TOML.
+      if (["CODEX_API_BASE_URL", "CODEX_APP_SERVER_WS_URL", "CODEX_ELECTRON_USER_DATA_PATH", "ELECTRON_RUN_AS_NODE"].some(key => process.env[key]?.trim())) return false;
+      const stat = lstatSync(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576) return false;
+      return matchesNativeCompatibilityRouting(readFileSync(path, "utf8"), readOwner());
+    } catch { return false; }
+  };
+}

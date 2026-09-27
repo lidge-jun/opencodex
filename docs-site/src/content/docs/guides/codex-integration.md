@@ -923,6 +923,12 @@ login and direct outbound connectivity. Configured outbound proxies and OpenCode
 mode are not yet supported by these controls.
 Unknown app builds refuse correction; the integration does not patch application files or
 switch to login-free mode.
+The native root config and its selected profile must route `openai_base_url` to this process's
+actual local data listener. A different provider, destination or unsupported override refuses
+observation startup. This check does not determine a conversation's selected model or prove
+that project-local overrides are absent. If routing or the installed app build changes during
+a trial, correction is refused before the next usage response; periodic checks also return
+an idle trial to observation. Original responses and other app traffic continue to relay.
 
 After certificate preparation and a successful manual start, enable **Resume observation when
 OpenCodex starts** in the same panel. The optional OpenCodex configuration

@@ -57,9 +57,10 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore) {
   const cert = new X509Certificate(authority.certPem);
   const identity = { readCurrentIdentity: async () => account, verifyFreshIdentity: async () => account };
   const calls: { path: string; method: string; bytes: number; cookie: string | null }[] = [];
-  let streamSequence = 0, cancelledStreams = 0, buildSupported = true;
+  let streamSequence = 0, cancelledStreams = 0, buildSupported = true, routingSupported = true;
   let connection: DesktopConnectionIdentity | null = null;
   const runtime = createDesktopCompatibilityRuntime({ platform: "win32", testOnly: true, identity, buildSupported: () => buildSupported,
+    routingSupported: () => routingSupported,
     connectionStore: connectionStore ?? { read: () => connection, publish: async value => (connection ??= value) },
     loadAuthority: async () => ({ authority, commonName: "runtime-fixture", fingerprint: cert.fingerprint256.replaceAll(":", ""),
       expiresAt: Date.parse(cert.validTo), renewalDue: false, reused: true }), trust: async () => trusted ? "trusted" : "not-trusted",
@@ -77,7 +78,7 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore) {
     }) as typeof fetch,
   });
   stopped.push(() => runtime.stop());
-  return { runtime, authority, calls, cancelledStreams: () => cancelledStreams, setBuildSupported: (value: boolean) => { buildSupported = value; } };
+  return { runtime, authority, calls, cancelledStreams: () => cancelledStreams, setBuildSupported: (value: boolean) => { buildSupported = value; }, setRoutingSupported: (value: boolean) => { routingSupported = value; } };
 }
 
 describe("optional native compatibility runtime", () => {
@@ -132,6 +133,23 @@ describe("optional native compatibility runtime", () => {
     await expect(io.runtime.start()).rejects.toThrow("build_unverified"); expect(desktopCompatibilityRuntimeActive()).toBe(false);
     io.setBuildSupported(true); await io.runtime.start(); io.setBuildSupported(false);
     await expect(io.runtime.apply(true)).rejects.toThrow("build_unverified"); expect(io.runtime.status().usage?.mode).toBe("observe");
+  });
+  test("an active trial disarms on an app update or routing change before returning the next usage response", async () => {
+    for (const failure of ["build", "routing"] as const) {
+      const io = fixture(); await io.runtime.start();
+      const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+      const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
+      await read(); expect((await io.runtime.apply(true)).accepted).toBe(true); expect((await read()).rate_limit.allowed).toBe(true);
+      if (failure === "build") io.setBuildSupported(false); else io.setRoutingSupported(false);
+      expect(await read()).toEqual(usage); expect(io.runtime.status().usage?.mode).toBe("observe");
+      expect(io.runtime.status().contextFailure).toBe(failure === "build" ? "build_unverified" : "native_routing_unverified");
+      await io.runtime.stop();
+    }
+  });
+  test("routing preflight refuses a start before opening listeners", async () => {
+    const io = fixture(); io.setRoutingSupported(false);
+    await expect(io.runtime.start()).rejects.toThrow("native_routing_unverified");
+    expect(io.runtime.status().running).toBe(false); expect(io.runtime.getPacUrl()).toBeNull(); expect(desktopCompatibilityRuntimeActive()).toBe(false);
   });
   test("a cached PAC reconnects to the same ports after restart and Apply is never resumed", async () => {
     const io = fixture(); await io.runtime.start();

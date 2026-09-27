@@ -50,7 +50,7 @@ test("a fresh runtime reopens the persisted endpoints and serves an already cach
   const makeRuntime = () => createDesktopCompatibilityRuntime({ platform: "win32", testOnly: true,
     connectionStore: createDesktopConnectionStore(path), identity: { readCurrentIdentity: async () => account, verifyFreshIdentity: async () => account },
     loadAuthority: async () => ({ authority, commonName: "persisted-runtime-fixture", fingerprint: cert.fingerprint256.replaceAll(":", ""), expiresAt: Date.parse(cert.validTo), reused: true, renewalDue: false }),
-    trust: async () => "trusted", buildSupported: () => true,
+    trust: async () => "trusted", buildSupported: () => true, routingSupported: () => true,
     upstreamFetch: (async () => Response.json({ fixture: "original-response" })) as typeof fetch,
   });
   const first = makeRuntime(), second = makeRuntime();

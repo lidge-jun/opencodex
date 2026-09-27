@@ -735,6 +735,9 @@ PAC and CONNECT ports are persisted after successful first binding and reused on
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate
 ports or overwrite the existing connection record. Restart returns to Observe, not Apply.
+`native_routing_unverified` means the native root/profile routing cannot be matched to this
+process's bound OpenCodex listener. Runtime status may expose `contextFailure` for this condition
+or `build_unverified`. These states disable response correction without claiming an app repair.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,

@@ -18,7 +18,7 @@ export class UsageRelayController {
   private readonly activation: UsageActivation;
   constructor(account: UsageIdentity, private readonly readCurrentIdentity: () => Promise<UsageIdentity | null>,
     verifyFreshIdentity: () => Promise<UsageIdentity | null>, private readonly clock: () => number,
-    private readonly expiresAt: number, timeoutMs = 180000) {
+    private readonly expiresAt: number, timeoutMs = 180000, private readonly contextValid: () => boolean = () => true) {
     if (!account.id || !account.userId || !['plus', 'pro'].includes(account.plan)
       || account.structure !== 'personal' || !Number.isFinite(expiresAt) || expiresAt <= clock()) {
       throw new Error('A verified supported identity and finite safety deadline are required');
@@ -31,6 +31,7 @@ export class UsageRelayController {
   }
   snapshot() { return { ...this.activation.snapshot(), trackedStreams: this.refresh.size, expired: this.clock() >= this.expiresAt }; }
   async activate(options: { scope: ApplyScope; accountWideConsent: boolean }) {
+    if (!this.contextValid()) { this.activation.invalidateIdentity(); return { accepted: false, reason: 'native-context-changed', ...this.snapshot() }; }
     if (this.clock() >= this.expiresAt) { this.activation.invalidateIdentity(); return { accepted: false, reason: 'safety-deadline', ...this.snapshot() }; }
     return this.activation.activate(options);
   }
@@ -51,6 +52,7 @@ export class UsageRelayController {
     if (!same(current, this.account)) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
     // Do not apply an activation that raced this response's identity read.
     if (observedGeneration !== this.activation.snapshot().generation) return null;
+    if (!this.contextValid()) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
     if (this.clock() >= this.expiresAt) { this.activation.invalidateIdentity(); stream?.exclude(); return null; }
     if (Buffer.byteLength(text, 'utf8') > 262144) { stream?.exclude(); return null; }
     let parsed: unknown;

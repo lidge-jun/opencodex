@@ -16,6 +16,7 @@ import { startDesktopRelay } from "./relay-listener";
 import { launchWindowsCodexCompatibility } from "./windows-package-launch";
 import { acquireDesktopCompatibilityRuntime } from "./runtime-ownership";
 import { createDesktopConnectionStore, type DesktopConnectionStore } from "./connection-store";
+import { createNativeRoutingVerifier } from "./routing-preflight";
 
 // Reviewed usage.snapshot v1/cache/composer contract. A new build needs a new assessment.
 export const DESKTOP_COMPATIBILITY_ASSESSED_VERSION = "26.924.2738.0";
@@ -31,6 +32,7 @@ export interface DesktopRuntimeIo {
   buildSupported?: () => boolean;
   upstreamFetch?: typeof fetch;
   connectionStore?: DesktopConnectionStore;
+  routingSupported?: () => boolean;
   /** Synthetic-test execution is admitted only with explicit fixture identity and CA seams. */
   testOnly?: boolean;
 }
@@ -39,12 +41,19 @@ export interface DesktopRuntimeIo {
 export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   const platform = io.platform ?? process.platform;
   const buildSupported = io.buildSupported ?? isAssessedDesktopInstalled;
+  let routingSupported = io.routingSupported ?? (() => false);
+  let contextFailure: "build_unverified" | "native_routing_unverified" | null = null;
+  const contextValid = () => {
+    try { contextFailure = !routingSupported() ? "native_routing_unverified" : !buildSupported() ? "build_unverified" : null; }
+    catch { contextFailure = "build_unverified"; }
+    return contextFailure === null;
+  };
   let phase: "off" | "starting" | "running" | "stopping" | "cleanup-required" = "off";
   let owned: { controller: UsageRelayController; close(): Promise<void>; pacUrl: string; fingerprint: string; deadline: number } | null = null;
   let closing: Promise<void> | null = null;
   let pendingCleanup: (() => Promise<void>) | null = null;
   let releaseOwner: (() => void) | null = null;
-  const status = () => ({ phase, supported: platform === "win32", running: owned !== null,
+  const status = () => ({ phase, supported: platform === "win32", running: owned !== null, contextFailure,
     ...(owned ? { fingerprint: owned.fingerprint, safetyDeadline: owned.deadline, usage: owned.controller.snapshot() } : {}) });
   async function stop(): Promise<ReturnType<typeof status>> {
     if (phase === "starting") throw new Error("desktop_compatibility_busy");
@@ -58,7 +67,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   async function start() {
     if (phase !== "off") throw new Error("desktop_compatibility_busy");
     if (platform !== "win32") throw new Error("desktop_compatibility_unsupported");
-    if (isTestHomeGuardArmed() && !(io.testOnly && io.identity && io.loadAuthority && io.trust && io.buildSupported && io.connectionStore)) throw new Error("desktop_compatibility_test_environment");
+    if (isTestHomeGuardArmed() && !(io.testOnly && io.identity && io.loadAuthority && io.trust && io.buildSupported && io.connectionStore && io.routingSupported)) throw new Error("desktop_compatibility_test_environment");
     if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
     if (!buildSupported()) throw new Error("desktop_compatibility_build_unverified");
     if (effectiveProxyFor(new URL("https://chatgpt.com"), process.env)) throw new Error("desktop_compatibility_egress_proxy_unsupported");
@@ -74,6 +83,8 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     };
     pendingCleanup = cleanup;
     try {
+      if (!io.routingSupported) routingSupported = createNativeRoutingVerifier((await import("../paths")).getCodexHome());
+      if (!contextValid()) throw new Error(`desktop_compatibility_${contextFailure}`);
       const directory = join(getConfigDir(), "codex-desktop-compatibility");
       if (!io.loadAuthority) {
         const saved = inspectDesktopCompatibilityAuthority(directory);
@@ -92,7 +103,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       const account: UsageIdentity | null = await identity.verifyFreshIdentity();
       if (!account) throw new Error("desktop_compatibility_native_identity_unverified");
       if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
-      controller = new UsageRelayController(account, identity.readCurrentIdentity, identity.verifyFreshIdentity, Date.now, deadline);
+      controller = new UsageRelayController(account, identity.readCurrentIdentity, identity.verifyFreshIdentity, Date.now, deadline, 180000, contextValid);
       relay = await startDesktopRelay({ leaf: issueServerLeaf(authority.authority, authority.commonName, ["chatgpt.com"]),
         fetchImpl: createUsageControlledFetch(controller, io.upstreamFetch ?? fetch) });
       try { proxy = await startConnectProxy(previousConnection?.connectPort ?? 0, { interceptPort: relay.port, interceptHosts: ["chatgpt.com"], allowedTargets: ["chatgpt.com:443"] }); }
@@ -107,10 +118,14 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       const connection = await connections.publish({ version: 1, id: runId, connectPort: proxyPort, pacPort: pac.port! });
       if (connection.id !== runId || connection.connectPort !== proxyPort || connection.pacPort !== pac.port) throw new Error("desktop_compatibility_connection_changed");
       if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
-      const active = controller; let ticking = false, deadlineHandled = false;
+      const active = controller; let ticking = false, deadlineHandled = false, lastContextCheck = 0;
       timer = setInterval(() => {
         if (ticking) return; ticking = true;
         const expired = Date.now() >= deadline;
+        if (active.snapshot().mode === "apply" && Date.now() - lastContextCheck >= 10000) {
+          lastContextCheck = Date.now();
+          if (!contextValid()) { void active.observeOnly().catch(() => {}).finally(() => { ticking = false; }); return; }
+        }
         const work = expired && !deadlineHandled ? (deadlineHandled = true, active.observeOnly()) : active.expireIfNeeded();
         void work.catch(() => {}).finally(() => { ticking = false; });
       }, 1000); timer.unref();
@@ -127,7 +142,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   async function apply(accountWideConsent: boolean) {
     const current = owned;
     if (!current || phase !== "running") throw new Error("desktop_compatibility_not_running");
-    if (!buildSupported()) { await current.controller.observeOnly(); throw new Error("desktop_compatibility_build_unverified"); }
+    if (!contextValid()) { await current.controller.observeOnly(); throw new Error(`desktop_compatibility_${contextFailure}`); }
     const result = await current.controller.activate({ scope: "account-ui-compatibility", accountWideConsent });
     if (owned !== current || phase !== "running") { await current.controller.observeOnly(); return { ...result, accepted: false, reason: "runtime-stopped" }; }
     return result;
@@ -136,7 +151,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     async observe() { if (owned) await owned.controller.observeOnly(); return status(); },
     launch() {
       if (!owned || phase !== "running") throw new Error("desktop_compatibility_not_running");
-      if (!buildSupported()) throw new Error("desktop_compatibility_build_unverified");
+      if (!contextValid()) throw new Error(`desktop_compatibility_${contextFailure}`);
       return launchWindowsCodexCompatibility(owned.pacUrl);
     },
     /** Internal native launch context; management status never returns the control endpoint. */

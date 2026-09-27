@@ -731,6 +731,7 @@
   "desktop-cli-contracts.test.ts": "clients",
   "desktop-compatibility-authority.test.ts": "clients",
   "desktop-compatibility-connection-store.test.ts": "clients",
+  "desktop-compatibility-routing.test.ts": "clients",
   "server-desktop-compatibility-startup.test.ts": "server",
   "management-desktop-compatibility-settings.test.ts": "server",
   "desktop-compatibility-runtime.test.ts": "clients",

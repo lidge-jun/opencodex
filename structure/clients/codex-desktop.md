@@ -111,6 +111,16 @@ correction. `usage-sse-controller.ts` preserves event metadata and original sequ
 `usage-controlled-fetch.ts` removes stale validators from changed JSON and controlled SSE.
 Response production is reported separately from app-cache or UI confirmation.
 
+`routing-binding.ts` records the server's actual bound data/companion ports. Shutdown
+unregisters only its matching owner. `routing-preflight.ts` verifies bounded native root
+TOML and any selected root profile against those ports, rejecting foreign providers,
+remote destinations, authless mode, unknown profiles and process-level app overrides.
+It does not claim knowledge of project-local overrides or a conversation's selected model.
+Each eligible usage record checks routing and the assessed installed build after asynchronous
+identity verification, before any correction. During Apply, a ten-second context check also
+disarms and refreshes bound usage streams on failure. Native update/routing failures are
+public diagnostic codes; originals continue to relay and no app/config repair is automatic.
+
 `runtime-ownership.ts` serializes certificate mutations against active/starting runtimes.
 The existing sibling guard blocks all runtime mutations in sibling instances. Core shutdown
 registration occurs only after successful startup. Cleanup stops owned listeners and streams;

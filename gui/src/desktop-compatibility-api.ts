@@ -4,6 +4,7 @@ export interface CompatibilityCertificate {
 }
 export interface CompatibilityRuntime {
   supported: boolean; phase: "off" | "starting" | "running" | "stopping" | "cleanup-required"; running: boolean;
+  contextFailure?: "build_unverified" | "native_routing_unverified" | null;
   usage?: { mode: "observe" | "apply"; phase: string; outputs: number; appCacheConfirmed: false };
 }
 export interface CompatibilitySnapshot { certificate: CompatibilityCertificate; runtime: CompatibilityRuntime }
@@ -52,6 +53,10 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
     || typeof value.phase !== "string" || !["off", "starting", "running", "stopping", "cleanup-required"].includes(value.phase)
     || value.phase === "running" && !value.running || (value.phase === "off" || value.phase === "starting") && value.running) throw new CompatibilityApiError("invalid_runtime_status");
   const runtime: CompatibilityRuntime = { supported: value.supported, running: value.running, phase: value.phase as CompatibilityRuntime["phase"] };
+  if (value.contextFailure !== undefined) {
+    if (value.contextFailure !== null && value.contextFailure !== "build_unverified" && value.contextFailure !== "native_routing_unverified") throw new CompatibilityApiError("invalid_runtime_status");
+    runtime.contextFailure = value.contextFailure;
+  }
   if (value.usage !== undefined) {
     if (!object(value.usage) || typeof value.usage.mode !== "string" || !["observe", "apply"].includes(value.usage.mode) || typeof value.usage.phase !== "string"
       || !/^[a-z-]{1,80}$/.test(value.usage.phase) || !Number.isSafeInteger(value.usage.outputs) || Number(value.usage.outputs) < 0
