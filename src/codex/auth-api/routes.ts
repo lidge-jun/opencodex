@@ -213,7 +213,7 @@ export async function handleCodexAuthAPI(
     if (body.accountId === MAIN_CODEX_ACCOUNT_ID && hasLegacyMainCodexPoolAccount(runtimeConfig.codexAccounts)) {
       return jsonResponse({ error: "Remove the legacy __main__ pool row before selecting the Desktop account" }, 409);
     }
-    if (isCodexAccountPaused(runtimeConfig, targetAccountId)) {
+    if (body.accountId != null && isCodexAccountPaused(runtimeConfig, targetAccountId)) {
       return jsonResponse({ error: "Account is paused" }, 409);
     }
     if (body.accountId != null && body.accountId !== MAIN_CODEX_ACCOUNT_ID) {
