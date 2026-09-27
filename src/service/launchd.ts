@@ -12,7 +12,7 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
 import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, installedServiceListenPort, resolvedProxyEnv } from "./health";
-import { SERVICE_MANAGED_ENV, LABEL, cliEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
 
@@ -39,7 +39,7 @@ export function buildPlist(
   const runtime = deps.runtime ?? durableBunRuntime();
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   const log = logPath();
-  const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "darwin");
   const codexHome = process.env.CODEX_HOME?.trim();
   const codexSqliteHome = currentCodexSqliteHomeAbsolute();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
@@ -90,9 +90,15 @@ ${envLines}
  */
 const PLIST_PATH_ENTRY = /^(\s*<key>PATH<\/key><string>)([^\n]*)(<\/string>)$/m;
 
+/** Normalize a plist's PATH while keeping its XML framing and every non-transient entry. */
+function filterPlistPathVariable(plist: string): string {
+  return plist.replace(PLIST_PATH_ENTRY, (_match: string, open: string, value: string, close: string) =>
+    `${open}${filterTransientServicePath(value, ":", "darwin")}${close}`);
+}
+
 /**
- * The rendered plist with the PREVIOUS definition's `PATH` put back — or null when `PATH`
- * is not the only difference.
+ * The rendered plist with the PREVIOUS definition's filtered `PATH` put back — or null when
+ * `PATH` is not the only difference.
  *
  * `buildPlist` bakes `process.env.PATH`, and `ocx service repair` is run by whatever has a
  * shell: a tray helper, `ocx update`'s child, an ssh session, a cron job. Each of those
@@ -103,9 +109,9 @@ const PLIST_PATH_ENTRY = /^(\s*<key>PATH<\/key><string>)([^\n]*)(<\/string>)$/m;
  *
  * Reuse rather than ignore. A plist that differs only in PATH is not "equal" — dropping the
  * difference silently would let a repair report a no-op while launchd keeps a PATH the
- * operator has changed on purpose. Putting the previous value back makes the two files
- * genuinely identical, so the caller's ordinary byte comparison decides, and the PATH the
- * service already runs with is the one that survives.
+ * operator has changed on purpose. Putting the previous filtered value back makes the two
+ * definitions genuinely identical, so the caller's ordinary byte comparison decides, and
+ * the stable PATH the service already runs with is the one that survives.
  *
  * The caller applies this only when the live job is loaded from exactly the exec line this
  * install baked: that is the evidence that the running definition is the one on disk, which
@@ -117,11 +123,15 @@ export function reusePreviousPlistPathVariable(previous: string, rendered: strin
   const prev = PLIST_PATH_ENTRY.exec(previous);
   const next = PLIST_PATH_ENTRY.exec(rendered);
   if (!prev || !next || prev[2] === next[2]) return null;
+  const previousPath = filterTransientServicePath(prev[2] ?? "", ":", "darwin");
+  const nextPath = filterTransientServicePath(next[2] ?? "", ":", "darwin");
+  const normalizedPrevious = filterPlistPathVariable(previous);
+  if (previousPath === nextPath) return normalizedPrevious === previous ? null : normalizedPrevious;
   // A function replacer, not a `$1` template: a PATH entry containing `$&` or `$1` would
   // otherwise be re-expanded into the file.
   const adopted = rendered.replace(PLIST_PATH_ENTRY, (_match, open: string, _value: string, close: string) =>
-    `${open}${prev[2] ?? ""}${close}`);
-  return adopted === previous ? adopted : null;
+    `${open}${previousPath}${close}`);
+  return adopted === normalizedPrevious ? adopted : null;
 }
 
 /**
@@ -515,15 +525,17 @@ export function installLaunchd(deps: {
   let rendered = buildPlist(resolvedProxyEnv());
   if (previousPlist !== null && previousPlist !== rendered && verdict.state === "loaded-current") {
     // The live job runs exactly the exec line this install baked, so the definition on disk
-    // IS the one launchd is running: keep the PATH it already carries instead of replacing
-    // it with the repairing process's. See `reusePreviousPlistPathVariable`.
+    // IS the one launchd is running: keep its filtered PATH instead of replacing it with the
+    // repairing process's. See `reusePreviousPlistPathVariable`.
     const adopted = reusePreviousPlistPathVariable(previousPlist, rendered);
     if (adopted !== null) rendered = adopted;
   }
+  const comparablePrevious = previousPlist === null ? null : filterPlistPathVariable(previousPlist);
+  const needsPathCleanup = previousPlist !== null && comparablePrevious !== previousPlist;
   // Whether launchd has to be handed NEW BYTES, which is what decides below whether a
   // `kickstart` can be trusted. `previousPlist === null` (a fresh install) counts: whatever
   // the label may hold did not come from a definition we can see.
-  const renderedDiffers = previousPlist !== rendered;
+  const renderedDiffers = comparablePrevious !== rendered;
 
   // ── Writes start here. ──
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -537,9 +549,15 @@ export function installLaunchd(deps: {
   const tokenUnchanged = readTextOrNull(tokenFile) === previousToken;
 
   if (!renderedDiffers && tokenUnchanged && verdict.state === "loaded-current") {
-    // The plist is not rewritten and launchd is not touched; only the owner-only mode
-    // is re-asserted, for a definition an older version may have left at 0644.
-    try { chmodSync(p, 0o600); } catch { /* best-effort */ }
+    // A transient PATH entry is removed from the on-disk definition, but the healthy job
+    // remains loaded: launchd will use the cleaned bytes on its next restart without an
+    // unnecessary bootout window now.
+    if (needsPathCleanup) writeServiceDefinitionFile(p, rendered, "utf8");
+    else {
+      // The plist is not otherwise rewritten and launchd is not touched; only the owner-only
+      // mode is re-asserted, for a definition an older version may have left at 0644.
+      try { chmodSync(p, 0o600); } catch { /* best-effort */ }
+    }
     // Install state is refreshed because it is what `expectedLaunchdCommand` reads, and
     // a repair that leaves it stale re-creates the false "OLDER plist" report.
     writeServiceInstallState("scheduler");

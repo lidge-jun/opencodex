@@ -1,6 +1,12 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { bakedServicePathsDiagnostic, buildUnit, repairService, stableLauncherEntry } from "../../src/service";
+import {
+  bakedServicePathsDiagnostic,
+  buildUnit,
+  buildWindowsServiceScript,
+  repairService,
+  stableLauncherEntry,
+} from "../../src/service";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-fnm-launcher-test");
 
@@ -62,6 +68,32 @@ describe("fnm service launcher paths", () => {
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("Windows service scripts filter fnm PATH entries", () => {
+    const oldPath = process.env.PATH;
+    const oldLocalAppData = process.env.LOCALAPPDATA;
+    const localAppData = "C:\\Users\\Andrew\\AppData\\Local";
+    try {
+      process.env.LOCALAPPDATA = localAppData;
+      process.env.PATH = [
+        "C:\\Windows\\System32",
+        `${localAppData}\\fnm_multishells\\36956_1790318511513`,
+        "C:\\OpenCodex\\bin",
+      ].join(";");
+      const script = buildWindowsServiceScript(
+        { bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" },
+        10100,
+        [],
+      );
+      expect(script).toContain('set "PATH=C:\\Windows\\System32;C:\\OpenCodex\\bin"');
+      expect(script).not.toContain("fnm_multishells");
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = oldLocalAppData;
     }
   });
 

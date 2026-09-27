@@ -213,6 +213,33 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     }
   });
 
+  test("a stale fnm PATH entry is cleaned without booting out a healthy job", () => {
+    const plistPath = fixturePlist();
+    const previousPath = process.env.PATH;
+    const stablePath = "/usr/local/bin:/opt/homebrew/bin:/usr/bin";
+    const stalePath = "/usr/local/bin:/opt/fnm-user/.local/state/fnm_multishells/96164_1790461984409/bin:/opt/homebrew/bin:/usr/bin";
+    const pathLine = /(\s*<key>PATH<\/key><string>)[^\n]*(<\/string>)/;
+    try {
+      process.env.PATH = stablePath;
+      const rendered = buildPlist(resolvedProxyEnv());
+      expect(rendered).toContain(stablePath);
+      expect(rendered).not.toContain("fnm_multishells");
+      writeFileSync(plistPath, rendered.replace(pathLine, `$1${stalePath}$2`), "utf8");
+      const { argv, launchctl } = recordingLaunchctl({});
+
+      installLaunchd({ plistPath, launchctl, probe: loadedCurrent().probe, sleepSync: () => {} });
+
+      expect(argv).toEqual([]);
+      const repaired = readFileSync(plistPath, "utf8");
+      expect(repaired).toBe(rendered);
+      expect(repaired).not.toContain("fnm_multishells");
+      expect(repaired).toContain(stablePath);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
   test("an identical plist whose job is loaded from an OLDER command still reloads", () => {
     const plistPath = fixturePlist();
     writeFileSync(plistPath, renderedPlist(), "utf8");

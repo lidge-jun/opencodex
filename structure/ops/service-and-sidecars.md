@@ -62,10 +62,12 @@ package-local Bun and CLI pair selected by the trusted install or repair invocat
 credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an
 older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
 Shell-local version-manager paths such as `fnm_multishells/<id>/bin/ocx` are not stable
-launchers: the resolver skips them, systemd filters them from the baked PATH, and a recorded
-one is diagnosed as stale so repair can replace it. If no durable `ocx` remains, systemd uses
-the direct Bun/CLI fallback and does not depend on `/usr/bin/env node`. `ocx codex-shim install`
-also resolves an fnm multishell link to its durable Node installation before reporting the target.
+launchers: the resolver skips them, systemd, launchd, and the Windows service script filter
+them from their baked PATH, and a recorded one is diagnosed as stale so repair can replace it.
+Launchd repair also filters the old plist PATH before comparing definitions; it cleans the plist
+without booting out a healthy loaded job. If no durable `ocx` remains, systemd uses the direct
+Bun/CLI fallback and does not depend on `/usr/bin/env node`. `ocx codex-shim install` also
+resolves an fnm multishell link to its durable Node installation before reporting the target.
 
 Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
 versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
