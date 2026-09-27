@@ -214,9 +214,6 @@ bun run skill:surface        # regenerate after adding a capability
 bun run skill:surface:check  # what CI asserts
 ```
 
-For development tests of the management API, use the isolated
-[management API test recipe](./.agents/skills/testing-opencodex-management-api/SKILL.md).
-
 `tests/ci-workflows/skill-ocx.test.ts` fails if the committed map drifts from `src/cli/capabilities.ts`, and
 also if the hand-written pages name a command the registry does not have. That second check is not
 hypothetical: it caught a documented `ocx request-history` that never existed.
