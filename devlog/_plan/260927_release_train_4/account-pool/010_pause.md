@@ -41,3 +41,20 @@ iconography: { system: "existing gui/src/icons.tsx", weight: "regular", domain: 
 ```
 
 Reading as a dense developer-tool account panel with quiet status and a reversible secondary action. Reuse the existing Provider workspace row/button/badge tokens from `gui/design-system/components.md` and the semantic colors in `foundations.md`; add no new visual token or dependency. **DESIGN_VARIANCE 3, MOTION_INTENSITY 1, density D5**: preserve the current dashboard hierarchy, with feedback only for pending save. The pause/resume action has a visible label, keyboard path, disabled pending state and a role-alert error; paused status is text plus color. This is a utility dashboard control, so concept-image generation is inapplicable.
+
+## Outcome (2026-09-28)
+
+The carry landed as `6550f66ac9`, byte-identical to the donor trio outside `devlog/`, with a `Co-authored-by` trailer for chilung. Review found four defects beyond the donor's own tests, all fixed on top with red-green regressions:
+
+| Finding | Fix | Regression |
+| --- | --- | --- |
+| A saved pause was reported as a failed pause when the follow-up roster or status read failed | `ba8009c703`: the save and the refresh are separate steps in `useProviderAccountPools.pauseAccount` | `gui/tests/provider-account-pause-refresh.test.tsx` (2 of 3 red on the donor hook) |
+| Per-account quota refresh still probed a paused account with its stored bearer | `244c9e8513`: `accountQuotaProbeSkip` returns the last reading without a request; `getTokenForAccountQuotaProbe` rejects paused rows | `tests/providers/provider-account-quota.test.ts` |
+| The CLI account list dropped the `paused` flag and Kiro's `paused` skip reason | `244c9e8513` | `tests/cli/cli-kiro-auto-selection.test.ts` |
+| The Meta Muse key-mint quota read and xAI/Gemini web-search eligibility ignored pause | `459ef4cb9a` | `provider-account-quota`, `xai-web-search`, `gemini-web-search` tests |
+
+The donor also left `skills/ocx/references/01_management_surface.md` stale for the new route (regenerated) and `structure/data-planes/images.md` saying 503 where the code returns 403 (`d672516003`). A shared-toast `role="alert"` suggestion was deferred because `ToastNotice` serves every dashboard error and belongs to a GUI lane.
+
+Security review by an independent gpt-6-sol reviewer ended PASS after two FAIL rounds; its sweep found no other direct stored-credential read that sends upstream for a paused account. Isolated-home browser QA (temporary `HOME`, `OPENCODEX_HOME`, `CODEX_HOME`, client integrations off, synthetic accounts) confirmed pause of the active row, active hand-off, all-paused, resume, failed save and keyboard activation; an unauthenticated pause PUT returned 401. Screenshots are on `pr-assets` at `0e44dd30c7`. Real-home client config hashes matched before and after; `~/.opencodex/auth.json` changed during the window because the user's own running proxy refreshed tokens (no synthetic account or `paused` key appeared in it).
+
+Local verification at `d672516003` in `/private/tmp/t4-account-pool-verify`: 267 focused OAuth/CLI/Kiro/catalog/Guardian/401-replay tests, 279 hard-lock/reset-credit/paused-preservation tests, 481 quota/CLI/layout/skill tests, 109 quota and web-search tests and 59 GUI tests passed with 0 failures; `typecheck`, `privacy:scan`, `structure:check`, `skill:surface:check`, `lint:gui` and `build:gui` passed. `test:changed` selected 1,298 of 1,820 files and reported 9,611 passes and 0 failures before the runner's lane timeout terminated it under seven-lane contention, so full coverage is left to hosted CI.
