@@ -202,10 +202,11 @@ function effortIndex(rung: string | undefined): number {
 }
 
 /**
- * The member closest to `targets` on the non-effort axes, then nearest to
- * `effort` on the ladder, ties going to the higher rung so a tie never quietly
- * turns reasoning down (`xhigh` on SWE-2 selects Max, as the degraded table in
- * src/adapters/devin.ts does).
+ * The member closest to `targets` on the non-effort axes, then the lowest rung
+ * at or above `effort`, falling back to the highest rung below it. A missing
+ * rung never quietly turns reasoning down: `high` on SWE-1.7 (Medium, Max)
+ * selects Max, `xhigh` on SWE-2 selects Max, and `medium` on Kimi K3 (Low,
+ * High, Max) selects High.
  */
 function closestMember(
   members: ModelCatalogEntry[],
@@ -219,7 +220,9 @@ function closestMember(
     const axes = member.familyAxes ?? {};
     const mismatches = Object.entries(targets).filter(([axis, order]) => (axes[axis]?.order ?? 0) !== order).length;
     const have = effortIndex(devinFamilyEffortOf(member));
-    const distance = want < 0 ? 0 : have < 0 ? FAMILY_EFFORT_LADDER.length : Math.abs(have - want);
+    const distance = want < 0 ? 0
+      : have < 0 ? 2 * FAMILY_EFFORT_LADDER.length
+      : have >= want ? have - want : FAMILY_EFFORT_LADDER.length + (want - have);
     const score = [mismatches, distance, -have];
     if (!bestScore || lexicallyLess(score, bestScore)) {
       best = member;
