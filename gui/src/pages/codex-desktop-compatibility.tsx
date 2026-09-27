@@ -4,6 +4,7 @@ import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 import { CompatibilityApiError, readCompatibilityCertificate, readCompatibilityRuntime, readCompatibilitySnapshot, runCompatibilityAction,
   type CompatibilityAction, type CompatibilitySnapshot } from "../desktop-compatibility-api";
 import { setClientResourceData, useClientResource } from "../client-resource";
+import DesktopCompatibilityStartupSetting from "./desktop-compatibility-startup-setting";
 
 const label = { prepare: "desktopCompat.prepare", trust: "desktopCompat.trust", "remove-trust": "desktopCompat.remove", renew: "desktopCompat.renew",
   start: "desktopCompat.start", stop: "desktopCompat.stop", launch: "desktopCompat.launch", observe: "desktopCompat.observe", apply: "desktopCompat.apply" } as const;
@@ -70,6 +71,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     <h2>{t("desktopCompat.title")}</h2>
     <p className="muted text-body">{t("desktopCompat.description")}</p>
     <p className="muted text-control">{t("desktopCompat.localOnly")}</p>
+    <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} />
     <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void execute()}>{busy ? t("common.loading") : t("desktopCompat.refresh")}</button>
     {error && <div className="notice-err" role="alert"><p>{t(error in errorLabel ? errorLabel[error as keyof typeof errorLabel] : "desktopCompat.error")}</p><code>{error}</code></div>}
     {done && <p className="notice-ok" role="status">{t("desktopCompat.done")}</p>}

@@ -100,6 +100,19 @@ export function adoptPersistedProviderIntoLiveConfig(
   if (persistedConfig) refreshPreservedProviderOwner(config, persistedConfig);
 }
 
+/** Adopt only the committed next-start preference; preserve unrelated pending live edits. */
+export function adoptPersistedDesktopCompatibility(config: OcxConfig, persisted: OcxConfig["desktopCompatibility"]): void {
+  const baseline = liveConfigBaseline.get(config);
+  const merged = reconcileConfigValue(baseline?.desktopCompatibility ?? MISSING_CONFIG_VALUE,
+    config.desktopCompatibility ?? MISSING_CONFIG_VALUE, persisted ?? MISSING_CONFIG_VALUE);
+  if (merged === MISSING_CONFIG_VALUE) delete config.desktopCompatibility;
+  else config.desktopCompatibility = merged as OcxConfig["desktopCompatibility"];
+  if (baseline) {
+    if (persisted === undefined) delete baseline.desktopCompatibility;
+    else baseline.desktopCompatibility = structuredClone(persisted);
+  }
+}
+
 /** Test seam only: is this instance armed? */
 export function claudeCodeBaselineArmed(config: OcxConfig): boolean {
   return claudeCodeBaseline.has(config);

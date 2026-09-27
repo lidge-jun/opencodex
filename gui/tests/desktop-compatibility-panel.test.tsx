@@ -23,10 +23,14 @@ afterEach(async () => {
 });
 const requests: { url: string; method: string; body?: unknown }[] = [];
 function server(uncertain = false) {
-  requests.length = 0; let trusted = false;
+  requests.length = 0; let trusted = false, startup = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input), method = init?.method ?? "GET";
     requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (url.endsWith("/settings")) {
+      if (method === "POST") { startup = JSON.parse(String(init!.body)).startOnProxyStart; if (uncertain) throw new TypeError("uncertain response"); }
+      return Response.json({ ok: true, settings: { startOnProxyStart: startup, revision: (startup ? "b" : "a").repeat(64) } });
+    }
     if (method === "POST") { trusted = true; if (uncertain) throw new TypeError("uncertain response"); return Response.json({ ok: true }); }
     return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: trusted ? "trusted" : "prepared", busy: null,
       fingerprint: (url.startsWith("/second") ? "B" : "A").repeat(64) } } : { ok: true, runtime: { supported: true, phase: "off", running: false } });
@@ -85,4 +89,23 @@ test("managed client mode never falls back to mutating the shared hub", async ()
   await render("/machine", true);
   expect(container.textContent).toContain("unavailable in OpenCodex managed client mode");
   expect(requests).toHaveLength(0); expect(container.querySelector("button")).toBeNull();
+});
+test("auto-start toggle writes once with the displayed revision and rechecks the saved state", async () => {
+  server(); const container = await mount();
+  const toggle = button(container, "Resume observation when OpenCodex starts");
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => toggle.click());
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  const posts = requests.filter(req => req.method === "POST"); expect(posts).toHaveLength(1);
+  expect(posts[0]!.url).toEndWith("/settings"); expect(posts[0]!.body).toEqual({ confirmed: true, startOnProxyStart: true, revision: "a".repeat(64) });
+  expect(requests.some(req => req.method === "POST" && req.url.endsWith("/runtime"))).toBe(false);
+});
+test("an uncertain auto-start write is not replayed and refresh recovers its committed state", async () => {
+  server(true); const container = await mount();
+  const toggle = button(container, "Resume observation when OpenCodex starts");
+  await act(async () => toggle.click()); expect(toggle.disabled).toBe(true);
+  const setting = toggle.closest(".panel")!;
+  await act(async () => button(setting as HTMLElement, "Refresh status").click());
+  expect(toggle.disabled).toBe(false); expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(requests.filter(req => req.method === "POST")).toHaveLength(1);
 });

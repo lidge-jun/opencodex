@@ -149,4 +149,11 @@ warn without stopping the model proxy or installing trust.
 `service.ts` shares one runtime between startup and management. Server shutdown retains
 the asynchronous teardown, waits for in-flight startup, and prevents a late start after stop.
 The saved preference does not launch Codex, enroll or renew certificates, or resume a trial.
-Its dashboard toggle is a remaining integration item; the typed config preference is available.
+The dashboard's startup toggle changes only this next-process preference. Its settings API
+requires local GUI provenance, explicit boolean intent and a revision of the displayed field.
+`startup-settings.ts` uses the existing config mutation lock/rebase writer, then reads back
+the real file. Unrelated concurrent fields survive. `adoptPersistedDesktopCompatibility`
+updates only this field and its live comparison baseline, so a later unrelated save cannot
+undo the committed preference or overwrite newer disk edits. Publication-side errors remain
+errors, with verified disk state adopted rather than speculative rollback or request replay.
+Invalid/missing configuration cannot be recreated by toggling this setting.

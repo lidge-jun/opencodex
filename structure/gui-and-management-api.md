@@ -6,6 +6,8 @@ three-minute account-UI trial follow the [native compatibility contract](clients
 The lazy Codex Set desktop tab uses the machine API target and follows the
 [dashboard consent and stale-response contract](clients/codex-desktop.md#dashboard-controls).
 Runtime management and proxy startup share a single owner and register awaited shutdown.
+The desktop compatibility settings endpoint binds each local GUI write to the displayed
+field revision; no runtime action is triggered by saving the next-start preference.
 
 Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 

@@ -141,7 +141,7 @@ test("1. #codex-set renders Multi-auth, and Prompt is not mounted", async () => 
 
 test("desktop compatibility deep link mounts only its read-only status surface", async () => {
   testWindow.location.hash = "#codex-set/desktop";
-  const calls = stubRoutes(call => json(call.url.endsWith("/certificate")
+  const calls = stubRoutes(call => json(call.url.endsWith("/settings") ? { ok: true, settings: { startOnProxyStart: false, revision: "a".repeat(64) } } : call.url.endsWith("/certificate")
     ? { ok: true, certificate: { supported: true, state: "missing", busy: null } }
     : { ok: true, runtime: { supported: true, phase: "off", running: false } }));
   const { container, root } = await mountShell("/shared", "/machine");

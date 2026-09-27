@@ -924,12 +924,14 @@ mode are not yet supported by these controls.
 Unknown app builds refuse correction; the integration does not patch application files or
 switch to login-free mode.
 
-After certificate preparation and a successful manual start, the optional OpenCodex configuration
+After certificate preparation and a successful manual start, enable **Resume observation when
+OpenCodex starts** in the same panel. The optional OpenCodex configuration
 `"desktopCompatibility": { "startOnProxyStart": true }` resumes **observation only** when the model
 proxy starts. Omission or `false` disables this automatic start. It reuses the saved endpoints
 and trusted certificate, never launches Codex or enrolls trust, and never resumes an Apply trial.
 If prerequisites are missing, observation stays off and the model proxy continues running.
-The preference currently has no dashboard toggle; the rest of the controls remain available above.
+Saving this preference does not start or stop the current service. Use its separate service
+controls for immediate changes. If a save cannot be confirmed, refresh its status before retrying.
 
 ## Routed models during Codex reserve mode
 

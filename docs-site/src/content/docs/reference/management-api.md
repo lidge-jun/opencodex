@@ -86,6 +86,7 @@ route-specific results rather than repeating this table.
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 local dashboard required for POST; 409 stale, busy, or incomplete state |
 | `GET, POST /api/codex/desktop-compatibility/runtime` | Inspect or explicitly start, stop, launch, or run a bounded native compatibility trial | 403 local dashboard required for POST; 409 unsupported build, untrusted certificate, or incomplete state |
+| `GET, POST /api/codex/desktop-compatibility/settings` | Read or save the next-start observation preference with its current revision | 403 local dashboard required for POST; 409 stale, invalid, or unconfirmed configuration |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
 
@@ -721,8 +722,8 @@ CurrentUser protection does not isolate secrets from other processes running as 
 local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
 `observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
 The endpoint is experimental. The dashboard exposes it under **Codex Set → Desktop compatibility**;
-the optional `desktopCompatibility.startOnProxyStart` config preference resumes observation only
-and currently has no dashboard toggle. OpenCodex managed client mode does not offer these
+the **Resume observation when OpenCodex starts** toggle saves the optional
+`desktopCompatibility.startOnProxyStart` preference. OpenCodex managed client mode does not offer these
 local controls or forward them to the shared hub.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
@@ -746,6 +747,13 @@ listeners and connections; the PAC includes `DIRECT` fallback. The certificate s
 reuse. Stop the runtime and close Codex before removing trust or renewing the certificate.
 Failed cleanup reports `cleanup-required`; it does not claim that the runtime is off. OS login,
 system proxy settings and application files are not modified by these runtime commands.
+
+The separate settings endpoint returns `{ startOnProxyStart, revision }`. POST requires
+`{ startOnProxyStart: boolean, revision, confirmed: true }` from a local GUI session. A stale
+revision refuses the write; a valid update preserves unrelated config fields and verifies
+the persisted result. This preference affects the next proxy start, never current runtime
+state, app launch or an Apply trial. An uncertain response must be followed by GET, not an
+automatic POST retry. Invalid or missing configuration is preserved rather than recreated.
 
 ## Choosing a client
 

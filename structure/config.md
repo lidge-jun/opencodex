@@ -28,7 +28,7 @@ the [source-owned credential contract](codex-home.md#orca-source-owned-account-i
 
 ## Config surface
 
-`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged. Optional `desktopCompatibility: { startOnProxyStart: boolean }` likewise rejects invalid writes and degrades invalid disk values to off; it saves neither certificate consent nor correction mode. See [Codex Desktop startup](clients/codex-desktop.md#proxy-startup-preference).
+`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged. Optional `desktopCompatibility: { startOnProxyStart: boolean }` likewise rejects invalid writes and degrades invalid disk values to off; it saves neither certificate consent nor correction mode. Its field-scoped dashboard writer adopts committed state into the live comparison baseline; see [Codex Desktop startup](clients/codex-desktop.md#proxy-startup-preference).
 
 Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
 `ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the

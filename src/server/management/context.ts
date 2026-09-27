@@ -44,6 +44,7 @@ export interface ManagementRequestIngress {
 }
 
 export interface ManagementApiDeps {
+  desktopStartupSettings?: import("../../codex/desktop-compatibility/startup-settings").DesktopStartupSettingsService;
   desktopCertificateService?: import("../../codex/desktop-compatibility/certificate-service").DesktopCertificateService;
   desktopCompatibilityRuntime?: import("../../codex/desktop-compatibility/runtime").DesktopCompatibilityRuntime;
   onDesktopCompatibilityShutdown?: (shutdown: () => Promise<void>) => void;

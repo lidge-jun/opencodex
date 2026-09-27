@@ -7,6 +7,7 @@ export interface CompatibilityRuntime {
   usage?: { mode: "observe" | "apply"; phase: string; outputs: number; appCacheConfirmed: false };
 }
 export interface CompatibilitySnapshot { certificate: CompatibilityCertificate; runtime: CompatibilityRuntime }
+export interface CompatibilityStartupSettings { startOnProxyStart: boolean; revision: string }
 export type CompatibilityAction =
   | { target: "certificate"; action: "prepare" | "trust" | "remove-trust" | "renew"; fingerprint?: string }
   | { target: "runtime"; action: "start" | "stop" | "observe" | "apply" | "launch" };
@@ -25,6 +26,17 @@ async function reply(response: Response): Promise<Record<string, unknown>> {
     throw new CompatibilityApiError(typeof candidate === "string" && /^[a-z][a-z_-]{0,79}$/.test(candidate) ? candidate : "operation_unconfirmed");
   }
   return value;
+}
+function parseStartupSettings(value: unknown): CompatibilityStartupSettings {
+  if (!object(value) || typeof value.startOnProxyStart !== "boolean" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision)) throw new CompatibilityApiError("invalid_startup_settings");
+  return { startOnProxyStart: value.startOnProxyStart, revision: value.revision };
+}
+export async function readCompatibilityStartupSettings(apiBase: string, signal: AbortSignal): Promise<CompatibilityStartupSettings> {
+  return parseStartupSettings((await reply(await fetch(apiBase + ROOT + "settings", { signal }))).settings);
+}
+export async function saveCompatibilityStartupSettings(apiBase: string, current: CompatibilityStartupSettings, enabled: boolean, signal: AbortSignal): Promise<CompatibilityStartupSettings> {
+  return parseStartupSettings((await reply(await fetch(apiBase + ROOT + "settings", { method: "POST", signal,
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ startOnProxyStart: enabled, revision: current.revision, confirmed: true }) }))).settings);
 }
 export function parseCompatibilityCertificate(value: unknown): CompatibilityCertificate {
   if (!object(value) || typeof value.supported !== "boolean" || typeof value.state !== "string" || !["missing", "invalid", "expired", "prepared", "trusted", "unknown"].includes(value.state)
