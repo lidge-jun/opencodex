@@ -751,6 +751,7 @@
   "destination-policy-resolved.test.ts": "routing",
   "devin-adapter-reset-wait.test.ts": "providers",
   "devin-adapter.test.ts": "providers",
+  "devin-chat-wire-fixes.test.ts": "providers",
   "devin-cli-authmode-migration.test.ts": "providers",
   "devin-effort-ladder.test.ts": "providers",
   "devin-family-resolution.test.ts": "providers",

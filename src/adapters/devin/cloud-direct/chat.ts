@@ -39,6 +39,7 @@ import { getCachedCatalog, ModelNotAvailableError, type CacheEntry } from './cat
 import { anySignal, cancelBodyOnAbort } from '../../../lib/abort.js';
 import { parseRetryAfterFromMessage } from '../../../lib/retry-delay.js';
 import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
+import { normalizeDevinToolParameters } from './tool-schema.js';
 
 /**
  * Connect-RPC streaming inactivity timeout. If the cloud sends zero bytes
@@ -175,6 +176,7 @@ export function allocateCascadeId(): string {
  *   #3 prompt: string                          (text content)
  *   #4 num_tokens: int                          (rough estimate)
  *   #5 safe_for_code_telemetry: bool            (1 = ok to log)
+ *   #9 tool_result_is_error: bool               (tool prompts only)
  *   #10 images: repeated ImageData              (multimodal)
  *   #11 thinking: string                        (assistant reasoning, replayed)
  *   #12 signature: string                       (opaque attestation for #11)
@@ -218,6 +220,7 @@ function encodeChatMessagePrompt(
     thinking?: string;
     signature?: string;
     signatureType?: string;
+    isError?: boolean;
   },
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
@@ -234,6 +237,9 @@ function encodeChatMessagePrompt(
   if (opts?.toolCallId) {
     parts.push(encodeString(7, opts.toolCallId));
   }
+  // Accepted live on a tool prompt, and the model reported the failure from the
+  // flag alone, so a failed tool result needs no in-band text marker.
+  if (opts?.isError) parts.push(encodeVarintField(9, 1));
   // Assistant message with tool_calls: encode each as a ChatToolCall.
   if (opts?.toolCalls && opts.toolCalls.length > 0) {
     for (const tc of opts.toolCalls) {
@@ -257,21 +263,16 @@ function encodeChatMessagePrompt(
 const SOURCE_BY_ROLE: Record<string, number> = {
   user: 1,
   assistant: 2,
-  // NOTE: do not send source=3 (SYSTEM) directly — the Codeium chat backend
-  // returns "third-party model provider is experiencing issues" when any
-  // ChatMessagePrompt has source=SYSTEM. The captured LS upstream traffic
-  // shows the IDE inlines system context into the *user* prompt (source=1)
-  // wrapped in <additional_metadata>...</additional_metadata>. We collapse
-  // role:'system' messages into the next user turn before building the
-  // proto — see `collapseSystemIntoUser` below.
+  // Never sent as a prompt source: the leading system text goes in request #2,
+  // and a later system message is collapsed into the next user turn below.
   system: 1,
   tool: 4,
 };
 
 /**
- * Collapse OpenAI-style messages so all `role:'system'` entries are inlined
- * into the immediately-following user message, matching the wire format the
- * IDE uses. Cognition's chat backend rejects raw role=system entries.
+ * Collapse `role:'system'` entries that follow the conversation start into the
+ * immediately-following user message. The leading run of system messages never
+ * reaches here; it is the request's #2 system prompt.
  *
  *   [{system: "S1"}, {system: "S2"}, {user: "U1"}, {assistant: "A1"}, {user: "U2"}]
  *
@@ -428,6 +429,8 @@ export interface ChatHistoryItem {
   thinking?: string;
   signature?: string;
   signature_type?: string;
+  /** For `role: 'tool'` only — the tool failed. Encoded as ChatMessagePrompt #9. */
+  is_error?: boolean;
 }
 
 /**
@@ -535,8 +538,8 @@ interface BuildArgs {
   messages: ChatHistoryItem[];
   cascadeId: string;
   /**
-   * GetChatMessageRequest #22. Optional because it is omitted on a first turn;
-   * the working client only reuses one across a later tool loop.
+   * GetChatMessageRequest #17 prompt_id. Optional because it is omitted on a
+   * first turn; the working client only reuses one across a later tool loop.
    */
   promptId?: string;
   sessionId: string;
@@ -639,7 +642,7 @@ export function sanitizeToolDescriptionForCognitionForTests(description: string)
   return sanitizeToolDescriptionForCognition(description);
 }
 
-function encodeToolDef(tool: ToolDef): Buffer {
+function encodeToolDef(tool: ToolDef, modelUid: string): Buffer {
   const rawDesc = sanitizeToolDescriptionForCognition(tool.description ?? '');
   const desc =
     rawDesc.length > MAX_TOOL_DESC_LEN
@@ -648,7 +651,7 @@ function encodeToolDef(tool: ToolDef): Buffer {
   return Buffer.concat([
     encodeString(1, tool.name),
     encodeString(2, desc),
-    encodeString(3, JSON.stringify(tool.parameters ?? {})),
+    encodeString(3, JSON.stringify(normalizeDevinToolParameters(modelUid, tool.parameters ?? {}))),
   ]);
 }
 
@@ -667,9 +670,20 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     cloudChatShape: true,
   });
 
-  // System messages must be inlined into the user turn (Cognition cloud
-  // rejects source=3). See `collapseSystemIntoUser` for the format.
-  const collapsed = collapseSystemIntoUser(args.messages);
+  // The leading system messages become request #2. Measured live on swe-1-6
+  // with a ~6.7k-token system prompt: turn 2 read 6688 of 6715 prompt tokens
+  // from cache in #2, against 7072 of 7097 when the same text was collapsed
+  // into the first user prompt, so the cache ratio is unchanged and the prompt
+  // is smaller. The model obeyed an instruction given only in #2.
+  const firstNonSystem = args.messages.findIndex((m) => m.role !== 'system');
+  const leadingSystem = firstNonSystem === -1 ? args.messages : args.messages.slice(0, firstNonSystem);
+  const systemPrompt = leadingSystem
+    .map((m) => normalizeContent(m.content)
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text).join('\n'))
+    .filter(Boolean)
+    .join('\n\n');
+  const collapsed = collapseSystemIntoUser(args.messages.slice(leadingSystem.length));
   const promptParts = collapsed.map((m) =>
     encodeMessage(
       3,
@@ -686,6 +700,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
           thinking: m.role === 'assistant' ? m.thinking : undefined,
           signature: m.role === 'assistant' ? m.signature : undefined,
           signatureType: m.role === 'assistant' ? m.signature_type : undefined,
+          isError: m.role === 'tool' ? m.is_error : undefined,
         },
       ),
     ),
@@ -694,7 +709,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   const completion = encodeCompletionConfiguration(args.completionOpts ?? {});
 
   const toolParts: Buffer[] = (args.tools ?? []).map((t) =>
-    encodeMessage(10, encodeToolDef(t)),
+    encodeMessage(10, encodeToolDef(t, args.modelUid)),
   );
 
   // Field layout from mitm capture of the LS:
@@ -704,15 +719,15 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   //   #8  completion_configuration
   //   #10 tools (repeated ChatToolDefinition)
   //   #13 prompt_cache_options
+  //   #15 CortexTrajectoryReference
   //   #16 cascade_id (string)
+  //   #17 prompt_id (string)
   //   #21 chat_model_uid (string)
-  //   #22 prompt_id (string)
+  //   #22 execution_id (string)
   return Buffer.concat([
     encodeMessage(1, metadata),
-    // #2 system_prompt is always written, empty when the caller had none. The
-    // system turn is separately collapsed into the first user message because
-    // source=SYSTEM is refused; this field is the one the wire expects here.
-    encodeString(2, ''),
+    // #2 system_prompt is always written, empty when the caller had none.
+    encodeString(2, systemPrompt),
     ...promptParts,
     encodeVarintField(7, args.requestType ?? 5),
     encodeMessage(8, completion),
@@ -724,7 +739,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     // it and records real savings; sending it unconditionally matches both the
     // native client and CLIProxyAPIPlus, which places it outside its tools gate.
     encodeMessage(13, encodeVarintField(1, PROMPT_CACHE_EPHEMERAL)),
-    // #15 session model config: { id, turn, 4 }. Present on every verified
+    // #15 CortexTrajectoryReference: { id, 1, 4 }. Present on every verified
     // request.
     encodeMessage(15, Buffer.concat([
       encodeString(1, crypto.randomUUID()),
@@ -734,9 +749,9 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     encodeString(16, args.cascadeId),
     encodeVarintField(20, 1),
     encodeString(21, args.modelUid),
-    // #22 is deliberately omitted. It is a user-exchange id that only appears
-    // from the second turn onward and is reused across that turn's tool loop; a
-    // fresh per-request uuid matches neither shape.
+    // #17 prompt_id is deliberately omitted. It is a user-exchange id that only
+    // appears from the second turn onward and is reused across that turn's tool
+    // loop; a fresh per-request uuid matches neither shape.
   ]);
 }
 

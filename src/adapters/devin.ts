@@ -17,6 +17,7 @@ import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
 import { isProviderIssuedThinkingSignature } from "../responses/reasoning-envelope";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { devinContextOverflowEvent, isDevinHistoryOverflow } from "./devin/context-overflow";
 
 /**
  * Combine two usage frames from one turn by keeping the larger count per field.
@@ -519,16 +520,11 @@ function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
     };
   }
   if (message.role === "toolResult") {
-    const wireContent = mapOcxContentToWire(message.content);
-    const toolContent = message.isError
-      ? (typeof wireContent === "string"
-          ? `ERROR: ${wireContent}`
-          : [{ type: "text", text: "ERROR:" } as ContentPart, ...wireContent])
-      : wireContent;
     return {
       role: "tool",
-      content: toolContent,
+      content: mapOcxContentToWire(message.content),
       tool_call_id: message.toolCallId,
+      ...(message.isError ? { is_error: true } : {}),
     };
   }
   return undefined;
@@ -695,6 +691,11 @@ export function createDevinAdapter(
       let openToolId: string | undefined;
       let usage: OcxUsage | undefined;
       let stopReason: string | undefined;
+      // Kept outside the try so the catch can tell an oversized history from a bad request.
+      let producedOutput = false;
+      let maxInputTokens: number | undefined;
+      let messages: ChatHistoryItem[] = [];
+      let tools: ToolDef[] | undefined;
 
       const closeOpenTool = () => {
         if (!openToolId) return;
@@ -704,6 +705,8 @@ export function createDevinAdapter(
 
       try {
         // Read the selected UID's catalog row, not the picker's collapsed base.
+        messages = mapOcxMessagesToDevin(parsed);
+        tools = mapOcxToolsToDevin(parsed.context.tools);
         const maxOutputTokens = resolveDevinMaxOutputTokens(
           provider, modelUid, parsed.options.maxOutputTokens, catalog?.byUid.get(modelUid),
         );
@@ -718,8 +721,8 @@ export function createDevinAdapter(
           apiServerUrl: host,
           modelUid,
           catalog,
-          messages: mapOcxMessagesToDevin(parsed),
-          tools: mapOcxToolsToDevin(parsed.context.tools),
+          messages,
+          tools,
           cascadeId,
           completionOpts: {
             ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -746,6 +749,7 @@ export function createDevinAdapter(
             emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false, ...(usage ? { usage } : {}) });
             return;
           }
+          if (event.kind === "text" || event.kind === "reasoning" || event.kind === "tool_call_start") producedOutput = true;
           if (event.kind === "text") {
             closeOpenTool();
             if (event.text) emit({ type: "text_delta", text: event.text });
@@ -818,6 +822,12 @@ export function createDevinAdapter(
         // The Responses boundary already maps this local refusal to its structured 429 code.
         // Converting it to an adapter event would make it an ordinary untyped upstream error.
         if (error instanceof SendBudgetExhaustedError) throw error;
+        if (error instanceof CloudChatError && isDevinHistoryOverflow({
+          code: error.code, producedOutput, modelUid, contextWindow: maxInputTokens, messages, tools,
+        })) {
+          emit({ ...devinContextOverflowEvent(), ...(usage ? { usage } : {}) });
+          return;
+        }
         const message = error instanceof CloudChatError
           ? ("Devin cloud error" + (error.code ? " " + error.code : "") + ": " + error.message)
           : error instanceof Error ? error.message : String(error);
