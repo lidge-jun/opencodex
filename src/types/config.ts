@@ -903,6 +903,12 @@ export interface OcxConfig {
   stallTimeoutSec?: number;
   /** Connect timeout (ms) for upstream fetch — covers DNS, TCP, TLS, and response header. Default 200000. */
   connectTimeoutMs?: number;
+  /**
+   * Streaming Chat Completions first-output failover, keyed by requested model id. When the mapped
+   * model sends no content, reasoning or tool-call delta within `afterMs`, the attempt is aborted and
+   * the same body is re-sent once to `to`. Unset (the default) disables it.
+   */
+  firstOutputFailover?: Record<string, { to: string; afterMs: number }>;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */

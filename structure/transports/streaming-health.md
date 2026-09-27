@@ -222,6 +222,23 @@ with seam heartbeats between bounded units. None of these clocks is a total gene
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
+## Chat first-output failover
+
+`src/server/first-output-failover.ts` wraps the `/v1/chat/completions` dispatch in
+`src/server/index/serve-options.ts`. It is inert unless `firstOutputFailover` maps the requested
+model. For a mapped streaming request it reads the first attempt until the first real delta
+(content, reasoning, tool call or finish) and, if `afterMs` passes first, aborts that attempt and
+re-dispatches the same body once to the mapped `to` model through the normal handler.
+
+Invariants, covered by `tests/server/first-output-failover.test.ts`:
+
+- Bytes already read are replayed to the client in order, then the stream is piped; nothing is
+  re-sent after a real delta arrived.
+- Non-streaming requests, unmapped models and non-OK first responses pass through with exactly one
+  dispatch.
+- The timed-out attempt is aborted, so its upstream stream is cancelled.
+
+
 ## WebSocket
 
 The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
