@@ -255,8 +255,12 @@ function readJournal(cleanInvalid = true): Journal | null {
   }
 }
 
-export function journalOwner(): JournalOwner | null {
-  const journal = readJournal();
+/**
+ * Who owns the journal. `readOnly` never deletes an unreadable journal: a background reader (the
+ * routing healer, `routing-healer.ts`) must not destroy recovery evidence it only looked at.
+ */
+export function journalOwner(options: { readOnly?: boolean } = {}): JournalOwner | null {
+  const journal = readJournal(options.readOnly !== true);
   if (!journal) return null;
   if (journal.owner?.kind === "client" && typeof journal.owner.apiKeyId === "string" && journal.owner.apiKeyId) {
     return { kind: "client", apiKeyId: journal.owner.apiKeyId };

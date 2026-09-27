@@ -874,9 +874,13 @@ describe("native fallback account preview", () => {
     expect(entitlementCalls).toBe(2);
     // Final auth is authoritative and sees the second snapshot, not the preview snapshot.
     expect(finalAuth).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    if (finalAuth?.kind === "pool") expect(finalAuth.accessToken).toBe("pool-a_token");
     expect((logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo)
       .toBe("gpt-daybreak-blue-latest");
-    expect(capture.auths[0]).toContain("pool-a_token");
+    // A pool quota prime can reach /wham/usage before or after the response send.
+    // Only the response wire proves that final-route auth used the second snapshot.
+    expect(capture.urls.flatMap((url, index) => url.endsWith("/codex/responses")
+      ? [capture.auths[index]] : [])).toEqual(["Bearer pool-a_token"]);
   });
 
   test("pending preview entitlement errors release admission after preserving the original path", async () => {

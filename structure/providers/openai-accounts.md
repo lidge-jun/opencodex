@@ -149,6 +149,24 @@ switch accounts, reset threads, or mutate affinity.
 
 > Decision record: [ADR-0089](../decisions/ADR-0089-process-local-affinity-diagnostics.md)
 
+## Idle-window steering
+
+`codexPool.startIdleWindows` is an optional boolean that defaults to `false`. When it is `true`,
+`src/codex/routing/idle-window.ts` may steer a new unbound real request after conversation and
+family affinity have been checked. An explicit account pin and manual account preference take
+precedence. Independent model quota scopes are excluded. The selection does not move the shared
+active cursor, and normal strategy selection continues for other conversations.
+
+An account is eligible only when its observed short quota is exactly 0%, its short window is
+explicitly 18,000 seconds, the observation is no older than five minutes, and the observed reset
+is within 60 seconds of `observation + 5h`. The synchronous process-local reservation prevents
+duplicate selection of the same window. Its deadline is at least five hours and one minute after
+selection; an observation after that deadline is required before that account can be steered again. The reservation
+map is cleared on proxy restart and has no disk persistence.
+
+This is request steering only. It sends no synthetic request and starts no timer. The ordinary
+strategy path remains responsible for subsequent unbound selections.
+
 ## Account identity and store concurrency
 
 Pool mode needs stable public names and a store that survives concurrent refresh:

@@ -45,6 +45,8 @@ modelProfile:
 
 Keep your chosen `modelProfile.default` to apply it when plain `gjc` starts. The managed integration owns only `providers.opencodex` in `models.yml`; refreshing or disabling that provider does not rewrite your preset choice. Refresh the integration after changing the exported model selection.
 
+GJC models with a supported reasoning-effort ladder export `reasoning: true`, `thinking.levels`, and `compat.supportsReasoningEffort`, so GJC can offer an effort choice. Native Codex models receive their standard ladder even when the catalog omits it. Models without a known ladder omit these fields; `none` and `ultra` are not offered because `none` sends no effort and `ultra` folds to `max` on the wire. Refresh the integration to update these model options.
+
 The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
 `providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort
 variants, so both are written and kept in sync; they name the same provider and model ids, and

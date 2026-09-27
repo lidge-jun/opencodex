@@ -53,7 +53,7 @@ import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
-import { clearManualCodeSlot, ensureManualCodeSlot, kiroLoginSettling, loginAbort, loginState, waitForManualLoginCode } from "./login-flow-state";
+import { clearManualCodeSlot, ensureManualCodeSlot, kiroLoginSettling, loginAbort, loginState, waitForManualLoginCode, type OAuthLoginHint } from "./login-flow-state";
 export { reconcileOAuthFlowState, submitManualLoginCode } from "./login-flow-state";
 import { randomUUID } from "node:crypto";
 export {
@@ -1626,6 +1626,10 @@ export async function runLogin(
   const loginProviderConfig = preflightConfig
     ? (def.resolveProviderConfig?.(preflightConfig) ?? preflightConfig.providers[provider] ?? def.providerConfig)
     : def.providerConfig;
+  if (provider === "kiro" && opts?.reauthAccountId
+    && getAccountSet("kiro")?.accounts.some(a => a.id === opts.reauthAccountId && a.loginOrigin === "kiro-device")) {
+    throw new Error("Native Kiro device accounts cannot be reauthenticated with kiro-cli; remove and re-add the account.");
+  }
   const rawCred = await def.login(ctrl, opts, loginProviderConfig);
   const cred: OAuthCredentials = rawCred.source ? rawCred : { ...rawCred, source: "oauth" };
   const settleKiroTransaction = deps.settleKiroLoginTransaction ?? settleKiroLoginTransaction;
@@ -1653,6 +1657,7 @@ export async function runLogin(
       }
       await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred, {
         assertBeforePersist: deps.assertCurrentOwner,
+        rotateLoginId: true,
       });
     } else {
       const saveOptions = {
@@ -1764,7 +1769,7 @@ export interface OAuthAccountSummary {
  * the config at its request boundary and resolves the policy there with `emailMaskingEnabled`.
  * The default masks, so every existing caller keeps today's behaviour.
  */
-export function getLoginStatus(provider: string, maskEmails = true): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
+export function getLoginStatus(provider: string, maskEmails = true): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; hint?: OAuthLoginHint; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
   const cred = getCredential(provider);
   const st = loginState.get(provider);
   const set = getAccountSet(provider);
@@ -1795,6 +1800,7 @@ export function getLoginStatus(provider: string, maskEmails = true): { loggedIn:
     source: cred?.source,
     error: st?.error,
     done: st?.done ?? false,
+    ...(st?.hint && !st.done ? { hint: { url: st.hint.url, instructions: st.hint.instructions, deviceCode: st.hint.deviceCode } } : {}),
     ...(set ? { activeAccountId: set.activeAccountId, accounts } : {}),
   };
 }
@@ -1849,8 +1855,15 @@ export async function startLoginFlow(
     let urlResolved = false;
     const ctrl: OAuthController = {
       onAuth: ({ url, instructions, deviceCode }) => {
-        urlResolved = true;
-        resolve({ url, instructions, deviceCode });
+        if (abort.signal.aborted || loginAbort.get(provider)?.controller !== abort) return;
+        // Device approval can fall back to manual input. Replace, never merge: the
+        // previous device code must disappear when the provider changes the next step.
+        const hint = { url, instructions, deviceCode };
+        loginState.set(provider, { done: false, hint });
+        if (!urlResolved) {
+          urlResolved = true;
+          resolve({ ...hint });
+        }
       },
       onProgress: () => {},
       // GUI fallback when the browser cannot hit the loopback callback server.

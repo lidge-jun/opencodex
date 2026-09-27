@@ -292,10 +292,8 @@ describe("GET /api/usage", () => {
         // A distinct key forces a fresh custom scan.
         url.searchParams.set("until", "1");
         const response = await fetch(url);
-        expect(response.status).toBe(200); // existing Usage UI reads the error field
-        expect(await response.json()).toMatchObject({
-          range: "today", customWindow: true, since: 0, until: 1, error: "read_failed",
-        });
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({ error: "read_failed" });
       } finally {
         scanSpy.mockRestore();
       }
@@ -942,17 +940,14 @@ describe("GET /api/usage", () => {
     }
   });
 
-  test("read failure keeps the normalized surface in the fallback response", async () => {
+  test("read failure is unavailable instead of a successful measured-zero report", async () => {
     mkdirSync(join(testDir, "usage.jsonl"));
     const server = startServer(0);
     try {
       const res = await fetch(new URL("/api/usage?surface=claude", server.url));
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(500);
       const body = await res.json();
-      expect(body.surface).toBe("claude");
-      expect(body.summary.requests).toBe(0);
-      expect(body.accounts).toEqual([]);
-      expect(body.error).toBe("read_failed");
+      expect(body).toEqual({ error: "read_failed" });
     } finally {
       await server.stop(true);
     }

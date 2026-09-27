@@ -20,7 +20,8 @@ const CLAUDE_USAGE = `Usage:
       [--compact-window <tokens|default>] [--inject-agents <on|off>]
       [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
       [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
-      [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]`;
+      [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]
+  ocx claude config set --first-party <on|off> [--json]`;
 
 const GROK_USAGE = `Usage:
   ocx grok [status] [--json]
@@ -74,6 +75,7 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     if (action !== "set") throw new CliUsageError(`unknown Claude config command ${action}`, CLAUDE_USAGE);
     const body: Record<string, unknown> = {};
     const enabled = takeBooleanOption(args, "--enabled");
+    const firstParty = takeBooleanOption(args, "--first-party");
     const authMode = takeOption(args, "--auth-mode");
     const systemEnv = takeBooleanOption(args, "--system-env");
     const fastMode = takeBooleanOption(args, "--fast-mode");
@@ -116,6 +118,12 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     const vision = sidecar(visionModel, visionBackend);
     if (web) body.webSearchSidecar = web;
     if (vision) body.visionSidecar = vision;
+    if (firstParty !== undefined) {
+      if (Object.keys(body).length > 0) {
+        throw new CliUsageError("--first-party must be set on its own (it writes Claude Code's settings file immediately)", CLAUDE_USAGE);
+      }
+      body.cliFirstParty = firstParty;
+    }
     if (Object.keys(body).length === 0) throw new CliUsageError("at least one Claude setting is required", CLAUDE_USAGE);
     const result = await runtimeRequest("/api/claude-code", { method: "PUT", body: JSON.stringify(body) }, deps);
     printData(result, wantsJson, ["Claude Code settings updated."]);

@@ -333,6 +333,138 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
+  test("interleaved parallel tool calls are serialized per block and complete the leg", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const wireName = bridge.emittedNameMap.get(cliName)!;
+    const startAt = (index: number, id: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_start", index, content_block: { type: "tool_use", id, name: cliName } },
+    });
+    const deltaAt = (index: number, part: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: part } },
+    });
+    const stopAt = (index: number) => ({ type: "stream_event", event: { type: "content_block_stop", index } });
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = (_cmd, _args) => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        // CodeBuddy emits genuinely interleaved blocks for parallel calls: starts arrive
+        // before earlier blocks stop and argument deltas alternate across indices (captured
+        // from the live CLI on 2026-09-25). Single-slot accounting led to a spurious
+        // "incomplete tool call" 502 at message_stop.
+        startAt(1, "tu_a"),
+        startAt(2, "tu_b"),
+        deltaAt(1, "{\"command\":[\"ec"),
+        deltaAt(2, "{\"command\":[\"ls"),
+        deltaAt(1, "ho\"]}"),
+        deltaAt(2, "\"]}"),
+        stopAt(2),
+        stopAt(1),
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.map(e => e.type)).toEqual([
+      "tool_call_start",
+      "tool_call_delta",
+      "tool_call_delta",
+      "tool_call_end",
+      "tool_call_start",
+      "tool_call_delta",
+      "tool_call_delta",
+      "tool_call_end",
+      "done",
+    ]);
+    // Blocks are emitted atomically in stop order: tu_b closed first.
+    expect(events[0]).toMatchObject({ type: "tool_call_start", id: "tu_b", name: wireName });
+    expect(events[1]).toMatchObject({ arguments: "{\"command\":[\"ls" });
+    expect(events[4]).toMatchObject({ type: "tool_call_start", id: "tu_a", name: wireName });
+    expect(events[5]).toMatchObject({ arguments: "{\"command\":[\"ec" });
+    expect(events[6]).toMatchObject({ arguments: "ho\"]}" });
+    expect(events[8]).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
+    expect(child?.killed).toBe(true);
+  });
+
+  test("an indexless argument delta with two open tool blocks fails before emitting a tool call", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const frame = (event: Record<string, unknown>) => ({ type: "stream_event", event });
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = () => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        frame({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tu_a", name: cliName } }),
+        frame({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_b", name: cliName } }),
+        frame({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"a":' } }),
+        inputJsonDelta("2"),
+        frame({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "1}" } }),
+        frame({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"a":3}' } }),
+        frame({ type: "content_block_stop", index: 1 }),
+        frame({ type: "content_block_stop", index: 2 }),
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    // Dropping the ambiguous "2" would still leave valid JSON ({"a":1}) and a successful turn.
+    expect(events).toEqual([expect.objectContaining({ type: "error", code: "protocol_error", status: 502, retryable: false })]);
+    expect(child?.killed).toBe(true);
+  });
+
+  test("a parallel batch on one shared block index completes every call in the leg", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const wireName = bridge.emittedNameMap.get(cliName)!;
+    const start = (id: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id, name: cliName } },
+    });
+    const delta = (part: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: part } },
+    });
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = (_cmd, _args) => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        // Live capture 2026-09-26 (CodeBuddy 2.158.0, kimi-k3-1): a parallel batch reuses one
+        // content-block index — alpha starts, streams its complete arguments, then beta starts
+        // on the same index with no stop for alpha; only the final block receives a stop.
+        start("tu_a"),
+        delta("{\"command\":[\"echo\"]}"),
+        start("tu_b"),
+        delta("{\"command\":[\"ls\"]}"),
+        { type: "stream_event", event: { type: "content_block_stop", index: 2 } },
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.map(e => e.type)).toEqual([
+      "tool_call_start",
+      "tool_call_delta",
+      "tool_call_end",
+      "tool_call_start",
+      "tool_call_delta",
+      "tool_call_end",
+      "done",
+    ]);
+    expect(events[0]).toMatchObject({ type: "tool_call_start", id: "tu_a", name: wireName });
+    expect(events[1]).toMatchObject({ arguments: "{\"command\":[\"echo\"]}" });
+    expect(events[3]).toMatchObject({ type: "tool_call_start", id: "tu_b", name: wireName });
+    expect(events[4]).toMatchObject({ arguments: "{\"command\":[\"ls\"]}" });
+    expect(events[6]).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
+    expect(child?.killed).toBe(true);
+  });
+
   test("a tool call before the init frame fails closed with tool_bridge_init_missing", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
@@ -357,6 +489,28 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     // No tool lifecycle events surface from an unvalidated bridge.
     expect(events.some(e => e.type === "tool_call_start")).toBe(false);
     expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("a tool start before init stays invalid when the block stops after init", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        toolUseStart(cliName),
+        INIT_OK,
+        BLOCK_STOP,
+        MESSAGE_STOP,
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "tool_bridge_init_missing",
+      status: 502,
+      retryable: false,
+    });
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
   });
 
   test("a result frame before message_stop defers to the synthesized tool_use done", async () => {

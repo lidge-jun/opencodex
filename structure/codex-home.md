@@ -141,6 +141,72 @@ cannot leave the process fenced for the servers that follow it; an entry created
 the same home arms its own gate, and the retired generation's late convergence writes are ignored.
 `tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
+A sibling instance — `ocx start --port <other>` while a live proxy serves the configured port, the
+`"sibling"` outcome of `decideStartWithLiveOwner` in `src/cli/dispatch.ts` — gets past the spend-ledger
+lease only with its own `OPENCODEX_HOME`, and still shares this Codex home, `~/.claude`, `~/.grok` and
+the launchd domain with the live owner. `handleStart` marks the process through
+`src/codex/sibling-start.ts` before the server binds, and the mark is one-way for the process's
+lifetime. It closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
+`sibling`, so startup sync, cache invalidation, Grok, the retained catalog writers and the native-main
+lifecycle stand down (the sibling runs the no-op lifecycle, so it never contends for the owner lease;
+its data-plane `auth.json` refresh still runs under the machine-wide exclusive claim). Owner-level
+checks cover what the gate reads backwards or never reaches: both restore entry points and the
+injector return before their external-provider journal cleanup, the management catalog funnel,
+`src/integrations/catalog-refresh.ts`, `connectClient`/`syncConnectedClient`/`disconnectClient`,
+the Claude roster and system env refuse, the exit teardown comes from `decideStartExitTeardown`, and
+`POST /api/stop` answers `sharedTeardown: "not-owned"` without touching the service manager. The guard refuses the native-main
+profile and reauth routes among the others listed in
+[`gui-and-management-api.md`](gui-and-management-api.md#api-ownership). The runtime record carries
+`siblingOfPort`, and `ocx stop` of such a runtime, live or left behind by a hard kill, claims no
+receipt, runs no shared teardown, does not revert the system env and does not ask the service
+manager: a sibling never runs under one, so an installed service is the live owner's. When the
+recorded sibling no longer answers and discovery reaches the owner instead (`siblingStopFoundOwner`),
+the stop leaves that proxy running, clears the stale sibling records and exits 0. A clean sibling
+exit removes that record; a later `ocx stop` refuses a discovered listener unless it proves possession of this home's runtime-record secret through a fresh `/healthz` challenge, so the configured-port fallback cannot stop the owner. The sibling's own drain-and-restart (`src/server/management/system-restart.ts`) and standalone recycle
+(`src/client/runtime.ts`) hand the mark to their replacement through `OCX_SIBLING_OF_PORT` and
+`OCX_SIBLING_HANDOFF_NONCE`, backed by a one-use `src/codex/sibling-handoff.ts` record bound to the
+prior sibling runtime and `OPENCODEX_HOME`. Connected-client recycle issues it before stopping
+the listener or removing that runtime record. `handleStart` consumes the record before any probe;
+a forged port env or replay grants no sibling status. A valid replacement stays a sibling while
+the owner is down, and its journal recovery remains skipped.
+Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`
+auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
+through `withoutSiblingMarker`.
+
+The startup sync is not the owner's last look at `config.toml`. Once it settles, `handleStart`
+starts `src/codex/routing-healer.ts` in an unmarked owner (never in a sibling or the
+connected-client runtime), and the exit cleanup stops it before any teardown. An unref'd timer
+reads `config.toml` every 10 s; unchanged bytes cost nothing more. `src/codex/routing-drift.ts`
+calls routing foreign only when it is opencodex-owned (the marker line, the journaled value, or the
+`opencodex` provider table), names a loopback endpoint with an explicit port that is neither the
+bound port nor the loopback listener's, and no external `model_provider` is selected, so native,
+user, custom, external, restored, LAN and admission-token routing never is. Every distinct foreign
+hostname and port is probed with `probeEndpointLiveness`: a live opencodex is left alone with one
+log line per endpoint, `unknown`
+never advances the streak, and a heal needs dead on at least two probes spanning 20 s, dead again
+on a final probe, and every gate open (no sibling mark, no recycle or drain, the runtime record
+names this process, Codex ON and not hub-gated, no admission-token routing, a write target this
+process serves, no client connection and no client-owned journal). The heal is
+`injectCodexConfig` with no catalog path, a 1 s lock timeout and a synchronous `beforeClientWrite`
+guard that re-reads `config.toml` under the lock and aborts if any admitted bytes or destination
+endpoint changed. A coordinated
+home re-reads its admission under the lock before that guard runs, so a rewrite between plan and
+lock comes back as a stale-admission refusal instead: any refused or failed write whose
+`config.toml` bytes moved since the proof is the same abort, with no wait and no warning, and the
+next heal needs a fresh streak. A busy lock retries on the next tick. A refusal over the proven
+bytes waits 10 minutes, and that wait ends once routing is no longer foreign. Six attempts, or a
+fourth heal, within an hour pause probing and writing until the oldest one leaves the hour; the
+loop then resumes with a fresh streak and never stops for good. An `unknown` answer is asked again
+every 30 s, not every tick. Each heal prints one warning; a failure line carries only the first
+message line, with home paths masked. Detection, gates and probes read the
+journal only through the read-only accessors, `journalOwner({ readOnly: true })` included, so
+watching never deletes an unreadable journal; only a heal write goes through the injector's
+ordinary journal handling. Threads Codex opened while routing named the dead port keep that address until they are
+reopened. `ocx status` reports the same drift, also while the loop is gated off, through
+`codexRoutingDriftWarning` in `src/cli/status.ts`, which reads the journal the same read-only way.
+It says nothing in a sibling's home, whose routing names the owner beside it, and it promises only
+`ocx sync`, because it cannot see whether a healer runs, is gated, or is paused.
+
 The native main slot also accepts one same-identity device reauth (#3898):
 `/api/codex-auth/main/reauth-device` (start/status/cancel) plus
 `ocx account main reauth`. The grant is the OpenAI deviceauth grant already

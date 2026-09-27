@@ -40,6 +40,13 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 
 > Decision record: [ADR-0029](../decisions/ADR-0029-windows-startup-ownership-listing-reuse.md)
 
+## Windows config-directory handle release
+
+`src/server/index.ts` resolves `server.stop(true)` only after the config-directory hardening flight
+and any `icacls.exe` child that outlived its deadline have reaped. `src/config/paths.ts` owns the
+barrier: a timeout verdict alone does not make the home removable. The contract is exercised by
+`tests/server/server-stop-config-hardening.test.ts`.
+
 ## Service-manager probe
 
 `src/service-manager-probe.ts` (`inspectServiceManagerInstallation`) reports what the platform
@@ -266,7 +273,56 @@ so an override can never shorten the budgets that prevent a duplicate proxy, and
 `src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
 constants in child processes.
 
-`src/update/install-detection.mjs` examines both lexical and resolved package paths. An enclosing mise installation owns its nested npm/aube package only when the adjacent `.mise.backend.toml` identifies the containing tool alias and the canonical `npm:@bitkyc08/opencodex` backend. That verified outer owner takes precedence over the inner npm layout. Two verified owners whose tool roots differ only by a symlinked ancestor (macOS `/var` -> `/private/var`) are compared by canonical directory and count as one install. An unreadable or contradictory ownership boundary on either path takes precedence over a verified owner on the other path, refusing mutation without inventing a tool name or recovery command. One boundary is not OpenCodex's at all: on Windows, npm -g under a mise-managed Node puts the package directly in `<mise>/installs/node/<version>/node_modules`, whose adjacent record is Node's own (`short = "node"`, `full = "core:node"`). That exact record with the package directly in the runtime's global `node_modules` is an npm install and falls through to npm detection; any other backend, alias or deeper layout stays fail-closed (`tests/update/update-mise-node-runtime.test.ts`). `ocx update`, dashboard update checks, and update workers expose `installer: "mise"`; checks remain read-only, while mutation is refused with `mise upgrade <verified-alias>` before any proxy stop, package write, or worker creation. The package-tree integrity guard remains active for mise packages.
+`src/update/install-detection.mjs` examines both lexical and resolved package paths. An enclosing mise installation owns its nested npm/aube package only when the adjacent `.mise.backend.toml` identifies the containing tool alias and the canonical `npm:@bitkyc08/opencodex` backend. That verified outer owner takes precedence over the inner npm layout. Two verified owners whose tool roots differ only by a symlinked ancestor (macOS `/var` -> `/private/var`) are compared by canonical directory and count as one install. An unreadable or contradictory ownership boundary on either path takes precedence over a verified owner on the other path, refusing mutation without inventing a tool name or recovery command. One boundary is not OpenCodex's at all: on Windows, npm -g under a mise-managed Node puts the package directly in `<mise>/installs/node/<version>/node_modules`, whose adjacent record is Node's own (`short = "node"`, `full = "core:node"`). That exact record with the package directly in the runtime's global `node_modules` is an npm install and falls through to npm detection; any other backend, alias or deeper layout stays fail-closed (`tests/update/update-mise-node-runtime.test.ts`). `ocx update`, dashboard update checks, and update workers expose `installer: "mise"`; checks remain read-only, while mutation is refused with `mise upgrade <verified-alias>` before any proxy stop, package write, or worker creation. The package-tree integrity guard remains active for mise packages, and the managed Linux service additionally follows its mise package launcher onto an upgraded version ([package-tree integrity fence](docs-and-release.md#package-tree-integrity-fence)).
+
+## Restart handoff
+
+A dashboard drain-and-restart (`src/server/management/system-restart.ts`, which is also the restart
+after a join into a Child) and the client runtime's standalone recycle (`src/client/runtime.ts`)
+replace their process through `src/server/restart-replacement.ts`. Every replacement `ocx start`
+carries `OCX_RESTART_PARENT_PID`. `handleStart` consumes the marker before its first probe and
+honors it only when it names the process's real parent. When the live owner that probe finds is
+exactly that pid, `decideStartWithLiveOwner` answers `await-parent`, and `src/cli/restart-handoff.ts`
+waits up to 30 seconds for the parent to exit or stop answering (re-probing once a second) before it
+probes again; a parent that outlives the wait is refused like any live proxy. An ordinary start
+carries no marker and probes once.
+
+Only a handoff that waits for health (the drain completed) respawns a replacement that exits before
+it answers, at most twice, inside the one 70-second readiness budget. A spawn error is not retried.
+A parent-exit handoff (drain deadline, failed or rejected drain, listener-stop fallback) resolves as
+soon as the child spawned: the parent must exit to release what the replacement waits for, so it
+cannot watch for an early exit. The replacement's `await-parent` wait and the link-mode port reclaim
+cover the known transient causes there. Any other early exit on that path is a residual: no proxy
+serves the port until something runs `ocx start` again, and Codex keeps pointing at that port.
+
+The replacement's stdout and stderr go to `<configDir>/restart-handoff.log`: mode 0600, opened
+without following a symlink, recorded as an owned config path, and bounded at 256 KiB on both sides.
+A handoff empties the file before it opens it. The replacement keeps writing to it for its whole
+life, so the parent hands it `OCX_RESTART_HANDOFF_LOG=1` along with the file; `handleStart` consumes
+the flag and arms one unref'd 60-second timer (`armRestartHandoffLogCap`) that lstats the file and
+empties it at the cap through a fresh descriptor. A start without the flag arms nothing. The parent
+writes only timestamps, pids, ports, attempt counts, exit codes and errno labels, never an
+environment value.
+
+When every attempt fails while client state is `connected` (a join has committed), the parent marks
+recycling before `exit(1)`, so its exit cleanup keeps the Codex routing `connectClient` wrote
+instead of restoring native Codex; a standalone restart still restores. The standalone recycle
+waits for its replacement to answer, exits 1 when it never did, and falls back to `config.port`
+when the listener recorded none. A supervised process (`OCX_SERVICE=1`) never spawns and exits 1
+for its supervisor. Coverage: `tests/server/restart-replacement.test.ts`,
+`tests/cli/cli-restart-handoff.test.ts`, `tests/server/system-restart.test.ts` and
+`tests/clients/client-runtime.test.ts`.
+
+A process the desktop app spawned spawns no replacement at all. The app sets
+`OCX_DESKTOP_SUPERVISED=1` on its sidecar; `handleStart` consumes it with the other start markers and
+records the parent pid (`src/lib/system-restart-contract.ts`). While that parent is still this
+process's parent and alive, the drain-and-restart (completed and deadline paths alike) marks
+recycling and exits 75, the standalone recycle exits 75 once its cleanup ran, and the app starts the
+replacement itself ([desktop shell](../desktop-shell.md#keeping-the-runtime-alive)). This check runs before the service
+rule, because that app, not a service manager, is the parent. An app that crashed leaves the runtime
+re-parented or its parent dead, and the restart falls back to the detached replacement. Every
+detached replacement's environment drops the marker. Coverage:
+`tests/clients/desktop-supervised-restart.test.ts`.
 
 ## Package cache refresh
 
@@ -275,3 +331,5 @@ src/update/refresh-scheduler.ts owns the package cache timer and per-channel sin
 src/update/async-check.ts uses the existing owner-bound registry target with a bounded asynchronous child; pnpm owner discovery runs in src/update/pnpm-owner-worker.ts off the request loop. `src/update/notify.ts` writes successful results atomically and preserves a dismissal only for the same channel and version. The interactive pre-bind prompt reads the cache and does not launch a second detached refresh. `src/update/badge.ts` only reads the cache and reports unknown at 40 hours.
 
 The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.
+
+On Linux, a dashboard update worker started from the systemd user service is launched through `systemd-run --user --scope --quiet --collect` (`src/update/worker-launch.ts`), so it leaves the service cgroup before the updater stops `opencodex-proxy.service`; the default `KillMode=control-group` otherwise kills it with the proxy (#5750). The path applies only when `INVOCATION_ID` is set and a no-op scope probe succeeds; every other case keeps the plain detached spawn. `--scope` moves `systemd-run` itself into the scope and then execs the worker, so the recorded PID is the worker's (`tests/update/update-worker-launch.test.ts`).

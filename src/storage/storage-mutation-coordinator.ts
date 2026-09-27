@@ -34,7 +34,23 @@ export const MAX_ACTIVE_STORAGE_HOME_SLOTS = 32;
 const slots = new Map<string, ActiveSlot>();
 const slotGate = createAdmissionGate("storage_home_slots", MAX_ACTIVE_STORAGE_HOME_SLOTS);
 let releaseMisses = 0;
+let mutationEpoch = 0;
 let testHooks: StorageMutationCoordinatorTestHooks | null = null;
+
+/**
+ * Advances whenever a CODEX_HOME storage mutation finishes (coordinated cleanup, restore
+ * and policy runs on lease release; Log Guard maintenance through
+ * {@link noteStorageMutationCompleted}). An in-flight storage scan that started under an
+ * older epoch describes the tree before that mutation and must not answer a later read.
+ */
+export function storageMutationEpoch(): number {
+  return mutationEpoch;
+}
+
+/** Record a CODEX_HOME mutation that does not go through a coordinator slot. */
+export function noteStorageMutationCompleted(): void {
+  mutationEpoch += 1;
+}
 
 function slotKey(codexHome?: string): string {
   return resolve(codexHome ?? resolveCodexHomeDir());
@@ -79,6 +95,7 @@ export function tryBeginStorageMutation(
     release() {
       if (!active) return;
       active = false;
+      mutationEpoch += 1;
       const owner = slots.get(key);
       if (owner?.lease === ownerLease) slots.delete(key);
       lease.release();

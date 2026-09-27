@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { resolveAnthropicMessagesUrl } from "../../../src/adapters/anthropic";
 import { routeModel } from "../../../src/router";
 import { providerDestinationConfigError } from "../../../src/lib/destination-policy";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
@@ -141,4 +142,46 @@ test("the seeded https endpoint is still reachable with the opt-in set", () => {
 
   expect(baseUrl).toBe("https://gateway.example/v1");
   expect(warnings).toHaveLength(0);
+});
+
+/**
+ * Placeholder-probe contract (CodeQL js/polynomial-redos): the probe reports the
+ * first `{` closed by a later `}` — the same span `\{[^}]*\}` matched, including
+ * a `{` nested inside it — and rejects before the request is built.
+ */
+test("the placeholder probe reports the first closed brace span", () => {
+  expect(() => resolveAnthropicMessagesUrl({
+    baseUrl: "https://gateway.example/{region}/v1",
+  })).toThrow("anthropic baseUrl contains unresolved {region}");
+
+  // A second placeholder is not the one reported, and `[^}]*` admitted a nested
+  // `{`, so `{a{b}` reports the whole outer span.
+  expect(() => resolveAnthropicMessagesUrl({
+    baseUrl: "https://gateway.example/a{x}b{y}/v1",
+  })).toThrow("unresolved {x}");
+  expect(() => resolveAnthropicMessagesUrl({
+    baseUrl: "https://gateway.example/{a{b}/v1",
+  })).toThrow("unresolved {a{b}");
+});
+
+test("the placeholder probe accepts braces that never form a placeholder", () => {
+  // An unclosed `{` and a `}` before any `{` matched nothing under the regex
+  // and still resolve under the indexOf probe.
+  expect(resolveAnthropicMessagesUrl({
+    baseUrl: "https://gateway.example/{tenant",
+  })).toBe("https://gateway.example/{tenant/v1/messages");
+  expect(resolveAnthropicMessagesUrl({
+    baseUrl: "https://gateway.example/}tenant{",
+  })).toBe("https://gateway.example/}tenant{/v1/messages");
+});
+
+test("the placeholder probe stays linear on brace-only input", () => {
+  // `\{[^}]*\}` rescans the tail from every `{` start position on input with no
+  // closing brace, so the old regex is quadratic: 100k braces took ~1.2s, 300k take
+  // ~10s. The indexOf probe scans once, so it must finish far inside the deadline.
+  const started = performance.now();
+  expect(resolveAnthropicMessagesUrl({
+    baseUrl: "https://gateway.example/" + "{".repeat(300_000),
+  })).toContain("/v1/messages");
+  expect(performance.now() - started).toBeLessThan(1_000);
 });

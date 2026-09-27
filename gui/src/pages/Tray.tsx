@@ -1,12 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createBoundedFetch } from '../bounded-fetch';
 import { useI18n } from '../i18n/shared';
 import { formatTokens } from '../format-tokens';
 import { formatProviderDisplayName } from '../provider-icons';
+import { ProviderIcon } from '../components/provider-workspace/ProviderRail';
+import { quotaSeverity } from '../quota-summary';
 import { UsageCompanionChart } from './usage-companion-chart';
 import { companionTimelineQuery, companionTimelineProjection, type CompanionSettings, type CompanionSettingsResponse, type UsageTimeline } from './usage-companion-utils';
-import { fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, finite, parseAccounts, providerSources, quotaWindows, relativeReset, type TrayProvider, type TrayTotals, type TrayUsage } from './tray-data';
+import { accountSwitchRequest, fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, finite, parseAccounts, providerSources, quotaWindows, relativeReset, type TrayProvider, type TraySwitchKind, type TrayTotals, type TrayUsage } from './tray-data';
 
 declare global { interface Window { __OPENCODEX_TRAY_VISIBLE__?: boolean } }
+
+/** A switch that has not answered by then is reported as failed rather than left spinning. */
+const SWITCH_TIMEOUT_MS = 20_000;
 
 const incomplete = (data: TrayUsage | null | undefined) => data?.usageIncomplete || data?.historyTruncated || data?.entriesTruncated;
 
@@ -23,7 +29,30 @@ export default function Tray() {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const retry = () => setRevision(value => value + 1);
+  // Set after a successful switch: the pending row stays busy until the reload it started lands.
+  const awaitingRefresh = useRef(false);
+  // The same route and body the native panel sends; the dashboard session supplies the
+  // credentials. The switch settles only when the reload shows the runtime's own selection.
+  const switchAccount = async (provider: string, kind: TraySwitchKind, accountId: string) => {
+    setSwitching(`${provider}:${accountId}`);
+    setSwitchError(null);
+    const bounded = createBoundedFetch(SWITCH_TIMEOUT_MS);
+    try {
+      const request = accountSwitchRequest(provider, kind, accountId);
+      const response = await fetch(request.path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request.body), signal: bounded.signal });
+      if (!response.ok) throw new Error(String(response.status));
+      awaitingRefresh.current = true;
+      retry();
+    } catch {
+      setSwitching(null);
+      setSwitchError(t(kind === 'codex' ? 'codexAuth.switchFailed' : 'prov.accountSwitchFail'));
+    } finally {
+      bounded.clear();
+    }
+  };
 
   // Every post-await state write checks both effect disposal and the request's AbortSignal.
   // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect
@@ -49,7 +78,7 @@ export default function Tray() {
           try {
             const sources = providerSources(await json<unknown>('/api/config'));
             const rows = await Promise.all(sources.map(async source => {
-              if (!source.path) return { name: source.name, accounts: [] };
+              if (!source.path) return { name: source.name, switchKind: source.switchKind, accounts: [] };
               try {
                 const payload = await json<Record<string, unknown>>(source.path);
                 if (source.name === 'openai') {
@@ -58,9 +87,9 @@ export default function Tray() {
                     payload.activeCodexAccountId = selection.activeCodexAccountId ?? '__main__';
                   } catch { /* Missing selection is unknown, never inferred from quota. */ }
                 }
-                return { name: source.name, accounts: parseAccounts(payload) };
+                return { name: source.name, switchKind: source.switchKind, accounts: parseAccounts(payload) };
               }
-              catch { return { name: source.name, accounts: [], unavailable: true }; }
+              catch { return { name: source.name, switchKind: source.switchKind, accounts: [], unavailable: true }; }
             }));
             if (active()) { setProviders(rows); setQuotaError(false); hadSuccess = true; }
           } catch { if (active()) { setProviders([]); setQuotaError(true); } }
@@ -95,7 +124,11 @@ export default function Tray() {
         await Promise.allSettled([quotas, metrics]);
       } finally {
         busy = false;
-        if (active()) { setRefreshing(false); if (hadSuccess) setUpdatedAt(Date.now()); }
+        if (active()) {
+          setRefreshing(false);
+          if (hadSuccess) setUpdatedAt(Date.now());
+          if (awaitingRefresh.current) { awaitingRefresh.current = false; setSwitching(null); }
+        }
         if (!disposed && current.signal.aborted && visible()) void load();
       }
     };
@@ -152,11 +185,23 @@ export default function Tray() {
     </section>}
     {(settings?.showAccounts ?? true) && <section className="tray-providers" aria-label={t('usage.section.providers')}>
       {quotaError && <p role="alert" className="tray-error">{t('startup.tray.unavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
+      {switchError && <p role="alert" className="tray-error">{switchError}</p>}
       {providers.filter(provider => !hiddenProviders.has(provider.name)).map(provider => <div className="tray-provider" key={provider.name}>
-        <h2>{formatProviderDisplayName(provider.name, t)}</h2>
+        <h2><ProviderIcon name={provider.name} cls="provider-icon tray-provider-icon" />{formatProviderDisplayName(provider.name, t)}</h2>
         {!provider.accounts.length && <div className="tray-missing">{t(provider.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</div>}
-        {provider.accounts.map(account => <div className="tray-account" key={account.id}>
-          <div className="tray-account-name" title={account.label}>{account.label}<span className="tray-account-meta">{account.plan}{account.active && <span title={t('prov.activeBadge')} aria-label={t('prov.activeBadge')}> ●</span>}</span></div>
+        {provider.accounts.map(account => {
+          const kind = provider.switchKind;
+          const pending = switching === `${provider.name}:${account.id}`;
+          return <div className="tray-account" key={account.id}>
+          <div className="tray-account-name">
+            <span className="tray-account-label" title={account.label}>{account.label}{account.exhausted && <span className="tray-exhausted" title={t('quota.limitReached')} aria-label={t('quota.limitReached')}> ⚠</span>}</span>
+            <span className="tray-account-meta">
+              {pending && <span role="status">{t('pws.accountSwitching')}</span>}
+              {!pending && kind && account.switchState === 'available' && <button type="button" className="tray-use" disabled={switching !== null} onClick={() => void switchAccount(provider.name, kind, account.id)} title={t('prov.accountSwitchTitle')} aria-label={`${t('prov.accountSwitchTitle')}: ${account.label}`}>{t('prov.accountSwitchTitle')}</button>}
+              {account.plan}
+              {account.active && <span className="tray-active" title={t('prov.activeBadge')} aria-label={t('prov.activeBadge')}> ✓</span>}
+            </span>
+          </div>
           {account.email && account.email !== account.label && <div className="tray-account-email">{account.email}</div>}
           {!quotaWindows(account.quota).length && <div className="tray-missing">{t(account.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</div>}
           {quotaWindows(account.quota).map(window => {
@@ -165,11 +210,12 @@ export default function Tray() {
             const percent = finite(window.percent) ? Math.min(100, window.percent) : null;
             return <div className="tray-quota" key={window.id}>
               <span title={label}>{label}</span><span>{percent === null ? '—' : `${Math.round(percent)}%`}</span>
-              <span className="tray-bar" role={percent === null ? 'img' : 'meter'} aria-label={percent === null ? `${label}: ${t('pws.dashboard.noQuota')}` : label} aria-valuemin={percent === null ? undefined : 0} aria-valuemax={percent === null ? undefined : 100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? undefined : `${Math.round(percent)}%`}><i style={{ width: percent === null ? '0%' : `${percent}%` }} /></span>
-              <time title={reset.exact}>{reset.text}</time>
-            </div>;
-          })}
-        </div>)}
+              <span className={`tray-bar tray-bar--${quotaSeverity(percent ?? undefined)}`} role={percent === null ? 'img' : 'meter'} aria-label={percent === null ? `${label}: ${t('pws.dashboard.noQuota')}` : label} aria-valuemin={percent === null ? undefined : 0} aria-valuemax={percent === null ? undefined : 100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? undefined : `${Math.round(percent)}%`}><i style={{ width: percent === null ? '0%' : `${percent}%` }} /></span>
+             <time title={reset.exact}>{reset.text}</time>
+           </div>;
+         })}
+        </div>;
+        })}
       </div>)}
     </section>}
     <div className="tray-refresh"><button type="button" onClick={retry} disabled={refreshing}>{t('startup.refresh')}</button><span role="status">{t('tray.updated', { time: updatedAt === null ? '—' : new Date(updatedAt).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })}</span></div>

@@ -79,6 +79,10 @@ export type OAuthCredentials = {
 export interface ProviderAccount {
   /** Stable short id, generated once at append time; never re-derived after rotation. */
   id: string;
+  /** Rotated on each explicit login and retained across token refreshes. */
+  loginId?: string;
+  /** Native Kiro device accounts cannot use the kiro-cli reauth path. */
+  loginOrigin?: "kiro-device";
   /** User-owned display label; never participates in auth identity or routing. */
   alias?: string;
   credential: OAuthCredentials;

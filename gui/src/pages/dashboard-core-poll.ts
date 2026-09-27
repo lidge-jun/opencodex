@@ -1,4 +1,5 @@
 import { readJsonIfOk } from "../fetch-json";
+import { readUsageResponseJson } from "../usage-summary-resource";
 import { readSubagentSurfaceAdvisory, type SubagentSurfaceAdvisory } from "../subagent-surface";
 import {
   beginPollEpoch,
@@ -142,7 +143,7 @@ export async function fetchDashboardUsage(apiBase: string, signal: AbortSignal):
   // Usage can be expensive on an older server. Keeping it in its own resource means
   // it cannot delay health/provider/settings commits, and a failed refresh retains
   // the last good usage snapshot.
-  return requireJson<UsageSummary30d>(response);
+  return readUsageResponseJson<UsageSummary30d>(response);
 }
 
 /** Web-search / vision sidecar + shadow-call — config reads, typically sub-10ms. */

@@ -457,6 +457,15 @@
       ]
     },
     {
+      "path": "ops/plugins.md",
+      "tier": 6,
+      "title": "Local Plugins",
+      "scope": "Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to.",
+      "documents": [
+        "src/plugins/"
+      ]
+    },
+    {
       "path": "ops/docs-and-release.md",
       "tier": 6,
       "title": "Docs And Release",

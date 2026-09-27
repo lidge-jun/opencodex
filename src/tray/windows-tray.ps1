@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$BunPath,
   [Parameter(Mandatory = $true)][string]$CliPath,
   [Parameter(Mandatory = $true)][string]$CodexHome,
@@ -14,6 +14,19 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { $null = $_ }
+
+# Chinese UI cultures get Chinese tray text; every other locale keeps the English strings. The
+# judgment is a named function so it can be exercised directly instead of only through a live
+# desktop, where a selector that always answered English would still look correct.
+function Test-TrayChineseCulture([string]$CultureName) {
+  return $CultureName -like "zh*"
+}
+$script:isZh = Test-TrayChineseCulture ([System.Globalization.CultureInfo]::CurrentUICulture.Name)
+function Get-TrayText {
+  param([string]$En, [string]$Zh)
+  if ($script:isZh) { return $Zh }
+  return $En
+}
 
 # Normalize aliases before deriving singleton/event names. Without this,
 # C:\path and C:\path\. create separate tray instances for the same home.
@@ -127,7 +140,7 @@ function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
     return $true
   } catch {
     Write-ActionLog "launch failed: $($_.Exception.GetType().Name)"
-    $notify.ShowBalloonTip(5000, "opencodex action failed", "The action could not start. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
+    $notify.ShowBalloonTip(5000, (Get-TrayText "opencodex action failed" "opencodex 操作失败"), (Get-TrayText "The action could not start. Open the logs folder or run ocx doctor." "操作无法启动。打开日志文件夹或运行 ocx doctor。"), [System.Windows.Forms.ToolTipIcon]::Error)
     return $false
   }
 }
@@ -396,19 +409,19 @@ $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $statusItem.Enabled = $false
 $safetyItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $safetyItem.Enabled = $false
-$openItem = $menu.Items.Add("Open Dashboard")
-$updateItem = $menu.Items.Add("Update available")
+$openItem = $menu.Items.Add((Get-TrayText "Open Dashboard" "打开面板"))
+$updateItem = $menu.Items.Add((Get-TrayText "Update available" "有可用更新"))
 $updateItem.Visible = $false
 $updateItem.Enabled = $false
-$startItem = $menu.Items.Add("Start Proxy")
-$stopItem = $menu.Items.Add("Stop Proxy and Restore Native Routing")
-$restartItem = $menu.Items.Add("Restart Proxy")
+$startItem = $menu.Items.Add((Get-TrayText "Start Proxy" "启动代理"))
+$stopItem = $menu.Items.Add((Get-TrayText "Stop Proxy and Restore Native Routing" "停止代理并还原原生路由"))
+$restartItem = $menu.Items.Add((Get-TrayText "Restart Proxy" "重启代理"))
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 [void]$menu.Items.Add($statusItem)
 [void]$menu.Items.Add($safetyItem)
-$logsItem = $menu.Items.Add("Open Logs Folder")
+$logsItem = $menu.Items.Add((Get-TrayText "Open Logs Folder" "打开日志文件夹"))
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$exitItem = $menu.Items.Add("Exit Tray")
+$exitItem = $menu.Items.Add((Get-TrayText "Exit Tray" "退出托盘"))
 
 $script:online = $false
 $script:port = 10100
@@ -463,6 +476,14 @@ function Set-PendingAction([string]$Action, [int]$TimeoutSeconds) {
 function Complete-PendingAction([bool]$Success) {
   if ($null -eq $script:pendingAction) { return }
   $action = $script:pendingAction
+  # The pending value stays English because it is compared against the labels the click
+  # handlers set; only the text a user reads is localized.
+  $displayAction = switch ($action) {
+    "Start Proxy" { Get-TrayText "Start Proxy" "启动代理" }
+    "Stop Proxy" { Get-TrayText "Stop Proxy" "停止代理" }
+    "Restart Proxy" { Get-TrayText "Restart Proxy" "重启代理" }
+    default { $action }
+  }
   $script:pendingAction = $null
   if ($null -ne $script:pendingProcess) {
     try {
@@ -474,10 +495,10 @@ function Complete-PendingAction([bool]$Success) {
   }
   if ($Success) {
     Write-ActionLog "$action completed (port=$($script:port), pid=$($script:proxyPid))"
-    $notify.ShowBalloonTip(2500, "opencodex", "$action completed.", [System.Windows.Forms.ToolTipIcon]::Info)
+    $notify.ShowBalloonTip(2500, "opencodex", (Get-TrayText "$displayAction completed." "$displayAction 已完成。"), [System.Windows.Forms.ToolTipIcon]::Info)
   } else {
     Write-ActionLog "$action failed to reach the expected state"
-    $notify.ShowBalloonTip(5000, "opencodex action failed", "$action did not reach the expected state. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
+    $notify.ShowBalloonTip(5000, (Get-TrayText "opencodex action failed" "opencodex 操作失败"), (Get-TrayText "$displayAction did not reach the expected state. Open the logs folder or run ocx doctor." "$displayAction 未达到预期状态。打开日志文件夹或运行 ocx doctor。"), [System.Windows.Forms.ToolTipIcon]::Error)
   }
 }
 
@@ -536,8 +557,8 @@ function Update-TrayState {
     Start-StartupHealthProbe
   }
   if ($script:online) {
-    $statusItem.Text = "Proxy: Online (port $($script:port))"
-    $notify.Text = "opencodex: Online"
+    $statusItem.Text = (Get-TrayText "Proxy: Online (port $($script:port))" "代理: 在线 (端口 $($script:port))")
+    $notify.Text = (Get-TrayText "opencodex: Online" "opencodex: 在线")
     $startItem.Enabled = $false
     $stopItem.Enabled = $true
     $restartItem.Enabled = $true
@@ -547,21 +568,27 @@ function Update-TrayState {
     # diagnostic is cleaned up outside the online-only UI branch.
     $startup = $script:startupHealth
     if ($null -ne $startup) {
-      $label = if ($startup.status -eq "at-risk") { "At risk" } elseif ($startup.status -eq "protected") { "Protected" } else { "Native routing" }
-      $safetyItem.Text = "Restart safety: $label"
+      $label = if ($startup.status -eq "at-risk") {
+        Get-TrayText "At risk" "有风险"
+      } elseif ($startup.status -eq "protected") {
+        Get-TrayText "Protected" "已保护"
+      } else {
+        Get-TrayText "Native routing" "原生路由"
+      }
+      $safetyItem.Text = (Get-TrayText "Restart safety: $label" "重启保护: $label")
       $notify.Icon = if ($startup.status -eq "at-risk") {
         if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }
       } else {
         if ($script:updateAvailable) { $onlineUpdateIcon } else { $onlineIcon }
       }
     } else {
-      $safetyItem.Text = "Restart safety: unavailable"
+      $safetyItem.Text = (Get-TrayText "Restart safety: unavailable" "重启保护: 不可用")
       $notify.Icon = if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }
     }
   } else {
-    $statusItem.Text = "Proxy: Offline"
-    $safetyItem.Text = "Restart safety: start the proxy to inspect"
-    $notify.Text = "opencodex: Offline"
+    $statusItem.Text = (Get-TrayText "Proxy: Offline" "代理: 离线")
+    $safetyItem.Text = (Get-TrayText "Restart safety: start the proxy to inspect" "重启保护: 启动代理后查看")
+    $notify.Text = (Get-TrayText "opencodex: Offline" "opencodex: 离线")
     $notify.Icon = if ($script:updateAvailable) { $offlineUpdateIcon } else { $offlineIcon }
     $startItem.Enabled = $true
     $stopItem.Enabled = $false
@@ -607,7 +634,7 @@ $openItem.add_Click({ Start-OcxCommand @("gui") })
 $updateItem.add_Click({ Start-OcxCommand @("gui") })
 $startItem.add_Click({
   if (-not (Set-PendingAction "Start Proxy" 75)) { return }
-  $statusItem.Text = "Proxy: Starting..."
+  $statusItem.Text = (Get-TrayText "Proxy: Starting..." "代理: 启动中...")
   # service start can spend 20s and the CLI then observes health for another 40s.
   $startProcess = Start-OcxCommand @("__tray-start") -TrackExit
   if ($startProcess -is [System.Diagnostics.Process]) {
@@ -618,7 +645,7 @@ $startItem.add_Click({
 })
 $stopItem.add_Click({
   if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
-  $statusItem.Text = "Proxy: Stopping..."
+  $statusItem.Text = (Get-TrayText "Proxy: Stopping..." "代理: 停止中...")
   $stopProcess = Start-OcxCommand @("stop") -TrackExit
   if ($stopProcess -is [System.Diagnostics.Process]) {
     $script:pendingProcess = $stopProcess
@@ -628,7 +655,7 @@ $stopItem.add_Click({
 })
 $restartItem.add_Click({
   if (-not (Set-PendingAction "Restart Proxy" 160)) { return }
-  $statusItem.Text = "Proxy: Restarting..."
+  $statusItem.Text = (Get-TrayText "Proxy: Restarting..." "代理: 重启中...")
   # /api/system/restart may drain active work for 60s and then spend up to 70s
   # handing off to an identity-verified replacement. The tray observes health/PID
   # rather than the detached CLI exit, so keep a watchdog margin around that shared
@@ -665,7 +692,7 @@ $timer.add_Tick({
 $notify.ContextMenuStrip = $menu
 $notify.Icon = $offlineIcon
 $notify.Visible = $true
-$notify.Text = "opencodex: Checking..."
+$notify.Text = (Get-TrayText "opencodex: Checking..." "opencodex: 检查中...")
 
 try {
   Initialize-UpdateBadgeReader

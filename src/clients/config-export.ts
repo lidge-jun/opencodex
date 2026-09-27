@@ -722,7 +722,7 @@ export function opencodeProviderBlocks(
     const entry: OpencodeModelEntry = { name: exportModelLabel(model) };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
-      entry.limit = { context, output: outputBudgetFor(context) };
+      entry.limit = { context, output: outputBudgetFor(context, model) };
     }
     // `attachment` / `modalities` are fields of opencode's V1 model schema — the shape its
     // published config.json defines and the one its loader reads (verified against opencode
@@ -934,6 +934,17 @@ export interface GajaeModelEntry {
   input: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** Advertised only when the catalog declares at least one wire-selectable effort. */
+  reasoning?: true;
+  /** GJC's per-model reasoning-effort capability declaration. */
+  thinking?: {
+    mode: "effort";
+    minLevel: string;
+    maxLevel: string;
+    levels: string[];
+  };
+  /** Tells GJC to pass the selected level as OpenAI-compatible reasoning_effort. */
+  compat?: { supportsReasoningEffort: true };
 }
 
 /** Gajae validates strictly: an unknown field fails the whole config. */
@@ -1004,7 +1015,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
-      entry.maxTokens = outputBudgetFor(context);
+      entry.maxTokens = outputBudgetFor(context, model);
     }
     models.push(entry);
   }
@@ -1140,7 +1151,29 @@ function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
-      entry.maxTokens = outputBudgetFor(context);
+      entry.maxTokens = outputBudgetFor(context, model);
+    }
+    // GJC accepts the OpenAI-compatible effort ladder in model metadata. `none` means
+    // no parameter and `ultra` is an OCX orchestration level that folds to `max` on the
+    // wire, so neither can be offered as a GJC model-level effort.
+    const declaredEfforts = model.reasoningEfforts
+      // Native Codex rows do not repeat their built-in ladder in the catalog. They still
+      // accept the standard effort field, so omitting this fallback hides GJC's thinking
+      // control for the models most likely to need it.
+      ?? (model.native && model.provider === "openai"
+        ? ["low", "medium", "high", "xhigh", "max"]
+        : []);
+    const efforts = canonicalizeReasoningEfforts(declaredEfforts)
+      .filter(effort => effort !== "none" && effort !== "ultra");
+    if (efforts.length > 0) {
+      entry.reasoning = true;
+      entry.thinking = {
+        mode: "effort",
+        minLevel: efforts[0]!,
+        maxLevel: efforts.at(-1)!,
+        levels: efforts,
+      };
+      entry.compat = { supportsReasoningEffort: true };
     }
     models.push(entry);
   }

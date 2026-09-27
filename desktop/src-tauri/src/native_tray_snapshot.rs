@@ -7,7 +7,7 @@ pub fn display_settings(settings: Option<&Value>) -> Value {
     json!({
         "showToday": enabled("showToday"), "show30Days": settings.is_some(),
         "showChart": enabled("showChart"), "showModels": enabled("showModels"),
-        "showAccounts": settings.map_or(true, |s| s["showAccounts"].as_bool() != Some(false)),
+        "showAccounts": match settings { None => true, Some(s) => s["showAccounts"].as_bool() != Some(false) },
         "showCost": enabled("showCost"),
         "chartStyle": settings.map(|s| text(s, "chartStyle")).unwrap_or("line")
     })

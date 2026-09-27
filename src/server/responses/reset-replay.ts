@@ -79,6 +79,38 @@ export function selfContainedResponsesBody(body: unknown): boolean {
 }
 
 /**
+ * Chat Completions tools are executed by the client by spec -- the origin only emits the call.
+ * Anything else (`web_search`, `code_interpreter`, a vendor hosted tool) runs on the origin during
+ * the turn, so an unknown or hosted entry fails the whole catalog rather than being skipped.
+ */
+function clientExecutedChatTools(tools: unknown, budget: { remaining: number }): boolean {
+  if (!Array.isArray(tools) || tools.length > budget.remaining) return false;
+  budget.remaining -= tools.length;
+  return tools.every(tool => record(tool) && tool.type === "function");
+}
+
+/**
+ * A Chat Completions body whose second send can only repeat the inference.
+ *
+ * The lane is stateless by construction -- the proxy rebuilds the whole `messages` array on every
+ * turn, and `previous_response_id` is not part of the Chat wire -- so the only hazards left are
+ * server-side storage, which would record a second completion, and a hosted tool the origin would
+ * run a second time.
+ */
+export function selfContainedChatBody(body: unknown): boolean {
+  if (!record(body)) return false;
+  if (body.store === true) return false;
+  if (body.previous_response_id != null) return false;
+  // Hosted execution requested outside the `tools` catalog. Judged on the inbound body like every
+  // other hazard here, which is conservative for the outbound request by design: a body that asks
+  // for a hosted search is refused rather than assumed harmless because a later stage might drop
+  // the field.
+  if (body.web_search_options !== undefined) return false;
+  if (!Array.isArray(body.messages)) return false;
+  return body.tools === undefined || clientExecutedChatTools(body.tools, { remaining: MAX_TOOL_ENTRIES });
+}
+
+/**
  * The allowance for ONE logical request, or nothing when the provider did not opt in.
  *
  * Built once per request and handed to every leg. `claim` spends the request's counter, which

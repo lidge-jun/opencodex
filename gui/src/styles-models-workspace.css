@@ -52,6 +52,7 @@
 .models-workspace-root {
   display: grid;
   grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  align-items: start;
   gap: var(--space-4);
   width: 100%;
   max-width: 100%;
@@ -60,6 +61,11 @@
 
 /* ── Rail ─────────────────────────────────────────────── */
 
+/*
+  Pinned under the sticky quota bar while the document scrolls the model list.
+  QuotaSummaryBar publishes its measured height as the unitless --ocx-sticky-top-h;
+  without the bar the rail pins to the viewport top. The list fills the rest of the viewport.
+*/
 .models-workspace-rail {
   display: flex;
   flex-direction: column;
@@ -67,6 +73,9 @@
   border-right: 1px solid var(--border);
   padding-right: var(--space-3);
   min-width: 0;
+  position: sticky;
+  top: calc(var(--ocx-sticky-top-h, 0) * 1px + var(--space-3));
+  max-height: calc(100dvh - var(--ocx-sticky-top-h, 0) * 1px - var(--space-6));
 }
 
 .models-workspace-rail-header {
@@ -94,7 +103,7 @@
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
-  max-height: 640px;
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -611,6 +620,8 @@
     border-bottom: 1px solid var(--border);
     padding-right: 0;
     padding-bottom: var(--space-3);
+    position: static;
+    max-height: none;
   }
 
   .models-workspace-rail-list {
@@ -635,6 +646,8 @@
     border-bottom: 1px solid var(--border);
     padding-right: 0;
     padding-bottom: var(--space-3);
+    position: static;
+    max-height: none;
   }
 
   .models-workspace-rail-list {
@@ -674,3 +687,111 @@
 .models-delivery-steps p { margin: 2px 0 0; }
 .models-delivery-hint { margin: 10px 0 0 13px; padding: 8px 12px; border-left: 2px solid var(--border); line-height: var(--leading-body); }
 :lang(ko) .models-delivery { word-break: keep-all; overflow-wrap: anywhere; }
+
+/*
+  Model settings panel: every global catalog control, folded into one card above the
+  rail/list workspace. The summary line states each folded value so folding never hides
+  behaviour; the chevron rotation is the only motion.
+*/
+.models-settings {
+  margin: 0 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface);
+  min-width: 0;
+}
+.models-settings > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 10px var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--text-control);
+}
+.models-settings > summary::-webkit-details-marker { display: none; }
+.models-settings > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--motion-fast);
+}
+.models-settings[open] > summary::before { transform: rotate(90deg); }
+.models-settings[open] > summary { border-bottom: 1px solid var(--border); }
+.models-settings-title {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+.models-settings-warn {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber, #d99a1e);
+}
+.models-settings-state {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.models-settings-kv + .models-settings-kv::before {
+  content: "·";
+  margin: 0 var(--space-2);
+  color: var(--faint);
+}
+.models-settings-v {
+  margin-left: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--text-label);
+}
+.models-settings-body {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  min-width: 0;
+}
+.models-settings-body > .models-control-top-row { margin-bottom: var(--space-3); }
+.models-settings-body .models-cap-row { margin-bottom: var(--space-3); }
+.models-settings-body > .models-aliases-card { margin: var(--space-2) 0 0; }
+
+.models-info-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: help;
+  border-radius: var(--radius-pill);
+}
+
+/* List toolbar: collapse/expand, the order hint, and the custom-model count on one row. */
+.models-collapse-controls { align-items: center; flex-wrap: wrap; }
+.models-collapse-controls > .models-custom-summary { margin: 0 0 0 auto; }
+
+/*
+  Wide workspace: the open panel lays its rows out in two columns instead of one tall
+  stack. Rows that carry their own internal grid or a list span the full width.
+*/
+@container models-workspace (min-width: 1000px) {
+  .models-settings-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--space-6);
+    row-gap: 0;
+    align-items: start;
+  }
+  .models-settings-body > .models-control-top-row,
+  .models-settings-body > .models-v2-detail-row,
+  .models-settings-body > .picker-order-editor,
+  .models-settings-body > .models-aliases-card {
+    grid-column: 1 / -1;
+  }
+}

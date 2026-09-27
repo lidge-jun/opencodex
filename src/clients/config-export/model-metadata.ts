@@ -1,4 +1,5 @@
 // Shared client export model metadata.
+import { getModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { SCHEMA_REQUIRED_OUTPUT_BUDGET } from "./constants";
 import { expandFastExportModels } from "./fast-models";
 import type { OpencodeCatalogModel, ExportModel, ExportClientId, ManagedContribution } from "./contracts";
@@ -18,9 +19,14 @@ export function authoritativeContextWindow(contextWindow: number | undefined): n
   return undefined;
 }
 
-/** Schema-required output budget for a known context window. */
-export function outputBudgetFor(context: number): number {
-  return Math.min(SCHEMA_REQUIRED_OUTPUT_BUDGET, context);
+/** Known model output limit, with a schema-required fallback, clamped to context. */
+export function outputBudgetFor(context: number, model: OpencodeCatalogModel): number {
+  const provider = model.provider ?? "";
+  const metadata = getModelMetadata(resolveMetadataProvider(provider) ?? provider, model.id ?? model.namespaced);
+  const limit = authoritativeContextWindow(model.maxTokens)
+    ?? authoritativeContextWindow(metadata?.maxTokens)
+    ?? SCHEMA_REQUIRED_OUTPUT_BUDGET;
+  return Math.min(limit, context);
 }
 
 /**

@@ -67,7 +67,7 @@ import {
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
-import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
+import { getRequestLogEntries, queryRequestLogs, type RequestLogEntry } from "../request-log";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../request-log-cursor";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
@@ -120,11 +120,12 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       return jsonResponse({ error: { code: "invalid_cursor", message: "invalid cursor" } }, 400);
     }
     const all = getRequestLogEntries();
-    const total = filteredRequestLogCount(all, url.searchParams);
+    const queried = queryRequestLogs(all, url.searchParams);
+    const total = queried.total;
     // Not point-free: requestLogDto takes an options object second, and Array.map would pass the
     // element INDEX into it. An explicit arrow keeps the default (decode rate included) and is
     // what /api/logs wants; /api/request-history opts out at its own call sites.
-    const logs = filterRequestLogs(all, url.searchParams).map(entry => requestLogDto(entry));
+    const logs = queried.logs.map(entry => requestLogDto(entry));
     const poll = selectRequestLogPoll(logs, url.searchParams, cursor);
     return jsonResponse({
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -347,45 +348,11 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       }
       return jsonResponse(requestedSummary);
     } catch {
-      return jsonResponse({
-        range,
-        surface,
-        since: window?.since ?? null,
-        ...(window ? { customWindow: true, until: window.until } : {}),
-        generatedAt: now,
-        summary: {
-          requests: 0,
-          attemptCount: 0,
-          measuredRequests: 0,
-          reportedRequests: 0,
-          unreportedRequests: 0,
-          unsupportedRequests: 0,
-          estimatedRequests: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens: 0,
-          coverageRatio: 0,
-          estimatedCostUsd: 0,
-          pricedRequests: 0,
-          unpricedRequests: 0,
-          unmeteredRequests: 0,
-        },
-        days: [],
-        models: [],
-        providers: [],
-        accounts: [],
-        historyTruncated: false,
-        truncatedPrefixBytes: 0,
-        entriesTruncated: false,
-        entriesDropped: 0,
-        snapshotWindowStart: null,
-        snapshotWindowEnd: null,
-        error: "read_failed",
-      });
+      // A missing ledger is handled as an empty installation by the reader. Reaching this catch
+      // therefore means the report is unavailable, not that usage was measured as zero. Keep the
+      // transport status aligned with the JEV projection above so every dashboard consumer can
+      // retain its last valid snapshot instead of caching fabricated zero totals.
+      return jsonResponse({ error: "read_failed" }, 500);
     }
   }
 

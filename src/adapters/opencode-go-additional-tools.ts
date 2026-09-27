@@ -2,22 +2,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * True only for the exact OpenCode Go Responses resource. Lookalike hosts, other Zen paths,
+ * credentials, queries, fragments and unparsable URLs are all excluded, so a custom provider
+ * that merely resembles Go never inherits a Go-specific body rewrite.
+ */
+export function isOpenCodeGoResponsesUrl(responseUrl: string): boolean {
+  let destination: URL;
+  try {
+    destination = new URL(responseUrl);
+  } catch {
+    return false;
+  }
+  return destination.origin === "https://opencode.ai"
+    && destination.pathname === "/zen/go/v1/responses"
+    && !destination.username && !destination.password
+    && !destination.href.includes("?") && !destination.href.includes("#");
+}
+
 /** Console Go accepts public tools but rejects the private additional_tools input wrapper. */
 export function normalizeOpenCodeGoAdditionalTools(
   body: unknown,
   responseUrl: string,
   replayPrefixLength = 0,
 ): unknown {
-  let destination: URL;
-  try {
-    destination = new URL(responseUrl);
-  } catch {
-    return body;
-  }
-  if (destination.origin !== "https://opencode.ai"
-    || destination.pathname !== "/zen/go/v1/responses"
-    || destination.username || destination.password
-    || destination.href.includes("?") || destination.href.includes("#")) return body;
+  if (!isOpenCodeGoResponsesUrl(responseUrl)) return body;
   if (!isRecord(body) || !Array.isArray(body.input)) return body;
   // Do not replace a malformed top-level catalog with a partial promoted one.
   if (body.tools !== undefined && !Array.isArray(body.tools)) return body;

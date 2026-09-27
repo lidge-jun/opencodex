@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
@@ -45,6 +45,9 @@ const producers: string[] = Array.isArray(aggregateNeeds) ? aggregateNeeds : [];
 // runner has no /bin/bash, so executing them there would test the host.
 const cannotRunShell = process.platform === "win32";
 const cannotRunAggregate = cannotRunShell || !Bun.which("jq");
+const AGGREGATE_CHILD_DEADLINE_MS = 5_000;
+
+setDefaultTimeout(AGGREGATE_CHILD_DEADLINE_MS + 5_000);
 
 const scanners = Object.entries(jobs)
   .filter(([, job]) => (job.steps ?? []).some(step => step.run?.includes("bun run privacy:scan")))
@@ -100,37 +103,67 @@ describe("the privacy scan selection", () => {
 });
 
 describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
-  const runAggregate = (scope: Record<string, string>, results: Record<string, string>) => spawnSync("bash", ["-c", aggregateStep!.run!], {
-    encoding: "utf8",
-    env: {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
-      EVENT_NAME: "pull_request",
-      LANE: "",
-      CHANGES_CI: "false",
-      CHANGES_NATIVE: "false",
-      CHANGES_DESKTOP: "false",
-      CHANGES_PACKAGING: "false",
-      CHANGES_DOCS: "false",
-      CHANGES_STRUCTURE: "false",
-      CHANGES_SETUP_ACTION: "false",
-      CHANGES_REMOTE_HELPER: "false",
-      ...scope,
-      // needs serializes as an object per job; the gate reads .value.result.
-      RESULTS: JSON.stringify(Object.fromEntries(Object.entries(results).map(([job, result]) => [job, { result }]))),
-    },
-    timeout: 5_000,
+  const runAggregate = (
+    scope: Record<string, string>,
+    results: Record<string, string>,
+    script = aggregateStep!.run!,
+    deadlineMs = AGGREGATE_CHILD_DEADLINE_MS,
+  ): Promise<{ status: number | null; stdout: string; stderr: string }> => new Promise((resolve, reject) => {
+    const child = spawn("bash", ["-c", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        EVENT_NAME: "pull_request",
+        LANE: "",
+        CHANGES_CI: "false",
+        CHANGES_NATIVE: "false",
+        CHANGES_DESKTOP: "false",
+        CHANGES_PACKAGING: "false",
+        CHANGES_DOCS: "false",
+        CHANGES_STRUCTURE: "false",
+        CHANGES_SETUP_ACTION: "false",
+        CHANGES_REMOTE_HELPER: "false",
+        ...scope,
+        // needs serializes as an object per job; the gate reads .value.result.
+        RESULTS: JSON.stringify(Object.fromEntries(Object.entries(results).map(([job, result]) => [job, { result }]))),
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+    const deadline = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`aggregate ci gate child exceeded ${deadlineMs}ms`));
+    }, deadlineMs);
+    child.once("error", error => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.once("close", status => {
+      clearTimeout(deadline);
+      resolve({ status, stdout, stderr });
+    });
   });
   const resultsWith = (succeeded: string[]): Record<string, string> =>
     Object.fromEntries(producers.map(job => [job, succeeded.includes(job) ? "success" : "skipped"]));
 
-  test("is green on a pull request that matches no filter only when the privacy gate ran", () => {
+  test("a hung aggregate child reports its own deadline", async () => {
+    await expect(runAggregate({}, {}, "while :; do :; done", 100))
+      .rejects.toThrow("aggregate ci gate child exceeded 100ms");
+  });
+
+  test("is green on a pull request that matches no filter only when the privacy gate ran", async () => {
     expect(producers).toContain("privacy-gate");
     // The two unconditional producers plus the privacy gate, and nothing else.
-    const ran = runAggregate({}, resultsWith(["changes", "select-windows-runner", "privacy-gate"]));
+    let eventLoopAdvanced = false;
+    setTimeout(() => { eventLoopAdvanced = true; }, 0);
+    const ran = await runAggregate({}, resultsWith(["changes", "select-windows-runner", "privacy-gate"]));
+    expect(eventLoopAdvanced).toBe(true);
     expect(`status:${ran.status}`, ran.stdout + ran.stderr).toBe("status:0");
 
     for (const result of ["skipped", "failure", "cancelled"]) {
-      const run = runAggregate({}, {
+      const run = await runAggregate({}, {
         ...resultsWith(["changes", "select-windows-runner"]),
         "privacy-gate": result,
       });
@@ -139,15 +172,15 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
     }
   });
 
-  test("requires the privacy gate alongside a narrow job on a docs-only pull request", () => {
+  test("requires the privacy gate alongside a narrow job on a docs-only pull request", async () => {
     // docs-site-build is pull-request scope like privacy-gate: the complement
     // must still request the scan, and a gate that did not succeed fails by name.
     const docsOnly = { CHANGES_DOCS: "true" };
-    const ran = runAggregate(docsOnly, resultsWith(["changes", "select-windows-runner", "docs-site-build", "privacy-gate"]));
+    const ran = await runAggregate(docsOnly, resultsWith(["changes", "select-windows-runner", "docs-site-build", "privacy-gate"]));
     expect(`status:${ran.status}`, ran.stdout + ran.stderr).toBe("status:0");
 
     for (const result of ["skipped", "failure", "cancelled"]) {
-      const run = runAggregate(docsOnly, {
+      const run = await runAggregate(docsOnly, {
         ...resultsWith(["changes", "select-windows-runner", "docs-site-build"]),
         "privacy-gate": result,
       });
@@ -156,14 +189,14 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
     }
   });
 
-  test("rejects a second scan on a pull request that gates already scans", () => {
+  test("rejects a second scan on a pull request that gates already scans", async () => {
     // Where ci is true, gates scans; a privacy gate that also ran means its
     // condition and this table have drifted apart.
     const both = { CHANGES_CI: "true" };
-    const doubled = runAggregate(both, { ...resultsWith([]), "privacy-gate": "success" });
+    const doubled = await runAggregate(both, { ...resultsWith([]), "privacy-gate": "success" });
     expect(doubled.status).toBe(1);
     expect(doubled.stdout).toContain("privacy-gate was not requested by pull_request but reported 'success'");
-    const single = runAggregate(both, resultsWith([]));
+    const single = await runAggregate(both, resultsWith([]));
     // The step prints RESULTS first, so look for the verdict line, not the job name.
     expect(single.stdout).not.toContain("privacy-gate was");
   });

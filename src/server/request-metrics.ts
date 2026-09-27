@@ -1,4 +1,5 @@
 import type { ResponsesTerminalStatus } from "../bridge";
+import type { KiroQuotaMetricRow } from "../providers/kiro-quota-metrics";
 import type { AttemptRecoveryKind } from "../usage/log";
 import {
   REQUEST_FAILURE_CAUSES,
@@ -188,8 +189,34 @@ function appendHistogram(
   }
 }
 
+function appendKiroQuotaGauges(lines: string[], rows: readonly KiroQuotaMetricRow[]): void {
+  const families = [
+    ["opencodex_kiro_quota_used_credits", "Cached Kiro plan credits used.", "used"],
+    ["opencodex_kiro_quota_limit_credits", "Cached Kiro plan credit limit.", "limit"],
+    ["opencodex_kiro_quota_used_percent", "Cached Kiro plan percent used.", "percent"],
+    ["opencodex_kiro_quota_seconds_to_reset", "Seconds until the observed Kiro reset.", "secondsToReset"],
+  ] as const;
+  const labels = new Set<string>();
+  const valid = rows.slice(0, 32).filter(row => {
+    if (!/^o[0-9a-f]{6}$/.test(row.account) || labels.has(row.account)) return false;
+    if (![row.used, row.limit, row.percent].every(value => Number.isFinite(value) && value >= 0)) return false;
+    if (row.limit <= 0 || row.percent > 100) return false;
+    labels.add(row.account);
+    return true;
+  });
+  for (const [name, help, key] of families) {
+    lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
+    for (const row of valid) {
+      const value = row[key];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+        lines.push(`${name}{account="${row.account}"} ${value}`);
+    }
+  }
+}
+
 export function createRequestMetricsOwner(
   processStartTimeSeconds = Date.now() / 1000,
+  kiroQuotaRows?: () => readonly KiroQuotaMetricRow[],
 ): RequestMetricsOwner {
   let logicalRequests = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RESULTS.length);
   let physicalSends = Array.from({ length: REQUEST_METRICS_PROTOCOLS.length }, () => 0);
@@ -282,6 +309,7 @@ export function createRequestMetricsOwner(
           lines.push(`opencodex_ttft_missing_total${sampleLabels(protocol, result)} ${missingTtft[protocolCell(protocol)]![resultCell(result)]}`);
         }
       }
+      appendKiroQuotaGauges(lines, kiroQuotaRows?.() ?? []);
       lines.push(
         "# HELP opencodex_metrics_process_start_time_seconds Unix time when this process metrics owner started.",
         "# TYPE opencodex_metrics_process_start_time_seconds gauge",

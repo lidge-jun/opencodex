@@ -208,6 +208,15 @@ function providerIconAlias(provider: string): string | undefined {
   return Object.hasOwn(PROVIDER_ICON_ALIASES, key) ? PROVIDER_ICON_ALIASES[key] : undefined;
 }
 
+/**
+ * Every provider id that has a mark, with its file. The native menu bar panel embeds the same
+ * table in desktop/src-tauri/src/provider_icons.rs; gui/tests/provider-icons-native.test.ts keeps
+ * the two identical.
+ */
+export function providerIconAliasEntries(): Array<[provider: string, file: string]> {
+  return Object.entries(PROVIDER_ICON_ALIASES);
+}
+
 /** Optional hints kept for call-site compatibility; resolution is name-based for now. */
 export function providerIconSrc(provider: string, _hints?: ProviderIconHints): string | undefined {
   void _hints;

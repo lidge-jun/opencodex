@@ -10,6 +10,20 @@ provider capabilities below; see [Responses compatibility](../transports/respons
 
 ## Kiro CLI executable resolution
 
+Native device login is an add-only Kiro account path for Builder ID, Google, and GitHub.
+It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded process-local
+flow table. A flow ID is returned only at start; status and cancellation require that ID and
+the same management principal kind. Polling follows the server's interval, and only an exact
+approval shape reaches the protected OAuth store. Device codes and tokens never enter
+management responses. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
+refuses them before starting CLI work. Upstream verification URLs require HTTPS, no credentials
+or control characters, and a 2048-character limit; user codes use 4–32 plain alphanumeric or
+hyphen characters. Completed flow results are consumed once, terminal entries expire after
+60 seconds, and the table holds at most 16 entries. Terminal entries retain no config snapshot.
+Explicit reauth rotates login identity, while token
+refresh preserves it. A first-account config-publication failure compensates the new slot
+through the existing receipt ownership check.
+
 Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
 `src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The
 canonical `kiro-cli` name is tried on `PATH` and then in the platform install locations. Only
@@ -29,6 +43,53 @@ A concurrent account addition, selection, or credential refresh wins and is neve
 before/after account-ID set.
 
 > Decision record: [ADR-0109](../decisions/ADR-0109-kiro-login-rollback-ownership.md)
+
+Kiro usage probing uses the same request-profile resolver as generation. A non-OIDC
+account without a formable ARN is not probed. Persisted quota and exhaustion evidence
+are bound independently by observation time, reset, and login identity, never by token
+or raw account label; removal, identity change, expiry, or malformed disk degrades routing
+evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
+The same identity-fenced reading carries precise plan `kiroCreditsUsed` and
+`kiroCreditsLimit`; missing or expired evidence has no metric sample. The automatic
+candidate filter and account list both use `kiroAutoSelection` from
+`src/oauth/generic-account-failover.ts`. Its closed reasons are `needs_reauth`,
+`suspended`, `cooldown`, and `quota_exhausted`. An active singleton can still send
+when it is excluded as an alternative. The existing `health` field does not reflect
+Kiro suspension or quota exhaustion, so `health: ok` can coexist with
+`autoSelectable: false`; the GUI does not display the new projection.
+
+After an account is admitted, a detached `ListAvailableModels` request reads that account's
+regional management host with its own timeout and account-paired bearer/profile. The request
+never waits for discovery. `OPENCODEX_KIRO_MODEL_DISCOVERY=0` disables this optional path at
+call time, primarily for tests or operational rollback. The process-local list is fenced to
+the login identity, refreshed after one hour, and retained as last good for at most 24 hours.
+Malformed or empty replies preserve the static model roster. Observed model membership only
+prefers accounts already eligible and with room under a configured cap; unknown IDs remain
+callable. Reported `tokenLimits.maxInputTokens` informs a conservative catalog and token
+estimate window, including the static limit when any live account lacks evidence. Only accounts
+that have served acquire list evidence; inactive siblings may remain unknown until refusal
+rotation reaches them. The public catalog advertises only observed IDs made of plain
+characters (no `/` the router would have to decode), at most 64 across the roster; every
+observed ID still informs routing preference.
+
+`src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
+confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account
+verdict. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
+credential generation and login identity, independently of quota observation time. A
+completed response from that same live credential clears an older verdict after disk
+hydration. Suspension is a process-local quarantine; rate refusals use a short cooldown.
+Reactive account rotation is presence-driven even when a proactive preference switch is
+off. Pre-dispatch exclusion of an already refused account requires effective proactive
+preference with the provider override taking precedence over the global setting.
+Kiro OAuth may use `least-loaded` as an opt-in proactive strategy under `pool.kernel`.
+`maxConcurrentPerAccount` independently limits active requests on each account in this
+process: a full selected account waits up to 250 ms, then returns 503
+`account_capacity` with `Retry-After: 1`. Capacity does not select a sibling;
+reactive refusal rotation remains presence-driven and prefers a sibling with room.
+A released slot is handed to the first live waiter before it wakes, so a new arrival
+cannot take it, and every send (first send, reactive rotation, 401 replay) holds the lease of
+the account whose credentials it carries: a replay that resolves a different account takes
+that account's lease first or stops with the formatted 401.
 
 ## Kiro client parallel-tool hint
 
@@ -60,6 +121,8 @@ raw body.
 > Decision record: [ADR-0061](../decisions/ADR-0061-kiro-responses-text-controls.md)
 
 ## Bounded fallback HTTP errors
+
+`src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
 
 When a first Kiro stream needs a completion fallback, the fallback response's non-success
 body is read through the shared display-safe bounded reader with the attempt's abort signal.
@@ -124,8 +187,19 @@ from `metadataEvent` is legitimate rather than impossible. Both feed the same fi
 positive value overwrites an earlier one.
 
 Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
-`tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
-ignored because a credit is not a token count.
+`tokenUsage` on any event, which is why Kiro token usage stays estimated. The parser preserves
+`meteringEvent` unit/usage (`amount` is an alias) and optional `unitPlural`; credit readings populate
+`OcxUsage.providerCredits` independently of token metadata. The latest reading within a response
+is a snapshot; separate completion-fallback responses add their credits. Missing metering stays
+absent and measured zero stays zero. `initial-response` carries `conversationId` through the same
+validated provider-state path as `messageMetadataEvent`. Unknown event types produce opt-in
+`debugProviderDiagnostic` entries containing only the event-type length, never the raw header or payload.
+The final usage row records summed request spend across billed physical sends; sealed attempt
+rows preserve per-serving-account spend in `src/usage/log.ts`.
+Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
+`tests/providers/kiro/kiro-metering-usage.test.ts`, and
+`tests/server/server-kiro-completion-e2e.test.ts`.
+
 ## Remote image references
 
 Kiro's wire inlines base64 bytes only, so a remote `https` image reference cannot be

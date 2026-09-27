@@ -36,6 +36,12 @@ export type RuntimePortState = {
   hostname?: string;
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
+  /**
+   * The live proxy's port when this runtime is a sibling instance started beside it
+   * (`src/codex/sibling-start.ts`). `ocx stop` reads it to leave shared client routing alone.
+   * Absent for every other runtime, so those records keep their bytes.
+   */
+  siblingOfPort?: number;
 };
 
 function isValidRuntimePortState(value: unknown): value is RuntimePortState {
@@ -43,13 +49,16 @@ function isValidRuntimePortState(value: unknown): value is RuntimePortState {
   const state = value as Record<string, unknown>;
   const hostnameOk = state.hostname === undefined || typeof state.hostname === "string";
   const attestationOk = state.attestationSecret === undefined || isLocalAttestationSecret(state.attestationSecret);
+  const siblingOk = state.siblingOfPort === undefined
+    || (Number.isInteger(state.siblingOfPort) && Number(state.siblingOfPort) > 0 && Number(state.siblingOfPort) <= 65535);
   return Number.isSafeInteger(state.pid)
     && Number(state.pid) > 0
     && Number.isInteger(state.port)
     && Number(state.port) > 0
     && Number(state.port) <= 65535
     && hostnameOk
-    && attestationOk;
+    && attestationOk
+    && siblingOk;
 }
 
 export function writeRuntimePort(state: RuntimePortState): void {
