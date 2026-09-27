@@ -439,18 +439,15 @@ family shared by unrelated upstreams.
 
 ## Anthropic structured-output compatibility
 
-The Anthropic adapter lowers Responses `text.format` and Chat Completions `response_format` JSON
-Schema requests to `output_config.format`. The local transform follows Anthropic's TypeScript SDK
-subset so upstream rejects neither OpenAI-only envelope fields nor unsupported schema constraints.
-The adapter merges `format` into an existing adaptive-thinking `output_config` rather than replacing
-it, so a compatible `output_config.effort` remains alongside the structured-output format.
-Routed Anthropic Messages input carries `output_config.format` through internal `text.format`, so
-stored-OAuth requests regain the same native format when the Anthropic adapter rebuilds the wire body.
-Unsupported constraints remain in `description` as model guidance instead of disappearing. Root
-`$defs` stay beside a root `$ref`, intentionally differing from the current SDK transform's early
-`$ref` return so local references remain resolvable.
+The Anthropic adapter lowers Responses `text.format` and Chat Completions `response_format` JSON Schema requests to `output_config.format`, following Anthropic's TypeScript SDK subset.
+It merges `format` into the existing adaptive-thinking `output_config`, preserving compatible `output_config.effort`. Unsupported constraints remain in `description` as model guidance; root `$defs` remain beside a root `$ref` so local references resolve.
+Routed Anthropic Messages input carries `output_config.format` through internal `text.format`; stored-OAuth requests regain that format when the Anthropic adapter rebuilds the wire body.
+In that inbound direction, `src/adapters/anthropic-output-schema.ts` checks the original schema, not the normalized acceptance clone. Strict mode requires an object root without a root union, and every object must supply a property map, `additionalProperties: false`, and exactly matching `required` names.
+The check traverses schema-valued properties, array items, unions and definitions; property names and literal enum/const values are not schema nodes. It admits only documented schema keywords for the node's declared type, so incomplete objects, unknown constraints and invalid keyword values retain their original schema with explicit `strict: false` instead of waiting for a denylist update. Fine-tuned `ft:` targets use OpenAI's narrower model-specific keyword subset after Claude alias/model-map resolution; later provider/combo routing remains outside this ingress proof. Anthropic's native acceptance still includes `uri`; only the translated OpenAI strict claim uses the narrower set.
+`tests/claude-integration/claude-output-schema-strict.test.ts` covers the acceptance probe, inbound format, translated Responses parser, recursive object controls and caller-schema preservation.
 
 > Decision record: [ADR-0066](../decisions/ADR-0066-anthropic-structured-output-compatibility.md)
+> Decision record: [ADR-5901](../decisions/ADR-5901-translated-output-schema-strict-eligibility.md)
 
 ## Reasoning display parity (hideThinkingSummary)
 

@@ -574,6 +574,7 @@ export async function executeResponsesRunTurn(
       if (preflight.replayUnsafe || preflight.error?.status !== 429
         || preflight.error.code === SEND_BUDGET_EXHAUSTED_CODE) return;
       const { httpStatus, error } = adapterFailureFromEvent(preflight.error);
+      transportState.bindKeyUsageFromBridge(preflight.error.usage);
       cancelResponseCompletion();
       runTurnAbort.abort();
       queue.close();

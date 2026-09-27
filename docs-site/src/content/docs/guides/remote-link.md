@@ -73,7 +73,7 @@ When a step fails, the dashboard shows the reason and, when SSH reported one, th
 
 ## Security
 
-The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. On the Child, the key stays inside OpenCodex: credentials that Codex or Claude Code send there are not forwarded to the Home, and any program on the Child that reaches `127.0.0.1:<port>` uses the Home without a key, the same local trust a standalone install gives. Web pages from other sites are refused. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
+The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. On the Child, the key stays inside OpenCodex: credentials that Codex or Claude Code send there are not forwarded to the Home, including Bearer, Azure `api-key`, Anthropic-compatible `x-api-key`, and Google `x-goog-api-key` forms. Any program on the Child that reaches `127.0.0.1:<port>` uses the Home without a key, the same local trust a standalone install gives. Web pages from other sites are refused. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
 
 ## CLI reference
 

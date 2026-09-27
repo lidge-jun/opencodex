@@ -152,6 +152,10 @@ Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
 login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
+Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
+factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
+avoiding the false reservation created by probing and closing a port pair before the ephemeral TLS
+listener starts. The injected factory does not change production port selection.
 The User-Agent is a routing hint, not a trust boundary: a client that fakes it reaches only what
 any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,

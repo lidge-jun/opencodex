@@ -7,6 +7,7 @@ import {
   mapStreamMessageToEvents,
   projectedHistoryCharLimit,
   readJsonLines,
+  type StreamParseState,
   usageFromResult,
 } from "../../src/adapters/coding-agent/protocol";
 import type { OcxParsedRequest } from "../../src/types";
@@ -309,6 +310,56 @@ describe("codebuddy stream-json event mapping", () => {
     expect(state.toolBlockStarts).toBe(2);
     expect(state.completedToolCalls).toBe(2);
     expect(state.openToolBlocks?.size ?? 0).toBe(0);
+  });
+
+  test.each(["", "{\"value\":"])("same-index reuse rejects incomplete arguments %j before closing the previous call", partial => {
+    const state: StreamParseState = {
+      sawPartialText: false,
+      sawPartialThinking: false,
+      sawTerminalResult: false,
+      strictToolBlockCapture: true,
+    };
+    const feed = (event: unknown) => mapStreamMessageToEvents({ type: "stream_event", event: event as Record<string, unknown> }, state);
+    feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: "alpha" } });
+    if (partial) feed({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: partial } });
+
+    expect(() => feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_b", name: "beta" } }))
+      .toThrow("incomplete JSON arguments");
+    expect(state.completedToolCalls ?? 0).toBe(0);
+    expect(state.openToolBlocks?.get(2)?.id).toBe("tu_a");
+  });
+
+  test("same-index reuse rejects complete JSON that is not an argument object", () => {
+    const state: StreamParseState = {
+      sawPartialText: false,
+      sawPartialThinking: false,
+      sawTerminalResult: false,
+      strictToolBlockCapture: true,
+    };
+    const feed = (event: unknown) => mapStreamMessageToEvents({ type: "stream_event", event: event as Record<string, unknown> }, state);
+    feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: "alpha" } });
+    feed({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "[]" } });
+
+    expect(() => feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_b", name: "beta" } }))
+      .toThrow("non-object JSON arguments");
+    expect(state.completedToolCalls ?? 0).toBe(0);
+    expect(state.openToolBlocks?.get(2)?.id).toBe("tu_a");
+  });
+
+  test("an unindexed argument delta cannot be dropped from the sole indexed CodeBuddy tool block", () => {
+    const state: StreamParseState = {
+      sawPartialText: false,
+      sawPartialThinking: false,
+      sawTerminalResult: false,
+      strictToolBlockCapture: true,
+    };
+    const feed = (event: unknown) => mapStreamMessageToEvents({ type: "stream_event", event: event as Record<string, unknown> }, state);
+    feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: "alpha" } });
+
+    expect(() => feed({ type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{\"wrong\":true}" } }))
+      .toThrow("tool argument delta that cannot be attributed");
+    expect(state.openToolBlocks?.get(2)?.argParts).toEqual([]);
+    expect(state.completedToolCalls ?? 0).toBe(0);
   });
 
   test("usageFromResult returns undefined when no usage is present", () => {

@@ -1,8 +1,12 @@
 # Providers And Adapters
 
 The coding-agent stream parser buffers each tool-use block by its content-block index
-and emits a complete start/delta/end sequence on closure. A new start on an occupied
-index closes the previous block; distinct indices can interleave. Turn completion
+and emits a complete start/delta/end sequence on closure. Distinct indices can interleave.
+For the CodeBuddy capture-only bridge, the init handshake and turn-call limit are checked
+when a block opens, before its buffered events can be emitted. A new start on an occupied
+index closes the previous block only when its arguments form a complete JSON object;
+an unindexed delta or stop cannot be attributed to an indexed block, and a nonempty
+argument delta that cannot be attributed fails immediately. Turn completion
 requires every opened block to close, preserving the downstream single-open-call contract.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.

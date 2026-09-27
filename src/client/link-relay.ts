@@ -93,7 +93,10 @@ const RESPONSE_OMITTED_HEADERS = new Set(["content-encoding", "content-length"])
  * Caller credentials never cross the tunnel. The Child's own ChatGPT or Anthropic credential
  * stays on the Child, and the Home sees exactly one admission: the link key.
  */
-const CALLER_CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-opencodex-api-key", "chatgpt-account-id", "cookie"] as const;
+const CALLER_CREDENTIAL_HEADERS = [
+  "authorization", "api-key", "x-api-key", "x-goog-api-key", "x-opencodex-api-key",
+  "chatgpt-account-id", "cookie",
+] as const;
 
 function jsonError(status: number, error: string, retry = false): Response {
   const headers = retry ? { "Retry-After": String(LINK_RELAY_RETRY_AFTER_SECONDS) } : undefined;

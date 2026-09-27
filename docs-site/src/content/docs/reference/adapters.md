@@ -256,6 +256,14 @@ MiMo model Command Code serves.
   local reference remains resolvable. OpenAI envelope fields such as schema `name`, envelope
   `description`, and `strict` are not part of the Anthropic wire format. JSON object mode without a
   schema has no Anthropic equivalent and is not translated.
+  In the reverse direction, translated Anthropic output schemas retain the caller's original
+  schema. `strict: true` requires an object root without a root union and complete closed objects
+  throughout nested properties, array items, unions and definitions: `properties` must be an object,
+  `additionalProperties` must be `false`, and `required` must contain exactly its property names.
+  Incomplete objects, unknown schema keywords, and values outside OpenAI's documented strict
+  subset use explicit `strict: false`; the classifier uses an allowlist rather than chasing each
+  unsupported constraint separately. The proxy does not invent
+  required fields, close an open object, or discard the caller's schema merely to obtain strict mode.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.

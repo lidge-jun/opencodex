@@ -28,9 +28,23 @@ function fixture(provider: OcxProviderConfig): ProviderAdapter {
     },
   };
 }
+function fetchFixture(provider: OcxProviderConfig): ProviderAdapter {
+  return {
+    name: "fetchonly",
+    buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "{}" }),
+    fetchResponse: async () => new Response("{}", { status: 200 }),
+    async *parseStream() {
+      yield { type: "text_delta", text: "search-enabled answer" } as AdapterEvent;
+      yield { type: "done" } as AdapterEvent;
+    },
+    async parseResponse() { return [{ type: "done" }] as AdapterEvent[]; },
+  };
+}
 mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
   resolveAdapter: (provider: OcxProviderConfig, cache?: "none" | "short" | "long") =>
-    provider.adapter === "cursor" ? fixture(provider) : resolveAdapter(provider, cache),
+    provider.adapter === "cursor" ? fixture(provider)
+      : provider.adapter === "fetchonly" ? fetchFixture(provider)
+      : resolveAdapter(provider, cache),
 }));
 const pacing = await import("../../src/providers/request-pacing");
 const originalWaitForSlot = pacing.waitForProviderRequestSlot;
@@ -38,6 +52,20 @@ mock.module("../../src/providers/request-pacing", () => ({ ...pacing,
   waitForProviderRequestSlot: async (...args: Parameters<typeof originalWaitForSlot>) => {
     await onPacingSlotWait?.();
     return originalWaitForSlot(...args);
+  },
+}));
+const sidecarAuth = await import("../../src/server/responses/request-sidecar-auth");
+const prepareResponsesSidecarAuth = sidecarAuth.prepareResponsesSidecarAuth;
+let releasedFixtureProbe = false;
+mock.module("../../src/server/responses/request-sidecar-auth", () => ({ ...sidecarAuth,
+  prepareResponsesSidecarAuth: async (...args: Parameters<typeof sidecarAuth.prepareResponsesSidecarAuth>) => {
+    if (args[0].req.headers.get("x-fixture-probe") !== "held") {
+      return prepareResponsesSidecarAuth(...args);
+    }
+    return {
+      routedCompaction: false,
+      openAiSidecar: { releaseProbeLease: () => { releasedFixtureProbe = true; } },
+    } as Awaited<ReturnType<typeof sidecarAuth.prepareResponsesSidecarAuth>>;
   },
 }));
 const { handleResponses } = await import("../../src/server/responses");
@@ -129,6 +157,120 @@ test.each(["image", "video"] as const)("media-only %s bridge still injects its t
   expect(await run(true, false, media, false)).toContain("media answer");
   expect(attempts[0].context.tools?.some(t => t.name === `${media}_gen`)).toBe(true);
   expect(attempts[0].context.tools?.some(t => t.webSearch)).toBe(false);
+});
+
+test("releases a search probe when pre-dispatch validation rejects the request", async () => {
+  releasedFixtureProbe = false;
+  const config = {
+    port: 0, defaultProvider: "cursor",
+    webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+    providers: {
+      cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", authMode: "oauth", models: ["model"] },
+    },
+  } as OcxConfig;
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json", "x-fixture-probe": "held" },
+    body: JSON.stringify({ model: "cursor/model", input: [{
+      type: "function_call_output", output: "fixture result",
+    }], tools: [{ type: "web_search" }] }),
+  }), config, { model: "", provider: "" });
+
+  expect(response.status).toBe(400);
+  expect(releasedFixtureProbe).toBe(true);
+  expect(attempts).toHaveLength(0);
+});
+
+test("a streamed sidecar response keeps the search probe until the stream settles", async () => {
+  releasedFixtureProbe = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(typeof input === "object" && "url" in input ? input.url : input);
+    if (url.includes("exa")) {
+      return new Response(JSON.stringify({ results: [{ title: "fixture", url: "https://fixture.test" }] }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(
+      'event: response.completed\ndata: {"type":"response.completed","response":{"output":[]}}\n\n',
+      { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    const config = {
+      port: 0, defaultProvider: "fetchonly",
+      webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+      providers: {
+        fetchonly: { adapter: "fetchonly", baseUrl: "https://fetchonly.test/v1", apiKey: "fixture-key", models: ["model"] },
+      },
+    } as OcxConfig;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "x-fixture-probe": "held" },
+      body: JSON.stringify({ model: "fetchonly/model", input: "search this", stream: true,
+        tools: [{ type: "web_search" }] }),
+    }), config, { model: "", provider: "" });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("event-stream");
+    expect(releasedFixtureProbe).toBe(false);
+    await response.text();
+    // The routed model answered without a web_search call, so no sidecar outcome
+    // settled the lease — the stream's own completion hands the probe back.
+    expect(releasedFixtureProbe).toBe(true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a cancelled streamed sidecar response releases the search probe", async () => {
+  releasedFixtureProbe = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(
+    'event: response.completed\ndata: {"type":"response.completed","response":{"output":[]}}\n\n',
+    { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  try {
+    const config = {
+      port: 0, defaultProvider: "fetchonly",
+      webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+      providers: {
+        fetchonly: { adapter: "fetchonly", baseUrl: "https://fetchonly.test/v1", apiKey: "fixture-key", models: ["model"] },
+      },
+    } as OcxConfig;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "x-fixture-probe": "held" },
+      body: JSON.stringify({ model: "fetchonly/model", input: "search this", stream: true,
+        tools: [{ type: "web_search" }] }),
+    }), config, { model: "", provider: "" });
+
+    expect(response.status).toBe(200);
+    expect(releasedFixtureProbe).toBe(false);
+    // Client disconnect: the tracked stream's cancel path must settle the lease the same
+    // way a completed stream does, or the probe stays held until process exit.
+    await response.body!.cancel();
+    expect(releasedFixtureProbe).toBe(true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a media-bridge stream releases the search probe when it settles", async () => {
+  releasedFixtureProbe = false;
+  events = [[{ type: "text_delta", text: "media answer" }, { type: "done" }]];
+  const config = {
+    port: 0, defaultProvider: "cursor",
+    images: { bridgeEnabled: true },
+    providers: {
+      cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", authMode: "oauth", models: ["model"] },
+    },
+  } as OcxConfig;
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json", "x-fixture-probe": "held" },
+    body: JSON.stringify({ model: "cursor/model", input: "draw a fixture", stream: true,
+      tools: [{ type: "image_generation" }] }),
+  }), config, { model: "", provider: "" });
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("event-stream");
+  expect(releasedFixtureProbe).toBe(false);
+  await response.text();
+  expect(releasedFixtureProbe).toBe(true);
 });
 
 // Streaming only: a first-event 429 replays the turn while the superseded

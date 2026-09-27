@@ -1,5 +1,6 @@
 {
   "project-config-warning-snapshot.test.ts": "codex-integration",
+  "pnpm-command-isolation.test.ts": "update",
   "provider-antigravity-quota-retry.test.ts": "providers",
   "responses-compaction-recovery.test.ts": "responses",
   "compaction-recovery-settings.test.ts": "config",
@@ -314,6 +315,7 @@
   "claude-inbound-cache-stabilize.test.ts": "claude-integration",
   "claude-inbound-debug.test.ts": "claude-integration",
   "claude-inbound.test.ts": "claude-integration",
+  "claude-output-schema-strict.test.ts": "claude-integration",
   "claude-intercept-integration.test.ts": "server",
   "claude-intercept-local-ca.test.ts": "claude-integration",
   "claude-intercept-model-bindings.test.ts": "claude-integration",

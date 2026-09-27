@@ -137,9 +137,33 @@ test("recorded macOS ls output rejects effective non-owner write grants", () => 
     + " 0: group:everyone allow write\n";
   const ownerNamedGroup = "drwx------@ 2 runner staff 64 Sep 27 07:50 /private/var/folders/ab/tmp/plugins\n"
     + " 0: group:runner allow add_file\n";
-  for (const listing of [pluginDir, ownedAncestor, inheritedChild, pluginFile, ownerNamedGroup]) {
-    expect(macAclListingTrustError(listing)).toBe("has an access control list");
+  // `/bin/ls -lebd` renders resolved ACL record names, not numeric UIDs. A foreign record named
+  // `0` must not inherit root trust merely because its name looks like UID 0 (#6017).
+  const numericRecordName = "-rw-------@ 1 runner staff 64 Sep 27 07:50 /plugins/plugin.ts\n"
+    + " 0: user:0 allow write\n";
+  const rootRecordName = "-rw-------@ 1 runner staff 64 Sep 27 07:50 /plugins/plugin.ts\n"
+    + " 0: user:root allow write\n";
+  const unresolvedUuid = "-rw-------@ 1 runner staff 64 Sep 27 07:50 /plugins/plugin.ts\n"
+    + " 0: user:8D95C9F2-3B29-4B30-8932-C43D3AABC123 allow write\n";
+  for (const listing of [
+    pluginDir, ownedAncestor, inheritedChild, pluginFile, ownerNamedGroup,
+    numericRecordName, rootRecordName, unresolvedUuid,
+  ]) {
+    // Pin the current user so a runner whose login is `root` or a record named `0` cannot turn
+    // these foreign-principal refusals into the current-user exemption.
+    expect(macAclListingTrustError(listing, "runner")).toBe("has an access control list");
   }
+  // Bare principals are not identity-bearing user records. Keep the rights policy explicit so a
+  // future parser cleanup cannot accidentally grant them the owner/current-user exemption.
+  const bareBenignPrincipal = "-rw-------@ 1 runner staff 64 Sep 27 07:50 /plugins/plugin.ts\n"
+    + " 0: runner allow read\n";
+  expect(macAclListingTrustError(bareBenignPrincipal)).toBeNull();
+  const bareWritePrincipal = "-rw-------@ 1 runner staff 64 Sep 27 07:50 /plugins/plugin.ts\n"
+    + " 0: runner allow write\n";
+  expect(macAclListingTrustError(bareWritePrincipal)).toBe("has an access control list");
+  const numericCurrentUser = "-rw-------@ 1 0 staff 64 Sep 27 07:50 /plugins/plugin.ts\n"
+    + " 0: user:0 allow write\n";
+  expect(macAclListingTrustError(numericCurrentUser, "0")).toBeNull();
   expect(macAclListingTrustError("drwxr-xr-x+ 23 root wheel 736 Sep 27 07:50 /\n 0: unrecognized ACL entry\n"))
     .toBe("access control list inspection failed");
   expect(macAclListingTrustError(`${pluginDir.split("\n")[0]}\n 0: group:everyone allow future_permission\n`))

@@ -106,10 +106,13 @@ describe("client link HTTP relay", () => {
   test("replaces every caller credential with the link key and filters hop-by-hop headers", () => {
     const caller = new Headers({
       Authorization: "Bearer caller-chatgpt-oauth",
+      "Api-Key": "azure-caller",
       "X-OpenCodex-API-Key": "ocx_data_caller",
       "X-Api-Key": "sk-ant-caller",
+      "X-Goog-Api-Key": "google-caller",
       "ChatGPT-Account-Id": "acct-caller",
       Cookie: "session=caller",
+      "Idempotency-Key": "idem-1",
       "X-Trace": "trace-1",
       Connection: "keep-alive, X-Remove",
       "X-Remove": "secret",
@@ -118,15 +121,18 @@ describe("client link HTTP relay", () => {
     });
     const forwarded = forwardLinkRequestHeaders(caller, LINK_KEY, "/v1/responses");
     expect(forwarded.get("authorization")).toBe(`Bearer ${LINK_KEY}`);
+    expect(forwarded.get("idempotency-key")).toBe("idem-1");
     expect(forwarded.get("x-trace")).toBe("trace-1");
-    for (const name of ["x-opencodex-api-key", "x-api-key", "chatgpt-account-id", "cookie", "connection", "keep-alive", "x-remove", "host", "content-length"]) {
+    for (const name of ["api-key", "x-opencodex-api-key", "x-api-key", "x-goog-api-key", "chatgpt-account-id", "cookie", "connection", "keep-alive", "x-remove", "host", "content-length"]) {
       expect(forwarded.get(name)).toBeNull();
     }
     // /v1/usage admits only the dedicated header on the Home.
     const usage = forwardLinkRequestHeaders(caller, LINK_KEY, "/v1/usage");
     expect(usage.get("x-opencodex-api-key")).toBe(LINK_KEY);
     expect(usage.get("authorization")).toBeNull();
+    expect(usage.get("api-key")).toBeNull();
     expect(usage.get("x-api-key")).toBeNull();
+    expect(usage.get("x-goog-api-key")).toBeNull();
 
     const response = sanitizeLinkResponseHeaders(new Headers({
       Connection: "X-Response-Secret",
@@ -146,18 +152,32 @@ describe("client link HTTP relay", () => {
     const fetchImpl = (async (_input, init) => { sent.push(new Headers(init?.headers)); return Response.json({ ok: true }); }) as typeof fetch;
     const response = await relayLinkDataRequest(relayRequest({
       method: "POST",
-      headers: { Authorization: "Bearer caller-chatgpt-oauth", "ChatGPT-Account-Id": "acct-caller", "Content-Type": "application/json" },
+      headers: {
+        Authorization: "Bearer caller-chatgpt-oauth",
+        "Api-Key": "azure-caller",
+        "X-Goog-Api-Key": "google-caller",
+        "ChatGPT-Account-Id": "acct-caller",
+        "Content-Type": "application/json",
+      },
       body: "{}",
     }), target, { fetchImpl });
     expect(response.status).toBe(200);
     expect(sent[0]?.get("authorization")).toBe(`Bearer ${LINK_KEY}`);
+    expect(sent[0]?.get("api-key")).toBeNull();
+    expect(sent[0]?.get("x-goog-api-key")).toBeNull();
     expect(sent[0]?.get("chatgpt-account-id")).toBeNull();
     const usage = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/usage", {
-      headers: { Authorization: "Bearer caller-chatgpt-oauth" },
+      headers: {
+        Authorization: "Bearer caller-chatgpt-oauth",
+        "Api-Key": "azure-caller",
+        "X-Goog-Api-Key": "google-caller",
+      },
     }), target, { fetchImpl });
     expect(usage.status).toBe(200);
     expect(sent[1]?.get("x-opencodex-api-key")).toBe(LINK_KEY);
     expect(sent[1]?.get("authorization")).toBeNull();
+    expect(sent[1]?.get("api-key")).toBeNull();
+    expect(sent[1]?.get("x-goog-api-key")).toBeNull();
   });
 
   test("rejects TE/CL ambiguity and oversized requests before outbound I/O", async () => {
@@ -387,6 +407,8 @@ describe("client link HTTP relay", () => {
           path: new URL(req.url).pathname + new URL(req.url).search,
           host: req.headers.get("host"),
           authorization: req.headers.get("authorization"),
+          apiKey: req.headers.get("api-key"),
+          googleApiKey: req.headers.get("x-goog-api-key"),
           dedicated: req.headers.get("x-opencodex-api-key"),
           contentLength: req.headers.get("content-length"),
           transferEncoding: req.headers.get("transfer-encoding"),
@@ -401,14 +423,20 @@ describe("client link HTTP relay", () => {
     const body = JSON.stringify({ input: "hello" });
     const response = await fetch(new URL("/v1/responses?trace=1", machine.url), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer caller-chatgpt-oauth", "X-OpenCodex-API-Key": "ocx_data_caller" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer caller-chatgpt-oauth",
+        "Api-Key": "azure-caller",
+        "X-Goog-Api-Key": "google-caller",
+        "X-OpenCodex-API-Key": "ocx_data_caller",
+      },
       body,
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ relayed: true });
     expect(received).toEqual({
       method: "POST", path: "/v1/responses?trace=1", host: `127.0.0.1:${hub.port}`,
-      authorization: `Bearer ${LINK_KEY}`, dedicated: null,
+      authorization: `Bearer ${LINK_KEY}`, apiKey: null, googleApiKey: null, dedicated: null,
       contentLength: String(body.length), transferEncoding: null, body,
     });
     expect((await fetch(new URL("/v1/unknown", machine.url))).status).toBe(404);

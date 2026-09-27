@@ -1,5 +1,5 @@
 use crate::{
-    exit::{ExitCoordinator, ExitPhase, RestartReadiness},
+    exit::{AbortedRestart, ExitCoordinator, ExitPhase, RestartReadiness},
     logging, tray,
 };
 use serde::Serialize;
@@ -422,8 +422,13 @@ pub async fn install(app: &AppHandle, update: Update) -> Result<(), String> {
 
 /// Hand a failed install back to a running app. True when the drain had already stopped the
 /// runtime, so the startup sequence has to bring one back; a drain that failed left it running.
+/// Intent captured before the drain and a newer startup retry are both authoritative.
 fn after_install_failure(coordinator: &ExitCoordinator) -> bool {
-    coordinator.abort_restart() == Some(ExitPhase::Drained)
+    coordinator.abort_restart()
+        == Some(AbortedRestart {
+            phase: ExitPhase::Drained,
+            runtime_was_wanted: true,
+        })
 }
 
 fn recover_after_failed_install(app: &AppHandle) {
@@ -507,6 +512,7 @@ mod tests {
         DesktopUpdateState, InstallClaim, UiProjection,
     };
     use crate::exit::{DrainVerdict, ExitCoordinator, ExitDecision, ExitReason};
+    use crate::tray_availability::TrayAvailability;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
     use tauri_utils::config::BundleType;
@@ -533,6 +539,26 @@ mod tests {
         coordinator.finish_drain(DrainVerdict::Drained);
         assert!(!after_install_failure(&coordinator));
         assert_eq!(coordinator.decision(), ExitDecision::Proceed);
+
+        // A completed tray Stop remains the person's intent across repeated failed updates.
+        let coordinator = ExitCoordinator::new();
+        coordinator.set_tray(TrayAvailability::Available);
+        assert!(coordinator.begin_stop());
+        assert_eq!(coordinator.finish_stop(), None);
+        for _ in 0..2 {
+            coordinator.claim_drain(ExitReason::CoordinatedRestart);
+            coordinator.finish_drain(DrainVerdict::Drained);
+            assert!(!after_install_failure(&coordinator));
+            assert!(!coordinator.supervision_allowed());
+            assert_eq!(coordinator.decision(), ExitDecision::Hide);
+        }
+
+        // A newer retry wins over the stopped intent that the update captured at claim time.
+        coordinator.claim_drain(ExitReason::CoordinatedRestart);
+        coordinator.resume();
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert!(after_install_failure(&coordinator));
+        assert!(coordinator.supervision_allowed());
     }
 
     #[test]

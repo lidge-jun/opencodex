@@ -241,6 +241,8 @@ export interface StreamParseState {
   toolBlockStarts?: number;
   /** Completed tool_use content blocks observed in this stream. */
   completedToolCalls?: number;
+  /** CodeBuddy's capture-only bridge requires complete JSON and matching block indices. */
+  strictToolBlockCapture?: boolean;
   /** Tool IDs already captured through partial events, for complete-assistant deduplication. */
   partialToolCallIds?: Set<string>;
   /** A complete assistant tool block had no matching partial capture. */
@@ -351,6 +353,7 @@ export interface OpenToolBlock {
   id: string;
   name: string;
   argParts: string[];
+  indexed: boolean;
 }
 
 /** Key a tool_use start frame by content-block index, falling back to a synthetic key. */
@@ -366,8 +369,9 @@ function toolBlockKey(state: StreamParseState, event: StreamMessage): number {
  * Resolve a delta/stop frame to an open tool block. An indexed frame only matches a block
  * opened under the same index — CodeBuddy skips stop frames for thinking blocks, and such a
  * stop must not close a tool block that happens to be open. An index-less frame resolves
- * only when exactly one block is open. Ambiguous argument deltas are rejected before
- * resolution; an unmatched stop cannot close a tool block.
+ * only when exactly one block is open. Ambiguous argument deltas with multiple open blocks
+ * fail the turn. On the CodeBuddy capture path, a missing-index delta or stop cannot match
+ * an indexed block; an unmatched stop leaves the block open for terminal accounting.
  */
 function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): number | undefined {
   const index = event.index;
@@ -376,16 +380,33 @@ function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): num
   }
   const blocks = state.openToolBlocks;
   if (!blocks || blocks.size !== 1) return undefined;
-  return blocks.keys().next().value;
+  const [key, block] = blocks.entries().next().value!;
+  return state.strictToolBlockCapture && block.indexed ? undefined : key;
 }
 
 /**
  * Emit a closed block atomically — start, the buffered fragments in arrival order, end —
  * so the strictly sequential downstream bridge never sees two calls open at once.
  */
-function closeToolBlock(state: StreamParseState, key: number, events: AdapterEvent[]): void {
+function closeToolBlock(state: StreamParseState, key: number, events: AdapterEvent[], implicit = false): void {
   const block = state.openToolBlocks?.get(key);
   if (!block || !state.openToolBlocks) return;
+  if (state.strictToolBlockCapture && (implicit || block.argParts.length > 0)) {
+    // A second start on this index is an implicit stop only when the previous call's
+    // arguments are already complete. Otherwise a later delta could be assigned to the
+    // wrong call and still produce a superficially successful tool-use turn. An explicit
+    // stop with no deltas retains the CLI's existing empty-arguments representation.
+    const argumentsJson = block.argParts.join("");
+    let parsedArguments: unknown;
+    try {
+      parsedArguments = JSON.parse(argumentsJson);
+    } catch {
+      throw new CodingAgentProtocolError("Coding-agent CLI ended a tool call with incomplete JSON arguments.");
+    }
+    if (!asRecord(parsedArguments)) {
+      throw new CodingAgentProtocolError("Coding-agent CLI ended a tool call with non-object JSON arguments.");
+    }
+  }
   state.openToolBlocks.delete(key);
   events.push({ type: "tool_call_start", id: block.id, name: block.name });
   for (const part of block.argParts) events.push({ type: "tool_call_delta", arguments: part });
@@ -428,6 +449,11 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       if (partial) {
         const key = resolveToolBlockKey(state, event);
         const block = key === undefined ? undefined : state.openToolBlocks?.get(key);
+        if (state.strictToolBlockCapture && !block) {
+          throw new CodingAgentProtocolError(
+            "Coding-agent CLI sent a tool argument delta that cannot be attributed to an open tool block.",
+          );
+        }
         if (block) block.argParts.push(partial);
       }
     }
@@ -445,12 +471,16 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
           // CodeBuddy reuses one content-block index for a parallel batch: every call in the
           // batch starts on the same index, intermediate blocks never receive a stop, and only
           // the final block does (observed 2026-09-26: START 2 alpha, A's complete args, START 2
-          // beta, B's complete args, one STOP 2). Parallel calls stream their arguments
-          // sequentially — never interleaved — so the block already open on this index is
-          // complete, and the new start implicitly closes it.
-          closeToolBlock(state, key, events);
+          // beta, B's complete args, one STOP 2). A new start implicitly closes the previous
+          // block only after the capture path verifies its arguments form a complete object.
+          closeToolBlock(state, key, events, true);
         }
-        (state.openToolBlocks ??= new Map()).set(key, { id, name, argParts: [] });
+        (state.openToolBlocks ??= new Map()).set(key, {
+          id,
+          name,
+          argParts: [],
+          indexed: typeof event.index === "number" && Number.isInteger(event.index),
+        });
         state.toolBlockStarts = (state.toolBlockStarts ?? 0) + 1;
         state.partialToolCallIds?.add(id);
       }

@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { saveCredential } from "../../src/oauth/store";
@@ -34,6 +36,8 @@ mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
   },
 }));
 const { handleResponses } = await import("../../src/server/responses");
+const { addFinalRequestLog } = await import("../../src/server/request-log");
+let requestLog: Parameters<typeof handleResponses>[2];
 let home: ReturnType<typeof createTempHome>;
 let release: (() => void) | undefined;
 beforeEach(async () => {
@@ -73,10 +77,11 @@ function run({
     stallTimeoutSec,
     providers: { devin: { adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com", models: ["swe-2"] } },
   } as OcxConfig;
+  requestLog = { model: "", provider: "", surface };
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "devin/swe-2", input: "answer", stream }),
-  }), config, { model: "", provider: "", surface }, { comboAttempt, abortSignal });
+  }), config, requestLog, { comboAttempt, abortSignal });
 }
 
 async function waitForPreflightResponse(pending: Promise<Response>, started: Promise<void>, resume: () => void) {
@@ -111,6 +116,28 @@ test.each([
     message: limit.message, type: "rate_limit_error", code: "rate_limit_exceeded",
   } });
   expect(calls).toBe(1);
+});
+
+test.each([true, false])("pre-output 429 preserves metered usage (stream=%s)", async stream => {
+  const usage = { inputTokens: 23, outputTokens: 5, totalTokens: 28 };
+  events = [{ ...limit, usage }];
+  expect((await run({ stream })).status).toBe(429);
+  expect(requestLog.usage).toEqual(usage);
+});
+
+test.each([true, false])("pre-output 429 persists bound usage in the usage journal (stream=%s)", async stream => {
+  const usage = { inputTokens: 23, outputTokens: 5, totalTokens: 28 };
+  events = [{ ...limit, usage }];
+  expect((await run({ stream })).status).toBe(429);
+  // Exercise usage-journal finalization with this request's bound metering context.
+  // The durable row proves usage survives logging, not that a separate API-key budget
+  // reservation was settled. This preflight refusal returns HTTP before starting SSE.
+  addFinalRequestLog(`preflight-usage-${stream}`, Date.now(), requestLog, 429, { closeReason: "non_stream" });
+  const journalPath = join(home.root, "usage.jsonl");
+  expect(existsSync(journalPath)).toBe(true);
+  const rows = readFileSync(journalPath, "utf8").trim().split("\n").filter(Boolean)
+    .map(line => JSON.parse(line) as { usage?: typeof usage });
+  expect(rows.at(-1)?.usage).toMatchObject({ inputTokens: 23, outputTokens: 5 });
 });
 
 test("buffered cooldown heartbeat keeps a final refusal as HTTP 429", async () => {

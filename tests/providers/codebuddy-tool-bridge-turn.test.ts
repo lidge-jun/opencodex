@@ -417,6 +417,28 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(child?.killed).toBe(true);
   });
 
+  test("an indexless argument delta for the sole indexed tool block fails before a later indexed stop", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = () => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        { type: "stream_event", event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: cliName } } },
+        inputJsonDelta("{\"wrong\":true}"),
+        { type: "stream_event", event: { type: "content_block_stop", index: 2 } },
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+
+    expect(events).toEqual([expect.objectContaining({ type: "error", code: "protocol_error", status: 502, retryable: false })]);
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "tool_call_delta" || e.type === "done")).toBe(false);
+    expect(child?.killed).toBe(true);
+  });
+
   test("a parallel batch on one shared block index completes every call in the leg", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
@@ -463,6 +485,48 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events[4]).toMatchObject({ arguments: "{\"command\":[\"ls\"]}" });
     expect(events[6]).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false });
     expect(child?.killed).toBe(true);
+  });
+
+  test.each(["", "{\"command\":"])("same-index reuse fails closed when the previous arguments are incomplete %j", async partial => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const start = (id: string) => ({
+      type: "stream_event",
+      event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id, name: cliName } },
+    });
+    const frames: unknown[] = [INIT_OK, start("tu_a")];
+    if (partial) frames.push({
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: partial } },
+    });
+    frames.push(start("tu_b"), MESSAGE_STOP);
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines(frames)) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "protocol_error", status: 502, retryable: false });
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
+  });
+
+  test("an unindexed stop cannot complete an indexed tool call", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        INIT_OK,
+        { type: "stream_event", event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: cliName } } },
+        { type: "stream_event", event: { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{}" } } },
+        BLOCK_STOP,
+        MESSAGE_STOP,
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "protocol_error", status: 502, retryable: false });
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
   });
 
   test("a tool call before the init frame fails closed with tool_bridge_init_missing", async () => {
@@ -741,6 +805,7 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     const frames: unknown[] = [INIT_OK];
     for (let i = 0; i < 17; i += 1) {
       frames.push(toolUseStart(cliName, `tu_${i}`));
+      frames.push(inputJsonDelta("{}"));
       frames.push(BLOCK_STOP);
     }
     frames.push(MESSAGE_STOP);
@@ -750,5 +815,26 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     });
     const events = await run(adapter, p);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_call_limit" });
+  });
+
+  test("the turn limit is enforced when the seventeenth block opens", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const frames: unknown[] = [INIT_OK];
+    for (let i = 0; i < 17; i += 1) {
+      frames.push({
+        type: "stream_event",
+        event: { type: "content_block_start", index: i, content_block: { type: "tool_use", id: `tu_${i}`, name: cliName } },
+      });
+    }
+    frames.push(MESSAGE_STOP);
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines(frames)) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_call_limit", status: 502, retryable: false });
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
   });
 });

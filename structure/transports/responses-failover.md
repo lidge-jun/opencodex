@@ -105,6 +105,17 @@ is sorted exactly like the pre-header row's (see
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary)) before
 it goes round the recovery loop again.
 
+The boundary is the first non-control Responses event, not the first visible text delta:
+`response.created`, output/tool events and response usage all close the WebSocket replacement
+window. Quota metadata and ping/pong liveness alone do not. Cancellation and connect/silence
+deadlines never acquire the socket-death marker, even if a late close follows them.
+`tests/responses/ws-ambiguous-resend.test.ts` covers these boundaries through the exchange and
+the existing HTTP-only dispatch, including request-field preservation and terminal fallback
+answers. The replacement uses the shared credential-selection guard and physical-send ledger;
+there is no transport-local retry budget or credential snapshot with independent authority.
+
+> Decision record: [ADR-4191](../decisions/ADR-4191-established-websocket-fallback.md)
+
 ## Console upload rejection recovery
 
 `src/providers/opencode-zen-rate-limit.ts` recognizes the complete Console upload-rejection envelope only at the effective HTTPS opencode.ai Zen/Go generation endpoint. A provider row name cannot authorize another destination. The two recovery loops in `src/server/responses/core.ts` wait 800 ms and replay the captured serialized request once; cancellation, nonreplayable responses, other errors and a second upload rejection keep their failure semantics. The recovery kind is persisted as `console-go-upload-retry` and has a localized Logs label.

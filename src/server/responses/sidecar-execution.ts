@@ -111,6 +111,17 @@ export async function executeResponsesSidecars(
     cancelResponseCompletion,
   } = responseEffects;
 
+  // Resolving the OpenAI search credential may hold the account's sole
+  // cooldown-recovery probe lease. A streamed sidecar result keeps it until the
+  // stream settles — completion or client cancel — so a later in-stream search
+  // outcome can still clear the cooldown; a response with no live body is
+  // terminal, so the lease is handed back before returning it. A recorded
+  // search outcome already settled the lease, making each release a
+  // generation-bound no-op.
+  const releaseSearchProbeLease = (): void => {
+    openAiSidecar?.releaseProbeLease?.();
+  };
+
 
   // Tool results are PAIRED by call_id. parseRequest writes it into OcxToolResultMessage.toolCallId
   // (parser.ts:738/752) without validating it, because inputItemSchema's permissive catch-all
@@ -431,11 +442,12 @@ export async function executeResponsesSidecars(
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
       imgTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, undefined, options.turnAdmissionLease), {
+      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: imgResponse.status,
         headers: imgResponse.headers,
       });
     }
+    releaseSearchProbeLease();
     return imgResponse;
     } // end else (streaming bridge)
   }
@@ -511,11 +523,12 @@ export async function executeResponsesSidecars(
     if (wsResponse.body) {
       const wsTurnAc = new AbortController();
       wsTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, undefined, options.turnAdmissionLease), {
+      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: wsResponse.status,
         headers: wsResponse.headers,
       });
     }
+    releaseSearchProbeLease();
     return wsResponse;
   }
 

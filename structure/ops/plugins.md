@@ -20,9 +20,11 @@ or signs them.
   can swap a checked path before it is imported; files are imported through the resolved directory.
   On macOS, `ls -lebd` must show no effective non-owner ACL grant that can write, delete, change
   permissions, or add/remove path entries on the file, plugin directory, or any ancestor. Denials,
-  grants only to the path owner, the running user, or root, read-only grants, and inheritance-only
-  entries on the inspected path are safe; inherited grants effective on a descendant are checked
-  at that descendant. A timed-out macOS inspection retries once only if its output is empty:
+  grants only to the path owner or running user, read-only grants, and inheritance-only entries on
+  the inspected path are safe; inherited grants effective on a descendant are checked at that
+  descendant. `ls` renders UUID-backed principals as Directory Services record names, so names
+  such as `root` or `0` never establish UID 0; root-owned paths still pass through the owner check.
+  A timed-out macOS inspection retries once only if its output is empty:
   observed unsafe grants refuse immediately, and any other partial output is incomplete and also
   refuses loading. Unknown grants or other inspection errors also refuse loading.
   Linux uses `getfacl` when installed and refuses extended

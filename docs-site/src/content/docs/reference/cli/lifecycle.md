@@ -490,6 +490,12 @@ supersedes it rather than replacing it.
 A state file with no ownership record means the CLI installation owns the runtime, which is what
 every installation made before this feature is in. Nothing changes for you until an app takes over.
 
+Home paths inside a state record are compared with the current home by the physical directory they
+resolve to, not just their spelling. A junction or symlink recorded under an older install still
+names the same home and keeps working after the move; an alias that no longer resolves is only
+treated as a different home when its recorded spelling also differs from the current one, so a
+stale mount still produces the foreign-owner refusal instead of silently claiming the runtime.
+
 While something other than this CLI owns the runtime, the subcommands that would **activate** your
 registration refuse instead:
 

@@ -657,6 +657,14 @@ catalog entries; `enable`, `disable`, and `provider` control visibility; `select
 provider allowlist; `context` controls provider context caps; and `shadow` manages background
 shadow-call interception.
 
+Model prices are estimates in USD per million tokens. `ocx models --json` includes a
+`price` object with `cost4` rates and their source; `ocx models price --json` keeps
+`cost` for the saved override and reports resolved rates in `effectiveCost`.
+Manual prices (including zero) take precedence, followed by the shared catalog and
+verified official-price fallbacks. Unknown models return `null`; no price is invented.
+Automatic defaults are derived on read and do not populate `modelCosts` in your config,
+so catalog updates remain effective. Use `set-price` to save provider-specific rates.
+
 Every per-model operation the dashboard offers is available here, so a headless install never needs
 the GUI to manage a catalog. `add`, `remove`, and `list-custom` work against the config file and apply
 to a running proxy through a catalog sync; the rest talk to the live management API and require the
@@ -664,9 +672,9 @@ proxy to be running (`ocx start`, or an installed service).
 
 | Subcommand | Supported flags | Action |
 | --- | --- | --- |
-| `list` (default) | `--provider <name>`, `--json` | List models seeded in configured providers. |
+| `list` (default) | `--provider <name>`, `--json` | List models seeded in configured providers, with estimated input/output prices. |
 | `live` | `--provider <name>`, `--json` | Read the running catalog, including models discovered at runtime. Rows are flagged `native`/`routed`, `custom`, and `enabled`/`disabled`. |
-| `price <provider/model>` | `--json` | Read the model's saved manual price override; no override means automatic pricing. |
+| `price <provider/model>` | `--json` | Read the saved manual override and effective price, including automatic catalog defaults. |
 | `set-price <provider/model>` | `--input <rate>`, `--output <rate>`, `--cache-read <rate>`, `--cache-write <rate>`, `--auto`, `--json` | Set display prices in USD per 1M tokens. Input/output are required when setting; omitted cache rates become zero. `--auto` removes only this model's override. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Register a model the provider catalog does not advertise. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Edit a custom model. `-` clears a field; `0` clears the context window. |

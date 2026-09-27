@@ -90,6 +90,11 @@ refusal returns as soon as that grant is spent, the leg has no send left, or a r
 for any other reason. A request that already emitted output or a tool call keeps the refusal
 regardless. A caller that cancels mid-replacement gets the cancellation, not the refusal.
 
+For WebSocket recovery, “before the first Responses event” is stricter than “before the
+first text”: even `response.created`, a tool event or a usage-bearing response closes the
+replacement window. Ping/pong and quota metadata alone do not. A later socket close cannot
+turn an already settled cancellation or connect/silence timeout into an HTTP retry.
+
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
 replacing an inherited `NO_PROXY`:
 

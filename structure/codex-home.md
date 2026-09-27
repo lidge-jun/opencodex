@@ -95,7 +95,12 @@ to the single discoverable Windows Desktop home; recording Linux `~/.codex` inst
 later repair or uninstall look foreign even though the service and runtime were started from the
 same environment. A record written before that discovery still names Linux `~/.codex`; service
 commands refuse it and name the recorded home to rerun with, because stop and repair would otherwise
-restore a different home. An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
+restore a different home. A recorded spelling that still resolves to the same physical directory —
+a junction or symlink alias — counts as the same home for the ownership check, the recorded SQLite
+home, and the unattended ownership preflight. Access or transient I/O errors are unknown rather
+than foreign in preflight; distinct spellings with missing/non-directory paths remain mismatches.
+Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`.
+An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 

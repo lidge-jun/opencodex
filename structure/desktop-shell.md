@@ -168,8 +168,13 @@ restart asked for after `install` is never reached, and the package would be rep
 runtime still serving out of those files. A drain that did not complete refuses the install and
 leaves the update pending. Neither that refusal nor an install that fails after the drain strands
 the app: `ExitCoordinator::abort_restart` takes a coordinated restart's settled drain phase back to
-idle with no claimed reason, so a close hides again and Quit works, and when the drain had stopped
-the runtime the startup sequence brings one back in recovery mode. A quit's drain is never aborted.
+idle with no claimed reason, so a close hides again and Quit works. When the drain had stopped the
+runtime and it was wanted before the update **or** requested again while draining, the startup
+sequence brings one back in recovery mode. A runtime already stopped from the tray stays stopped after a failed update unless the person
+explicitly requests startup while that update drain is in flight; that newer request wins over the
+captured stopped intent. A quit's drain is never aborted.
+
+> Decision record: [ADR-6033](decisions/ADR-6033-desktop-update-intent.md)
 
 The Tauri updater also publishes a bounded desktop snapshot over its identity-bound ProxyClient. A random process-session id travels in the embedded dashboard URL, and the dashboard requests GET /api/update/badge?surface=desktop&session=<id>. A normal browser keeps the package badge. The shell posts each updater-state change and a 60-second heartbeat; if the proxy loses the snapshot or the shell stops, the desktop badge becomes unknown after 180 seconds. This display path never installs an update or replaces the signed Tauri result. The tray shows the same pending state: macOS draws a blue child NSView dot over the template status-item image; Windows/Linux swap a generated dotted PNG when a tray host exists. The Windows base glyph is unchanged.
 
@@ -263,7 +268,8 @@ unreadable answers never count. It covers guest runtimes and an exit event that 
 The exit coordinator's `wanted` intent keeps this from fighting the person. It is true from launch;
 the tray's Stop (when it takes the phase), a quit's drain and an update's drain clear it before the
 runtime's exit can arrive, finishing a stop does not restore it, and the failure page's retry sets it
-again. A terminal
+again. A coordinated update remembers the intent it temporarily clears: an aborted update restores a
+previously wanted runtime, but never turns a completed tray Stop back on. A terminal
 `ocx stop` of the runtime this app started clears nothing, so the app starts it again after the
 backoff; the tray's Stop and Quit keep it stopped. The dashboard's own Stop, in the app's window or
 a browser, is refused with `desktop_supervised` while the app supervises the runtime

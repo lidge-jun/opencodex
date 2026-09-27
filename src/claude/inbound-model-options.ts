@@ -96,7 +96,13 @@ export function effortFromOutputConfig(outputConfig: unknown): string | undefine
   return typeof effort === "string" && OUTPUT_CONFIG_EFFORTS.has(effort) ? effort : undefined;
 }
 
-export function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
+function isFineTunedOpenAiTarget(model: string | undefined): boolean {
+  if (!model) return false;
+  const separator = model.lastIndexOf("/");
+  return model.slice(separator + 1).startsWith("ft:");
+}
+
+export function formatFromOutputConfig(outputConfig: unknown, resolvedModel?: string): Rec | undefined {
   if (!isRec(outputConfig) || !isRec(outputConfig.format)) return undefined;
   const format = outputConfig.format;
   if (
@@ -115,7 +121,9 @@ export function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
     name: "response",
     schema: format.schema,
     // Strict Structured Outputs also needs an object at the root; a root anyOf/oneOf is refused.
-    strict: format.schema.type === "object" && satisfiesOpenAiStrictSchema(format.schema),
+    strict: format.schema.type === "object"
+      && !Object.hasOwn(format.schema, "anyOf") && !Object.hasOwn(format.schema, "oneOf")
+      && satisfiesOpenAiStrictSchema(format.schema, isFineTunedOpenAiTarget(resolvedModel)),
   };
 }
 

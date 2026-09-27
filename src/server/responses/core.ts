@@ -140,6 +140,7 @@ async function handleResponsesInner(
       responseEffects,
       sendBudgetState,
     );
+    if (sidecarPlans instanceof Response && !sidecarPlans.ok) sidecarState.openAiSidecar?.releaseProbeLease?.();
     if (sidecarPlans instanceof Response) return sidecarPlans;
     const completionPolicy = createResponsesCompletionPolicy(requestContext, sidecarState);
     if (transportState.adapter.runTurn) return await executeResponsesRunTurn(

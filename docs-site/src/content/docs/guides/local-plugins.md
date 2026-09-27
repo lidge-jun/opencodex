@@ -31,9 +31,10 @@ Put plugin files in `plugins/` inside the opencodex home (`~/.opencodex/plugins/
   `chmod go-w ~/.opencodex/plugins ~/.opencodex/plugins/*`; on systems whose default umask is
   `002`, check the parent directories too. On macOS, an ACL grant to another user or group that
   can write, delete, change permissions, or add/remove path entries blocks loading, even if the
-  mode is `0600`; inspect with `ls -le`. Read-only, deny, inheritance-only, and grants only to
-  the path owner, the running user, or root do not block loading. On Linux, extended ACLs are
-  checked when `getfacl` is installed. Without it, only owner and mode bits are verified.
+  mode is `0600`; inspect the path itself with `/bin/ls -lebd -- <path>`. Read-only, deny,
+  inheritance-only, and grants only to the path owner or running user do not block loading. ACL
+  display names such as `root` or `0` are not treated as numeric UID proof. On Linux, extended
+  ACLs are checked when `getfacl` is installed. Without it, only owner and mode bits are verified.
 - On Windows automatic plugin loading is disabled until an ACL trust check is available.
 
 Restart the proxy after adding, changing or removing a plugin (`ocx service restart`, or stop and
