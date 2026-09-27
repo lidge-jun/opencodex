@@ -1157,3 +1157,23 @@ describe("paused generic OAuth accounts are never quota-probed", () => {
     await expect(getTokenForAccountQuotaProbe("google-antigravity", heldId)).rejects.toThrow("paused");
   });
 });
+
+test("a paused Meta Muse account is never used to mint a quota key", async () => {
+  const { fetchMuseKeyQuota } = require("../../src/providers/quota/vendor-probes-oauth") as typeof import("../../src/providers/quota/vendor-probes-oauth");
+  const { resetMuseKeyQuotaBackoff } = require("../../src/providers/muse-key-quota") as typeof import("../../src/providers/muse-key-quota");
+  const { setAccountPaused } = require("../../src/oauth/store") as typeof import("../../src/oauth/store");
+  await saveCredential("meta-muse", { access: "muse-access", refresh: "muse-refresh", expires: Date.now() + 60 * 60_000,
+    email: "muse@example.com", muse: { oauthAccessToken: "meta-account-" + "z".repeat(48) } });
+  const id = getAccountSet("meta-muse")!.activeAccountId;
+  let mints = 0;
+  globalThis.fetch = (async () => { mints += 1; return new Response(JSON.stringify({}), { status: 200 }); }) as unknown as typeof fetch;
+  resetMuseKeyQuotaBackoff();
+  await fetchMuseKeyQuota("meta-muse");
+  expect(mints).toBe(1);
+
+  resetMuseKeyQuotaBackoff();
+  await setAccountPaused("meta-muse", id, true);
+  expect(await fetchMuseKeyQuota("meta-muse")).toBeNull();
+  expect(mints).toBe(1);
+  resetMuseKeyQuotaBackoff();
+});
