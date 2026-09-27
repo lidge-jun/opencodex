@@ -14,8 +14,9 @@ const ROTATED = "devin-session-token$synthetic-rotated";
 const originalFetch = globalThis.fetch;
 
 // GetUserJwt stand-in: the identity a key mints, keyed by the key inside the protobuf body.
-let mintedIdentity: Record<string, { auth_uid: string; email: string } | undefined> = {};
+let mintedIdentity: Record<string, { auth_uid?: string; sub?: string; email?: string } | undefined> = {};
 let mintCalls = 0;
+let mintFailure: (() => Response) | undefined;
 function fakeUserJwt(payload: object): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
   return `${part({ alg: "HS256", typ: "JWT" })}.${part({ ...payload, exp: 9_999_999_999 })}.c2lnbmF0dXJl`;
@@ -24,6 +25,7 @@ const mintFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit
   const url = String(input instanceof Request ? input.url : input);
   if (!url.endsWith("/exa.auth_pb.AuthService/GetUserJwt")) return originalFetch(input, init);
   mintCalls++;
+  if (mintFailure) return mintFailure();
   const body = Buffer.from(init?.body as Uint8Array).toString("latin1");
   const key = Object.keys(mintedIdentity).find(candidate => body.includes(candidate));
   const identity = key ? mintedIdentity[key] : undefined;
@@ -81,6 +83,7 @@ beforeEach(() => {
   holdDeadSend = undefined;
   mintedIdentity = { [ROTATED]: { auth_uid: "uid-rotated", email: "rotated@example.com" } };
   mintCalls = 0;
+  mintFailure = undefined;
   globalThis.fetch = mintFetch;
   previousCliPath = process.env[DEVIN_CLI_CREDENTIALS_ENV];
   // Never let a test read the developer's real CLI credential.
@@ -213,6 +216,8 @@ test.each([
   expect(sentKeys).toEqual([DEAD]);
   expect(cliAccount()?.needsReauth).toBe(true);
   expect(cliAccount()?.credential.access).toBe(DEAD);
+  // The key is only ever sent to an allowlisted host, including the identity probe.
+  expect(mintCalls).toBe(0);
 });
 
 test("a CLI key another stored account already owns is not adopted", async () => {
@@ -227,7 +232,15 @@ test("a CLI key another stored account already owns is not adopted", async () =>
 });
 
 test.each([
-  ["a key that cannot mint a user_jwt", async () => { mintedIdentity = {}; await saveCliImport(DEAD); }],
+  ["a key Cognition refuses with 401", async () => { mintedIdentity = {}; await saveCliImport(DEAD); }],
+  ["a key Cognition refuses with 403", async () => {
+    mintFailure = () => new Response("", { status: 403 });
+    await saveCliImport(DEAD);
+  }],
+  ["a minted token without auth_uid", async () => {
+    mintedIdentity = { [ROTATED]: { email: "rotated@example.com" } };
+    await saveCliImport(DEAD);
+  }],
   ["a slot whose recorded accountId differs", async () => { await saveCliImport(DEAD, { accountId: "uid-before" }); }],
   ["a slot whose recorded email differs", async () => { await saveCliImport(DEAD, { email: "before@example.com" }); }],
   ["an identity another stored account owns", async () => {
@@ -245,8 +258,39 @@ test.each([
   expect(cliAccount()?.credential.access).toBe(DEAD);
 });
 
+test.each([
+  ["a transient 503", () => new Response("", { status: 503 })],
+  ["a 429", () => new Response("", { status: 429 })],
+  ["a network failure", () => { throw new TypeError("fetch failed"); }],
+])("an identity probe that fails with %s does not flag the account", async (_label, failure) => {
+  await saveCliImport(DEAD);
+  writeCliFile(ROTATED);
+  mintFailure = failure;
+
+  const body = await (await run()).json() as { error: { type: string; message: string } };
+
+  expect(body.error.type).toBe("authentication_error");
+  expect(body.error.message).not.toContain("ocx login devin");
+  expect(cliAccount()?.needsReauth).not.toBe(true);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
+
+  // Once the probe recovers, the next 401 adopts the rotated key.
+  mintFailure = undefined;
+  expect(await (await run()).text()).toContain("served by rotated");
+  expect(cliAccount()?.credential.access).toBe(ROTATED);
+});
+
+test("a slot recorded from the key's `sub` claim still matches the minted identity", async () => {
+  mintedIdentity = { [ROTATED]: { auth_uid: "uid-rotated", sub: "sub-rotated", email: "rotated@example.com" } };
+  await saveCliImport(DEAD, { accountId: "sub-rotated" });
+  writeCliFile(ROTATED);
+
+  expect(await (await run()).text()).toContain("served by rotated");
+  expect(cliAccount()?.credential.accountId).toBe("uid-rotated");
+});
+
 test("a slot whose recorded identity matches adopts the rotated key", async () => {
-  await saveCliImport(DEAD, { accountId: "uid-rotated", email: "Rotated@example.com" });
+  await saveCliImport(DEAD, { accountId: "uid-rotated", email: "  Rotated@Example.com " });
   writeCliFile(ROTATED);
 
   expect(await (await run()).text()).toContain("served by rotated");
