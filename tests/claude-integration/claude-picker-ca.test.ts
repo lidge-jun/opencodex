@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { connect, createServer } from "node:tls";
 import { createCertificateAuthority, createLocalInterceptCa, issueServerLeaf } from "../../src/claude/intercept/local-ca";
 import { drainPendingPickerCaUntrust } from "../../src/claude/intercept/picker-ca-cleanup";
 import {
-  acknowledgePendingPickerCaUntrust, ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
+  acknowledgePendingPickerCaUntrust, acceptsPickerAuthority, ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
   pickerCaOwnerPath, pickerCaPendingUntrustPath, pickerLeafCertPath, pickerStateDir,
   pendingPickerCaHasLivePublishedOwner, readPendingPickerCaUntrust, PICKER_CA_COMMON_NAME, PICKER_HOST,
 } from "../../src/claude/intercept/picker-ca";
@@ -512,3 +512,74 @@ test("a malformed pending record blocks publication and an actively published pe
   expect(() => ensurePickerCa(dir, { rotation: "startup" })).toThrow("picker_ca_pending_untrust");
   expect(readPendingPickerCaUntrust(dir)).toEqual(pending);
 });
+// Minimal DER writers for minting nonstandard authorities that the issuer API cannot emit.
+function tlv(tag: number, body: Buffer): Buffer {
+  const hdr = body.length < 0x80 ? [body.length]
+    : body.length < 0x100 ? [0x81, body.length]
+      : [0x82, body.length >> 8, body.length & 0xff];
+  return Buffer.concat([Buffer.from([tag, ...hdr]), body]);
+}
+const seq = (...items: Buffer[]) => tlv(0x30, Buffer.concat(items));
+const oid = (...bytes: number[]) => tlv(0x06, Buffer.from(bytes));
+const octet = (body: Buffer) => tlv(0x04, body);
+const extension = (oidBytes: number[], critical: boolean, value: Buffer) =>
+  seq(oid(...oidBytes), ...(critical ? [tlv(0x01, Buffer.from([0xff]))] : []), octet(value));
+const dnsName = (name: string) => tlv(0x82, Buffer.from(name, "ascii"));
+
+/** The nameConstraints extnValue this process emits (claude.ai permitted, all IPs excluded). */
+const pickerConstraints = () => seq(
+  tlv(0xa0, seq(dnsName(PICKER_HOST))),
+  tlv(0xa1, Buffer.concat([seq(tlv(0x87, Buffer.alloc(8))), seq(tlv(0x87, Buffer.alloc(32)))])),
+);
+
+/** Flips the keyUsage bits byte inside an emitted certificate (the gate does not verify signatures). */
+function withKeyUsageBits(pem: string, bits: number): string {
+  const raw = Buffer.from(pem.replace(/-----[A-Z ]+-----|\s/g, ""), "base64");
+  const tbs = parts(der(raw, 0).body)[0]!;
+  const wrapper = parts(tbs.body).find(item => item.tag === 0xa3)!;
+  for (const item of parts(der(wrapper.body, 0).body)) {
+    const fields = parts(item.body);
+    if (fields[0]?.tag === 0x06 && fields[0].body.equals(Buffer.from([0x55, 0x1d, 0x0f]))) {
+      const value = fields.at(-1)!; // OCTET STRING wrapping `03 02 <unused> <bits>`
+      raw[value.body.byteOffset + 3] = bits;
+      const b64 = raw.toString("base64").replace(/.{1,64}/g, "$&\n");
+      return `-----BEGIN CERTIFICATE-----\n${b64}-----END CERTIFICATE-----\n`;
+    }
+  }
+  throw new Error("keyUsage extension not found");
+}
+
+const pickable = (overrides: Parameters<typeof createCertificateAuthority>[0]) =>
+  createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, ...overrides }).certPem;
+
+describe("acceptsPickerAuthority", () => {
+  test("accepts exactly the authority profile this process issues", () => {
+    expect(acceptsPickerAuthority(pickable({ permittedDnsNames: [PICKER_HOST] }))).toBe(true);
+    expect(acceptsPickerAuthority(ensurePickerCa(tempDir()).certPem)).toBe(true);
+  });
+
+  test.each<[string, Parameters<typeof createCertificateAuthority>[0]]>([
+    ["an extra permitted DNS subtree", { permittedDnsNames: [PICKER_HOST, "evil.example"] }],
+    ["missing IP exclusions", { permittedDnsNames: [PICKER_HOST], excludeAllIpAddresses: false }],
+    ["no name constraint at all", {}],
+    ["a non-critical name constraint", { additionalExtensions: [extension([0x55, 0x1d, 0x1e], false, pickerConstraints())] }],
+    ["a second nameConstraints extension", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x1e], true, pickerConstraints())] }],
+    // SAN + serverAuth would let the trust anchor itself terminate an off-host handshake.
+    ["a subjectAltName for an off-host name", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x11], false, seq(dnsName("example.com")))] }],
+    ["a serverAuth extended key usage", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x25], false, seq(oid(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01)))] }],
+    ["a critical key identifier", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x0e], true, octet(Buffer.alloc(20)))] }],
+  ])("rejects a root with %s", (_name, options) => {
+    expect(acceptsPickerAuthority(pickable(options))).toBe(false);
+  });
+
+  test("rejects a root whose key usage also grants digitalSignature", () => {
+    const forged = withKeyUsageBits(pickable({ permittedDnsNames: [PICKER_HOST] }), 0x87);
+    expect(acceptsPickerAuthority(forged)).toBe(false);
+  });
+
+  test("rejects the unconstrained intercept root and a wrong common name", () => {
+    expect(acceptsPickerAuthority(createLocalInterceptCa().certPem)).toBe(false);
+    expect(acceptsPickerAuthority(createCertificateAuthority({
+      commonName: "not the picker", permittedDnsNames: [PICKER_HOST],
+    }).certPem)).toBe(false);
+  });
