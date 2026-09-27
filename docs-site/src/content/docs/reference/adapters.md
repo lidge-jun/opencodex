@@ -596,9 +596,10 @@ configuration that names the old id is rewritten at startup.
 The model id you pick is a model family, and the reasoning effort picks the
 variant. With no effort, the family's own default variant is used: `swe-1-7`
 selects `swe-1-7-medium` and `swe-2` selects `swe-2-high`. An effort changes only
-the effort and lands on the nearest variant the family has, rounding up on a tie,
-so `swe-2` at `low` selects `swe-2-medium` and `kimi-k3` at `medium` selects
-`kimi-k3-high`. `fast` selects the Fast variant and `1m`, `max-1m` or `none-1m`
+the effort and lands on the lowest variant at or above it, or the highest one
+below when nothing is above, so a missing rung never turns reasoning down:
+`swe-1-7` at `high` selects the Max row `swe-1-7`, `swe-2` at `low` selects
+`swe-2-medium`, and `kimi-k3` at `medium` selects `kimi-k3-high`. `fast` selects the Fast variant and `1m`, `max-1m` or `none-1m`
 the 1M-context variant where the family has one; otherwise they change nothing.
 A suffixed id such as `claude-opus-5-high-fast` keeps its variant without an
 effort, and with one keeps its Fast and context settings. Resolution never moves

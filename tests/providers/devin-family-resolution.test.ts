@@ -166,7 +166,10 @@ describe("family-based wire model resolution", () => {
     ["swe-1-7", undefined, "swe-1-7-medium"],
     ["swe-1.7", undefined, "swe-1-7-medium"],
     ["swe-1-7", "max", "swe-1-7"],
-    ["swe-1-7-high", undefined, "swe-1-7-medium"],
+    // A missing rung rounds up, never down: SWE-1.7 has only Medium and Max.
+    ["swe-1-7", "high", "swe-1-7"],
+    ["swe-1-7", "low", "swe-1-7-medium"],
+    ["swe-1-7-high", undefined, "swe-1-7"],
     ["swe-2", undefined, "swe-2-high"],
     ["swe-2", "max", "swe-2-max"],
     ["swe-2", "low", "swe-2-medium"],
@@ -207,8 +210,11 @@ describe("family-based wire model resolution", () => {
 
   test("a disabled member is passed over while the family has an enabled one", async () => {
     const rows = LIVE_ROWS.map((r) => (r.uid === "swe-2-high" ? { ...r, disabled: true } : r));
-    // High is disabled; Medium is one rung away, Max two (XHigh sits between).
-    expect(await resolve(catalogOf(rows), "swe-2")).toBe("swe-2-medium");
+    // High (the default) is disabled: the next enabled rung up wins.
+    expect(await resolve(catalogOf(rows), "swe-2")).toBe("swe-2-max");
+    // Nothing enabled at or above High: the highest enabled rung below it.
+    const capped = rows.map((r) => (r.uid === "swe-2-max" ? { ...r, disabled: true } : r));
+    expect(await resolve(catalogOf(capped), "swe-2")).toBe("swe-2-medium");
   });
 
   test("an unknown caller effort keeps a named row", async () => {
