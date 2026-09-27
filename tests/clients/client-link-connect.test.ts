@@ -130,6 +130,34 @@ describe("client link connection contracts", () => {
     });
   });
 
+  test("cancellation during catalog download prevents late enrollment writes and drains token rollback", async () => {
+    await withLinkHome(async home => {
+      const prior = '{"models":[{"id":"prior"}]}\n';
+      writeFileSync(DEFAULT_CATALOG_PATH, prior);
+      const abort = new AbortController();
+      let cancelledFetch = false;
+      await expect(connectClient(linkOptions(), {
+        signal: abort.signal,
+        fetchImpl: async (input, init) => {
+          if (String(input).endsWith("/readyz")) return Response.json({
+            service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567,
+            status: "ready", protocol: 1, minimumClientProtocol: 1,
+            managementUrl: "http://127.0.0.1:34567",
+          });
+          abort.abort(new Error("fixture enrollment cancelled"));
+          cancelledFetch = init?.signal?.aborted === true;
+          // Even a fetch implementation returning after abort cannot authorize a write.
+          return Response.json({ models: [] });
+        },
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+      })).rejects.toThrow("fixture enrollment cancelled");
+      expect(cancelledFetch).toBe(true);
+      expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(prior);
+      expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
   test("catalog failure removes the pending link token and leaves config.client unset", async () => {
     await withLinkHome(async home => {
       await expect(connectClient(linkOptions(), {

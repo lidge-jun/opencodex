@@ -477,14 +477,23 @@ describe("client initiated link join", () => {
     const exited = new Promise<number>(resolve => { releaseExit = resolve; });
     let stopped = 0;
     let connectCommitted = false;
+    let connectDrained = false;
     await expect(joinHome(joinDeps({
       runner: runnerFor(calls),
       writeState: () => {},
       clearState: () => {},
       spawnTunnel: () => ({ pid: 1, exited, stop: async () => { stopped += 1; } }),
       fetchImpl: challengedFetch(),
-      connect: (async () => { releaseExit(255); await new Promise(() => {}); connectCommitted = true; }) as typeof import("../../src/client/connect").connectClient,
+      connect: (async (_options, deps) => {
+        releaseExit(255);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          deps?.signal?.throwIfAborted();
+          connectCommitted = true;
+        } finally { connectDrained = true; }
+      }) as typeof import("../../src/client/connect").connectClient,
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(connectDrained).toBe(true);
     expect(connectCommitted).toBe(false);
     expect(stopped).toBe(1);
     expect(revokeCalls(calls)).toHaveLength(1);

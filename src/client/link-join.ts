@@ -360,14 +360,22 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
     throw new ClientLinkJoinError(code);
   }
 
+  const enrollmentAbort = new AbortController();
+  let enrollment: Promise<unknown> | undefined;
+  let enrollmentFinished = false;
   try {
     if (!tunnel) throw new ClientLinkJoinError("join_tunnel_failed");
     const connect = deps.connect ?? connectClient;
     // Keep watching the tunnel until the connection commits: an exited tunnel
     // must not let the issued key ride out to whatever next holds the port.
-    await Promise.race([
-      tunnel.exited.then(() => { throw new ClientLinkJoinError("join_tunnel_failed"); }),
-      connect({
+    const tunnelFailure = tunnel.exited.then(() => {
+      const error = new ClientLinkJoinError("join_tunnel_failed");
+      if (!enrollmentFinished) enrollmentAbort.abort(error);
+      throw error;
+    });
+    const signal = deps.connectDeps?.signal
+      ? AbortSignal.any([enrollmentAbort.signal, deps.connectDeps.signal]) : enrollmentAbort.signal;
+    enrollment = Promise.resolve().then(() => connect({
         serverUrl: `http://127.0.0.1:${tunnelPort}`,
         managementUrl: `http://127.0.0.1:${tunnelPort}`,
         credential: { kind: "link", apiKeyId: issued.apiKeyId, key: issued.key },
@@ -378,11 +386,19 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
       }, {
         fetchImpl: deps.fetchImpl,
         ...deps.connectDeps,
-      }),
-    ]);
+        signal,
+      }));
+    await Promise.race([tunnelFailure, enrollment]);
+    enrollmentFinished = true;
   } catch (error) {
+    enrollmentAbort.abort(error);
+    // An observed tunnel exit is not completion of the losing exchange. Drain its
+    // cancellation and local rollback before stopping/revoking the shared link.
+    if (enrollment) await Promise.allSettled([enrollment]);
     await rollback(deps, issued.linkId, tunnel);
     throw new ClientLinkJoinError(error instanceof ClientLinkJoinError ? error.code : "join_connect_failed");
+  } finally {
+    enrollmentFinished = true;
   }
 
   await stopTunnel(tunnel);
