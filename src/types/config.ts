@@ -996,6 +996,8 @@ export interface OcxConfig {
     /** Observed boundaries retained until activation, even if an idle upstream clock moves. */
     nextFiveHourResetAt?: number;
     nextWeeklyResetAt?: number;
+    /** Durable pre-send backoff for initial activation, not a claimed reset or success. */
+    lastInitialActivationAttemptAt?: number;
   }>;
   /**
    * Selection order per account id, higher used earlier; absent = 0. Keyed by id

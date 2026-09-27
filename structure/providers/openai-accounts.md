@@ -413,3 +413,9 @@ quota-cache freshness after the existing attempt backoff. Main refresh keeps its
 passive intent: cache bypass does not clear an inference reauthentication mark. Other prime reasons
 retain their existing cache rules. The split config schema degrades malformed optional values to
 false. Exact-account and Direct routes are unchanged.
+
+## Initial Codex quota-window activation
+
+The existing per-account `codexQuotaAutoRefresh` opt-in also covers unused windows. `src/codex/quota-initial-activation.ts` requires two fresh, zero-use observations at least thirty seconds apart whose reset deadline moves with observation time. A fixed deadline at 0% is already counting down and never authorizes initial activation. Only reported five-hour or weekly windows qualify; account-credential generation changes discard the witness. The minute worker may request a second bounded metadata observation, while pause, validation, reauthentication, pool-mode and native-main protection remain authoritative.
+
+Before inference, `lastInitialActivationAttemptAt` is persisted under the existing config mutation lock. This is a five-minute retry fence across restart, not a successful reset marker or a changed usage count. Persistence failure sends nothing, and current on-disk opt-out, provider disable or account pause wins over a stale worker snapshot. The existing warmup routine is reused once per coalesced account attempt. A completed warmup does not claim that the client cache or upstream clock has already changed; subsequent authentic observations retain those responsibilities. The ephemeral witness is owned by `src/codex/quota-auto-refresh-state.ts` and is removed with the account.

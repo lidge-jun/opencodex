@@ -1317,3 +1317,11 @@ The process exits 0 only if all four live scenarios pass, 1 otherwise, and 2 for
 invalid arguments or missing credentials. This is a **wire diagnostic**, not an
 end-to-end Codex App/CLI interface test, live certification or instruction to enable
 the experimental feature for production work.
+
+## Starting unused quota windows
+
+The per-account **Quota window auto activation** setting can start an unused five-hour or weekly window as well as activate one after its reset. It remains opt-in and uses a small normal model request; it never consumes reset credits or changes the reported usage counters.
+
+Zero percent alone is not enough to trigger a request. OpenCodex compares fresh observations: a reset deadline that keeps moving forward with the observation time indicates an unused window, while a fixed deadline is already counting down. A second observation may take about a minute. Only windows actually reported for that account are eligible.
+
+An initial attempt is recorded before sending and cannot be repeated immediately after a proxy restart. Failed or uncertain attempts wait at least five minutes. Paused accounts, pending account validation, reauthentication and native-main protection remain in force. Successful inference can precede the usage display update; a fixed reset deadline and decreasing remaining time confirm that the window has started, even if rounded usage still reads 0%.

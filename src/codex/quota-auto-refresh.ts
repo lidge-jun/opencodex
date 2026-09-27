@@ -18,8 +18,9 @@ import { resolveNativeProfileContext } from "./native-profile-store";
 import { getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "./main-account-cache";
 import { applyAccountQuotaFromUpstreamHeaders, getAccountQuota, type StoredAccountQuota } from "./quota";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
+import { initialActivationRetryBlocked, inspectInitialQuotaActivation, noteInitialQuotaProbe, reserveInitialQuotaActivation, INITIAL_ACTIVATION_RETRY_MS } from "./quota-initial-activation";
 import {
-  completedByAccount, retryAfterByAccount, scheduledByAccount, quotaRefreshAfterByAccount,
+  completedByAccount, retryAfterByAccount, scheduledByAccount, quotaRefreshAfterByAccount, initialWindowObservations,
   resetCodexQuotaAutoRefreshStateForTests,
   type CodexQuotaAutoRefreshWindows,
 } from "./quota-auto-refresh-state";
@@ -47,6 +48,7 @@ export interface CodexQuotaAutoRefreshRunDeps {
     accountId: string,
     completed: CodexQuotaAutoRefreshWindows,
   ) => boolean;
+  reserveInitial?: typeof reserveInitialQuotaActivation;
 }
 
 let inFlight: Promise<void> | null = null;
@@ -273,9 +275,10 @@ function retryPendingMarkers(
 /** Coalesce sweeps, refresh stale metadata and activate due accounts with bounded concurrency. */
 export async function runCodexQuotaAutoRefresh(
   config: OcxConfig,
-  now = Date.now(),
+  requestedNow?: number,
   deps: CodexQuotaAutoRefreshRunDeps = {},
 ): Promise<void> {
+  const now = requestedNow ?? Date.now();
   const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
   if (!openai || openai.disabled === true || !isCanonicalOpenAiForwardProvider(openai)) return;
   if (providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool") return;
@@ -284,6 +287,9 @@ export async function runCodexQuotaAutoRefresh(
   const warm = deps.warmAccount ?? warmAccount;
   const persist = deps.persistCompleted ?? persistCompleted;
   const refresh = deps.refreshQuota ?? refreshQuota;
+  const reserveInitial = deps.reserveInitial ?? reserveInitialQuotaActivation;
+  const credentialBinding = (id: string) => id === MAIN_CODEX_ACCOUNT_ID
+    ? `main:${getMainQuotaCredentialGeneration()}` : `pool:${readCodexAccountRecord(id)?.generation ?? "missing"}`;
   inFlight = (async () => {
     retryPendingMarkers(config, persist);
     const accountIds = [
@@ -305,22 +311,34 @@ export async function runCodexQuotaAutoRefresh(
     };
     for (let index = 0; index < accountIds.length; index += CONCURRENCY) {
       await Promise.all(accountIds.slice(index, index + CONCURRENCY).map(async accountId => {
-        if (!eligible(accountId)) return;
+        if (!eligible(accountId)) { initialWindowObservations.delete(accountId); return; }
+        // Restart must not turn the same recent initial attempt into a due-window replay.
+        if (initialActivationRetryBlocked(config, accountId, now)) return;
         // Capture before WHAM can move an idle window's reset into the future.
         rememberWindows(config, accountId, quotaFor(accountId));
         const quota = quotaFor(accountId);
-        if ((!quota || now - quota.updatedAt >= RETRY_MS)
-          && (quotaRefreshAfterByAccount.get(accountId) ?? 0) <= now) {
+        const initialProbe = inspectInitialQuotaActivation(config, accountId, quota, credentialBinding(accountId), now).probe;
+        if (((!quota || now - quota.updatedAt >= RETRY_MS)
+          && (quotaRefreshAfterByAccount.get(accountId) ?? 0) <= now) || initialProbe) {
           quotaRefreshAfterByAccount.set(accountId, now + RETRY_MS);
+          noteInitialQuotaProbe(accountId, now);
           try { await refresh(config, accountId); } catch { /* Retry metadata at the bounded cadence. */ }
         }
         if (!eligible(accountId)) return;
         rememberWindows(config, accountId, quotaFor(accountId));
         if ((retryAfterByAccount.get(accountId) ?? 0) > now) return;
         const windows = dueCodexQuotaAutoRefreshWindows(config, accountId, quotaFor(accountId), now);
-        if (!windows) return;
+        if (!windows) {
+          // Metadata is timestamped after the awaited fetch, not at sweep entry.
+          const observedNow = requestedNow ?? Date.now();
+          const initial = inspectInitialQuotaActivation(config, accountId, quotaFor(accountId), credentialBinding(accountId), observedNow).windows;
+          if (!initial.length || !reserveInitial(config, accountId, initial, observedNow) || !eligible(accountId)) return;
+          retryAfterByAccount.set(accountId, observedNow + INITIAL_ACTIVATION_RETRY_MS);
+        }
         try {
           if (await warm(config, accountId) === false) return;
+          // A completed warmup is not proof that the upstream clock is already ticking.
+          if (!windows) return;
           retryAfterByAccount.delete(accountId);
           const completed = { ...completedByAccount.get(accountId), ...windows };
           completedByAccount.set(accountId, completed);

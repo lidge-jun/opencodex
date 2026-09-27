@@ -638,6 +638,7 @@ const codexQuotaAutoRefreshEntrySchema = z.object({
   lastWeeklyResetAt: z.number().finite().nonnegative().optional(),
   nextFiveHourResetAt: z.number().finite().nonnegative().optional(),
   nextWeeklyResetAt: z.number().finite().nonnegative().optional(),
+  lastInitialActivationAttemptAt: z.number().finite().nonnegative().optional(),
 }).strict();
 const CODEX_QUOTA_AUTO_REFRESH_KEY_ERROR =
   "quota auto-refresh keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";

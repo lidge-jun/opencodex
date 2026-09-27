@@ -106,7 +106,7 @@ merge cannot turn them into a valid config while discarding the original bytes.
 | Canonical ChatGPT upstream transport | `providers.openai.upstreamWebsocket` | Omitted uses upstream WebSocket when eligible; explicit `false` selects HTTP/SSE without changing the canonical provider identity. `true` is rejected on the canonical row. This is independent of the client-facing `websockets` setting. |
 | Provider egress | `providers.<name>.proxy`, `providers.<name>.noProxy` | An absent `proxy` inherits global egress; `"direct"` or `null` forces direct egress; HTTP(S) and SOCKS5(H) URLs select a provider-owned proxy. `noProxy` uses NO_PROXY syntax and sends a matching destination direct across either a provider-owned or inherited global proxy. `src/lib/provider-egress.ts` owns parsing and request-local resolution. |
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
-| Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
+| Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup, `codexQuotaAutoRefresh` | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). Quota activation's internal `lastInitialActivationAttemptAt` is a pre-send retry fence, not an upstream reset or usage value; see [initial activation](providers/openai-accounts.md#initial-codex-quota-window-activation). |
 
 Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
