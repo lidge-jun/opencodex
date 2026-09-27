@@ -132,6 +132,16 @@ export async function syncModelsToCodex(
   // the injector, before it gets a chance to create any artifact.
   const admission = (deps.admitCodexWrite ?? admitCodexWrite)();
   if (admission.kind === "refused" && admission.authority === "service-home") {
+    // Startup turns this result into a failed /readyz and records nothing else, and
+    // `ocx sync` only says the sync did not complete, so an unattended refusal must
+    // leave one line behind (#5782). The admission message can name private home and
+    // service-definition paths, so the log carries the authority only; POST /api/sync
+    // returns the specific reason to an authenticated operator.
+    log?.error(
+      "[opencodex] Codex write refused (service-home): this proxy could not prove it owns the "
+        + "installed service homes, so catalog sync and Codex config injection were skipped. "
+        + "POST /api/sync returns the specific reason.",
+    );
     return {
       status: "refused",
       authority: "service-home",
