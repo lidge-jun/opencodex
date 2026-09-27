@@ -13,6 +13,7 @@
 import { execFileSync } from "node:child_process";
 import { sep, win32 } from "node:path";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../../lib/windows-elevation";
+import { activateWindowsCodexCompatibility, captureWindowsCompatibilityContext } from "../desktop-compatibility/windows-package-command";
 import {
   isUnderRoot,
   type DesktopAppAdapter,
@@ -100,7 +101,8 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
     "    if ($o -and $o.ReturnValue -eq 0 -and $o.User) {",
     "      $owner = if ($o.Domain) { \"$($o.Domain)\\$($o.User)\" } else { $o.User }",
     "      if ($owner -ieq $me) {",
-    "        \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToString('o')) $($_.ExecutablePath)\"",
+    "        $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_.CommandLine))",
+    "        \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToString('o')) $($_.ExecutablePath)`t$encoded\"",
     "      }",
     "    }",
     "  }",
@@ -126,7 +128,9 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
 }
 
 function parseProcessLine(line: string, root: string): DesktopProcess | null {
-  const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+))?$/.exec(line);
+  const [listing, encoded, ...extra] = line.split("\t");
+  if (extra.length || (encoded && (encoded.length > 65_536 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)))) return null;
+  const match = /^\s*(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+))?$/.exec(listing ?? "");
   if (!match) return null;
   const pid = Number(match[1]);
   const parentPid = Number(match[2]);
@@ -143,7 +147,8 @@ function parseProcessLine(line: string, root: string): DesktopProcess | null {
   // Authoritative membership. PowerShell StartsWith already cheap-filtered, but
   // that test is a string prefix and is how a sibling install would sneak in.
   if (!isMemberExecutable(executable, root)) return null;
-  return { pid, parentPid, createdAt, executable };
+  return { pid, parentPid, createdAt, executable,
+    ...(encoded ? { commandLine: Buffer.from(encoded, "base64").toString("utf8") } : {}) };
 }
 
 /**
@@ -215,13 +220,15 @@ export const windowsDesktopAppAdapter: DesktopAppAdapter = {
     exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(root.pid), "/T", "/F"], POWERSHELL_PROBE_OPTIONS);
   },
 
-  captureRelaunchContext(): Record<string, string> {
-    // The session is supplied by the shell:AppsFolder launch, so nothing needs
-    // carrying forward.
-    return {};
+  captureRelaunchContext(_exec, _install, processes): Record<string, string> {
+    return captureWindowsCompatibilityContext(processes);
   },
 
-  relaunch(exec, install): void {
+  relaunch(exec, install, context): void {
+    if (context.codexCompatibilityPacUrl) {
+      activateWindowsCodexCompatibility(exec, install, context.codexCompatibilityPacUrl);
+      return;
+    }
     // Throws on failure so the ladder reports relaunch_failed. The old code
     // returned targets_survived here, which was dishonest: everything HAD died
     // and it was the relaunch that failed.

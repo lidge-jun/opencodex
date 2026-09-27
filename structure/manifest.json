@@ -423,6 +423,13 @@
       ]
     },
     {
+      "path": "clients/codex-desktop.md",
+      "tier": 5,
+      "title": "Codex Desktop Compatibility",
+      "scope": "Windows package activation, restart context, and protected compatibility authority persistence.",
+      "documents": ["src/codex/", "src/cli/"]
+    },
+    {
       "path": "clients/claude-desktop.md",
       "tier": 5,
       "title": "Claude Desktop Integration",

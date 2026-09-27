@@ -891,6 +891,13 @@ it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
 ## Routed models during Codex reserve mode
 
+On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
+compatibility PAC argument and launches Codex through Windows package activation. It checks the
+package identity and routing argument after launch; conflicting main-app routing arguments cause
+a refusal before the restart. This does not enable a compatibility mode, install a certificate,
+or watch and restart the app automatically. Normal launches without that routing argument keep
+their existing behavior.
+
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make
 **every other entry unselectable — including opencodex routed models**, even though those
