@@ -183,6 +183,12 @@ describe("fetchDevinQuota transport", () => {
     expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
   });
 
+  test("a complete field followed by a truncated one is malformed, not authoritative-empty", async () => {
+    // An empty UserStatus, then field 2 declaring 127 bytes with none present.
+    globalThis.fetch = (async () => new Response(new Uint8Array([0x0a, 0x02, 0x6a, 0x00, 0x12, 0x7f]), { status: 200 })) as unknown as typeof fetch;
+    expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+  });
+
   test("a decoded status with nothing measurable is authoritative-empty", async () => {
     const unlimited = userStatusResponse(planInfo({ tier: 17, name: "Max", billing: 2 }), { 8: -1 }, false);
     globalThis.fetch = (async () => new Response(new Uint8Array(unlimited), { status: 200 })) as unknown as typeof fetch;

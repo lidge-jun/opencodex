@@ -19,9 +19,8 @@
  *   PlanInfo              { #1 teams_tier, #2 plan_name, #13 monthly_flow, #35 billing_strategy,
  *                           #36 hide_daily_quota, #37 hide_weekly_quota }
  */
-import { randomUUID } from "node:crypto";
 import { buildMetadata } from "../../adapters/devin/cloud-direct/metadata";
-import { encodeMessage, iterFields } from "../../adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeTag, encodeVarint, iterFields } from "../../adapters/devin/cloud-direct/wire";
 import { DEVIN_DEFAULT_API_SERVER, validateDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { epochMillis, QUOTA_RESPONSE_MAX_BYTES, REQUEST_TIMEOUT_MS } from "../quota-wire";
@@ -60,12 +59,23 @@ export interface DevinUserStatus {
 
 type Fields = Map<number, bigint | Buffer>;
 
-/** Last occurrence wins, as protobuf specifies for a non-repeated field. */
-function fieldsOf(buf: Buffer | undefined): Fields {
+/**
+ * Last occurrence wins, as protobuf specifies for a non-repeated field. Null when the fields do
+ * not account for every byte: iterFields stops quietly at a truncated field, and a status read
+ * from half a response would otherwise be published as an authoritative empty quota.
+ */
+function fieldsOf(buf: Buffer | undefined): Fields | null {
   const out: Fields = new Map();
   if (!buf) return out;
-  for (const field of iterFields(buf)) out.set(field.num, field.value);
-  return out;
+  let consumed = 0;
+  for (const field of iterFields(buf)) {
+    out.set(field.num, field.value);
+    const body = typeof field.value === "bigint" ? encodeVarint(field.value).length
+      : field.wire === 2 ? encodeVarint(field.value.length).length + field.value.length
+      : field.value.length;
+    consumed += encodeTag(field.num, field.wire).length + body;
+  }
+  return consumed === buf.length ? out : null;
 }
 
 /** int32/int64 on the wire are two's-complement varints; -1 arrives as 2^64-1. */
@@ -80,11 +90,13 @@ function sub(fields: Fields, num: number): Buffer | undefined {
 }
 
 function timestampMs(buf: Buffer | undefined): number | undefined {
-  return buf ? epochMillis(int(fieldsOf(buf), 1)) : undefined;
+  const f = buf ? fieldsOf(buf) : null;
+  return f ? epochMillis(int(f, 1)) : undefined;
 }
 
-function decodePlanInfo(buf: Buffer | undefined): DevinPlanInfo {
+function decodePlanInfo(buf: Buffer | undefined): DevinPlanInfo | null {
   const f = fieldsOf(buf);
+  if (!f) return null;
   return {
     teamsTier: int(f, 1),
     planName: sub(f, 2)?.toString("utf8").trim() ?? "",
@@ -98,12 +110,14 @@ function decodePlanInfo(buf: Buffer | undefined): DevinPlanInfo {
 /** Null when the response carries no PlanStatus, which is not something a mapper can use. */
 export function decodeDevinUserStatus(buf: Buffer): DevinUserStatus | null {
   const response = fieldsOf(buf);
-  const user = fieldsOf(sub(response, 1));
-  const statusBuf = sub(user, 13);
+  const user = response && fieldsOf(sub(response, 1));
+  const statusBuf = user && sub(user, 13);
   if (!statusBuf) return null;
   const status = fieldsOf(statusBuf);
+  if (!status) return null;
   // The top-level PlanInfo is authoritative; the nested copy covers servers that omit it.
   const plan = decodePlanInfo(sub(response, 2) ?? sub(status, 1));
+  if (!plan) return null;
   if (!plan.teamsTier) plan.teamsTier = int(user, 10);
   const planEndMs = timestampMs(sub(status, 3));
   const dailyResetMs = epochMillis(int(status, 17));
@@ -187,9 +201,9 @@ export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseU
   if (!base || !apiKey.trim()) return null;
   const metadata = buildMetadata({
     apiKey,
-    sessionId: randomUUID(),
+    sessionId: crypto.randomUUID(),
     requestId: BigInt(Date.now()),
-    triggerId: randomUUID(),
+    triggerId: crypto.randomUUID(),
   });
   try {
     const response = await fetch(`${base}${GET_USER_STATUS_PATH}`, {
