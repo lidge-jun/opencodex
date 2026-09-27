@@ -1,13 +1,47 @@
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { afterAll, beforeAll } from "bun:test";
+import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { removeTreeWithRetry } from "./remove-tree";
 
 /**
  * Config, request and upstream-response fixtures for the compaction-routing suite.
  *
  * Moved verbatim out of tests/responses/responses-compaction-routing.test.ts: that file sits at
  * its file-size cap, and the repository answer to a cap is a sibling helper rather than
- * compressed control flow. Nothing here decides anything; every value is the one its callers
- * were already building inline.
+ * compressed control flow. Fixture teardown also owns the continuation writes started by
+ * direct handler calls, so they cannot survive a fixture-home switch.
  */
+export function installCompactionRoutingAclFixture(): void {
+  // These cases prove routing and replay with synthetic credentials, not Windows DACLs.
+  // Actual ACL contracts have their own subprocess tests; incidental spawns here can
+  // outlive a case timeout and mutate the next fixture's continuation state.
+  beforeAll(() => {
+    const ok = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    setIcaclsRunnerForTests(() => ok);
+    setAsyncIcaclsRunnerForTests(async () => ok);
+  });
+  afterAll(async () => {
+    try { await flushConfigDirHardeningForTests(); } finally {
+      setIcaclsRunnerForTests(null);
+      setAsyncIcaclsRunnerForTests(null);
+    }
+  });
+}
+
+export async function drainCompactionResponseState(): Promise<void> {
+  await flushResponseState();
+  clearResponseStateForTests();
+  closeRequestHistoryIndex();
+}
+
+export async function removeCompactionFixture(path: string): Promise<void> {
+  await drainCompactionResponseState();
+  removeTreeWithRetry(path);
+}
+
 export function keyProviderConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
     defaultProvider: "gw",
