@@ -131,6 +131,21 @@ describe("Devin Anthropic signature fallback", () => {
     expect(done?.usage?.outputTokens).toBe(60);
   });
 
+  test("the refused attempt's usage survives a retry with no usage frame or an early failure", async () => {
+    responses = ["usage-reasoning-then-refuse", "ok"];
+    const done = (await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium"))
+      .find(e => e.type === "done") as { usage?: { inputTokens?: number; outputTokens?: number } } | undefined;
+    expect(done?.usage?.inputTokens).toBe(1000);
+    expect(done?.usage?.outputTokens).toBe(40);
+
+    requests = [];
+    responses = ["usage-reasoning-then-refuse", "refuse"];
+    const failed = (await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium"))
+      .find(e => e.type === "error") as { usage?: { inputTokens?: number } } | undefined;
+    expect(requests).toHaveLength(2);
+    expect(failed?.usage?.inputTokens).toBe(1000);
+  });
+
   test("held reasoning emits heartbeats, never the held events", async () => {
     // Each clock read advances 20s, so every held frame is past the heartbeat interval.
     let clock = Date.now();

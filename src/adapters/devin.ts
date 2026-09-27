@@ -715,6 +715,8 @@ export function createDevinAdapter(
               yield* held.splice(0);
               throw error;
             }
+            // Emitted first so the counts survive a retry that reports no usage or fails early.
+            if (refusedUsage) yield refusedUsage;
             for await (const event of request(unsignedMessages)) {
               yield event.kind === "usage" && refusedUsage ? addDevinUsage(event, refusedUsage) : event;
             }
