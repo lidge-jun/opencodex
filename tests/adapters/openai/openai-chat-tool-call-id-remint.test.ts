@@ -67,6 +67,44 @@ describe("createToolCallIdReminter", () => {
     expect(probes).toBeLessThan(20_001);
   });
 
+  test("distinct ids sharing a truncated prefix share one collision domain", () => {
+    // A candidate keeps at most MAX-2 characters of the base, so ids agreeing on those characters
+    // truncate to the same candidate sequence. A per-base cursor restarts each of them at -2:
+    // M such ids emitted twice cost ~M²/2 probes. The cursor has to live on the shared domain.
+    const remint = createToolCallIdReminter([]);
+    const originalHas = Set.prototype.has;
+    let probes = 0;
+    Set.prototype.has = function (value) {
+      probes++;
+      return originalHas.call(this, value);
+    };
+
+    // Conforming 64-char ids and overlength non-conforming ones, all agreeing on `prefix`.
+    const prefix = "p".repeat(MAX_TOOL_CALL_ID_LENGTH - 2);
+    const rawIds = [
+      ...Array.from({ length: 1_000 }, (_, i) => prefix + i.toString(36).padStart(2, "0")),
+      ...Array.from({ length: 500 }, (_, i) => `${prefix}:${i}`),
+    ];
+    const emitted: string[] = [];
+    try {
+      for (let round = 0; round < 2; round++) {
+        for (const rawId of rawIds) emitted.push(remint(rawId));
+      }
+    } finally {
+      Set.prototype.has = originalHas;
+    }
+
+    // First occurrences pass through byte-identical; each repeat draws the domain's next suffix.
+    expect(emitted.slice(0, rawIds.length)).toEqual(rawIds);
+    for (const [index, id] of emitted.slice(rawIds.length).entries()) {
+      const suffix = `-${index + 2}`;
+      expect(id).toBe(prefix.slice(0, MAX_TOOL_CALL_ID_LENGTH - suffix.length) + suffix);
+      expect(id.length).toBeLessThanOrEqual(MAX_TOOL_CALL_ID_LENGTH);
+    }
+    expect(new Set(emitted).size).toBe(emitted.length);
+    expect(probes).toBeLessThan(10_000);
+  });
+
   test("skips a suffix the reserved set already occupies", () => {
     const remint = createToolCallIdReminter(["call-0-0", "call-0-0-2"]);
 
