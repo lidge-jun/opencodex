@@ -49,6 +49,24 @@ describe("createToolCallIdReminter", () => {
     expect(new Set(ids).size).toBe(3);
   });
 
+  test("keeps repeated-id collision searches linear", () => {
+    const remint = createToolCallIdReminter([]);
+    const originalHas = Set.prototype.has;
+    let probes = 0;
+    Set.prototype.has = function (value) {
+      probes++;
+      return originalHas.call(this, value);
+    };
+
+    try {
+      for (let index = 0; index < 10_000; index++) remint("call-0-0");
+    } finally {
+      Set.prototype.has = originalHas;
+    }
+
+    expect(probes).toBeLessThan(20_001);
+  });
+
   test("skips a suffix the reserved set already occupies", () => {
     const remint = createToolCallIdReminter(["call-0-0", "call-0-0-2"]);
 

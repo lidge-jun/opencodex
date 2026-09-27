@@ -17,6 +17,7 @@ import type { OcxMessage } from "../../types";
  */
 export function createToolCallIdReminter(reservedIds: Iterable<string>): (rawId: string) => string {
   const occupied = new Set(reservedIds);
+  const nextSuffixByBase = new Map<string, number>();
   return rawId => {
     if (!occupied.has(rawId)) {
       occupied.add(rawId);
@@ -25,13 +26,16 @@ export function createToolCallIdReminter(reservedIds: Iterable<string>): (rawId:
     // A non-conforming source is sanitized, never dropped: the wire still needs an id, and the
     // occupied check below covers a sanitized form that now equals some other call's id.
     const base = isConformingToolCallId(rawId) ? rawId : rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    for (let n = 2; ; n++) {
+    // Resume after the last suffix considered for this effective base. Restarting at 2 made a
+    // response containing N copies of one id perform O(N²) occupied-set probes synchronously.
+    for (let n = nextSuffixByBase.get(base) ?? 2; ; n++) {
       // Hyphen, not underscore: an id that extends another id as `<earlier>_<digits>` is parsed by
       // at least one client as a batch sub-call of `<earlier>`, which pairs the second call's
       // result to the first call. A `-<n>` suffix is in the same id family without that reading.
       const suffix = `-${n}`;
       const candidate = base.slice(0, Math.max(1, MAX_TOOL_CALL_ID_LENGTH - suffix.length)) + suffix;
       if (!occupied.has(candidate)) {
+        nextSuffixByBase.set(base, n + 1);
         occupied.add(candidate);
         return candidate;
       }
