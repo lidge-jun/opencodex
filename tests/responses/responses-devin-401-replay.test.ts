@@ -11,12 +11,34 @@ import { createTempHome } from "../helpers/temp-home";
 const DEAD = "devin-session-token$synthetic-dead";
 const LIVE = "devin-session-token$synthetic-live";
 const ROTATED = "devin-session-token$synthetic-rotated";
+const originalFetch = globalThis.fetch;
+
+// GetUserJwt stand-in: the identity a key mints, keyed by the key inside the protobuf body.
+let mintedIdentity: Record<string, { auth_uid: string; email: string } | undefined> = {};
+let mintCalls = 0;
+function fakeUserJwt(payload: object): string {
+  const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${part({ alg: "HS256", typ: "JWT" })}.${part({ ...payload, exp: 9_999_999_999 })}.c2lnbmF0dXJl`;
+}
+const mintFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  const url = String(input instanceof Request ? input.url : input);
+  if (!url.endsWith("/exa.auth_pb.AuthService/GetUserJwt")) return originalFetch(input, init);
+  mintCalls++;
+  const body = Buffer.from(init?.body as Uint8Array).toString("latin1");
+  const key = Object.keys(mintedIdentity).find(candidate => body.includes(candidate));
+  const identity = key ? mintedIdentity[key] : undefined;
+  if (!identity) return new Response("", { status: 401 });
+  const jwt = Buffer.from(fakeUserJwt(identity));
+  return new Response(Buffer.concat([Buffer.from([0x0a, jwt.length & 0x7f | 0x80, jwt.length >> 7]), jwt]),
+    { status: 200, headers: { "content-type": "application/proto" } });
+}) as typeof fetch;
 
 const resolver = await import("../../src/server/adapter-resolve");
 const originalResolve = resolver.resolveAdapter;
 const originalResolverModule = { ...resolver };
 let sentKeys: string[] = [];
 let rateLimited = false;
+let holdDeadSend: (() => Promise<void>) | undefined;
 mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
   resolveAdapter(provider: OcxProviderConfig, cache?: "none" | "short" | "long") {
     if (provider.adapter !== "devin") return originalResolve(provider, cache);
@@ -33,6 +55,7 @@ mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
           return;
         }
         if (key === DEAD) {
+          await holdDeadSend?.();
           emit({ type: "error", status: 401, errorType: "authentication_error", code: "unauthenticated",
             retryable: false, message: "Devin cloud error unauthenticated: invalid api key" });
           return;
@@ -55,6 +78,10 @@ beforeEach(() => {
   clearGenericFailoverHealth();
   sentKeys = [];
   rateLimited = false;
+  holdDeadSend = undefined;
+  mintedIdentity = { [ROTATED]: { auth_uid: "uid-rotated", email: "rotated@example.com" } };
+  mintCalls = 0;
+  globalThis.fetch = mintFetch;
   previousCliPath = process.env[DEVIN_CLI_CREDENTIALS_ENV];
   // Never let a test read the developer's real CLI credential.
   process.env[DEVIN_CLI_CREDENTIALS_ENV] = home.path("devin-credentials.toml");
@@ -68,6 +95,7 @@ afterEach(() => {
   } finally {
     if (previousCliPath === undefined) delete process.env[DEVIN_CLI_CREDENTIALS_ENV];
     else process.env[DEVIN_CLI_CREDENTIALS_ENV] = previousCliPath;
+    globalThis.fetch = originalFetch;
     clearGenericFailoverHealth();
     home.remove();
   }
@@ -83,6 +111,18 @@ async function saveDevin(access: string, accountId: string, source: "oauth" | "l
     access, refresh: access, expires: Number.MAX_SAFE_INTEGER, accountId, source,
     apiBaseUrl: "https://server.codeium.com",
   });
+}
+
+// A CLI import records no identity: the session token it copies carries only a session_id.
+async function saveCliImport(access: string, extra: { accountId?: string; email?: string } = {}) {
+  await saveCredential("devin", {
+    access, refresh: access, expires: Number.MAX_SAFE_INTEGER, source: "local-cli",
+    apiBaseUrl: "https://server.codeium.com", ...extra,
+  }, { preserveIdentityless: true });
+}
+
+function cliAccount() {
+  return getAccountSet("devin")?.accounts.find(row => row.credential.source === "local-cli");
 }
 
 function run(stream = false) {
@@ -141,7 +181,7 @@ test("a lone revoked account surfaces the login instruction", async () => {
 });
 
 test("a CLI-imported account adopts the key a later `devin auth login` wrote", async () => {
-  await saveDevin(DEAD, "cli", "local-cli");
+  await saveCliImport(DEAD);
   writeCliFile(ROTATED);
 
   const response = await run();
@@ -149,9 +189,12 @@ test("a CLI-imported account adopts the key a later `devin auth login` wrote", a
   expect(response.status).toBe(200);
   expect(await response.text()).toContain("served by rotated");
   expect(sentKeys).toEqual([DEAD, ROTATED]);
-  const row = account("cli");
+  const row = cliAccount();
   expect(row?.needsReauth).not.toBe(true);
   expect(row?.credential.access).toBe(ROTATED);
+  // The minted identity is recorded, so the next adoption for this slot is strict.
+  expect(row?.credential.accountId).toBe("uid-rotated");
+  expect(row?.credential.email).toBe("rotated@example.com");
   expect(row?.credential.source).toBe("local-cli");
   expect(row?.credential.expires).toBe(Number.MAX_SAFE_INTEGER);
 });
@@ -161,26 +204,84 @@ test.each([
   ["missing", () => {}],
   ["off-allowlist host", () => writeCliFile(ROTATED, "https://attacker.example")],
 ])("a CLI-imported account with a %s credential file needs reauth", async (_label, arrange) => {
-  await saveDevin(DEAD, "cli", "local-cli");
+  await saveCliImport(DEAD);
   arrange();
 
   const body = await (await run()).json() as { error: { message: string } };
 
   expect(body.error.message).toBe("Not logged in to devin. Run: ocx login devin");
   expect(sentKeys).toEqual([DEAD]);
-  expect(account("cli")?.needsReauth).toBe(true);
-  expect(account("cli")?.credential.access).toBe(DEAD);
+  expect(cliAccount()?.needsReauth).toBe(true);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
 });
 
 test("a CLI key another stored account already owns is not adopted", async () => {
   await saveDevin(ROTATED, "other");
-  await saveDevin(DEAD, "cli", "local-cli");
+  await saveCliImport(DEAD);
   writeCliFile(ROTATED);
 
   await (await run()).text();
 
-  expect(account("cli")?.needsReauth).toBe(true);
-  expect(account("cli")?.credential.access).toBe(DEAD);
+  expect(cliAccount()?.needsReauth).toBe(true);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
+});
+
+test.each([
+  ["a key that cannot mint a user_jwt", async () => { mintedIdentity = {}; await saveCliImport(DEAD); }],
+  ["a slot whose recorded accountId differs", async () => { await saveCliImport(DEAD, { accountId: "uid-before" }); }],
+  ["a slot whose recorded email differs", async () => { await saveCliImport(DEAD, { email: "before@example.com" }); }],
+  ["an identity another stored account owns", async () => {
+    await saveDevin(LIVE, "uid-rotated");
+    await saveCliImport(DEAD);
+  }],
+])("the CLI key is not adopted for %s", async (_label, arrange) => {
+  await arrange();
+  writeCliFile(ROTATED);
+
+  await (await run()).text();
+
+  expect(sentKeys).not.toContain(ROTATED);
+  expect(cliAccount()?.needsReauth).toBe(true);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
+});
+
+test("a slot whose recorded identity matches adopts the rotated key", async () => {
+  await saveCliImport(DEAD, { accountId: "uid-rotated", email: "Rotated@example.com" });
+  writeCliFile(ROTATED);
+
+  expect(await (await run()).text()).toContain("served by rotated");
+  expect(cliAccount()?.credential.access).toBe(ROTATED);
+  expect(mintCalls).toBe(1);
+});
+
+test("a turn whose 401 lands after another turn already failed the account over still fails over", async () => {
+  await saveDevin(LIVE, "spare");
+  await saveDevin(DEAD, "revoked");
+  // Both turns send on the revoked account; the second 401 only arrives once the first turn has
+  // flagged it and moved the selection, so the second refresh sees a changed selection.
+  const bothSent = Promise.withResolvers<void>();
+  const firstDone = Promise.withResolvers<void>();
+  let deadSends = 0;
+  holdDeadSend = async () => {
+    const order = ++deadSends;
+    if (order === 2) bothSent.resolve();
+    await bothSent.promise;
+    if (order === 2) await firstDone.promise;
+  };
+
+  const first = run().then(async response => {
+    const text = await response.text();
+    firstDone.resolve();
+    return text;
+  });
+  const second = run().then(response => response.text());
+  const [firstBody, secondBody] = await Promise.all([first, second]);
+
+  expect(deadSends).toBe(2);
+  expect(firstBody).toContain("served by live");
+  expect(secondBody).toContain("served by live");
+  expect(account("revoked")?.needsReauth).toBe(true);
+  expect(getAccountSet("devin")?.activeAccountId).toBe(account("spare")?.id);
 });
 
 test("a 429 is not treated as an authentication failure", async () => {

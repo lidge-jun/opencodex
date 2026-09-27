@@ -19,6 +19,7 @@ import { DEFAULT_REGION, type WindsurfRegion } from "./devin/types";
 import { registerUser } from "./devin/register-user";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./devin/api-base";
 import { readDevinCliCredentialOutcome } from "./devin/cli-import";
+import { mintUserJwt } from "../adapters/devin/cloud-direct/auth";
 import { getCredential, listAccounts } from "./store";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES } from "./index";
 
@@ -269,28 +270,56 @@ export async function loginDevin(
  * a live key. The session JWT carries no expiry, so the upstream 401 is the only
  * signal, and this re-read runs only on that forced refresh.
  *
- * Nothing is adopted that could belong to someone else: the host must pass the
- * allowlist before the key is paired with it, a key another stored account
- * already owns stays with that account, and a key whose identity contradicts the
- * stored one is refused.
+ * Adoption fails closed on identity. The session token carries only a
+ * session_id, so the file key's account is established by minting a user_jwt
+ * with it (GetUserJwt answers with auth_uid and email); a key that cannot mint
+ * one is dead or unidentifiable and is refused. The minted identity must then
+ * not contradict the slot's recorded accountId or email, and no other stored
+ * account may own the key or that identity.
+ *
+ * A slot imported from the CLI records no identity (its token has none to
+ * give), so its first adoption rests on the last two rules alone: it is by
+ * definition "whatever the CLI is signed into", and the adopted credential
+ * records the minted identity, which makes every later adoption strict.
  */
-function rereadDevinCliCredential(stored: OAuthCredentials): OAuthCredentials | undefined {
+async function rereadDevinCliCredential(stored: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials | undefined> {
   const outcome = readDevinCliCredentialOutcome();
   if (outcome.kind !== "ok" || outcome.file.apiKey === stored.access) return undefined;
   const apiBaseUrl = validateDevinApiBaseUrl(outcome.file.apiServerUrl);
   if (apiBaseUrl === undefined) return undefined;
   if (findDevinCredentialOwner("devin", outcome.file.apiKey) !== undefined) return undefined;
-  const fresh = credentialsFromApiKey(outcome.file.apiKey, apiBaseUrl, "local-cli");
-  if (stored.accountId && fresh.accountId && stored.accountId !== fresh.accountId) return undefined;
-  return fresh;
+  let minted: Record<string, unknown> | undefined;
+  try {
+    minted = decodeJwtPayload((await mintUserJwt(outcome.file.apiKey, apiBaseUrl, signal)).jwt);
+  } catch {
+    return undefined;
+  }
+  const accountId = typeof minted?.auth_uid === "string" && minted.auth_uid ? minted.auth_uid : undefined;
+  const email = typeof minted?.email === "string" && minted.email ? minted.email : undefined;
+  if (accountId === undefined) return undefined;
+  if (stored.accountId && stored.accountId !== accountId) return undefined;
+  if (stored.email?.includes("@") && stored.email.toLowerCase() !== email?.toLowerCase()) return undefined;
+  if (devinIdentityOwnedElsewhere(stored, accountId, email)) return undefined;
+  return { ...credentialsFromApiKey(outcome.file.apiKey, apiBaseUrl, "local-cli"), accountId, ...(email ? { email } : {}) };
+}
+
+function devinIdentityOwnedElsewhere(stored: OAuthCredentials, accountId: string, email: string | undefined): boolean {
+  for (const slot of ["devin", ...devinAliasCredentialSlots("devin")]) {
+    for (const { credential } of listAccounts(slot)) {
+      if (credential.access === stored.access) continue;
+      if (credential.accountId === accountId) return true;
+      if (email && credential.email?.toLowerCase() === email.toLowerCase()) return true;
+    }
+  }
+  return false;
 }
 
 export async function refreshDevinToken(
   _refreshToken: string,
-  _signal?: AbortSignal,
+  signal?: AbortSignal,
   credential?: OAuthCredentials,
 ): Promise<OAuthCredentials> {
-  const reread = credential?.source === "local-cli" ? rereadDevinCliCredential(credential) : undefined;
+  const reread = credential?.source === "local-cli" ? await rereadDevinCliCredential(credential, signal) : undefined;
   if (reread) return reread;
   // Cognition has no refresh endpoint. Extending the stored expiry here is what
   // the carried implementation did, and it makes a revoked key look valid

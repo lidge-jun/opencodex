@@ -42,7 +42,7 @@ import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
@@ -610,7 +610,7 @@ export async function prepareAdapterExchange(
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
         } catch (err) {
           const failed = transportState.sentOAuthSnapshot;
-          if (route.providerName === "kiro" && err instanceof OAuthLoginRequiredError && failed
+          if (route.providerName === "kiro" && failed
             && transportState.genericFailovers < transportState.genericFailoverLimit) {
             const alternate = await tryKiroAlternateAfterTerminalRefresh(config, failed.accountId, failed.generation);
             if (alternate) {
