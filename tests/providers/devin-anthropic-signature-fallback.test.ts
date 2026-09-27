@@ -1,11 +1,11 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createDevinAdapter } from "../../src/adapters/devin";
 import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { devinCacheIdentity, invalidateSessionIdentity } from "../../src/adapters/devin/cloud-direct/chat";
-import { encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { encodeDevinSignature } from "../../src/adapters/devin/reasoning-signature";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
@@ -24,7 +24,7 @@ describe("Devin Anthropic signature fallback", () => {
   const previousFetch = globalThis.fetch;
   let home = "";
   let requests: Buffer[] = [];
-  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok"> = [];
+  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok" | "usage-reasoning-then-refuse" | "usage-ok"> = [];
 
   const frame = (body: Buffer, flags = 0) => {
     const header = Buffer.alloc(5);
@@ -74,6 +74,9 @@ describe("Devin Anthropic signature fallback", () => {
         // The live shape: reasoning, its signature and a finish frame, then the refusal trailer.
         : next === "reasoning-then-refuse" ? Buffer.concat([frame(Buffer.concat([encodeString(9, "thinking"), encodeString(10, "EpcBNew"), encodeString(21, "anthropic"), encodeVarintField(5, 2)])), refusal])
         : next === "reasoning-then-ok" ? Buffer.concat([frame(Buffer.concat([encodeString(9, "thinking"), encodeString(10, "EpcBNew"), encodeString(21, "anthropic")])), ok])
+        // ModelUsageStats (#7) arrives with the reasoning, before the refusal trailer.
+        : next === "usage-reasoning-then-refuse" ? Buffer.concat([frame(Buffer.concat([encodeMessage(7, Buffer.concat([encodeVarintField(2, 1000), encodeVarintField(3, 40)])), encodeString(9, "thinking")])), frame(encodeString(9, " more")), refusal])
+        : next === "usage-ok" ? Buffer.concat([frame(Buffer.concat([encodeMessage(7, Buffer.concat([encodeVarintField(2, 1100), encodeVarintField(3, 20)])), encodeString(3, "ok"), encodeVarintField(5, 2)])), frame(Buffer.from("{}"), 2)])
         : ok;
       return new Response(body, { headers: { "content-type": "application/connect+proto" } });
     }) as typeof fetch;
@@ -117,6 +120,31 @@ describe("Devin Anthropic signature fallback", () => {
     expect(kinds).toContain("thinking_delta");
     expect(events).toContainEqual({ type: "thinking_signature", signature: encodeDevinSignature("EpcBNew", "anthropic") });
     expect(kinds.indexOf("thinking_delta")).toBeLessThan(kinds.indexOf("text_delta"));
+  });
+
+  test("the refused attempt's usage is added to the retry's", async () => {
+    responses = ["usage-reasoning-then-refuse", "usage-ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    expect(requests).toHaveLength(2);
+    const done = events.find(e => e.type === "done") as { usage?: { inputTokens?: number; outputTokens?: number } } | undefined;
+    expect(done?.usage?.inputTokens).toBe(2100);
+    expect(done?.usage?.outputTokens).toBe(60);
+  });
+
+  test("held reasoning emits heartbeats, never the held events", async () => {
+    // Each clock read advances 20s, so every held frame is past the heartbeat interval.
+    let clock = Date.now();
+    const now = spyOn(Date, "now").mockImplementation(() => (clock += 20_000));
+    try {
+      responses = ["usage-reasoning-then-refuse", "ok"];
+      const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+      const kinds = events.map(e => e.type);
+      expect(kinds.filter(k => k === "heartbeat").length).toBeGreaterThan(0);
+      expect(kinds).not.toContain("thinking_delta");
+      expect(kinds.indexOf("heartbeat")).toBeLessThan(kinds.indexOf("text_delta"));
+    } finally {
+      now.mockRestore();
+    }
   });
 
   test("an accepted signed Claude turn is sent once, signature included", async () => {
