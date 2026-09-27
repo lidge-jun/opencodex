@@ -861,7 +861,32 @@ describe("ownership refuses what it cannot prove", () => {
     const { opencodexHome } = useHomes();
     writeState(opencodexHome, "/elsewhere/.codex", "/elsewhere/.opencodex");
     const { run } = recorder(() => ({ status: 113 }));
-    expect(inspectNativeCodexOwnership(own({ run })).ownership).toBe("foreign");
+    // Identity resolution keeps this comparison lexical so it proves "different", not "unknown".
+    const realpathSync = (path: string) => path;
+    expect(inspectNativeCodexOwnership(own({ run, realpathSync })).ownership).toBe("foreign");
+  });
+
+  /*
+   * A realpath failure (EACCES, EPERM, a directory that vanished mid-compare,
+   * transient I/O) is not evidence the home is different. Collapsing it to
+   * "different" would make the unattended preflight report a definitive
+   * foreign install — and wrongly block stop, repair, uninstall, and native
+   * writes with incorrect recovery guidance — on nothing but an I/O hiccup.
+   */
+  test("an unresolvable recorded home is unknown, not foreign", () => {
+    const { codexHome, opencodexHome } = useHomes();
+    const recordedHome = join(home, "recorded-alias");
+    writeState(opencodexHome, recordedHome, opencodexHome);
+    const { run } = recorder(() => ({ status: 113 }));
+    const realpathSync = (path: string) => {
+      if (path === recordedHome) throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      return path;
+    };
+
+    const result = inspectNativeCodexOwnership(own({ run, realpathSync }));
+    expect(result.ownership).toBe("unknown");
+    expect(result.reason).toContain("could not be resolved");
+    expect(result.reason).not.toContain("foreign");
   });
 
   // An older install may have recorded a junction or symlink spelling of the
@@ -887,7 +912,10 @@ describe("ownership refuses what it cannot prove", () => {
     writePlist("/elsewhere/.codex", "/elsewhere/.opencodex");
     const { run } = recorder(() => ({ status: 113 }));
 
-    const result = inspectNativeCodexOwnership(own({ run }));
+    // Identity resolution keeps the claim comparison lexical: the fixture
+    // intends a genuinely different home, not an unresolvable one.
+    const realpathSync = (path: string) => path;
+    const result = inspectNativeCodexOwnership(own({ run, realpathSync }));
     expect(result.ownership).toBe("unknown");
     expect(result.reason).toContain("different homes");
   });

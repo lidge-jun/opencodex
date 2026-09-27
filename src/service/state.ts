@@ -857,16 +857,31 @@ export function serviceHomeMatches(a: string, b: string): boolean {
   return normalizePathForCompare(a) === normalizePathForCompare(b);
 }
 
-/** Lexical compare first; when spellings differ, compare the directories both resolve to so a
- * junction or symlink spelling recorded by an older install still names the same home. */
-export function servicePathMatchesInstall(recorded: string, current: string, deps: CodexHomeDeps = {}): boolean {
-  if (serviceHomeMatches(recorded, current)) return true;
+export type ServicePathComparison = "same" | "different" | "unknown";
+
+/**
+ * Tri-state physical-home compare. A realpath failure (EACCES, EPERM, a
+ * vanished directory, transient I/O) is "unknown", not "different": callers
+ * deciding whether a home is foreign must not turn an unreadable resolution
+ * into a definitive mismatch. Lifecycle guards may still fail closed on
+ * "unknown".
+ */
+export function compareServicePathToInstall(recorded: string, current: string, deps: CodexHomeDeps = {}): ServicePathComparison {
+  if (serviceHomeMatches(recorded, current)) return "same";
   const realpath = deps.realpathSync ?? realpathSync;
   try {
-    return serviceHomeMatches(realpath(recorded), realpath(current));
+    return serviceHomeMatches(realpath(recorded), realpath(current)) ? "same" : "different";
   } catch {
-    return false;
+    return "unknown";
   }
+}
+
+/** Lexical compare first; when spellings differ, compare the directories both resolve to so a
+ * junction or symlink spelling recorded by an older install still names the same home.
+ * Fails closed on an indeterminate resolution — ownership classification needs the
+ * tri-state {@link compareServicePathToInstall} instead. */
+export function servicePathMatchesInstall(recorded: string, current: string, deps: CodexHomeDeps = {}): boolean {
+  return compareServicePathToInstall(recorded, current, deps) === "same";
 }
 
 export function serviceCodexHomeMatchesInstall(recordedHome: string, deps: CodexHomeDeps = {}): boolean {

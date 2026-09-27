@@ -18,8 +18,9 @@ import {
 import {
   currentServiceHomes,
   inspectServiceStateEvidence,
-  servicePathMatchesInstall,
+  compareServicePathToInstall,
   type ServiceStateEvidence,
+  type ServicePathComparison,
 } from "../../service";
 import type { CodexHomeDeps } from "../../codex/home";
 import {
@@ -71,16 +72,25 @@ export interface OwnershipInspection {
   readonly reason: string;
 }
 
-function claimNamesDifferentHome(
+function claimComparesToCurrentHomes(
   claim: ServiceManagerClaim,
   current: { codexHome: string; opencodexHome: string },
   deps: CodexHomeDeps,
-): boolean {
+): ServicePathComparison {
   // A definition that OMITS a home is not a definition that disagrees about it:
   // an install run without CODEX_HOME set writes no such key at all.
-  if (claim.homes.codexHome !== null && !servicePathMatchesInstall(claim.homes.codexHome, current.codexHome, deps)) return true;
-  if (claim.homes.opencodexHome !== null && !servicePathMatchesInstall(claim.homes.opencodexHome, current.opencodexHome, deps)) return true;
-  return false;
+  let indeterminate = false;
+  if (claim.homes.codexHome !== null) {
+    const verdict = compareServicePathToInstall(claim.homes.codexHome, current.codexHome, deps);
+    if (verdict === "different") return "different";
+    indeterminate ||= verdict === "unknown";
+  }
+  if (claim.homes.opencodexHome !== null) {
+    const verdict = compareServicePathToInstall(claim.homes.opencodexHome, current.opencodexHome, deps);
+    if (verdict === "different") return "different";
+    indeterminate ||= verdict === "unknown";
+  }
+  return indeterminate ? "unknown" : "same";
 }
 
 /**
@@ -134,20 +144,33 @@ export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): Ownership
   // Mirrors that disagree with each other are not a majority vote.
   for (const one of valid) {
     for (const other of valid) {
-      if (!servicePathMatchesInstall(one.state.codexHome, other.state.codexHome, deps)
-        || !servicePathMatchesInstall(one.state.opencodexHome, other.state.opencodexHome, deps)) {
+      if (compareServicePathToInstall(one.state.codexHome, other.state.codexHome, deps) !== "same"
+        || compareServicePathToInstall(one.state.opencodexHome, other.state.opencodexHome, deps) !== "same") {
         return { ownership: "unknown", reason: "two service state files disagree about which homes are installed" };
       }
     }
   }
 
-  const foreign = valid.find(e =>
-    !servicePathMatchesInstall(e.state.codexHome, current.codexHome, deps)
-    || !servicePathMatchesInstall(e.state.opencodexHome, current.opencodexHome, deps));
+  const evidenceComparesDifferent = (e: Extract<ServiceStateEvidence, { kind: "valid" }>): boolean =>
+    compareServicePathToInstall(e.state.codexHome, current.codexHome, deps) === "different"
+    || compareServicePathToInstall(e.state.opencodexHome, current.opencodexHome, deps) === "different";
+  const evidenceComparesIndeterminate = (e: Extract<ServiceStateEvidence, { kind: "valid" }>): boolean =>
+    compareServicePathToInstall(e.state.codexHome, current.codexHome, deps) === "unknown"
+    || compareServicePathToInstall(e.state.opencodexHome, current.opencodexHome, deps) === "unknown";
+  const foreign = valid.find(evidenceComparesDifferent);
   if (foreign) {
     return {
       ownership: "foreign",
       reason: `a service is installed for CODEX_HOME=${foreign.state.codexHome} / OPENCODEX_HOME=${foreign.state.opencodexHome}`,
+    };
+  }
+  // A resolution that could not run (EACCES, EPERM, a vanished directory, transient I/O)
+  // proves neither same nor different — report it as unknown, never as foreign.
+  const indeterminateEvidence = valid.find(evidenceComparesIndeterminate);
+  if (indeterminateEvidence) {
+    return {
+      ownership: "unknown",
+      reason: `a recorded home in ${indeterminateEvidence.path} could not be resolved for comparison`,
     };
   }
 
@@ -166,7 +189,7 @@ export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): Ownership
     return { ownership: "unknown", reason: "more than one service manager holds a registration for this proxy" };
   }
   if (manager.kind === "present") {
-    const disagreeing = manager.claims.find(claim => claimNamesDifferentHome(claim, current, deps));
+    const disagreeing = manager.claims.find(claim => claimComparesToCurrentHomes(claim, current, deps) === "different");
     if (disagreeing) {
       /*
        * The state file says this home and the definition says another. An
@@ -177,6 +200,13 @@ export function inspectNativeCodexOwnership(deps: OwnershipDeps = {}): Ownership
       return {
         ownership: "unknown",
         reason: `${disagreeing.backend} is installed from ${disagreeing.definitionPath}, which names different homes than the recorded service state`,
+      };
+    }
+    const indeterminateClaim = manager.claims.find(claim => claimComparesToCurrentHomes(claim, current, deps) === "unknown");
+    if (indeterminateClaim) {
+      return {
+        ownership: "unknown",
+        reason: `the homes recorded in ${indeterminateClaim.definitionPath} could not be resolved for comparison`,
       };
     }
     // A manager backend that disagrees with the recorded state (e.g. state says
