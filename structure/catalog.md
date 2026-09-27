@@ -1,5 +1,7 @@
 # Model Catalog
 
+Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
@@ -593,8 +595,6 @@ Subagent account previews and live routing share the [priority failback](provide
 
 Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
-gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
-the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
+gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
 `src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
-only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
-not fetch on the request path; catalog sync owns their bootstrap.
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do not fetch on the request path; catalog sync owns their bootstrap.

@@ -1,5 +1,7 @@
 # Config Surface
 
+Quota activation reuses the existing next-reset fields without adding a polling configuration key. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+
 Native function-result injection follows [the separate opt-in control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
@@ -589,9 +591,7 @@ being treated as a text model by one and an image target by the other.
 malformed persisted value is off. `src/config/schema/config-schema.ts` degrades a malformed hand edit
 to absence so an optional monitoring typo cannot discard providers or credentials. The live-write
 boundary runs `metricsExportConfigError` in `src/config/diagnostics.ts` before the degrading schema,
-so wrong types and unknown nested fields are rejected rather than silently saved. Activation is read
-when the server process creates its serve options and therefore requires restart; it adds no setting
-to the live `/api/settings` mutation surface.
+so wrong types and unknown nested fields are rejected rather than silently saved. Activation is read when the server process creates its serve options and therefore requires restart; it adds no setting to the live `/api/settings` mutation surface.
 
 `apiSurfaces` and `protocols` on `src/types/config.ts` are parsed by `src/protocols/settings.ts` only; [Protocol Paths](data-planes/protocol-paths.md#settings) owns their schema handling, meaning and the one writer (`PATCH /api/protocols/settings`), including why closing Messages also writes `claudeCode.enabled` through `commitClaudeCodeBlock` (`src/claude/claude-code-block.ts`, the sentinel-stamping block writer every management route uses).
 

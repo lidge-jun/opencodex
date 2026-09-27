@@ -51,8 +51,13 @@ account before the request is forwarded upstream. The rule is intentionally spli
   coalesces simultaneous windows into one request, and durably persists both reset timestamps to
   prevent duplicate work after restarts. Paused accounts and accounts
   requiring reauthentication are skipped. Activation captures successful response quota headers;
-  opted-in idle accounts also refresh stale quota metadata at most once every five minutes,
-  without needing an open dashboard. Observed reset boundaries are retained across restarts
+  known reset times are checked locally each minute without periodic quota queries, even when
+  the cached usage is old or the proxy restarts. Only missing reset times need a metadata query
+  after the five-minute freshness guard. Unresolved discovery and failed activations retry after
+  5, 10, 20, 40, then at most every 60 minutes; these retry delays reset on proxy restart.
+  Successful response headers seed the next window without an extra query when available.
+  Dashboard refreshes and optional reset-notification polling remain independent.
+  Observed reset boundaries are retained across restarts
   until completed, so a moving idle-window timestamp cannot erase a pending activation.
   Metadata refresh uses the existing bounded authentication recovery; an inference 401 marks
   the rejected credential for reauthentication instead of repeatedly spending retries on it.

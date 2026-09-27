@@ -21,13 +21,14 @@ import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./
 import {
   completedByAccount, retryAfterByAccount, scheduledByAccount, quotaRefreshAfterByAccount,
   resetCodexQuotaAutoRefreshStateForTests,
-  type CodexQuotaAutoRefreshWindows,
+  type CodexQuotaAutoRefreshWindows, type CodexQuotaRetry,
 } from "./quota-auto-refresh-state";
 export type { CodexQuotaAutoRefreshWindows } from "./quota-auto-refresh-state";
 export { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 
 export const FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const RETRY_MS = 5 * 60_000;
+const MAX_RETRY_MS = 60 * 60_000;
 const CONCURRENCY = 4;
 
 export interface CodexQuotaAutoRefreshStatus {
@@ -50,6 +51,21 @@ export interface CodexQuotaAutoRefreshRunDeps {
 }
 
 let inFlight: Promise<void> | null = null;
+
+/** Back off unsuccessful discovery/activation without adding another timer. */
+function deferRetry(retries: Map<string, CodexQuotaRetry>, accountId: string, now: number): number {
+  const delay = Math.min((retries.get(accountId)?.delay ?? RETRY_MS / 2) * 2, MAX_RETRY_MS);
+  retries.set(accountId, { after: now + delay, delay });
+  return delay;
+}
+
+/** Every enabled window needs a retained, uncompleted deadline, not fresh usage percentages. */
+function hasScheduledWindows(config: OcxConfig, accountId: string): boolean {
+  const setting = config.codexQuotaAutoRefresh?.[accountId];
+  const scheduled = scheduledByAccount.get(accountId);
+  return (!setting?.fiveHour || scheduled?.fiveHour !== undefined)
+    && (!setting?.weekly || scheduled?.weekly !== undefined);
+}
 
 /** Report upstream window availability separately from persisted spending intent. */
 export function codexQuotaAutoRefreshStatus(
@@ -309,14 +325,19 @@ export async function runCodexQuotaAutoRefresh(
         // Capture before WHAM can move an idle window's reset into the future.
         rememberWindows(config, accountId, quotaFor(accountId));
         const quota = quotaFor(accountId);
-        if ((!quota || now - quota.updatedAt >= RETRY_MS)
-          && (quotaRefreshAfterByAccount.get(accountId) ?? 0) <= now) {
-          quotaRefreshAfterByAccount.set(accountId, now + RETRY_MS);
-          try { await refresh(config, accountId); } catch { /* Retry metadata at the bounded cadence. */ }
+        // A known deadline remains actionable even when its usage snapshot is old.
+        // Only discover missing windows; never poll merely to keep percentages fresh.
+        if (hasScheduledWindows(config, accountId)) {
+          quotaRefreshAfterByAccount.delete(accountId);
+        } else if ((!quota || now - quota.updatedAt >= RETRY_MS)
+          && (quotaRefreshAfterByAccount.get(accountId)?.after ?? 0) <= now) {
+          deferRetry(quotaRefreshAfterByAccount, accountId, now);
+          try { await refresh(config, accountId); } catch { /* Retry missing metadata with backoff. */ }
         }
         if (!eligible(accountId)) return;
         rememberWindows(config, accountId, quotaFor(accountId));
-        if ((retryAfterByAccount.get(accountId) ?? 0) > now) return;
+        if (hasScheduledWindows(config, accountId)) quotaRefreshAfterByAccount.delete(accountId);
+        if ((retryAfterByAccount.get(accountId)?.after ?? 0) > now) return;
         const windows = dueCodexQuotaAutoRefreshWindows(config, accountId, quotaFor(accountId), now);
         if (!windows) return;
         try {
@@ -327,11 +348,11 @@ export async function runCodexQuotaAutoRefresh(
           persist(config, accountId, completed);
           rememberWindows(config, accountId, quotaFor(accountId));
         } catch (error) {
-          retryAfterByAccount.set(accountId, now + RETRY_MS);
+          const delay = deferRetry(retryAfterByAccount, accountId, now);
           const account = config.codexAccounts?.find(candidate => candidate.id === accountId);
           const label = account ? codexAccountLogLabel(account) : "main";
           console.warn(`[codex-quota-auto-refresh] ${label}: ${codexWarmupFailureReason(error)}; ${
-            isAccountNeedsReauth(accountId) ? "reauthentication required" : "retry in five minutes"
+            isAccountNeedsReauth(accountId) ? "reauthentication required" : `retry in ${delay / 60_000} minutes`
           }`);
         }
       }));

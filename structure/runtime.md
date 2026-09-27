@@ -1,5 +1,7 @@
 # Runtime
 
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+
 ## Resolved static model policy
 
 `src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
@@ -589,9 +591,7 @@ an unreadable current record is unknown, and a valid address is probed even when
 PID is gone. Lease delegation is passed only to stop and recovery children, never package
 manager children. A replacement refusal passes through owner-aware recovery: only the same CLI
 owner revives the stopped runtime; foreign ownership stays transferred and unknown ownership
-remains a reported recovery requirement. Dashboard restart delegates the lease token to its repair child. Direct
-start holds the same lease through bind plus PID and runtime-address publication. If listener
-rollback cannot prove the socket closed, the process retains its lease until exit.
+remains a reported recovery requirement. Dashboard restart delegates the lease token to its repair child. Direct start holds the same lease through bind plus PID and runtime-address publication. If listener rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
 registration succeeds.
 

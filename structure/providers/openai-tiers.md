@@ -204,12 +204,17 @@ existing minimal non-stored warmup through that exact account once the timestamp
 field-patches the completed timestamp. The next observed reset boundary is also retained in
 `nextFiveHourResetAt` / `nextWeeklyResetAt` until completed; later idle-window metadata cannot
 postpone it. Successful warmups publish quota headers under the captured credential/identity fence.
-For opted-in accounts only, stale metadata is refreshed at most once per five minutes through
-the existing WHAM recovery path, independently of dashboard traffic or reset notifications.
+Known deadlines suppress activation-owned WHAM queries regardless of snapshot age, including
+when only persisted deadlines survive a restart. Missing enabled-window deadlines use the existing
+WHAM recovery path after the five-minute freshness guard; unresolved discovery backs off from
+five minutes to an hour (5, 10, 20, 40, 60 minutes). Passive headers can satisfy discovery without
+a query. Completed warmups seed the next deadlines from response headers; missing next-window
+headers use the same discovery path. Retry delays are process-local; deadlines remain durable.
+Dashboard queries and reset-notification polling are separate owners and retain their behavior.
 Inference 401s quarantine the rejected credential; failures log an opaque label and safe reason.
 Paused or reauthentication-required
-accounts are skipped, simultaneous 5-hour/weekly resets share one warmup, transient failures retry
-after five minutes, and account deletion removes its setting and completion markers.
+accounts are skipped, simultaneous 5-hour/weekly resets share one warmup, transient activation failures
+back off from five minutes to an hour, and account deletion removes settings and retry/completion state.
 Main-account hard-lock also gates these billable warmups. A policy/identity skip changes neither
 completion markers nor retry delay; quota reads remain available. Main refresh completes before
 shared credential ownership, then prepared credentials and restrictions are rechecked. Lifecycle
