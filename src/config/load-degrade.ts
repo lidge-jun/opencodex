@@ -36,6 +36,7 @@ import {
   remoteGuiConfigSchema,
   retryOn429PolicySchema,
   retryOnResetPolicySchema,
+  transientRetryOn5xxPolicySchema,
   runtimeRoleSchema,
   spendSchema,
 } from "./schema/leaf-validators";
@@ -239,6 +240,20 @@ export function retryOn429PolicyConfigError(policy: unknown): string | null {
  */
 export function retryOnResetPolicyConfigError(policy: unknown): string | null {
   return strictPolicyConfigError("retryOnReset", retryOnResetPolicySchema, policy);
+}
+
+/**
+ * Management write-boundary validation for `transientRetryOn5xx`, with the same fail-closed
+ * contract as the other retry policies.
+ *
+ * The load-time schema does not degrade a malformed block: `transientRetryOn5xxPolicySchema` has
+ * no `.catch`, so a bad value fails the whole config parse and the loader substitutes the default
+ * config, taking every provider with it. That makes this check the only place a malformed ladder
+ * can be refused without losing the file, and PATCH never runs the schema — only POST does,
+ * through `validateConfigCandidate`.
+ */
+export function transientRetryOn5xxPolicyConfigError(policy: unknown): string | null {
+  return strictPolicyConfigError("transientRetryOn5xx", transientRetryOn5xxPolicySchema, policy);
 }
 
 /**
