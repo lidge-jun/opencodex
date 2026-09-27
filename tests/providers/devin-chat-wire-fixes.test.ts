@@ -137,7 +137,19 @@ describe("Gemini tool schema type arrays", () => {
     });
   });
 
-  test("an existing anyOf is folded in, never nested under allOf", () => {
+  test("a branch that contradicts an outer keyword keeps both constraints under allOf", () => {
+    const out = normalizeDevinToolParameters("gemini-x", {
+      type: ["string", "null"], maxLength: 5, anyOf: [{ maxLength: 50 }, { type: "null" }],
+    }) as any;
+    expect(out).toEqual({
+      allOf: [
+        { anyOf: [{ maxLength: 5, type: "string" }, { type: "null" }] },
+        { anyOf: [{ maxLength: 50 }, { type: "null" }] },
+      ],
+    });
+  });
+
+  test("an existing anyOf that agrees with the outer keywords is folded in, not nested under allOf", () => {
     const out = normalizeDevinToolParameters("MODEL_GOOGLE_GEMINI_2_5_PRO", {
       type: ["object", "null"], anyOf: [{ required: ["a"] }, { required: ["b"] }],
     }) as any;

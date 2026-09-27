@@ -34,7 +34,8 @@ const isSchema = (value: unknown): value is Schema => !!value && typeof value ==
 /**
  * `{type: [T, "null"], ...rest}` becomes `{anyOf: [{...rest, type: T}, {type: "null"}]}`,
  * so type-specific keywords (items, properties, ...) stay attached to their type.
- * An existing anyOf is folded in branch by branch rather than nested under allOf.
+ * An existing anyOf is folded in branch by branch when no branch contradicts an
+ * outer keyword, and kept beside the split under allOf when one does.
  */
 function splitTypeArray(node: Schema, types: unknown[]): Schema {
   const annotations: Schema = {};
@@ -46,6 +47,15 @@ function splitTypeArray(node: Schema, types: unknown[]): Schema {
   const concrete = types.filter((type) => type !== 'null');
   const allowsNull = concrete.length < types.length;
   const existing = Array.isArray(node.anyOf) ? node.anyOf : undefined;
+  // Folding merges each branch into the outer keywords, which is only exact when
+  // they never disagree: `{maxLength: 5, anyOf: [{maxLength: 50}]}` folded would
+  // loosen the outer limit. On a disagreement keep both constraints under allOf,
+  // which this backend accepts (live: gemini-3-8-flash-medium).
+  if (existing?.some((branch) => isSchema(branch) && Object.keys(branch).some(
+    (key) => key !== 'type' && key in rest && JSON.stringify(branch[key]) !== JSON.stringify(rest[key]),
+  ))) {
+    return { ...annotations, allOf: [splitTypeArray({ ...rest, type: types }, types), { anyOf: existing }] };
+  }
   const branches: unknown[] = [];
   let nullReachable = allowsNull && !existing;
   if (!existing) {
