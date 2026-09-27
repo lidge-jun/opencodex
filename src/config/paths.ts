@@ -1,7 +1,7 @@
 import { chmodSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
+import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 
 /**
@@ -61,6 +61,12 @@ export function hardenConfigDir(): void {
 export async function flushConfigDirHardening(dir: string = getConfigDir()): Promise<void> {
   const flight = configDirHardeningFlights.get(dir);
   if (flight) await flight;
+}
+
+/** A settled ACL deadline is not proof its child has exited; stop must drain both before removal. */
+export async function flushConfigDirHardeningAndReaps(dir: string): Promise<void> {
+  try { await flushConfigDirHardening(dir); }
+  finally { await flushWindowsSecretAclReapsBeforeRemoval(dir); }
 }
 
 /** Test-only: settle every in-flight config-directory harden regardless of directory. */

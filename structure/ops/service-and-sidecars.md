@@ -40,6 +40,13 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 
 > Decision record: [ADR-0029](../decisions/ADR-0029-windows-startup-ownership-listing-reuse.md)
 
+## Windows config-directory handle release
+
+`src/server/index.ts` resolves `server.stop(true)` only after the config-directory hardening flight
+and any `icacls.exe` child that outlived its deadline have reaped. `src/config/paths.ts` owns the
+barrier: a timeout verdict alone does not make the home removable. The contract is exercised by
+`tests/server/server-stop-config-hardening.test.ts`.
+
 ## Service-manager probe
 
 `src/service-manager-probe.ts` (`inspectServiceManagerInstallation`) reports what the platform
