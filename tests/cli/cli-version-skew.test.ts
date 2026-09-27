@@ -12,6 +12,7 @@ describe("version skew detection", () => {
     expect(skew.skewed).toBe(true);
     expect(skew.cliVersion).toBe("2.35.0");
     expect(skew.proxyVersion).toBe("2.36.1");
+    expect(skew.relation).toBe("proxy-newer");
     expect(skew.warning).toContain("2.35.0");
     expect(skew.warning).toContain("2.36.1");
     expect(skew.warning).toContain("this ocx on PATH is older");
@@ -25,6 +26,7 @@ describe("version skew detection", () => {
       cliVersion: "2.42.0",
       proxyVersion: "2.10.1-preview.20260805",
       skewed: true,
+      relation: "cli-newer",
       warning: "CLI 2.42.0 does not match the running proxy 2.10.1-preview.20260805 — "
         + "the running proxy is older than this CLI. Restart the proxy using the intended current installation. "
         + "For a background service, run ocx service restart (repair reloads only a changed definition).",
@@ -45,6 +47,8 @@ describe("version skew detection", () => {
   ])("orders %s above %s in both directions", (newer, older) => {
     expect(computeVersionSkew(newer, older).warning).toContain("the running proxy is older");
     expect(computeVersionSkew(older, newer).warning).toContain("this ocx on PATH is older");
+    expect(computeVersionSkew(newer, older).relation).toBe("cli-newer");
+    expect(computeVersionSkew(older, newer).relation).toBe("proxy-newer");
   });
 
   test.each([
@@ -64,6 +68,7 @@ describe("version skew detection", () => {
       expect(skew.cliVersion).toBe(cli);
       expect(skew.proxyVersion).toBe(proxy);
       expect(skew.skewed).toBe(true);
+      expect(skew.relation).toBe("incomparable");
       expect(skew.warning).toContain("neither can be identified as older");
       expect(skew.warning).not.toContain("ocx service repair");
       expect(isConfirmedVersionMatch(skew)).toBe(false);
@@ -74,6 +79,7 @@ describe("version skew detection", () => {
     for (const [cli, proxy] of [[placeholder, "2.43.0"], ["2.43.0", placeholder], [placeholder, placeholder]]) {
       const skew = computeVersionSkew(cli!, proxy!);
       expect(skew.skewed).toBe(false);
+      expect(skew.relation).toBe("unknown");
       expect(skew.warning).toBeNull();
       expect(isConfirmedVersionMatch(skew)).toBe(false);
     }
@@ -82,6 +88,7 @@ describe("version skew detection", () => {
   test("stays quiet when the versions match", () => {
     const skew = computeVersionSkew("2.35.0", "2.35.0");
     expect(skew.skewed).toBe(false);
+    expect(skew.relation).toBe("match");
     expect(skew.warning).toBeNull();
     expect(isConfirmedVersionMatch(skew)).toBe(true);
   });
@@ -89,6 +96,7 @@ describe("version skew detection", () => {
   test("stays quiet when nothing is live", () => {
     const skew = computeVersionSkew("2.35.0", undefined);
     expect(skew.skewed).toBe(false);
+    expect(skew.relation).toBe("unknown");
     expect(skew.proxyVersion).toBeNull();
     expect(skew.warning).toBeNull();
     expect(isConfirmedVersionMatch(skew)).toBe(false);
