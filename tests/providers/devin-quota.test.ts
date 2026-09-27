@@ -141,6 +141,21 @@ describe("Devin GetUserStatus decode and mapping", () => {
     expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 6: 0, 8: 0 }))!, 1).monthlyPercent).toBe(100);
   });
 
+  test("a status with no plan copy is not decoded into a zero-valued plan", () => {
+    // Neither the top-level PlanInfo nor PlanStatus #1: a zero plan would read as an exhausted account.
+    const planStatus = Buffer.concat([encodeMessage(3, int(1, PLAN_END)), int(6, 0), int(8, 0)]);
+    const noPlan = encodeMessage(1, Buffer.concat([int(10, 1), encodeMessage(13, planStatus)]));
+    expect(decodeDevinUserStatus(noPlan)).toBeNull();
+  });
+
+  test("a present but truncated plan-end timestamp fails the decode instead of reading as absent", () => {
+    const plan = planInfo({ tier: 16, name: "Pro", billing: 1 });
+    // PlanStatus #3 holds a field declaring 127 bytes with none present.
+    const planStatus = Buffer.concat([encodeMessage(1, plan), encodeMessage(3, Buffer.from([0x12, 0x7f])), int(6, 0), int(8, 0)]);
+    const malformed = Buffer.concat([encodeMessage(1, Buffer.concat([int(10, 1), encodeMessage(13, planStatus)])), encodeMessage(2, plan)]);
+    expect(decodeDevinUserStatus(malformed)).toBeNull();
+  });
+
   test("a response without PlanStatus is not a usable status", () => {
     expect(decodeDevinUserStatus(encodeMessage(1, encodeString(3, "Fixture User")))).toBeNull();
     expect(decodeDevinUserStatus(Buffer.alloc(0))).toBeNull();
@@ -187,6 +202,17 @@ describe("fetchDevinQuota transport", () => {
     expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
     globalThis.fetch = (async () => new Response(new Uint8Array(QUOTA_RESPONSE_MAX_BYTES + 1), { status: 200 })) as unknown as typeof fetch;
     expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+  });
+
+  test("a missing plan or a truncated nested timestamp keeps the last-good row", async () => {
+    const plan = planInfo({ tier: 16, name: "Pro", billing: 1 });
+    const truncatedEnd = Buffer.concat([encodeMessage(1, plan), encodeMessage(3, Buffer.from([0x12, 0x7f])), int(6, 0), int(8, 0)]);
+    const noPlan = Buffer.concat([encodeMessage(3, int(1, PLAN_END)), int(6, 0), int(8, 0)]);
+    for (const planStatus of [truncatedEnd, noPlan]) {
+      const body = encodeMessage(1, Buffer.concat([int(10, 1), encodeMessage(13, planStatus)]));
+      globalThis.fetch = (async () => new Response(new Uint8Array(body), { status: 200 })) as unknown as typeof fetch;
+      expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+    }
   });
 
   test("a complete field followed by a truncated one is malformed, not authoritative-empty", async () => {
