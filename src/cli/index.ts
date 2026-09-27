@@ -3,6 +3,8 @@ import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { currentServingCommand, deferServiceChildToNewerRuntime, recordServingRuntime } from "../config/serving-runtimes";
+import { packageVersion } from "../lib/package-version";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
@@ -146,7 +148,7 @@ import { loadExportModels } from "../server/management/model-rows";
 
 import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
-import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
@@ -229,15 +231,6 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   return null;
-}
-
-/** Argv for detached `start`, optionally hard-pinning the listen port. */
-function startArgv(port?: number): string[] {
-  const args = ["start"];
-  if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
-    args.push("--port", String(Math.trunc(port)));
-  }
-  return selfLaunchArgv(args);
 }
 
 class StartCommandExit extends Error {
@@ -463,6 +456,11 @@ async function handleStart(options: { block?: boolean } = {}) {
     return;
   }
 
+  // A service child defers the serve to a strictly newer recorded install
+  // rather than silently downgrading (src/config/serving-runtimes.ts).
+  const deferredExit = await deferServiceChildToNewerRuntime({ sibling: siblingStart, env: process.env, selfVersion: packageVersion(), selfCommand: currentServingCommand(), port: requestedPort });
+  if (deferredExit !== null) process.exit(deferredExit);
+
   // Interactive-only update prompt. Must run BEFORE we bind a port / write a
   // PID: choosing "Update now" installs globally and exits, so we never want a
   // live daemon holding resources while it overwrites its own binary. Never from a
@@ -563,6 +561,8 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   const { server, serverModule, port, readinessGate, config } = boundStart;
   const { drainAndShutdown, isRecyclingForExit, noteExplicitShutdownRequested } = serverModule;
+  // Register the relaunch command the service-child deferral consults on a later takeover.
+  recordServingRuntime({ command: currentServingCommand(), version: packageVersion(), servedAt: new Date().toISOString() });
   // Records are visible now; background work may observe this runtime without a gap.
   scheduleCatalogPrewarm();
   installCrashGuards();
