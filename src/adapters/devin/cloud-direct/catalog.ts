@@ -35,7 +35,17 @@
  *     #5  supports_images      bool   ← tri-state: absent stays unknown
  *     #18 max_input_tokens     varint ← per-account context window
  *     #22 model_uid            string ← what `GetChatMessage` accepts
+ *     #23 model_info           ModelInfo { #6 features { #15 supports_thinking },
+ *                                          #13 max_output_tokens, #23 model_family_uid }
+ *     #30 family_metadata      ModelFamilyMetadata { #1 family_label,
+ *                                          #2 repeated Entry { #1 axis key, #2 { #1 order, #2 name } },
+ *                                          #3 is_default_model_in_family }
+ *     #31 is_default_model_in_family bool
  *   }
+ *
+ *   #23/#30/#31 were read back from a live 267-row catalog (2026-09-27): every
+ *   current row names its family, and each family marks one default member.
+ *   Legacy `MODEL_*` rows carry no #30.
  *
  *   Disabled semantics: TRUE means "this UID exists in the catalog but the
  *   caller's account/tier cannot run inference against it." BYOK models
@@ -91,6 +101,73 @@ export interface ModelCatalogEntry {
    * (see src/providers/antigravity-models.ts).
    */
   supportsImages?: boolean;
+  /** ModelInfo #13: the model's own output-token ceiling. */
+  maxOutputTokens?: number;
+  /** ModelInfo #6.15. */
+  supportsThinking?: boolean;
+  /** ModelInfo #23, e.g. `swe-1.7` for both `swe-1-7` and `swe-1-7-medium`. */
+  familyUid?: string;
+  /** ModelFamilyMetadata #1, e.g. `SWE-1.7`. */
+  familyLabel?: string;
+  /**
+   * ModelFamilyMetadata #2: this row's position on each of its family's axes,
+   * keyed by axis name (`Effort`, `Reasoning Effort`, `Fast Mode`, `1M Context`,
+   * `Thinking`, ...). Toggle axes such as `Fast Mode` carry only an order.
+   */
+  familyAxes?: Record<string, DevinFamilyAxisValue>;
+  /** #31 (or #30.3): the member the family selects when nothing is asked for. */
+  isFamilyDefault?: boolean;
+}
+
+export interface DevinFamilyAxisValue {
+  order: number;
+  name?: string;
+}
+
+/**
+ * Rows whose catalog entry claims image support that the model does not have.
+ * Live 2026-09-27: `swe-1-6` answered "NOIMAGE" to a solid red PNG while
+ * `swe-1-6-fast` and `swe-2-medium` named the colour, so the image is dropped
+ * server-side without an error. Marking it text-only lets the vision fallback
+ * describe the image instead of the model silently never seeing it.
+ */
+const IMAGE_BLIND_UIDS = new Set(['swe-1-6']);
+
+function parseFamilyMetadata(buf: Buffer): { label?: string; axes: Record<string, DevinFamilyAxisValue>; isDefault: boolean } {
+  let label: string | undefined;
+  let isDefault = false;
+  const axes: Record<string, DevinFamilyAxisValue> = {};
+  for (const f of iterFields(buf)) {
+    if (f.num === 1 && f.wire === 2 && Buffer.isBuffer(f.value)) label = f.value.toString('utf8');
+    else if (f.num === 3 && f.wire === 0) isDefault = f.value === 1n;
+    else if (f.num === 2 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      let key = '';
+      const value: DevinFamilyAxisValue = { order: 0 };
+      for (const e of iterFields(f.value)) {
+        if (e.num === 1 && e.wire === 2 && Buffer.isBuffer(e.value)) key = e.value.toString('utf8');
+        else if (e.num === 2 && e.wire === 2 && Buffer.isBuffer(e.value)) {
+          for (const v of iterFields(e.value)) {
+            if (v.num === 1 && v.wire === 0) value.order = Number(v.value);
+            else if (v.num === 2 && v.wire === 2 && Buffer.isBuffer(v.value)) value.name = v.value.toString('utf8');
+          }
+        }
+      }
+      if (key) axes[key] = value;
+    }
+  }
+  return { ...(label ? { label } : {}), axes, isDefault };
+}
+
+function parseModelInfo(buf: Buffer): { maxOutputTokens?: number; familyUid?: string; supportsThinking?: boolean } {
+  const out: { maxOutputTokens?: number; familyUid?: string; supportsThinking?: boolean } = {};
+  for (const f of iterFields(buf)) {
+    if (f.num === 13 && typeof f.value === 'bigint' && f.value > 0n) out.maxOutputTokens = Number(f.value);
+    else if (f.num === 23 && f.wire === 2 && Buffer.isBuffer(f.value) && f.value.length > 0) out.familyUid = f.value.toString('utf8');
+    else if (f.num === 6 && f.wire === 2 && Buffer.isBuffer(f.value)) {
+      for (const g of iterFields(f.value)) if (g.num === 15 && g.wire === 0) out.supportsThinking = g.value === 1n;
+    }
+  }
+  return out;
 }
 
 export interface CacheEntry {
@@ -127,6 +204,9 @@ export function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): C
     let disabled = false;
     let contextWindow = 0;
     let supportsImages: boolean | undefined;
+    let info: ReturnType<typeof parseModelInfo> = {};
+    let family: ReturnType<typeof parseFamilyMetadata> | undefined;
+    let isFamilyDefault = false;
     for (const sf of iterFields(f.value as Buffer)) {
       if (sf.num === 1 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         label = (sf.value as Buffer).toString('utf8');
@@ -145,8 +225,15 @@ export function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): C
         contextWindow = Number(sf.value);
       } else if (sf.num === 22 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         modelUid = (sf.value as Buffer).toString('utf8');
+      } else if (sf.num === 23 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
+        info = parseModelInfo(sf.value);
+      } else if (sf.num === 30 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
+        family = parseFamilyMetadata(sf.value);
+      } else if (sf.num === 31 && sf.wire === 0) {
+        isFamilyDefault = sf.value === 1n;
       }
     }
+    if (IMAGE_BLIND_UIDS.has(modelUid)) supportsImages = false;
     if (modelUid.length > 0) {
       byUid.set(modelUid, {
         modelUid,
@@ -154,6 +241,10 @@ export function parseCatalogBuffer(buf: Buffer, apiKey: string, host: string): C
         disabled,
         ...(contextWindow > 0 ? { contextWindow } : {}),
         ...(supportsImages !== undefined ? { supportsImages } : {}),
+        ...info,
+        ...(family?.label ? { familyLabel: family.label } : {}),
+        ...(family ? { familyAxes: family.axes } : {}),
+        ...(isFamilyDefault || family?.isDefault ? { isFamilyDefault: true } : {}),
       });
     }
   }

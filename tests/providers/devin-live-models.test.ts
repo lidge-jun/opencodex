@@ -192,6 +192,26 @@ describe("devin advertised catalog input modalities", () => {
     expect(models[0]?.inputModalities).toEqual(["text"]);
   });
 
+  test("a family's catalog default member becomes the advertised default effort", async () => {
+    // Real swe-1.7 shape: bare swe-1-7 is Max, swe-1-7-medium is the default.
+    const member = (uid: string, order: number, name: string, isDefault: boolean) => Buffer.concat([
+      catalogEntry(uid),
+      encodeMessage(23, encodeString(23, "swe-1.7")),
+      encodeMessage(30, Buffer.concat([
+        encodeMessage(2, Buffer.concat([
+          encodeString(1, "Reasoning Effort"),
+          encodeMessage(2, Buffer.concat([encodeVarintField(1, order), encodeString(2, name)])),
+        ])),
+      ])),
+      ...(isDefault ? [encodeVarintField(31, 1)] : []),
+    ]);
+    seedCatalog(member("swe-1-7", 5, "Max", false), member("swe-1-7-medium", 2, "Medium", true));
+    const models = await fetchProviderModels("devin-test", devinProvider(), 60_000);
+    expect(models.map((model) => model.id)).toEqual(["swe-1-7"]);
+    expect(models[0]?.reasoningEfforts).toEqual(["medium", "max"]);
+    expect(models[0]?.defaultReasoningEffort).toBe("medium");
+  });
+
   test("a credential change cannot reuse the previous account's live roster", async () => {
     // The live catalog is entitlement-specific: an observation made under one
     // credential must not be served to the next. Before the roster cache was

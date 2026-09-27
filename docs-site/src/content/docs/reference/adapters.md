@@ -571,8 +571,10 @@ configuration that names the old id is rewritten at startup.
   session token doubled and dash-joined in an `Authorization: Basic` header while the protobuf body
   keeps one copy, the request envelope goes up uncompressed, and `Metadata` #31 carries a
   732-character device fingerprint whose length — not value — the service checks. Inside
-  `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
-  makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
+  `CompletionConfiguration`, #2 is the output cap and #3 is `max_newlines`, sent at a fixed large
+  value; swapping those two makes every turn fail with an opaque `invalid_argument`. With no caller
+  or configured cap, the output cap is the selected model's own ceiling from the catalog, and 8192
+  only when the catalog is unavailable. A temperature of exactly 0 is refused, so
   it is clamped to the smallest accepted value.
 - A pre-output 429 with a stated recovery delay is surfaced immediately by default, releasing the
   admitted turn's shared capacity. Set `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` to a positive cumulative
@@ -591,13 +593,17 @@ configuration that names the old id is rewritten at startup.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 
-For SWE-2, an explicit reasoning effort overrides an effort suffix in the model
-id. For example, `swe-2-high` with `medium` selects the native `swe-2-medium` UID;
-`xhigh`, `ultra`, and `max` select `swe-2-max`. Values below Medium select Medium
-and do not disable SWE-2 reasoning. Without an explicit effort, a suffixed model
-id is preserved. This applies through the shared adapter to every Devin account,
-whichever login path minted the credential; other model families keep their
-existing suffix precedence.
+The model id you pick is a model family, and the reasoning effort picks the
+variant. With no effort, the family's own default variant is used: `swe-1-7`
+selects `swe-1-7-medium` and `swe-2` selects `swe-2-high`. An effort changes only
+the effort and lands on the nearest variant the family has, rounding up on a tie,
+so `swe-2` at `low` selects `swe-2-medium` and `kimi-k3` at `medium` selects
+`kimi-k3-high`. `fast` selects the Fast variant and `1m`, `max-1m` or `none-1m`
+the 1M-context variant where the family has one; otherwise they change nothing.
+A suffixed id such as `claude-opus-5-high-fast` keeps its variant without an
+effort, and with one keeps its Fast and context settings. Resolution never moves
+to another family. When the account catalog is unavailable, the effort is
+appended to the id instead.
 
 ## `azure-openai` (alias: `azure`)
 

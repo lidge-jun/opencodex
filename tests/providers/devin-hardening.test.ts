@@ -208,7 +208,7 @@ describe("anySignal", () => {
 
 describe("devin cloud request shape", () => {
   // The bug this guards: #2 and #3 were swapped, so a caller asking for 32
-  // output tokens wrote 32 into the context-window field and Cognition answered
+  // output tokens wrote 32 into #3 (max_newlines) and Cognition answered
   // every single turn with an opaque "an internal error occurred" - on free and
   // paid accounts alike. Verified on 2026-09-12 by building the same turn with a
   // working client and diffing the encoded messages field by field.
@@ -229,12 +229,12 @@ describe("devin cloud request shape", () => {
       ...(completionOpts ? { completionOpts } : {}),
     });
 
-  test("the output cap lands in #2 and the context window in #3", () => {
-    const outer = fields(build({ maxOutputTokens: 64, maxInputTokens: 200_000 }));
+  test("the output cap lands in #2 and max_newlines in #3", () => {
+    const outer = fields(build({ maxOutputTokens: 64 }));
     const completion = outer[8]?.value as Buffer;
     const inner = fields(completion);
     expect(inner[2]).toEqual({ wire: 0, value: 64n });
-    expect(inner[3]).toEqual({ wire: 0, value: 200_000n });
+    expect(inner[3]).toEqual({ wire: 0, value: 128_000n });
     // #6 and #11 are not part of the message the service accepts.
     expect(inner[6]).toBeUndefined();
     expect(inner[11]).toBeUndefined();

@@ -332,10 +332,15 @@ function collapseSystemIntoUser(messages: ChatHistoryItem[]): ChatHistoryItem[] 
  * CompletionConfiguration — mirrors the LS-shipped defaults, lets the caller
  * override the obvious knobs.
  */
-/** Output cap when the caller named none. */
+/** Output cap when neither the caller nor the catalog named one. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
-/** Context window when the caller named none. */
-const DEFAULT_CONTEXT_WINDOW = 128_000;
+/**
+ * CompletionConfiguration #3 is `max_newlines`, not a token count and not an
+ * input ceiling: live, a value of 5 did not truncate a 25-line answer. It is
+ * still sent, at the value every turn has carried, so the request shape the
+ * service accepts does not change.
+ */
+const MAX_NEWLINES = 128_000;
 
 /**
  * Cognition rejects a temperature of exactly 0 with the same opaque internal
@@ -353,7 +358,6 @@ function safeTemperature(value: number | undefined): number {
 
 function encodeCompletionConfiguration(opts: {
   maxOutputTokens?: number;
-  maxInputTokens?: number;
   temperature?: number;
   topK?: number;
   topP?: number;
@@ -365,15 +369,15 @@ function encodeCompletionConfiguration(opts: {
   };
   // Tag map, verified by building the same turn with a working client and
   // diffing the encoded messages field by field: #2 is the OUTPUT cap and #3 is
-  // the context window. This layout had those two swapped, so a caller asking
-  // for 32 output tokens put 32 into the context-window field and the request
-  // came back as an opaque "an internal error occurred" — for every turn, on
-  // every account, which is why free and paid failed identically. #6 and #11
-  // are not part of the message the service accepts.
+  // max_newlines. This layout once had those two swapped, so a caller's output
+  // cap landed in #3 and a large value in #2, and the request came back as an
+  // opaque "an internal error occurred" — for every turn, on every account,
+  // which is why free and paid failed identically. #6 and #11 are not part of
+  // the message the service accepts.
   return Buffer.concat([
     encodeVarintField(1, 1),
     encodeVarintField(2, opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS),
-    encodeVarintField(3, opts.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW),
+    encodeVarintField(3, MAX_NEWLINES),
     enc64(5, safeTemperature(opts.temperature)),
     encodeVarintField(7, opts.topK ?? 40),
     enc64(8, opts.topP ?? 1.0),
@@ -543,7 +547,6 @@ interface BuildArgs {
   requestType?: number;
   completionOpts?: {
     maxOutputTokens?: number;
-    maxInputTokens?: number;
     temperature?: number;
     topK?: number;
     topP?: number;

@@ -11,8 +11,8 @@ import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEventsWithResetRetry, devinStatedResetWaitMs, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import type { ContentPart } from "./devin/cloud-direct/chat";
-import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog";
-import { collapseDevinModelUid } from "./devin/live-models";
+import { getCachedCatalog, type CacheEntry, type ModelCatalogEntry } from "./devin/cloud-direct/catalog";
+import { collapseDevinModelUid, devinFamiliesOf, devinFamilyBaseId, selectDevinFamilyMember, type DevinVariantRequest } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
 import { isProviderIssuedThinkingSignature } from "../responses/reasoning-envelope";
@@ -131,7 +131,9 @@ const SWE2_EFFORT: Record<string, "medium" | "high" | "max"> = {
 
 /**
  * Resolve an explicit effort onto a SWE-2 lane, or undefined when this is not a
- * SWE-2 id or the caller named no usable effort. Undefined leaves every existing
+ * SWE-2 id or the caller named no usable effort. Reached only when the catalog
+ * is unavailable or lacks family metadata; otherwise the catalog's SWE-2 family
+ * rows decide, with the same rounding. Undefined leaves every existing
  * path untouched, which is what keeps other model families on suffix precedence.
  */
 function resolveSwe2Variant(modelId: string, reasoningEffort?: string): string | undefined {
@@ -140,17 +142,85 @@ function resolveSwe2Variant(modelId: string, reasoningEffort?: string): string |
   return mapped ? `swe-2-${mapped}` : undefined;
 }
 
+const VARIANT_EFFORT_TOKENS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const EFFORT_ALIASES: Record<string, string> = { off: "none", ultra: "max" };
+
+/**
+ * Read hyphen-separated variant tokens as a request. Any token outside the
+ * vocabulary voids the whole value, so an unknown effort changes nothing
+ * rather than half-applying. `priority` is the uid spelling of Fast Mode on
+ * the GPT rows; a caller never sends it as effort (see CALLER_EFFORT_VALUES).
+ */
+function variantRequestOf(tokens: string[], allowPriority: boolean): DevinVariantRequest | undefined {
+  const request: DevinVariantRequest = {};
+  for (const raw of tokens) {
+    const token = EFFORT_ALIASES[raw] ?? raw;
+    if (VARIANT_EFFORT_TOKENS.has(token)) request.effort = token;
+    else if (token === "fast" || (allowPriority && token === "priority")) request.fast = true;
+    else if (token === "1m") request.longContext = true;
+    else return undefined;
+  }
+  return request;
+}
+
+function callerVariantRequest(reasoningEffort: string | undefined): DevinVariantRequest | undefined {
+  const value = reasoningEffort?.toLowerCase();
+  if (!value) return undefined;
+  const aliased = EFFORT_ALIASES[value] ?? value;
+  if (!CALLER_EFFORT_VALUES.has(aliased) && aliased !== "minimal") return undefined;
+  return variantRequestOf(aliased.split("-"), false);
+}
+
+/**
+ * Resolve through the catalog's family metadata (ClientModelConfig #23/#30/#31).
+ * Returns undefined when the id belongs to no family, which leaves the
+ * suffix-based path for legacy rows and catalogs without that metadata.
+ *
+ * The family id wins over an identical row uid on purpose: bare `swe-1-7` is
+ * the Max row while the family default is `swe-1-7-medium`, and `glm-5-2` is
+ * both the family id and its default row. A caller naming the family means the
+ * family, so no effort selects the default member and an effort moves only the
+ * effort axis. A caller naming a member row keeps that row's other axes.
+ */
+function resolveFamilyUid(catalog: CacheEntry, modelId: string, reasoningEffort?: string): string | undefined {
+  const families = devinFamiliesOf(catalog);
+  const caller = callerVariantRequest(reasoningEffort);
+  let members = families.get(modelId);
+  let anchor: ModelCatalogEntry | undefined;
+  let fromId: DevinVariantRequest = {};
+  if (!members) {
+    const row = catalog.byUid.get(modelId);
+    if (row?.familyUid) {
+      members = families.get(devinFamilyBaseId(row.familyUid));
+      if (members) anchor = row;
+    }
+  }
+  if (!members) {
+    // A suffixed spelling the catalog does not list (`swe-1-7-high`) still
+    // names a family; its suffix is the request.
+    const base = collapseDevinModelUid(modelId);
+    const suffix = base !== modelId ? variantRequestOf(modelId.slice(base.length + 1).split("-"), true) : undefined;
+    members = suffix ? families.get(base) : undefined;
+    if (suffix) fromId = suffix;
+  }
+  if (!members) return undefined;
+  if (anchor && !caller) return anchor.modelUid;
+  const request: DevinVariantRequest = {
+    ...fromId,
+    ...(caller?.effort ? { effort: caller.effort } : {}),
+    ...(caller?.fast || fromId.fast ? { fast: true } : {}),
+    ...(caller?.longContext || fromId.longContext ? { longContext: true } : {}),
+  };
+  return selectDevinFamilyMember(members, request, anchor)?.modelUid;
+}
+
 /**
  * Resolve the wire model UID using the live catalog as the source of truth.
- * Cognition's catalog lists most models with an effort suffix
- * (e.g. `gpt-5-6-sol-high`); the base id alone is not accepted for those.
  *
- * If the catalog is available: use the exact UID when it exists, otherwise
- * append the reasoning effort (or `medium` default) and pick a variant the
- * account actually has.
- *
- * If the catalog is unavailable (degraded mode): append the effort suffix
- * for any base id that doesn't already carry one, mirroring the catalog shape.
+ * With family metadata in the catalog, resolution picks a family member by
+ * axis (see resolveFamilyUid). Without it — legacy rows, an older catalog, or
+ * no catalog at all — the id is resolved by suffix: an exact or suffixed UID is
+ * kept, otherwise the reasoning effort (or `medium`) is appended.
  */
 async function resolveWireModelUid(
   rawModelId: string,
@@ -160,28 +230,33 @@ async function resolveWireModelUid(
   catalog?: CacheEntry | null,
 ): Promise<string> {
   const modelId = normalizeDevinModelId(rawModelId);
+  // Callers that already read the catalog this turn pass it in; an explicit
+  // null records a failed lookup and must not trigger a same-turn retry —
+  // failures are not cached, so re-reading would only pay another timeout.
+  const entry = catalog !== undefined ? catalog : await getCachedCatalog(apiKey, host);
+  if (entry) {
+    const fromFamily = resolveFamilyUid(entry, modelId, reasoningEffort);
+    if (fromFamily) return fromFamily;
+  }
   // Explicit effort wins over a suffix the picker already baked into the id, so
   // `swe-2-high` asked for at `medium` becomes `swe-2-medium` instead of ignoring
   // the caller. Runs before the shortcut below, which would otherwise return early.
   const swe2 = resolveSwe2Variant(modelId, reasoningEffort);
   if (swe2) return swe2;
   if (hasEffortSuffix(modelId)) return modelId;
-  // Callers that already read the catalog this turn pass it in; an explicit
-  // null records a failed lookup and must not trigger a same-turn retry —
-  // failures are not cached, so re-reading would only pay another timeout.
-  const entry = catalog !== undefined ? catalog : await getCachedCatalog(apiKey, host);
+  const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
   if (entry) {
     if (entry.byUid.has(modelId)) return modelId;
-    const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
     const suffixed = `${modelId}-${effort}`;
     if (entry.byUid.has(suffixed)) return suffixed;
-    // Fall back to any enabled variant of this base model.
-    for (const uid of entry.byUid.keys()) {
-      if (uid.startsWith(modelId + "-") && !entry.byUid.get(uid)?.disabled) return uid;
+    // Any enabled variant of this exact base. The base must match after
+    // collapsing, not as a string prefix: `claude-opus-5-` prefixes
+    // `claude-opus-5-5-low` and `gpt-5-4-` prefixes `gpt-5-4-mini-low`.
+    for (const [uid, row] of entry.byUid) {
+      if (!row.disabled && uid !== modelId && collapseDevinModelUid(uid) === modelId) return uid;
     }
   }
   // Degraded mode: append the default effort suffix.
-  const effort = reasoningEffort && CALLER_EFFORT_VALUES.has(reasoningEffort) ? reasoningEffort : "medium";
   return `${modelId}-${effort}`;
 }
 
@@ -198,7 +273,9 @@ const positiveTokenCount = (value: unknown): number | undefined =>
 /**
  * Read a per-model token count for the exact UID selected for this turn.
  *
- * Tries the selected UID and then its collapsed base id, preferring the
+ * Tries the selected UID, then its catalog family id (the picker id, e.g.
+ * `claude-sonnet-4-6` for `claude-sonnet-4-6-thinking`), then its collapsed
+ * base id, preferring the
  * canonical spelling and accepting dotted or case-folded saved hints — the same
  * normalization the inference request applies to the model id. Where several
  * spellings match one id, the smallest wins: a ceiling stated twice is
@@ -207,9 +284,10 @@ const positiveTokenCount = (value: unknown): number | undefined =>
 function devinModelTokenHint(
   record: Record<string, number> | undefined,
   modelUid: string,
+  familyBase?: string,
 ): number | undefined {
   if (!record) return undefined;
-  for (const id of [modelUid, collapseDevinModelUid(modelUid)]) {
+  for (const id of [modelUid, ...(familyBase ? [familyBase] : []), collapseDevinModelUid(modelUid)]) {
     const exact = Object.hasOwn(record, id) ? positiveTokenCount(record[id]) : undefined;
     if (exact !== undefined) return exact;
     const matches = Object.entries(record)
@@ -222,42 +300,23 @@ function devinModelTokenHint(
 }
 
 /**
- * Resolve the INPUT ceiling for the exact UID selected for this turn. Catalog
- * ClientModelConfig #18 and CompletionConfiguration #3 both carry input tokens;
- * the independent output cap is not subtracted here. Smaller operator hints
- * cap live evidence, never enlarge it. No evidence leaves the encoder's 128k
- * fallback intact; an unrelated or opt-in long-context variant is not evidence.
- */
-function resolveDevinMaxInputTokens(
-  provider: OcxProviderConfig,
-  modelUid: string,
-  liveWindow?: number,
-): number | undefined {
-  const contextHint = devinModelTokenHint(provider.modelContextWindows, modelUid)
-    ?? positiveTokenCount(provider.contextWindow);
-  const inputHint = devinModelTokenHint(provider.modelMaxInputTokens, modelUid);
-  const ceilings = [positiveTokenCount(liveWindow), contextHint, inputHint]
-    .filter((value): value is number => value !== undefined);
-  return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
-}
-
-/**
  * Resolve the OUTPUT ceiling for this turn, highest authority first:
  *
  * 1. the caller's explicit `max_output_tokens`, forwarded unchanged — an
  *    explicit cap is a request, so a small one is never widened into a
  *    configured larger one;
  * 2. the configured per-model cap (`modelMaxOutputTokens`), read through the
- *    same UID-aware hint lookup the input ceiling uses;
+ *    through the UID-aware hint lookup above;
  * 3. the provider-wide `defaultMaxOutputTokens`;
- * 4. undefined, which leaves the cloud-direct encoder's own 8192 fallback in
- *    place for a provider that configured nothing.
+ * 4. the catalog's own ceiling for the selected UID (ModelInfo #13) — without
+ *    it every uncapped turn stopped at the encoder's 8192, far below the
+ *    128k most rows advertise;
+ * 5. undefined, which leaves the cloud-direct encoder's 8192 fallback in
+ *    place when there is no catalog and nothing configured.
  *
- * This is NOT the history ceiling, and the two must not collapse into one
- * number. CompletionConfiguration #2 is the output cap and #3 is the context
- * window, so feeding a context window into this resolver would ask Cognition to
- * generate a whole window's worth of output. Nothing here reads
- * `contextWindow` or `modelContextWindows` for that reason.
+ * A context window is not an output cap: feeding one into CompletionConfiguration
+ * #2 would ask Cognition to generate a whole window's worth of output. Nothing
+ * here reads `contextWindow` or `modelContextWindows` for that reason.
  *
  * Step 1 keeps the caller's raw value rather than `positiveTokenCount`: the
  * inbound parser owns what a caller may send, and re-filtering here would
@@ -268,14 +327,16 @@ function resolveDevinMaxOutputTokens(
   provider: OcxProviderConfig,
   modelUid: string,
   requested: number | undefined,
+  catalogRow?: Pick<ModelCatalogEntry, "maxOutputTokens" | "familyUid">,
 ): number | undefined {
   if (typeof requested === "number") return requested;
-  return devinModelTokenHint(provider.modelMaxOutputTokens, modelUid)
-    ?? positiveTokenCount(provider.defaultMaxOutputTokens);
+  const familyBase = catalogRow?.familyUid ? devinFamilyBaseId(catalogRow.familyUid) : undefined;
+  return devinModelTokenHint(provider.modelMaxOutputTokens, modelUid, familyBase)
+    ?? positiveTokenCount(provider.defaultMaxOutputTokens)
+    ?? positiveTokenCount(catalogRow?.maxOutputTokens);
 }
 
-/** Pure test seams; runtime uses the same resolvers immediately before dispatch. */
-export const resolveDevinMaxInputTokensForTests = resolveDevinMaxInputTokens;
+/** Pure test seam; runtime uses the same resolver immediately before dispatch. */
 export const resolveDevinMaxOutputTokensForTests = resolveDevinMaxOutputTokens;
 
 export class DevinMissingCredentialError extends Error {
@@ -613,8 +674,8 @@ export function createDevinAdapter(
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
       const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId, apiKey);
-      // One catalog read per turn serves model-UID resolution, the input
-      // ceiling, and the chat pre-flight inside streamChatEvents. Failures are
+      // One catalog read per turn serves model-UID resolution, the output
+      // cap, and the chat pre-flight inside streamChatEvents. Failures are
       // not cached, so a second read would only pay another fetch timeout on
       // an otherwise valid turn.
       const catalog = await getCachedCatalog(apiKey, host, incoming.abortSignal);
@@ -636,11 +697,8 @@ export function createDevinAdapter(
 
       try {
         // Read the selected UID's catalog row, not the picker's collapsed base.
-        const maxInputTokens = resolveDevinMaxInputTokens(
-          provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
-        );
         const maxOutputTokens = resolveDevinMaxOutputTokens(
-          provider, modelUid, parsed.options.maxOutputTokens,
+          provider, modelUid, parsed.options.maxOutputTokens, catalog?.byUid.get(modelUid),
         );
         // A combo child has not committed an outer response yet. Holding its preflight through
         // a reset wait would also hold the next-target fallback with no client keepalive.
@@ -656,10 +714,7 @@ export function createDevinAdapter(
           messages: mapOcxMessagesToDevin(parsed),
           tools: mapOcxToolsToDevin(parsed.context.tools),
           cascadeId,
-          // Input and output ceilings are separate wire fields. Omitting the
-          // input hint used to force every model through the 128k default.
           completionOpts: {
-            ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
             ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
             ...(typeof parsed.options.topP === "number" ? { topP: parsed.options.topP } : {}),
