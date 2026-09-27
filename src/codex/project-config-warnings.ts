@@ -266,7 +266,7 @@ export function resolveEffectiveProjectModelProvider(content: string): Effective
 /** True when global Codex config routes through the opencodex proxy. */
 export function isGlobalOpencodexRoutingActive(
   codexConfigPath: string = resolveCodexConfigPath(),
-  content?: string,
+  content?: string | null,
 ): boolean {
   let text = content;
   if (text === undefined) {
@@ -277,6 +277,7 @@ export function isGlobalOpencodexRoutingActive(
     }
     if (text === undefined) return false;
   }
+  if (text === null) return false;
   if (hasInjectedOpenaiBaseUrl(text)) return true;
   if (readRootTomlString(text, "model_provider") === "opencodex") return true;
   return false;
@@ -380,6 +381,8 @@ export function discoverProjectCodexConfigPaths(options: {
   cwd?: string;
   codexConfigPath?: string;
   maxWalkParents?: number;
+  /** Explicit null keeps an absent/unreadable observation; undefined permits a fresh read. */
+  globalContent?: string | null;
 } = {}): string[] {
   const found = new Set<string>();
   const codexConfigPath = options.codexConfigPath ?? resolveCodexConfigPath();
@@ -418,7 +421,8 @@ export function discoverProjectCodexConfigPaths(options: {
   }
 
   try {
-    const global = readBoundedCodexConfig(codexConfigPath);
+    const global = options.globalContent === undefined
+      ? readBoundedCodexConfig(codexConfigPath) : options.globalContent;
     if (global !== null) {
       for (const projectPath of parseTrustedProjectPathsFromCodexConfig(global)) {
         addIfExists(projectPath);
@@ -442,7 +446,7 @@ export function collectProjectCodexConfigWarnings(options: {
   // The routing question has three answers: active, inactive, and unreadable. An oversized
   // or swapped-underneath global config must not silently collapse to "inactive" — that
   // would erase both project-bypass coverage and trusted-path discovery without a trace.
-  let globalContent: string | null | undefined;
+  let globalContent: string | null = null;
   let globalUnreadable = false;
   try {
     globalContent = readBoundedCodexConfig(codexConfigPath);
@@ -450,7 +454,7 @@ export function collectProjectCodexConfigWarnings(options: {
     globalUnreadable = true;
   }
   if (requireRouting && !globalUnreadable
-    && !isGlobalOpencodexRoutingActive(codexConfigPath, globalContent ?? undefined)) {
+    && !isGlobalOpencodexRoutingActive(codexConfigPath, globalContent)) {
     return [];
   }
 
@@ -463,7 +467,7 @@ export function collectProjectCodexConfigWarnings(options: {
       message: "The global Codex config could not be read within the 1 MiB bound — whether it routes through OpenCodex, and which projects it declares trusted, is undetermined.",
     });
   }
-  for (const path of discoverProjectCodexConfigPaths({ cwd: options.cwd, codexConfigPath })) {
+  for (const path of discoverProjectCodexConfigPaths({ cwd: options.cwd, codexConfigPath, globalContent })) {
     const content = readBoundedProjectConfig(path);
     if (content !== null) warnings.push(...analyzeProjectCodexConfig(content, path));
   }
