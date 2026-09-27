@@ -24,7 +24,7 @@ describe("Devin Anthropic signature fallback", () => {
   const previousFetch = globalThis.fetch;
   let home = "";
   let requests: Buffer[] = [];
-  let responses: Array<"refuse" | "ok" | "text-then-refuse"> = [];
+  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse"> = [];
 
   const frame = (body: Buffer, flags = 0) => {
     const header = Buffer.alloc(5);
@@ -71,6 +71,8 @@ describe("Devin Anthropic signature fallback", () => {
       const next = responses.shift() ?? "ok";
       const body = next === "refuse" ? refusal
         : next === "text-then-refuse" ? Buffer.concat([frame(encodeString(3, "partial")), refusal])
+        // The live shape: reasoning, its signature and a finish frame, then the refusal trailer.
+        : next === "reasoning-then-refuse" ? Buffer.concat([frame(Buffer.concat([encodeString(9, "thinking"), encodeString(10, "EpcBNew"), encodeString(21, "anthropic"), encodeVarintField(5, 2)])), refusal])
         : ok;
       return new Response(body, { headers: { "content-type": "application/connect+proto" } });
     }) as typeof fetch;
@@ -90,6 +92,15 @@ describe("Devin Anthropic signature fallback", () => {
     expect(requests).toHaveLength(2);
     expect(assistantSignature(requests[0]!)).toEqual({ thinking: "summarised thought", signature: "EpcBClaude" });
     expect(assistantSignature(requests[1]!)).toEqual({ thinking: "summarised thought", signature: undefined });
+    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+  });
+
+  test("a refusal after reasoning alone is still retried", async () => {
+    responses = ["reasoning-then-refuse", "ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    expect(requests).toHaveLength(2);
+    expect(assistantSignature(requests[1]!).signature).toBeUndefined();
     expect(events.some(e => e.type === "error")).toBe(false);
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
   });

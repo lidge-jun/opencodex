@@ -758,7 +758,9 @@ export function createDevinAdapter(
           let produced = false;
           try {
             for await (const event of request(signedMessages)) {
-              produced ||= event.kind === "text" || event.kind === "reasoning" || event.kind === "tool_call_start" || event.kind === "tool_call_args";
+              // Only visible output makes a retry unsafe. Live, the refusal often lands after the
+              // model has streamed its reasoning, its signature and a finish frame, and nothing else.
+              produced ||= event.kind === "text" || event.kind === "tool_call_start" || event.kind === "tool_call_args";
               yield event;
             }
           } catch (error) {
