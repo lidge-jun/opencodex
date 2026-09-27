@@ -30,3 +30,10 @@ The existing opt-in `maxUpstreamBodyBytes` checks the final serialized outbound 
 ## Verification
 
 For each posted comment, read it back from GitHub and confirm number, body, open/closed state and link. A current source/merged-commit link is needed for any claim of resolution. For #4213 and #4143, no local user's app configuration is changed. If the diagnostic records arrive during this phase, amend this doc, run a separate repair cycle if a bounded regression is feasible, and update the issue with verified evidence.
+
+## wp3 result (2026-09-28)
+
+- #4213: diagnostic comment posted ([issuecomment-5857691131](https://github.com/lidge-jun/opencodex/issues/4213#issuecomment-5857691131)). It separates image-tool gating (client side: plan, feature flag, auth mode, model input modalities) from a failed Images call, links #6097 for the Pool admission failure, and names the trial-prompt cause: the live roster's `availability_nux` is dropped by `parseAccountModels`, so native rows keep the pinned `null`. The fix is `wp5` (`050_trial_nux.md`). Stays open.
+- #4143: current-build reproduction request posted ([issuecomment-5857853055](https://github.com/lidge-jun/opencodex/issues/4143#issuecomment-5857853055)); stays open.
+- #3765: `OPENCODEX_CACHE_DEBUG=1` two-turn comparison request posted ([issuecomment-5857853190](https://github.com/lidge-jun/opencodex/issues/3765#issuecomment-5857853190)); stays open.
+- #2511, #3506, #5270: no new comment. An independent sol audit found the drafts repeated or contradicted the existing maintainer comments, and the posting conditions above (no current scoped decision / new evidence / landed Qoder client integration) are not met. The existing maintainer comments remain the recorded disposition; all three stay open.

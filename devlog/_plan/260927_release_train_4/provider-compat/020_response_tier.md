@@ -32,3 +32,19 @@ This is one PR and one atomic runtime contract. Do not split observation from co
 ## Verification
 
 Run `bun test tests/routing/fastwire-response-authority.test.ts tests/routing/fastwire-observability.test.ts tests/providers/model-rename-migration.test.ts tests/providers/provider-config-validation.test.ts tests/usage/usage-cost.test.ts tests/usage/cost-cap-unknown-evidence.test.ts`; these direct paths exercise the changed route, config and cost contracts. Also run `bun run test:changed`, `bun run typecheck`, `bun run privacy:scan`, `bun run structure:check`, `git diff --check`, and the docs-site frozen-install/build required by `docs-site/AGENTS.md`. The test fixture has a fake relay; it is not live evidence of a particular provider's billing. Record the resource exception for the local full suite and rely on completed exact-head required CI before merge. The PR credits @hulkbig with a `Co-authored-by` trailer, targets latest `dev`, and gets an independent review of the full current-dev diff.
+
+## wp2 P stale check (2026-09-28)
+
+Previous D (wp1): #6097 head `ad40e8d46a` verified (focused 19/19, `test:changed` 2,619 pass / 1 skip / 0 fail, sol security PASS); merge waits on exact-head CI. Direction kept: carry #5497 next.
+
+A sol explorer re-mapped PR #5497 head `1152e3c9fc21` onto `origin/dev` `24b2f39b77`. No hunk is obsolete; the old docs anchors moved. Findings that amend the change map above:
+
+- `src/providers/fastwire.ts:398` already reads `context.responseTierAuthoritative !== false`; the carry only copies the defined flag into `AttemptTierOutcome` near line 341.
+- Context conflicts only (newer `fastEnabled` neighbours): `src/config/schema/leaf-validators.ts:299`, `src/server/auth-cors.ts:975` (editor roster is exhaustive at 1104; classify `"editor"`), `src/usage/log.ts:658,680`, `src/providers/openai-tiers-destination.ts:26`, `src/server/responses/core-normalize.ts:20`.
+- `src/providers/model-rename-fields.ts:18` needs the field as provider-scoped `"none"`; its role union is exhaustive at 141.
+- None of the grown files is listed in `tests/fixtures/file-size-baseline.json`, so no ratchet cap applies. The new `tests/routing/fastwire-response-authority.test.ts` needs both layout registries.
+- Docs: English `reference/configuration/providers.md` (field row near 207; section before FastWire migration near 568, after the newer root `auto_review_model` section at 552), zh-cn providers (87, 175), and the Codex guide (134). `structure/gui-and-management-api.md` lost the old usage paragraph; place the note near lines 223/231.
+
+Existing-user contract: omission keeps legacy authoritative relay semantics; canonical ChatGPT forwarding stays observational even with `true`; `false` changes evidence and pricing only, never the outbound tier or a local unsupported-route downgrade.
+
+Audit amendment (sol reviewer, NEAR-PASS): `serviceTierContextFromOutcome` in `src/usage/cost.ts:441` checks the `canonical === "priority" && confirmation === "confirmed"` branch before the raw echo, and `normalizeAttemptTierOutcome` (`src/usage/log.ts:635`) does not tie the new flag to `confirmation`. The carry therefore gates **both** branches on `responseTierAuthoritative !== false`, as #5497's cost diff does, and the fixture covers a persisted record whose flag is `false` while `confirmation` says `confirmed`. No GUI, dashboard, usage-summary or CLI consumer needs a change: they read the outcome through the shared cost path.
