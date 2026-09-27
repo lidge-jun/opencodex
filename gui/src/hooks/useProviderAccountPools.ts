@@ -414,6 +414,7 @@ export function useProviderAccountPools(deps: {
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
       && selectionMutationsRef.current.get(key) === mutation;
     const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
+    let result: { activeAccountId?: string | null; activeAccountChanged?: boolean };
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts/pause`, {
         method: "PUT",
@@ -425,7 +426,7 @@ export function useProviderAccountPools(deps: {
         notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);
         return;
       }
-      const result = await res.json().catch(() => ({})) as { activeAccountId?: string | null; activeAccountChanged?: boolean };
+      result = await res.json().catch(() => ({})) as { activeAccountId?: string | null; activeAccountChanged?: boolean };
       if (!currentMutation()) return;
       invalidateSelectionReads(provider, "oauth");
       const selected = result.activeAccountId === undefined
@@ -438,13 +439,11 @@ export function useProviderAccountPools(deps: {
         return { ...current, [provider]: { activeAccountId: selected, accounts: selectionRows(accounts, selected) } };
       });
       selectionMutationsRef.current.delete(key);
-      const refreshed = await refreshAccountRosters({ provider, kind: "oauth" });
-      if (result.activeAccountChanged) await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
-      if (!refreshed) { notify(t("pws.accountsLoadFailed"), false); return; }
-      notify(t(paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded", { email: label }), true);
     } catch {
       if (currentMutation()) notify(t(paused ? "codexAuth.pauseFailed" : "codexAuth.resumeFailed", { email: label }), false);
+      return;
     } finally {
+      // Only an unconfirmed save still holds the registered mutation here.
       if (currentMutation()) {
         invalidateSelectionReads(provider, "oauth");
         selectionMutationsRef.current.delete(key);
@@ -454,6 +453,17 @@ export function useProviderAccountPools(deps: {
         pausingAccountRef.current = null;
         if (aliveRef.current) setPausingAccount(null);
       }
+    }
+    // The server persisted the change. A failed follow-up read is not a failed pause: keep
+    // the saved state visible and report only the refresh failure.
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return;
+    notify(t(paused ? "codexAuth.pauseSucceeded" : "codexAuth.resumeSucceeded", { email: label }), true);
+    try {
+      const refreshed = await refreshAccountRosters({ provider, kind: "oauth" });
+      if (result.activeAccountChanged) await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
+      if (!refreshed) notify(t("pws.accountsLoadFailed"), false);
+    } catch {
+      if (aliveRef.current && mountedRef.current) notify(t("pws.accountsLoadFailed"), false);
     }
   };
 
