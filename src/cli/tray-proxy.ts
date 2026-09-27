@@ -53,6 +53,8 @@ export interface ProxyRestartIo {
     previous: ProxyRestartLive,
   ) => ProxyRestartRequestOutcome | Promise<ProxyRestartRequestOutcome>;
   waitForReplacement: (previous: ProxyRestartLive) => Promise<ProxyRestartLive | null>;
+  /** Pause between start attempts; defaults to a short sleep. Tests pass a recorder. */
+  waitBetweenAttempts?: () => Promise<void>;
 }
 
 /**
@@ -145,13 +147,61 @@ export async function runTrayProxyStart(io: TrayProxyStartIo): Promise<boolean> 
  * child and lets ordinary /api/stop restore native routing between the two halves.
  * When no proxy is live there is nothing to recycle, so restart degrades to the
  * caller's normal start path.
+ *
+ * One invocation is the whole transaction: transient races are retried inside it so the
+ * operator never has to re-run the command by hand. An uncertain discovery round is
+ * re-observed, a failed start is retried, and a replacement that never arrives triggers
+ * one strong re-observation (a crashed proxy reads absent and is started fresh; a late
+ * replacement still proves success). A live target is never stopped to make room, so the
+ * no-stop/start-fallback invariant holds: absence is confirmed twice before anything starts.
  */
+/**
+ * Start attempts per restart transaction. A service child that is still exiting, a port
+ * that has not been released yet, or a supervisor that has not re-armed all fail the
+ * first attempt and succeed on the next; an install that is actually broken still fails
+ * fast enough to read the error. A deliberate operator refusal (`"skipped"`) never retries.
+ */
+const RESTART_START_ATTEMPTS = 3;
+
+/** Discovery rounds per restart transaction; an uncertain round is a transient race. */
+const RESTART_DISCOVERY_ATTEMPTS = 3;
+
+async function startRestartedProxy(
+  io: ProxyRestartIo,
+  waitBetweenAttempts: () => Promise<void>,
+): Promise<ProxyRestartResult> {
+  let lastError: unknown;
+  let sawError = false;
+  for (let attempt = 0; attempt < RESTART_START_ATTEMPTS; attempt++) {
+    if (attempt > 0) await waitBetweenAttempts();
+    try {
+      const started = await io.startWhenStopped();
+      if (started === "skipped") return { ok: true, mode: "skipped" };
+      if (started) return { ok: true, mode: "started" };
+      sawError = false;
+    } catch (error) {
+      sawError = true;
+      lastError = error;
+    }
+  }
+  return sawError
+    ? { ok: false, phase: "start", error: lastError }
+    : { ok: false, phase: "start" };
+}
+
 export async function runProxyRestart(io: ProxyRestartIo): Promise<ProxyRestartResult> {
-  let discovery: ProxyRestartDiscovery;
-  try {
-    discovery = await io.findLive();
-  } catch (error) {
-    return { ok: false, phase: "request", error };
+  const waitBetweenAttempts = io.waitBetweenAttempts ?? (() => Bun.sleep(500));
+  // An uncertain round is a transient appear/vanish race, not a verdict: re-observe a
+  // few times before failing, so one invocation survives a supervisor mid-handoff.
+  let discovery: ProxyRestartDiscovery = { status: "uncertain", error: new Error("restart_discovery_no_attempt") };
+  for (let attempt = 0; attempt < RESTART_DISCOVERY_ATTEMPTS; attempt++) {
+    if (attempt > 0) await waitBetweenAttempts();
+    try {
+      discovery = await io.findLive();
+    } catch (error) {
+      discovery = { status: "uncertain", error };
+    }
+    if (discovery.status !== "uncertain") break;
   }
 
   if (discovery.status === "uncertain") {
@@ -159,13 +209,7 @@ export async function runProxyRestart(io: ProxyRestartIo): Promise<ProxyRestartR
   }
 
   if (discovery.status === "absent") {
-    try {
-      const started = await io.startWhenStopped();
-      if (started === "skipped") return { ok: true, mode: "skipped" };
-      return started ? { ok: true, mode: "started" } : { ok: false, phase: "start" };
-    } catch (error) {
-      return { ok: false, phase: "start", error };
-    }
+    return startRestartedProxy(io, waitBetweenAttempts);
   }
 
   const previous = discovery.live;
@@ -187,13 +231,29 @@ export async function runProxyRestart(io: ProxyRestartIo): Promise<ProxyRestartR
     return { ok: false, phase: "request", error: request.error };
   }
 
+  let replacement: ProxyRestartLive | null;
   try {
-    const replacement = await io.waitForReplacement(previous);
-    if (replacement) return { ok: true, mode: "restarted", live: replacement };
-    return request.accepted
-      ? { ok: false, phase: "replacement" }
-      : { ok: false, phase: "request", error: request.error };
+    replacement = await io.waitForReplacement(previous);
   } catch (error) {
     return { ok: false, phase: "replacement", error };
   }
+  if (replacement) return { ok: true, mode: "restarted", live: replacement };
+  // The replacement never arrived: re-observe once instead of failing blind. A proxy
+  // that crashed mid-restart reads absent (safe to start fresh — nothing live can race
+  // the bind); a replacement that landed just past the deadline still proves success;
+  // the same PID or another uncertain round fails closed exactly as before. A live
+  // target is never stopped to make room: the no-stop/start-fallback invariant holds.
+  let again: ProxyRestartDiscovery;
+  try {
+    again = await io.findLive();
+  } catch (error) {
+    return { ok: false, phase: "replacement", error };
+  }
+  if (again.status === "absent") return startRestartedProxy(io, waitBetweenAttempts);
+  if (again.status === "live" && isProxyReplacement(previous, again.live)) {
+    return { ok: true, mode: "restarted", live: again.live };
+  }
+  return request.accepted
+    ? { ok: false, phase: "replacement" }
+    : { ok: false, phase: "request", error: request.error };
 }

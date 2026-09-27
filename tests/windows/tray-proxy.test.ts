@@ -106,7 +106,8 @@ describe("tray proxy coordinator", () => {
     calls.length = 0;
     io.startWhenStopped = async () => { calls.push("start"); return false; };
     expect(await runProxyRestart(io)).toEqual({ ok: false, phase: "start" });
-    expect(calls).toEqual(["start"]);
+    // A failed start is retried inside the same transaction before admitting defeat.
+    expect(calls).toEqual(["start", "start", "start"]);
 
     calls.length = 0;
     io.startWhenStopped = async () => { calls.push("skip"); return "skipped"; };
@@ -117,7 +118,79 @@ describe("tray proxy coordinator", () => {
     const error = new Error("spawn failed");
     io.startWhenStopped = async () => { calls.push("start"); throw error; };
     expect(await runProxyRestart(io)).toEqual({ ok: false, phase: "start", error });
-    expect(calls).toEqual(["start"]);
+    expect(calls).toEqual(["start", "start", "start"]);
+  });
+
+  test("a start that fails transiently succeeds without re-running the command", async () => {
+    const calls: string[] = [];
+    let attempts = 0;
+    const io: ProxyRestartIo = {
+      findLive: async () => ({ status: "absent" }),
+      startWhenStopped: async () => {
+        attempts += 1;
+        calls.push(`start:${attempts}`);
+        if (attempts < 3) throw new Error(`transient race ${attempts}`);
+        return true;
+      },
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      waitBetweenAttempts: async () => { calls.push("wait"); },
+    };
+    expect(await runProxyRestart(io)).toEqual({ ok: true, mode: "started" });
+    expect(calls).toEqual(["start:1", "wait", "start:2", "wait", "start:3"]);
+  });
+
+  test("a proxy that crashed mid-restart is started fresh after strong re-observation", async () => {
+    const calls: string[] = [];
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    let observations = 0;
+    const result = await runProxyRestart({
+      findLive: async () => {
+        observations += 1;
+        // Initial discovery sees the live target; the post-failure re-observation
+        // finds nothing: the old process died without publishing a replacement.
+        return observations === 1
+          ? { status: "live", live: previous }
+          : { status: "absent" };
+      },
+      startWhenStopped: async () => { calls.push("start"); return true; },
+      requestInPlaceRestart: async () => { calls.push("request"); return { accepted: true }; },
+      waitForReplacement: async () => { calls.push("wait"); return null; },
+      waitBetweenAttempts: async () => {},
+    });
+    expect(result).toEqual({ ok: true, mode: "started" });
+    expect(calls).toEqual(["request", "wait", "start"]);
+  });
+
+  test("a replacement that lands past the deadline still proves success", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    const late: ProxyRestartLive = { pid: 20, port: 10100, source: "runtime" };
+    let observations = 0;
+    const result = await runProxyRestart({
+      findLive: async () => {
+        observations += 1;
+        return observations === 1
+          ? { status: "live", live: previous }
+          : { status: "live", live: late };
+      },
+      startWhenStopped: async () => { throw new Error("must not start"); },
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      waitBetweenAttempts: async () => {},
+    });
+    expect(result).toEqual({ ok: true, mode: "restarted", live: late });
+  });
+
+  test("the same PID after a missed replacement still fails closed", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    const result = await runProxyRestart({
+      findLive: async () => ({ status: "live", live: previous }),
+      startWhenStopped: async () => { throw new Error("must not start"); },
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      waitBetweenAttempts: async () => {},
+    });
+    expect(result).toEqual({ ok: false, phase: "replacement" });
   });
 
   test("a live proxy owns one in-place restart and must publish a replacement identity", async () => {

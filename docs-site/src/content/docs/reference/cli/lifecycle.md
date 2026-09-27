@@ -101,6 +101,13 @@ If a live listener cannot be attested to a runtime PID (including a pre-update p
 closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by
 `ocx service start` so supervision is restored.
+One invocation is the whole transaction: transient races are retried inside it, so a failed
+start is attempted again and an uncertain discovery round is re-observed instead of failing
+the command. When an accepted restart never publishes a replacement, the command re-observes
+once before giving up — a proxy that crashed mid-restart reads absent and is started fresh,
+while a replacement that landed just past the deadline still proves success. A live target is
+never stopped to make room, so a stale-but-listening process can not be replaced by a second
+proxy racing it for the port.
 
 Port recovery after stop or update respects a failed OCX process check even when the PID was
 recorded before shutdown. A rejected live holder is left running and prevents TCP-row cleanup.
