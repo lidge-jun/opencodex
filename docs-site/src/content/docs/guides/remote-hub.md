@@ -546,6 +546,8 @@ input checks.
 
 ## Docker Compose
 
+To run this image on Cloudflare instead of your own host, see [Cloudflare Deployment](/guides/cloudflare/).
+
 opencodex does not publish an official container image. The repository does maintain a source-build
 [`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
 [`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow

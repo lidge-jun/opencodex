@@ -1,0 +1,10 @@
+# Data-plane token clients send as `x-opencodex-api-key` or a Bearer token. Required.
+OPENCODEX_API_AUTH_TOKEN=
+# Management-plane token for /api/*. Optional; must differ from the data token.
+OPENCODEX_ADMIN_AUTH_TOKEN=
+# Full config.json written on first boot only, e.g. {"port":10100,"hostname":"0.0.0.0",...}. Optional.
+OCX_BOOTSTRAP_CONFIG_JSON=
+# Comma-separated names of further secrets to expose to ocx, e.g. provider API keys referenced as ${NAME}. Optional.
+OCX_PASSTHROUGH_SECRETS=
+# Set to 1 to forward /api/* to ocx. Also requires OPENCODEX_ADMIN_AUTH_TOKEN. Optional.
+OCX_EXPOSE_MANAGEMENT_API=

@@ -1,0 +1,101 @@
+import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
+import { containerEnv, edgeDecision, envFingerprint, type SecretSource } from "./container-env";
+import { LeaseState } from "./lease";
+import { handleStateRequest } from "./state-routes";
+
+export { ContainerProxy };
+
+export interface Env extends SecretSource {
+  HUB: DurableObjectNamespace<OpencodexHub>;
+  STATE: R2Bucket;
+  OCX_SLEEP_AFTER?: string;
+  OCX_EXPOSE_MANAGEMENT_API?: string;
+}
+
+// Must match STATE_ORIGIN in docker/cloudflare-supervisor.ts.
+const STATE_HOST = "state.ocx.internal";
+const HUB_NAME = "hub";
+const STARTED_ENV_KEY = "ocx:started-env";
+const STOP_WAIT_MS = 5 * 60_000;
+// The supervisor closes its 503 placeholder a moment before ocx binds the port.
+const HANDOFF_WINDOW_MS = 30_000;
+const PROXY_FAILURE = "Error proxying request to container";
+
+export class OpencodexHub extends Container<Env> {
+  defaultPort = 10100;
+  // The library fetches `http://${pingEndpoint}`, so this is host + path, not a path.
+  pingEndpoint = "localhost/healthz";
+  sleepAfter = this.env.OCX_SLEEP_AFTER || "30m";
+  entrypoint = ["bun", "docker/cloudflare-supervisor.ts"];
+  envVars = containerEnv(this.env);
+
+  private readonly leases = new LeaseState(this.ctx.storage);
+
+  private startedAt = 0;
+
+  override async onStart(): Promise<void> {
+    this.startedAt = Date.now();
+    await this.ctx.storage.put(STARTED_ENV_KEY, await envFingerprint(this.envVars));
+  }
+
+  override async fetch(req: Request): Promise<Response> {
+    await this.restartIfEnvChanged();
+    // This request may itself start the container, which sets startedAt only once it is up.
+    const starting = (await this.getState()).status !== "healthy";
+    if (!starting && Date.now() - this.startedAt > HANDOFF_WINDOW_MS) return super.fetch(req);
+    // Only inside the handoff window is the request cloned, so a refused connection can be replayed.
+    for (let attempt = 0; ; attempt++) {
+      const response = await super.fetch(req.clone());
+      if (response.status !== 500 || attempt >= 20 || Date.now() - this.startedAt > HANDOFF_WINDOW_MS) return response;
+      const text = await response.text();
+      if (!text.startsWith(PROXY_FAILURE)) return new Response(text, response);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  // A running container keeps the environment it started with, and every request renews its idle
+  // timer, so a rotated data token would otherwise stay valid for as long as the leaked one is used.
+  private async restartIfEnvChanged(): Promise<void> {
+    if ((await this.getState()).status !== "healthy") return;
+    const started = await this.ctx.storage.get<string>(STARTED_ENV_KEY);
+    if (!started || started === (await envFingerprint(this.envVars))) return;
+    console.log("Container secrets changed; restarting the container.");
+    const stoppedAt = Date.now();
+    await this.stop("SIGTERM");
+    // Done once the state moves after our stop: the old process exited, or another request
+    // already started its replacement.
+    const deadline = stoppedAt + STOP_WAIT_MS;
+    while (Date.now() < deadline) {
+      const state = await this.getState();
+      if (state.lastChange >= stoppedAt || !["running", "healthy"].includes(state.status)) break;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  acquireLease(bootId: string) { return this.leases.acquireLease(bootId); }
+  renewLease(bootId: string) { return this.leases.renewLease(bootId); }
+  holdsLease(bootId: string) { return this.leases.holdsLease(bootId); }
+  releaseLease(bootId: string) { return this.leases.releaseLease(bootId); }
+  currentSnapshot() { return this.leases.currentSnapshot(); }
+  commitSnapshot(bootId: string, key: string) { return this.leases.commitSnapshot(bootId, key); }
+}
+
+async function handleState(req: Request, env: Env): Promise<Response> {
+  return handleStateRequest(req, getContainer(env.HUB, HUB_NAME), {
+    get: async key => (await env.STATE.get(key))?.body ?? null,
+    put: async (key, body, length) => { await env.STATE.put(key, body.pipeThrough(new FixedLengthStream(length))); },
+    delete: key => env.STATE.delete(key),
+  });
+}
+
+OpencodexHub.outboundByHost = { [STATE_HOST]: handleState };
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    const decision = edgeDecision(req, env);
+    if (!decision.forward) {
+      return Response.json({ error: { message: decision.message, type: "invalid_request_error" } }, { status: decision.status });
+    }
+    return getContainer(env.HUB, HUB_NAME).fetch(req);
+  },
+} satisfies ExportedHandler<Env>;

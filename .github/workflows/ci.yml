@@ -36,6 +36,7 @@ on:
       - "compose.yaml"
       - ".dockerignore"
       - "docker/**"
+      - "deploy/**"
       - "src/**"
       - "bin/**"
       - "tests/**"
@@ -229,6 +230,7 @@ jobs:
               - 'compose.yaml'
               - '.dockerignore'
               - 'docker/**'
+              - 'deploy/**'
               - 'src/**'
               - 'bin/**'
               - 'tests/**'
