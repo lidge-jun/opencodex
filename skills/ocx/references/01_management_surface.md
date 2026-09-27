@@ -803,11 +803,13 @@ JSON mode: `payload`.
 
 ### `ocx account pause`
 
-Stop routing new requests to one account in the Codex pool.
+Stop routing new requests to one account in a Codex or supported generic OAuth pool.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/codex-auth/accounts/pause` |
+| GET | `/api/oauth/accounts` |
+| PUT | `/api/oauth/accounts/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -815,16 +817,17 @@ Stop routing new requests to one account in the Codex pool.
 
 JSON mode: `envelope`.
 
-- Pausing also unbinds threads pinned to the account and selects a fallback if it was active -- side effects of the route, not of the word `pause`.
-- The issue that requested this reported the route as POST; it is PUT.
+- Codex pause unbinds pinned threads and selects a fallback when possible. Generic OAuth pause excludes that account from new requests and failover; Anthropic is unsupported.
 
 ### `ocx account resume`
 
-Return a paused account to the Codex pool.
+Return a paused account to a Codex or supported generic OAuth pool.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/codex-auth/accounts/pause` |
+| GET | `/api/oauth/accounts` |
+| PUT | `/api/oauth/accounts/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|

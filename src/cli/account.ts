@@ -108,7 +108,8 @@ function statusText(row: AccountRow): string {
   if (row.paused) parts.push("paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) parts.push("needs-reauth");
-  if (row.provider === "kiro" && row.autoSelectable === false)
+  // A paused Kiro row already says "paused"; repeating it as a skip reason adds nothing.
+  if (row.provider === "kiro" && row.autoSelectable === false && !(row.paused && row.skipReason === "paused"))
     parts.push(row.skipReason ? `not-auto-selected(${row.skipReason})` : "not-auto-selected");
   if (row.validationPending) parts.push("validation-pending");
   if (row.selectionExcludedReason === "plan_excluded") {
