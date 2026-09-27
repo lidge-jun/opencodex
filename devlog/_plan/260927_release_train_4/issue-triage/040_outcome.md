@@ -11,7 +11,7 @@ This document begins as the executable final phase design. At Done it becomes th
 
 ## Evidence slots to fill from readback
 
-At finalization, replace this section with a table of exact issue comment URLs, PR comment URLs, any closed issues/PRs and their evidence, carry PR/head/merge SHA, docs PR/head/merge SHA, exact-head CI run URLs and conclusions, post-merge `dev` CI, and the remaining risks. Never mark an unrun suite passed. If an item head changes, refresh its decision and comment before finalizing.
+The filled receipts are under **Final outcome** at the end of this document. The original instruction was to add a table of exact issue comment URLs, PR comment URLs, any closed issues/PRs and their evidence, carry PR/head/merge SHA, docs PR/head/merge SHA, exact-head CI run URLs and conclusions, post-merge `dev` CI, and the remaining risks. Never mark an unrun suite passed. If an item head changes, refresh its decision and comment before finalizing.
 
 ## Final reconciliation checks
 
@@ -72,3 +72,18 @@ Ordered steps:
 2. #6094 review by a Sol reviewer in `/private/tmp/t4-issue-triage-6094` (diff against backend contract, locale completeness, file-size ratchet, test layout, screenshot, gates). Act on the verdict as above; pushing to a contributor fork is not allowed, so a small blocker is fixed only by a maintainer carry PR with a co-author trailer.
 3. Sol re-verification of the prior 12 issue and 21 PR decisions, which another model produced. Any DISAGREE is reconciled here with a recorded reason before the docs PR; #5782 and #5800 are rechecked for a narrow, low-risk bug slice.
 4. Docs PR. Rebase this audit branch on the post-merge `dev`, fill the evidence table (carry PR/head/merge SHA/CI, #6079 comment edit, #6093/#6094 outcome, re-verification result), run `privacy:scan`, `structure:check` and diff checks, then open, CI-verify and merge a devlog-only PR and confirm `dev` CI after merge.
+
+## Final outcome (2026-09-28 KST)
+
+The lane is done. Two focused bug fixes landed on `dev` with contributor credit; no issue met the full-resolution bar for closing; every large feature PR stays open with a posted decision.
+
+| Item | Result | Evidence |
+|---|---|---|
+| [#6098](https://github.com/lidge-jun/opencodex/pull/6098) standalone URL carry from #6079 | Merged, squash `ef4e9940`, `Co-authored-by: luvs01` | Head `c72b88ca`. PR-event product CI passed on every pushed head; Windows shards (`lane=all` dispatch) passed on the same diff at `9366801b` ([run 36333848482](https://github.com/lidge-jun/opencodex/actions/runs/36333848482)). The first dispatch had one Windows temp-dir `EPERM` cleanup flake in `server-management-auth.test.ts`. Local union tree with `dev` `3401e1ee`: focused 5 pass, typecheck, layout/ratchet 27 pass, structure, privacy exit 0. `test:changed` at `08271bdf`: 26181 pass / 20 fail; 16 of those pass in isolation, the other 4 fail identically on unchanged `dev` (machine-load timeouts). Compiled macOS probe: `file:///$bunfs/root/probe` → standalone. CodeRabbit and Codex: no findings. |
+| [#6100](https://github.com/lidge-jun/opencodex/pull/6100) service-home refusal log from #5782 | Merged, squash `7b83dede`, `Co-authored-by: tcflying` | Head `75f863c6`. Red-then-green regression; path-free log line (raw admission message can contain private paths). Sol review NEAR-PASS; its stale `structure/config.md` finding was fixed (file at its 600-line budget). Local union tree with `dev` `3401e1ee`: focused 30 pass, typecheck, layout/ratchet 27 pass, structure, privacy exit 0. `test:changed` not completed: stopped externally while waiting on another lane's test lock. Codex review: no findings. |
+| #6079 / #5782 originals | Kept open | Existing decision comments edited with carry links and thanks: [#6079](https://github.com/lidge-jun/opencodex/pull/6079#issuecomment-5857047467), [#5782](https://github.com/lidge-jun/opencodex/pull/5782#issuecomment-5857050257). |
+| [#6094](https://github.com/lidge-jun/opencodex/pull/6094) for #6093 | Reviewed, awaiting maintainer merge | Fork CI approved and passed at `edb17c73`; [review comment](https://github.com/lidge-jun/opencodex/pull/6094#issuecomment-5857585625). Contributor-PR merges are outside this lane's authority. |
+| 15 owned open issues | 0 closed | 12 audited plus #6093, #6118, #6122; all have unmet acceptance. Sol re-verification agreed with all 12 original decisions. |
+| 21 large PRs | 0 merged as-is, 0 closed | Sol re-verification agreed with 20; the #5782 disagreement produced #6100. |
+
+Per the coordinator's closing rule, per-PR Cross-platform CI was not awaited after the last rebase; the coordinator runs it once on the final `dev`. Remaining risks: no compiled Windows binary was run, so the Windows `%7EBUN` URL shape is proven only by unit cases and CI shards; `structure/config.md` sits exactly at its 600-line budget, so the next edit there must move text out.
