@@ -200,6 +200,15 @@ Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
 `tests/providers/kiro/kiro-metering-usage.test.ts`, and
 `tests/server/server-kiro-completion-e2e.test.ts`.
 
+## Image count limits
+
+`src/adapters/kiro-images.ts` limits each user input message to 20 inline images and
+the whole `GenerateAssistantResponse` request to 100. It applies the per-message
+limit first, then removes the oldest surviving history images until the request
+fits. A bounded text marker remains in each affected message; the current turn's
+newest images are retained. The separate 18 MiB image byte budget still applies
+after these count limits.
+
 ## Remote image references
 
 Kiro's wire inlines base64 bytes only, so a remote `https` image reference cannot be

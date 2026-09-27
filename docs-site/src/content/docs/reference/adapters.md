@@ -347,6 +347,9 @@ MiMo model Command Code serves.
 
 - Builds Kiro `conversationState`, maps Codex tools and tool results, and sends image blocks supported
   by the Kiro wire.
+- Keeps at most 20 inline images per message and 100 per request. Older history images are omitted
+  first when the request exceeds the limit, with a text marker on affected messages; recent images
+  in the current turn remain available.
 - Coalesces adjacent outputs from the same original tool call into one Kiro result. Text remains
   ordered, images retain the existing per-message limits, and any error flag remains set. User,
   developer, assistant or another tool's output ends the group. Distinct original IDs that map

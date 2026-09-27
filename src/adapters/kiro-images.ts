@@ -74,8 +74,10 @@ export function kiroUninlinableImageMarker(count: number): string {
  */
 export const KIRO_IMAGE_BASE64_BUDGET = 18 * 1024 * 1024;
 export const KIRO_MAX_IMAGES_PER_MESSAGE = 20;
+export const KIRO_MAX_IMAGES_PER_REQUEST = 100;
 
 const COUNT_CAP_NOTE = "[image omitted: exceeded the 20-image per-message cap; oldest images in this message were dropped]";
+const REQUEST_CAP_NOTE = "[images omitted: exceeded the 100-image request cap; oldest images in this message were dropped]";
 
 /** A kiro wire message that can carry images (history userInputMessage or currentMessage). */
 interface KiroImageCarrier {
@@ -107,9 +109,10 @@ function appendNote(carrier: KiroImageCarrier, note: string): void {
 
 /**
  * Apply the generous image pipeline to a built CodeWhisperer payload (mutates in
- * place): per-message 20-image cap first (oldest dropped), then the shared tier
- * machinery with the kiro budget and terminal-overflow DROP (kiro has no downstream
- * guard). Test seams (encode/validate) forward into the core.
+ * place): per-message 20-image cap first, then the 100-image request cap (oldest
+ * dropped), then the shared tier machinery with the kiro budget and
+ * terminal-overflow DROP (kiro has no downstream guard). Test seams
+ * (encode/validate) forward into the core.
  */
 export async function normalizeKiroImages(
   payload: unknown,
@@ -124,6 +127,18 @@ export async function normalizeKiroImages(
     if (!images || images.length <= KIRO_MAX_IMAGES_PER_MESSAGE) continue;
     images.splice(0, images.length - KIRO_MAX_IMAGES_PER_MESSAGE);
     appendNote(carrier, COUNT_CAP_NOTE);
+  }
+
+  let excess = carriers.reduce((count, carrier) => count + (carrier.images?.length ?? 0), 0) - KIRO_MAX_IMAGES_PER_REQUEST;
+  for (const carrier of carriers) {
+    if (excess <= 0) break;
+    const images = carrier.images;
+    if (!images?.length) continue;
+    const dropped = Math.min(images.length, excess);
+    images.splice(0, dropped);
+    if (images.length === 0) delete carrier.images;
+    appendNote(carrier, REQUEST_CAP_NOTE);
+    excess -= dropped;
   }
 
   // Targets over the survivors, oldest→newest across carriers. Drops resolve the image

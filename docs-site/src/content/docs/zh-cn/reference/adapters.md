@@ -133,6 +133,7 @@ interface ProviderAdapter {
 token。
 
 - 构建 Kiro `conversationState`，映射 Codex 工具和工具结果，并发送 Kiro wire 支持的 image block。
+- 每条消息最多保留 20 张内联图，整次请求最多 100 张；超限时先省略最早的历史图片，并在受影响的消息中留下文字标记，当前轮次的新图片继续保留。
 - 解码 `application/vnd.amazon.eventstream`，重建 text/thinking/tool event，检测被截断的工具
   JSON。上游不返回 token 数量，因此 usage 采用估算值。
 - 经 `fetchResponse` 负责有界重试和分类/脱敏后的错误；非流式 parser 会排空同一 event stream，
