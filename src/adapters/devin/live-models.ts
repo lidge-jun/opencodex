@@ -2,12 +2,12 @@
  * Live Devin / Cognition model discovery via GetCascadeModelConfigs.
  *
  * The live catalog is the source of truth for the model roster. The endpoint
- * returns effort-suffixed variants (e.g. `gpt-5-6-sol-high`); we collapse those
- * to base ids so the picker stays clean and the adapter appends the effort
- * suffix at request time. `DEVIN_STATIC_MODELS` is only a degraded-mode
+ * returns one row per variant (e.g. `gpt-5-6-sol-high`), grouped into families;
+ * the picker shows one id per family and the adapter picks the family member
+ * for the requested effort at request time. `DEVIN_STATIC_MODELS` is only a degraded-mode
  * fallback for when there is no API key or discovery fails.
  */
-import { getCachedCatalog, type ModelCatalogEntry } from "./cloud-direct";
+import { getCachedCatalog, type CacheEntry, type ModelCatalogEntry } from "./cloud-direct";
 
 const DEFAULT_HOST = "https://server.codeium.com";
 
@@ -130,6 +130,136 @@ export function sortDevinRungs(rungs: Iterable<string>): string[] {
 }
 
 /**
+ * Effort rungs a catalog family axis can name, in ladder order. Wider than
+ * RUNG_ORDER because the catalog also spells `Minimal` (Gemini Flash) and
+ * `No Thinking` (GLM), which resolution has to place even though the Codex
+ * ladder does not offer them.
+ */
+const FAMILY_EFFORT_LADDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_AXES = ["Effort", "Reasoning Effort"];
+const FAST_AXIS = "Fast Mode";
+const LONG_CONTEXT_AXIS = "1M Context";
+const THINKING_AXIS = "Thinking";
+
+/** The picker id of a catalog family: its uid with dotted versions hyphenated, as the row uids spell it. */
+export function devinFamilyBaseId(familyUid: string): string {
+  return familyUid.replace(/\./g, "-");
+}
+
+function isEffortAxis(axis: string): boolean {
+  return EFFORT_AXES.includes(axis);
+}
+
+/** The effort rung a family member sits on, read from its axis value name rather than its uid. */
+export function devinFamilyEffortOf(entry: ModelCatalogEntry): string | undefined {
+  const axes = entry.familyAxes;
+  if (!axes) return undefined;
+  for (const axis of EFFORT_AXES) {
+    const name = axes[axis]?.name?.toLowerCase();
+    if (!name) continue;
+    const rung = name === "no thinking" ? "none" : name;
+    if (FAMILY_EFFORT_LADDER.includes(rung)) return rung;
+  }
+  return undefined;
+}
+
+const familyCache = new WeakMap<CacheEntry, Map<string, ModelCatalogEntry[]>>();
+
+/**
+ * Group catalog rows by family, keyed by the family's picker id. Only rows
+ * that carry family metadata take part; legacy `MODEL_*` rows are internal
+ * enum names and never form a picker family.
+ */
+export function devinFamiliesOf(catalog: CacheEntry): Map<string, ModelCatalogEntry[]> {
+  let families = familyCache.get(catalog);
+  if (families) return families;
+  families = new Map();
+  for (const entry of catalog.byUid.values()) {
+    if (!entry.familyUid || !entry.familyAxes || entry.modelUid.startsWith("MODEL_")) continue;
+    const base = devinFamilyBaseId(entry.familyUid);
+    const members = families.get(base);
+    if (members) members.push(entry);
+    else families.set(base, [entry]);
+  }
+  familyCache.set(catalog, families);
+  return families;
+}
+
+/** What a caller asked for, independent of how the catalog spells it. */
+export interface DevinVariantRequest {
+  effort?: string;
+  fast?: boolean;
+  longContext?: boolean;
+}
+
+function lexicallyLess(a: number[], b: number[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! < b[i]!;
+  return false;
+}
+
+function effortIndex(rung: string | undefined): number {
+  return rung === undefined ? -1 : FAMILY_EFFORT_LADDER.indexOf(rung);
+}
+
+/**
+ * The member closest to `targets` on the non-effort axes, then nearest to
+ * `effort` on the ladder, ties going to the higher rung so a tie never quietly
+ * turns reasoning down (`xhigh` on SWE-2 selects Max, as the degraded table in
+ * src/adapters/devin.ts does).
+ */
+function closestMember(
+  members: ModelCatalogEntry[],
+  targets: Record<string, number>,
+  effort: string | undefined,
+): ModelCatalogEntry | undefined {
+  const want = effortIndex(effort);
+  let best: ModelCatalogEntry | undefined;
+  let bestScore: number[] | undefined;
+  for (const member of members) {
+    const axes = member.familyAxes ?? {};
+    const mismatches = Object.entries(targets).filter(([axis, order]) => (axes[axis]?.order ?? 0) !== order).length;
+    const have = effortIndex(devinFamilyEffortOf(member));
+    const distance = want < 0 ? 0 : have < 0 ? FAMILY_EFFORT_LADDER.length : Math.abs(have - want);
+    const score = [mismatches, distance, -have];
+    if (!bestScore || lexicallyLess(score, bestScore)) {
+      best = member;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
+ * Pick the family member for a request. Axes the caller did not ask about
+ * (`Fast Mode`, `1M Context`, `Thinking`, `Prompt Cache Retention`, ...) stay
+ * where the anchor has them; the anchor is the member the caller named, else
+ * the family's catalog default, else the neutral member (every toggle off,
+ * effort nearest Medium) for the few families that mark no default. Disabled
+ * members are passed over while any enabled one remains, so the pre-flight
+ * only reports a tier refusal when the whole family is refused.
+ */
+export function selectDevinFamilyMember(
+  members: ModelCatalogEntry[],
+  request: DevinVariantRequest,
+  anchor?: ModelCatalogEntry,
+): ModelCatalogEntry | undefined {
+  const axisNames = new Set(members.flatMap((m) => Object.keys(m.familyAxes ?? {})).filter((a) => !isEffortAxis(a)));
+  const base = anchor
+    ?? members.find((m) => m.isFamilyDefault)
+    ?? closestMember(members, Object.fromEntries([...axisNames].map((a) => [a, 0])), "medium");
+  if (!base) return undefined;
+  const targets: Record<string, number> = {};
+  for (const axis of axisNames) targets[axis] = base.familyAxes?.[axis]?.order ?? 0;
+  if (request.fast && axisNames.has(FAST_AXIS)) targets[FAST_AXIS] = 1;
+  if (request.longContext && axisNames.has(LONG_CONTEXT_AXIS)) targets[LONG_CONTEXT_AXIS] = 1;
+  // `none` means no reasoning. Families like Claude Sonnet 4.6 express that as
+  // Thinking off rather than as an effort rung.
+  if (request.effort === "none" && axisNames.has(THINKING_AXIS)) targets[THINKING_AXIS] = 0;
+  const enabled = members.filter((m) => !m.disabled);
+  return closestMember(enabled.length > 0 ? enabled : members, targets, request.effort ?? devinFamilyEffortOf(base));
+}
+
+/**
  * Degraded-mode ladders, used only before the account catalog is readable.
  *
  * Only measured entries belong here. SWE-2 ships exactly three native lanes
@@ -158,14 +288,18 @@ export type DevinUsableModelsResult =
       models: string[];
       contextWindows: Record<string, number>;
       efforts: Record<string, string[]>;
+      /** Per base, the effort of the family's catalog default member, when it is on the ladder. */
+      defaultEfforts: Record<string, string>;
       inputModalities: Record<string, string[]>;
     }
   | { ok: false; error: "auth" | "http" | "empty" | "unknown"; detail?: string };
 
 /**
  * Fetch the live model roster from Cognition's `GetCascadeModelConfigs` and
- * collapse effort-suffixed variants to base ids. The returned list is the
- * authoritative model roster for the signed-in account.
+ * collapse variants to base ids. Rows that carry family metadata collapse to
+ * their family and read their effort from the family's effort axis; only rows
+ * without it (older catalogs) fall back to reading suffixes off the uid. The
+ * returned list is the authoritative model roster for the signed-in account.
  */
 export async function fetchDevinUsableModels(opts: {
   apiKey: string;
@@ -180,6 +314,7 @@ export async function fetchDevinUsableModels(opts: {
     const contextWindows: Record<string, number> = {};
     // Effort rungs per base, recovered from the suffixes the collapse strips.
     const rungs = new Map<string, Set<string>>();
+    const defaultRungs = new Map<string, string>();
     // supportsImages votes per base; only rows that asserted field #5 vote.
     const imageVotes = new Map<string, { sawTrue: boolean; sawFalse: boolean }>();
     for (const entry of catalog.byUid.values()) {
@@ -187,9 +322,14 @@ export async function fetchDevinUsableModels(opts: {
       // Skip internal enum constants (e.g. MODEL_GPT_5_2_LOW, MODEL_PRIVATE_*).
       // Real chat model UIDs are lowercase dashed strings (swe-1-7, gpt-5-6-sol).
       if (entry.modelUid.startsWith("MODEL_")) continue;
-      const base = collapseDevinModelUid(entry.modelUid);
+      const family = entry.familyUid && entry.familyAxes ? devinFamilyBaseId(entry.familyUid) : undefined;
+      const base = family ?? collapseDevinModelUid(entry.modelUid);
       bases.add(base);
-      const found = devinReasoningRungsOf(entry.modelUid);
+      const familyRung = family ? devinFamilyEffortOf(entry) : undefined;
+      const found = family
+        ? (familyRung && REASONING_RUNG_TOKENS.has(familyRung) ? [familyRung] : [])
+        : devinReasoningRungsOf(entry.modelUid);
+      if (family && entry.isFamilyDefault && familyRung) defaultRungs.set(base, familyRung);
       if (found.length > 0) {
         let set = rungs.get(base);
         if (!set) { set = new Set(); rungs.set(base, set); }
@@ -222,13 +362,18 @@ export async function fetchDevinUsableModels(opts: {
       // would draw a picker whose only option is the value already in effect.
       if (set.size > 1) efforts[base] = sortDevinRungs(set);
     }
+    const defaultEfforts: Record<string, string> = {};
+    for (const [base, rung] of defaultRungs) {
+      if (efforts[base]?.includes(rung)) defaultEfforts[base] = rung;
+    }
     // supportsImages arrives tri-state per catalog row, so the collapse votes:
     // a row that never asserted field #5 abstains, which keeps an unsuffixed
     // unknown row from poisoning a base whose effort variants were measured
     // image-capable. Unanimous measured rows advertise; measured disagreement
     // advertises nothing, because a single measured false is not outvoted by
-    // its siblings. One accepted mismatch: resolveWireModelUid prefers the
-    // plain UID when the catalog lists it, so a base advertised
+    // its siblings. One accepted mismatch, only for rows without family
+    // metadata: resolveWireModelUid prefers the plain UID when the catalog
+    // lists it, so a base advertised
     // ["text","image"] on variant evidence can still route a no-effort request
     // to a plain row that never asserted the field.
     const inputModalities: Record<string, string[]> = {};
@@ -236,7 +381,7 @@ export async function fetchDevinUsableModels(opts: {
       if (votes.sawTrue && votes.sawFalse) continue;
       inputModalities[base] = votes.sawTrue ? ["text", "image"] : ["text"];
     }
-    return { ok: true, models: [...bases].sort(), contextWindows, efforts, inputModalities };
+    return { ok: true, models: [...bases].sort(), contextWindows, efforts, defaultEfforts, inputModalities };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/unauth|401|invalid token|login/i.test(message)) return { ok: false, error: "auth", detail: message };
