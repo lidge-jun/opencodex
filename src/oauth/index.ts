@@ -191,6 +191,8 @@ interface OAuthProviderDef {
     refreshToken: string,
     signal?: AbortSignal,
     credential?: OAuthCredentials,
+    /** Store row being refreshed; passed by the generic lock only. */
+    accountId?: string,
   ): Promise<OAuthCredentials>;
   /** provider entry written into config.json on first login. */
   providerConfig: OcxProviderConfig;
@@ -1040,7 +1042,7 @@ export async function refreshGenericAccountWithLock(
     }
     const generation = credentialGeneration(stored);
     try {
-      const fresh = merged(await def.refresh(stored.refresh, deps.signal, stored), stored);
+      const fresh = merged(await def.refresh(stored.refresh, deps.signal, stored, accountId), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
