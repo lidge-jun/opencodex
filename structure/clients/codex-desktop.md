@@ -75,3 +75,40 @@ remains unknown. Public responses contain no PEM, private-key objects or subproc
 Sibling instances refuse certificate mutations because OS trust is shared user state.
 The registry declares the certificate-status CLI verb as deferred to the desktop
 compatibility integration owner; it currently has an authenticated HTTP contract only.
+
+## Optional compatibility runtime
+
+`src/codex/desktop-compatibility/runtime.ts` owns an explicit, default-off runtime.
+Construction and status do not start listeners, load credentials or enroll trust. Start
+loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
+identity, then creates only loopback TLS/CONNECT/PAC listeners. The currently assessed
+Windows package version is declared in the module. Unknown builds and configured outbound
+proxies refuse activation; no automatic direct-egress fallback bypasses a selected proxy.
+Proxy-aware WebSocket egress remains an integration item with the shared transport work.
+
+`relay-listener.ts` forwards HTTP with the existing upstream-header filter, cookies and
+streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The
+upstream is fixed to chatgpt.com; request Host cannot select another destination. CONNECT
+allows only chatgpt.com:443. PAC has a certificate-relative deadline and `DIRECT` fallback.
+The package launcher uses only the runtime-owned PAC and never kills an existing app.
+
+`usage-controller.ts`, `usage-activation.ts` and `usage-policy.ts` implement a maximum
+three-minute, explicitly confirmed account-UI trial after a fresh supported exhaustion
+snapshot. They cannot assert selected-provider isolation. Two usage gate booleans may
+change; quota windows, credits, spending limits and other responses remain original.
+Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
+correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
+`usage-refresh.ts` closes only usage streams bound by validated original account records.
+`usage-controlled-fetch.ts` removes stale validators from changed JSON and controlled SSE.
+Response production is reported separately from app-cache or UI confirmation.
+
+`runtime-ownership.ts` serializes certificate mutations against active/starting runtimes.
+The existing sibling guard blocks all runtime mutations in sibling instances. Core shutdown
+registration occurs only after successful startup. Cleanup stops owned listeners and streams;
+a failed cleanup retains ownership and reports `cleanup-required`, never a false `off` state.
+
+`src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
+local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
+separate account-wide consent for apply. No setting, login, quota, automatic startup or
+dashboard panel is changed by this API. GUI and persisted startup integration are pending.
+The status CLI verb remains deferred to this integration owner.

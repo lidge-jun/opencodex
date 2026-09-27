@@ -39,7 +39,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
     return jsonResponse({ ok: true, certificate: status });
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "operation_failed";
-    const allowed = new Set(["unsupported", "busy", "not_prepared", "fingerprint_changed", "app_running", "app_state_unknown", "trust_unknown", "trust_not_applied",
+    const allowed = new Set(["unsupported", "busy", "not_prepared", "fingerprint_changed", "app_running", "runtime_running", "app_state_unknown", "trust_unknown", "trust_not_applied",
       "unsafe_path", "unreadable", "expired", "protection_failed"]);
     return jsonResponse({ ok: false, error: allowed.has(code) ? code : "operation_failed" }, 409);
   }

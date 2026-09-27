@@ -45,6 +45,7 @@ export interface ManagementRequestIngress {
 
 export interface ManagementApiDeps {
   desktopCertificateService?: import("../../codex/desktop-compatibility/certificate-service").DesktopCertificateService;
+  desktopCompatibilityRuntime?: import("../../codex/desktop-compatibility/runtime").DesktopCompatibilityRuntime;
   /** Bound Claude intercept state, injectable for isolated management-route tests. */
   getClaudeInterceptState?: typeof import("../../claude/intercept/runtime").getClaudeInterceptState;
   /** Reconciliation seam for field-scoped rollback tests. */

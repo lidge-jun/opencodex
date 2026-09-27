@@ -3,6 +3,7 @@ import { getConfigDir } from "../../config/paths";
 import { windowsDefaultExec, windowsDesktopAppAdapter } from "../desktop-app/windows";
 import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, renewDesktopCompatibilityAuthority, type DesktopAuthorityInspection, type StoredDesktopAuthority } from "./certificate-store";
 import { createWindowsCertificateTrust, inspectWindowsCertificateTrust, type DesktopCertificateTrust } from "./windows-certificate-trust";
+import { acquireDesktopCertificateMutation, desktopCompatibilityRuntimeActive } from "./runtime-ownership";
 
 export interface DesktopCertificateStatus {
   supported: boolean;
@@ -26,7 +27,7 @@ export interface DesktopCertificateServiceIo {
 }
 
 export class DesktopCertificateServiceError extends Error {
-  constructor(readonly code: "unsupported" | "busy" | "not_prepared" | "fingerprint_changed" | "app_running" | "app_state_unknown" | "trust_unknown" | "trust_not_applied") {
+  constructor(readonly code: "unsupported" | "busy" | "not_prepared" | "fingerprint_changed" | "app_running" | "runtime_running" | "app_state_unknown" | "trust_unknown" | "trust_not_applied") {
     super(`desktop_compatibility_${code}`); this.name = "DesktopCertificateServiceError";
   }
 }
@@ -59,6 +60,9 @@ export function createDesktopCertificateService(directory = join(getConfigDir(),
   async function action(kind: NonNullable<DesktopCertificateStatus["busy"]>, expectedFingerprint?: string): Promise<DesktopCertificateStatus> {
     if (platform !== "win32") throw new DesktopCertificateServiceError("unsupported");
     if (busy !== null) throw new DesktopCertificateServiceError("busy");
+    if (desktopCompatibilityRuntimeActive()) throw new DesktopCertificateServiceError("runtime_running");
+    let release: () => void;
+    try { release = acquireDesktopCertificateMutation(); } catch { throw new DesktopCertificateServiceError("busy"); }
     busy = kind;
     try {
       if (kind !== "prepare") {
@@ -85,7 +89,7 @@ export function createDesktopCertificateService(directory = join(getConfigDir(),
       }
       busy = null;
       return status();
-    } finally { busy = null; }
+    } finally { busy = null; release(); }
   }
   return { status, prepare: () => action("prepare"), trust: (fingerprint: string) => action("trust", fingerprint),
     removeTrust: (fingerprint: string) => action("remove-trust", fingerprint), renew: (fingerprint: string) => action("renew", fingerprint) };

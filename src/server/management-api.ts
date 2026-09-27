@@ -78,6 +78,7 @@ import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-picker-routes";
 import { handleDesktopCompatibilityRoutes } from "./management/desktop-compatibility-routes";
+import { handleDesktopCompatibilityRuntimeRoutes } from "./management/desktop-compatibility-runtime-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -343,6 +344,7 @@ export async function handleManagementAPI(
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
     ??     (await handleDesktopCompatibilityRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))

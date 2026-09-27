@@ -1,5 +1,9 @@
 # GUI And Management API
 
+The optional Windows compatibility runtime uses confirmed local GUI-session commands;
+raw admin-token and remote ingress mutations are refused. Its start/stop/launch and
+three-minute account-UI trial follow the [native compatibility contract](clients/codex-desktop.md#optional-compatibility-runtime).
+
 Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
 The companion settings contract in `src/companion/` persists menu-bar and widget display

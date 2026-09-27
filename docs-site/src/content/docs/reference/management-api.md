@@ -85,6 +85,7 @@ route-specific results rather than repeating this table.
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET, POST /api/codex/desktop-compatibility/certificate` | Inspect or explicitly prepare Windows compatibility certificate trust | 403 local dashboard required for POST; 409 stale, busy, or incomplete state |
+| `GET, POST /api/codex/desktop-compatibility/runtime` | Inspect or explicitly start, stop, launch, or run a bounded native compatibility trial | 403 local dashboard required for POST; 409 unsupported build, untrusted certificate, or incomplete state |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
 | `GET, PUT /api/claude-code` | Read or update Claude Code gateway, auth-mode, model-map, context, agent, and sidecar settings | 400 invalid field or shape |
 
@@ -713,6 +714,31 @@ cannot replace the new identity again. No certificate backup chain is retained.
 
 This setup API does not enable a relay, change login, alter usage, restart Codex or install a watcher.
 CurrentUser protection does not isolate secrets from other processes running as the same OS user.
+
+## Experimental Windows compatibility runtime
+
+`GET /api/codex/desktop-compatibility/runtime` is an inert status read. POST requires a
+local GUI session and `{ action, confirmed: true }`, where action is `start`, `stop`,
+`observe`, `launch`, or `apply`. Only `apply` additionally requires `accountWideConsent: true`.
+The endpoint is experimental; a dashboard panel and saved startup preference are not yet provided.
+
+Start requires an already prepared, trusted certificate, a freshly verified native file-based
+ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
+An outbound proxy configuration is currently unsupported and refuses startup rather than
+routing some app connections outside that proxy. Start never registers a certificate or changes
+login. Launch preserves package identity and refuses an app that is already running.
+
+Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
+at the response layer. It changes two account-UI gate flags, not usage percentages, credits,
+spending restrictions or server limits. The usage response does not identify the selected model:
+this trial cannot promise an effect limited to external models. An accepted activation or produced
+response does not prove the app accepted the new snapshot or enabled its composer.
+
+Observe disarms correction and refreshes only validated usage streams. Stop closes this runtime's
+listeners and connections; the PAC includes `DIRECT` fallback. The certificate stays installed for
+reuse. Stop the runtime and close Codex before removing trust or renewing the certificate.
+Failed cleanup reports `cleanup-required`; it does not claim that the runtime is off. OS login,
+system proxy settings and application files are not modified by these runtime commands.
 
 ## Choosing a client
 
