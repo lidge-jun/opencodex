@@ -226,3 +226,14 @@ describe("isTrustedSystemdRunFile (resolved substitution chain)", () => {
     expect(isTrustedSystemdRunFile("/usr/bin/systemd-run", deps)).toBe(false);
   });
 });
+
+test("launcher trust also checks lexical ancestors of a canonical system target", () => {
+  const candidate = "/usr/local/bin/systemd-run";
+  const target = "/nix/store/systemd/bin/systemd-run";
+  const deps = (bad: string | undefined) => ({ realpathSync: () => target, accessSync: () => {},
+    statSync: (path: string) => ({ isFile: () => path === target, uid: 0, mode: path === bad ? 0o777 : 0o755 }) });
+  expect(isTrustedSystemdRunFile(candidate, deps(undefined))).toBe(true);
+  expect(isTrustedSystemdRunFile(candidate, deps("/usr/local"))).toBe(false);
+  expect(isTrustedSystemdRunFile(candidate, deps("/nix/store"))).toBe(false);
+  expect(isTrustedSystemdRunFile("relative/systemd-run", deps(undefined))).toBe(false);
+});

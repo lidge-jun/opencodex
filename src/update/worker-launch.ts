@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 
 /**
  * How to launch the dashboard update worker on POSIX.
@@ -69,6 +69,7 @@ function rootOnlyWritable(path: string, stat: SystemdRunTrustDeps["statSync"] = 
 // Exported for unit tests.
 export function isTrustedSystemdRunFile(path: string, deps: SystemdRunTrustDeps = {}): boolean {
   try {
+    if (!isAbsolute(path)) return false;
     (deps.accessSync ?? accessSync)(path, constants.X_OK);
     // The lexical path may be a symlink. Checking the link's own parent only proves
     // the *entry* is pinned; the file it resolves to — and every ancestor able to
@@ -80,8 +81,10 @@ export function isTrustedSystemdRunFile(path: string, deps: SystemdRunTrustDeps 
     if (!(st.isFile() && st.uid === 0 && (st.mode & GROUP_OR_WORLD_WRITE) === 0)) {
       return false;
     }
-    for (let dir = dirname(resolved), previous = ""; dir !== previous; previous = dir, dir = dirname(dir)) {
-      if (!rootOnlyWritable(dir, stat)) return false;
+    for (const start of [dirname(path), dirname(resolved)]) {
+      for (let dir = start, previous = ""; dir !== previous; previous = dir, dir = dirname(dir)) {
+        if (!rootOnlyWritable(dir, stat)) return false;
+      }
     }
     return true;
   } catch {
@@ -89,19 +92,28 @@ export function isTrustedSystemdRunFile(path: string, deps: SystemdRunTrustDeps 
   }
 }
 
+/** Scope discovery gets only user-bus identity, never inherited management credentials. */
+function scopeProbeEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" };
+  for (const name of ["HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
+  return env;
+}
+
 const systemdRunHooks: SystemdRunHooks = {
   isExecutableFile: isTrustedSystemdRunFile,
-  // Run a real no-op scope rather than `--version`: a present binary without a reachable user
-  // bus would otherwise pass the probe and then fail to start the worker at all.
+  // Run a real scope with the same absolute binary as its harmless version payload.
+  // Probing only the outer --version would not verify the user bus.
   probeScope: path => {
-    const probe = spawnSync(path, [...SYSTEMD_SCOPE_ARGS, "true"], { stdio: "ignore", timeout: 5_000 });
+    const probe = spawnSync(path, [...SYSTEMD_SCOPE_ARGS, path, "--version"], { stdio: "ignore", timeout: 5_000, env: scopeProbeEnvironment() });
     return !probe.error && probe.status === 0;
   },
   probeScopeAsync: path => new Promise<boolean>(resolve => {
-    const probe = spawn(path, [...SYSTEMD_SCOPE_ARGS, "true"], { stdio: "ignore" });
+    const probe = spawn(path, [...SYSTEMD_SCOPE_ARGS, path, "--version"], { stdio: "ignore", env: scopeProbeEnvironment() });
     probe.unref();
     const timer = setTimeout(() => {
-      try { probe.kill(); } catch { /* already exited */ }
+      try { probe.kill("SIGKILL"); } catch { /* failed termination is not a successful probe */ }
       resolve(false);
     }, 5_000);
     timer.unref();
