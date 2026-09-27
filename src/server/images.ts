@@ -890,6 +890,9 @@ export async function handleImages(
     // Client cancel first: it aborts the linked signal too, and must not be logged as an
     // upstream failure (499 maps to client_closed_request in the request log).
     if (req.signal.aborted) {
+      // No upstream outcome is recorded for a client cancel, so a recovery probe
+      // lease taken by the selected Pool account must be returned explicitly.
+      releaseForwardProbe();
       return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
     }
     if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {

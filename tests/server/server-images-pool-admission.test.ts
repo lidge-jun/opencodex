@@ -277,3 +277,25 @@ test("invalid configured header assembly is refused before an Images send", asyn
   const old = markRecoveryProbeDue(config);
   await expectPreFetchCredentialRefusal(config, old, invalidValue);
 });
+
+test("client cancel during a Pool Images send releases the recovery probe lease", async () => {
+  const config = imageConfig();
+  savePool(config);
+  markRecoveryProbeDue(config);
+  const controller = new AbortController();
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    sent.push({ url: String(_input), headers: new Headers(init?.headers) });
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    controller.abort();
+  })) as typeof fetch;
+  const req = new Request("http://127.0.0.1/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ADMISSION_SECRET}` },
+    body: JSON.stringify({ model: "gpt-image-2", prompt: PROMPT }),
+    signal: controller.signal,
+  });
+  const response = await handleImages(req, config, "generations", logContext());
+  expect(response.status).toBe(499);
+  expect(sent).toHaveLength(1);
+  expect(getCodexUpstreamHealth("pool-img")?.probeLeaseId).toBeUndefined();
+});
