@@ -29,6 +29,8 @@ const MIN_INTERVAL_MS = 15 * 60_000;
  * callers fail fast and defer (ConvergeRequest.mode) rather than holding the
  * write lock across a slow tick.
  */
+import type { OcxConfig } from "../types";
+
 const TICK_DEADLINE_MS = 1_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -42,6 +44,33 @@ let liveIntervalMs: number | null = null;
 let generation = 0;
 /** setInterval does not skip a firing while the previous callback is still awaiting. */
 let inFlight = false;
+
+/**
+ * Re-run the standard Codex sync when the injected config surface drifted (src/codex/config-
+ * drift-heal.ts). The gate mirrors syncCodexOnStartIfEnabled: a hub must not rewrite its own
+ * client, and the user's Codex OFF decision outlives restarts. A failed heal is silent here —
+ * the next tick retries, and the sync's own callers report their refusals.
+ */
+async function healCodexConfigDrift(config: OcxConfig): Promise<boolean> {
+  const [{ codexConfigDrift }, { journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { syncModelsToCodex }] =
+    await Promise.all([
+      import("./config-drift-heal"),
+      import("./journal"),
+      import("./desired-state"),
+      import("./sync"),
+    ]);
+  if (!shouldSyncCodexOnStart(config)) return false;
+  const drift = codexConfigDrift(() => ({
+    injectedOpenaiBaseUrl: journaledInjectedOpenaiBaseUrl({ readOnly: true }),
+    injectedRealtimeWsBaseUrl: journaledInjectedRealtimeWsBaseUrl({ readOnly: true }),
+  }));
+  if (!drift.drifted) return false;
+  const { readRuntimePort } = await import("../config/process-state");
+  const runtime = readRuntimePort(process.pid);
+  if (!runtime) return false;
+  const result = await syncModelsToCodex(runtime.port, config, null).catch(() => null);
+  return result?.ok === true;
+}
 
 /** Number of ticks that have run. Test-only observability; carries no catalog data. */
 let tickCount = 0;
@@ -89,6 +118,15 @@ async function tick(): Promise<void> {
     // callee at all. Only while this tick still owns the timer.
     restartIfCadenceChanged(configured);
     tickCount += 1;
+    // Config-surface healing precedes catalog work: a desktop app rewrite that stripped the
+    // injected routing keys leaves the catalog file untouched, so the converge below would
+    // report "no change" while Codex serves its native model picker. Re-injecting through the
+    // standard sync rewrites the keys, re-journals the baseline, and only runs when the
+    // integration is on and this install is allowed to manage its local client.
+    const drifted = await healCodexConfigDrift(config);
+    if (drifted) {
+      console.info("[catalog-auto-refresh] injected Codex config keys were rewritten externally; re-injected");
+    }
     const [{ createManagementConvergeCodex }, { createCatalogConvergeRequest }] = await Promise.all([
       import("./management-convergence"),
       import("./catalog-admission"),

@@ -125,6 +125,10 @@ describe("Codex shim install readiness", () => {
     mkdirSync(opencodexHome);
     mkdirSync(binDir);
     try {
+      // A base-url-less provider table is the Codex app's own routing placeholder, not an
+      // external gateway, so the readiness verdict falls to the routing kind ("unknown"
+      // here) rather than an external-owner label. A REAL external provider must carry a
+      // base_url to count.
       writeFileSync(join(codexHome, "config.toml"), [
         'model_provider = "custom"',
         "",
@@ -164,7 +168,7 @@ describe("Codex shim install readiness", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
-      expect(result.stderr).toContain('external model_provider "custom"');
+      expect(result.stderr).toContain("Codex routing could not be verified");
       expect(result.stderr).toContain("config.proxy");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain(proxyUrl);
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("user:secret");
