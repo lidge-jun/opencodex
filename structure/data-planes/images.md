@@ -42,7 +42,11 @@ separately billed generation.
 On non-loopback binds, data-plane authentication and origin policy cover both Images routes. An
 explicit keyed Images provider accepts the proxy admission secret as either an OpenAI-style bearer
 or `x-opencodex-api-key` because the provider key replaces caller authorization before fetch. The
-ChatGPT forward path still requires the dedicated header so its upstream bearer remains distinct.
+ChatGPT Direct path still requires the dedicated header so its caller-owned upstream bearer remains
+distinct. A proxy admission bearer leaves managed Pool eligible: Pool replaces it with its stored
+credential, while Direct cannot forward it. A selected Pool authentication failure remains its own
+error rather than falling through to a separately billed keyed provider. The outbound Images send
+has one selected Authorization value, validated before the non-idempotent upstream POST.
 The keyed path never enters `handleResponses`, so `src/server/images.ts` repeats
 `selectProactiveApiKeyTransport` inside the keyed branch and rebuilds Authorization from the
 returned clone rather than the earlier snapshot.

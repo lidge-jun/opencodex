@@ -1666,6 +1666,7 @@
     "server-google-antigravity-oauth-429-budget.test.ts": "server",
     "server-gui-bundle-freshness.test.ts": "server",
     "server-images-bodyless-content-length.test.ts": "server",
+    "server-images-pool-admission.test.ts": "server",
     "server-images.test.ts": "server",
     "server-key-failover-e2e.test.ts": "server",
     "server-jev-combo-e2e.test.ts": "server",

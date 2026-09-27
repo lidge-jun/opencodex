@@ -227,8 +227,10 @@ This is separate from the [Image Bridge](/guides/image-bridge/), which only acti
 **Responses** turn lists the hosted `image_generation` tool while a non-OpenAI model is selected.
 Standalone `/images/generations` calls never enter that bridge.
 
-- **One mode-aware forward candidate:** Pool selects an eligible main/added account; Direct uses the
-  caller OAuth bearer. The configured mode applies consistently to the image request.
+- **One mode-aware forward candidate:** Pool selects an eligible main/added account and uses its
+  stored ChatGPT credential even when the client authenticates to opencodex with a proxy admission
+  bearer. Direct uses the caller's ChatGPT OAuth bearer and cannot forward a proxy admission token.
+  The configured mode applies consistently to the image request.
 - **OpenAI API-key provider:** it is used only when no forward candidate owns an authentication
   failure. A broken/expired Pool credential is never hidden behind separately billed API usage.
 - **Explicit custom provider:** set `images.provider` to the id of a custom API-key
