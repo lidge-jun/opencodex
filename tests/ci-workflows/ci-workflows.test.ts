@@ -3268,12 +3268,36 @@ describe("GitHub Actions hardening", () => {
         eventName: "status",
         statusSha: headSha,
         associatedPullRequests: [
-          { number: 42, state: "open", head: { sha: headSha } },
+          {
+            number: 42,
+            state: "open",
+            head: { sha: headSha },
+            base: { repo: { name: "opencodex", owner: { login: "lidge-jun" } } },
+          },
         ],
       });
 
       expect(result.outputs).toEqual([{ name: "pull-number", value: "42" }]);
       // A unique index hit must not need the open-PR fallback.
+      expect(callsTo(result, "pulls.list")).toEqual([]);
+    });
+
+    test("the resolver ignores associated PRs based on another fork-network repo", async () => {
+      const headSha = "5fa700fb7f7247cbc000038652c60297f868517c";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 42, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        associatedPullRequests: [
+          // The commit-to-PR index spans the fork network: this number belongs
+          // to a PR in another repository and 404s on pulls.get here.
+          { number: 6086, state: "open", head: { sha: headSha }, base: { repo: { name: "opencodex", owner: { login: "fork-parent" } } } },
+          { number: 42, state: "open", head: { sha: headSha }, base: { repo: { name: "opencodex", owner: { login: "lidge-jun" } } } },
+        ],
+      });
+
+      expect(result.outputs).toEqual([{ name: "pull-number", value: "42" }]);
+      expect(result.logs.join(" ")).toContain("other repositories in the fork network");
       expect(callsTo(result, "pulls.list")).toEqual([]);
     });
 
