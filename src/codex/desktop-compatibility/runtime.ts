@@ -5,7 +5,7 @@ import { issueServerLeaf } from "../../claude/intercept/local-ca";
 import { startConnectProxy, type ConnectProxyHandle } from "../../claude/intercept/connect-proxy";
 import { didRunOptionalShutdownHooks, registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
-import { effectiveProxyFor } from "../../lib/proxy-env";
+import { desktopOutboundFetch, desktopProxyFor } from "../../lib/desktop-proxy-route";
 import { windowsDefaultExec, windowsDesktopAppAdapter } from "../desktop-app/windows";
 import { inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, type StoredDesktopAuthority } from "./certificate-store";
 import { inspectWindowsCertificateTrust } from "./windows-certificate-trust";
@@ -70,7 +70,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     if (isTestHomeGuardArmed() && !(io.testOnly && io.identity && io.loadAuthority && io.trust && io.buildSupported && io.connectionStore && io.routingSupported)) throw new Error("desktop_compatibility_test_environment");
     if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
     if (!buildSupported()) throw new Error("desktop_compatibility_build_unverified");
-    if (effectiveProxyFor(new URL("https://chatgpt.com"), process.env)) throw new Error("desktop_compatibility_egress_proxy_unsupported");
+    try { desktopProxyFor(new URL("https://chatgpt.com")); } catch { throw new Error("desktop_compatibility_egress_proxy_invalid"); }
     releaseOwner = acquireDesktopCompatibilityRuntime(); phase = "starting";
     let relay: Awaited<ReturnType<typeof startDesktopRelay>> | undefined, proxy: ConnectProxyHandle | undefined;
     let pac: ReturnType<typeof Bun.serve> | undefined, timer: ReturnType<typeof setInterval> | undefined;
@@ -99,13 +99,13 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       const previousConnection = connections.read();
       const deadline = authority.expiresAt - 300_000;
       if (deadline <= Date.now()) throw new Error("desktop_compatibility_certificate_expiring");
-      const identity = io.identity ?? createNativeIdentityReader(join((await import("../paths")).getCodexHome(), "auth.json"));
+      const identity = io.identity ?? createNativeIdentityReader(join((await import("../paths")).getCodexHome(), "auth.json"), desktopOutboundFetch as typeof fetch);
       const account: UsageIdentity | null = await identity.verifyFreshIdentity();
       if (!account) throw new Error("desktop_compatibility_native_identity_unverified");
       if (didRunOptionalShutdownHooks()) throw new Error("desktop_compatibility_stopping");
       controller = new UsageRelayController(account, identity.readCurrentIdentity, identity.verifyFreshIdentity, Date.now, deadline, 180000, contextValid);
       relay = await startDesktopRelay({ leaf: issueServerLeaf(authority.authority, authority.commonName, ["chatgpt.com"]),
-        fetchImpl: createUsageControlledFetch(controller, io.upstreamFetch ?? fetch) });
+        fetchImpl: createUsageControlledFetch(controller, io.upstreamFetch ?? desktopOutboundFetch as typeof fetch) });
       try { proxy = await startConnectProxy(previousConnection?.connectPort ?? 0, { interceptPort: relay.port, interceptHosts: ["chatgpt.com"], allowedTargets: ["chatgpt.com:443"] }); }
       catch { throw new Error("desktop_compatibility_connection_unavailable"); }
       const runId = previousConnection?.id ?? randomUUID(), proxyPort = proxy.port;

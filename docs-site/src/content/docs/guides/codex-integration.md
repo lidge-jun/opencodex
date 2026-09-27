@@ -919,8 +919,9 @@ the OpenCodex home. Do not delete that file as a routine restart fix: a differen
 requires launching the app with a fresh managed connection.
 
 Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
-login and direct outbound connectivity. Configured outbound proxies and OpenCodex managed client
-mode are not yet supported by these controls.
+login. HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
+outbound policy; NO_PROXY can explicitly select a direct route. Failed proxy connections do not
+fall back to direct egress. OpenCodex managed client mode is not yet supported by these controls.
 Unknown app builds refuse correction; the integration does not patch application files or
 switch to login-free mode.
 The native root config and its selected profile must route `openai_base_url` to this process's

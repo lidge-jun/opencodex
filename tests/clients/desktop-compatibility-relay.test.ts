@@ -4,8 +4,9 @@ import { connect } from "node:tls";
 import type { Duplex } from "node:stream";
 import { createCertificateAuthority, issueServerLeaf } from "../../src/claude/intercept/local-ca";
 import { startDesktopRelay } from "../../src/codex/desktop-compatibility/relay-listener";
+import { forwardProxy } from "../helpers/desktop-egress-fixture";
 
-test("upgraded native app traffic preserves handshake and raw frames in both directions", async () => {
+for (const route of ["direct", "http", "https", "socks5"] as const) test(`upgraded native app traffic preserves handshake and raw frames through ${route}`, async () => {
   const ca = createCertificateAuthority({ commonName: "relay-fixture", validityDays: 1 });
   const leaf = issueServerLeaf(ca, "relay-fixture", ["chatgpt.com"]);
   const upstream = createServer({ cert: leaf.certPem, key: leaf.keyPem });
@@ -22,8 +23,9 @@ test("upgraded native app traffic preserves handshake and raw frames in both dir
   });
   await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
   const port = (upstream.address() as { port: number }).port;
+  const proxy = route === "direct" ? null : await forwardProxy(route, port, issueServerLeaf(ca, "relay-fixture", ["localhost"]));
   const relay = await startDesktopRelay({ leaf, fetchImpl: (async () => { throw new Error("Upgrade must not use HTTP fetch"); }) as typeof fetch,
-    websocketPeer: { host: "127.0.0.1", port, ca: ca.certPem } });
+    websocketPeer: { host: "127.0.0.1", port, ca: ca.certPem }, websocketTransport: { proxy: proxy?.url ?? false, proxyCa: ca.certPem } });
   const client = connect({ host: "127.0.0.1", port: relay.port, servername: "chatgpt.com", ca: ca.certPem });
   try {
     const bytes = await new Promise<Buffer>((resolve, reject) => {
@@ -41,8 +43,10 @@ test("upgraded native app traffic preserves handshake and raw frames in both dir
     expect(bytes.toString("latin1")).toContain("101 Switching Protocols");
     expect(bytes.subarray(bytes.indexOf("\r\n\r\n") + 4)).toEqual(frame);
     expect(cookie).toBe("fixture=session"); expect(protocol).toBe("fixture.v1");
+    if (proxy) expect(proxy.seen).toHaveLength(1);
   } finally {
     client.destroy(); await relay.close();
+    await proxy?.close();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => upstream.close(() => resolve()));
   }

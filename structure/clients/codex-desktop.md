@@ -82,9 +82,10 @@ compatibility integration owner; it currently has an authenticated HTTP contract
 Construction and status do not start listeners, load credentials or enroll trust. Start
 loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
 identity, then creates only loopback TLS/CONNECT/PAC listeners. The currently assessed
-Windows package version is declared in the module. Unknown builds and configured outbound
-proxies refuse activation; no automatic direct-egress fallback bypasses a selected proxy.
-Proxy-aware WebSocket egress remains an integration item with the shared transport work.
+Windows package version is declared in the module. Unknown builds refuse activation.
+HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
+described in the [transport inventory](../transports/inventory.md#native-desktop-proxy-egress).
+Invalid proxy routes refuse rather than falling back to direct egress.
 
 `relay-listener.ts` forwards HTTP with the existing upstream-header filter, cookies and
 streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The

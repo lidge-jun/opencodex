@@ -300,6 +300,10 @@ admission or account-snapshot pairing. The forwarding contract is covered in
 
 ## SOCKS5 dispatch boundary
 
+`src/lib/socks5-handshake.ts` shares RFC1928/RFC1929 framing between the fetch tunnel and
+native desktop raw TLS dial. Credential decoding is bounded and failures retain the fetch
+transport's public `Socks5FetchError` contract. This extraction reuses lcxhh521's PR5947 work.
+
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
 the compatibility config facade does not own a second activation path.
 `src/server/responses/fetch-helpers.ts` routes the built-in HTTP executor through
@@ -370,3 +374,19 @@ is left to the HTTP agent, which may pool or destroy it.
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) selects a target before the existing native compact or routed Responses transport is resolved.
+
+## Native desktop proxy egress
+
+`src/lib/desktop-proxy-route.ts` binds desktop HTTP fetch and raw upgraded sockets to the
+same explicit proxy decision. NO_PROXY may choose direct; otherwise HTTPS_PROXY or a
+selected SOCKS5 ALL_PROXY is carried explicitly. Present but unsupported proxy configuration
+refuses. A failed selected route never retries directly. Identity verification uses this same
+HTTP path, while provider inference retains its separate existing provider-egress policy.
+
+`src/lib/desktop-upstream-tunnel.ts` dials fixed chatgpt.com TLS through HTTP/HTTPS CONNECT
+or authenticated SOCKS5. It bounds the whole connection setup, rejects proxy EOF, abort and
+oversized handshake heads, and verifies both proxy and upstream certificate identities.
+Only the proxy handshake carries proxy credentials. The raw upgraded socket remains opaque;
+the relay does not decode WebSocket payloads. After CONNECT the paused outer stream resumes
+before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
+injected test socket options, never the user's OS trust store.

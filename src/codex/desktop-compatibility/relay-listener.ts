@@ -1,9 +1,8 @@
 import { createServer } from "node:https";
-import { connect as connectTls } from "node:tls";
 import { Readable, type Duplex } from "node:stream";
 import type { PemKeyPair } from "../../claude/intercept/local-ca";
 import { forwardHeadersForUpstream } from "../../claude/intercept/listener";
-import { effectiveProxyFor } from "../../lib/proxy-env";
+import { dialDesktopUpstream, type DesktopTunnelOptions } from "../../lib/desktop-upstream-tunnel";
 
 const ORIGIN = "https://chatgpt.com";
 const STRIP = new Set(["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "alt-svc", "proxy-authenticate"]);
@@ -12,13 +11,11 @@ export interface DesktopRelayOptions {
   fetchImpl: typeof fetch;
   /** Test-only TLS peer; the production destination is fixed, never taken from a request. */
   websocketPeer?: { host: string; port: number; ca: string };
+  websocketTransport?: Pick<DesktopTunnelOptions, "proxy" | "proxyCa" | "timeoutMs">;
 }
 
 /** Transparent HTTP and raw upgraded-socket relay. Only fetchImpl owns usage policy. */
 export async function startDesktopRelay(options: DesktopRelayOptions) {
-  // Preserve all app features together. Until the shared proxy-aware WS transport lands,
-  // refuse this optional integration rather than silently bypass configured egress.
-  if (!options.websocketPeer && effectiveProxyFor(new URL(ORIGIN), process.env)) throw new Error("desktop_compatibility_egress_proxy_unsupported");
   const sockets = new Set<Duplex>(), requests = new Set<AbortController>();
   const server = createServer({ cert: options.leaf.certPem, key: options.leaf.keyPem, ALPNProtocols: ["http/1.1"] });
   server.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
@@ -55,19 +52,16 @@ export async function startDesktopRelay(options: DesktopRelayOptions) {
   server.on("upgrade", (req, client, head) => {
     if (!valid(req.headers.host, req.url)) { client.end("HTTP/1.1 421 Misdirected Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return; }
     const peer = options.websocketPeer;
-    const upstream = connectTls({ host: peer?.host ?? "chatgpt.com", port: peer?.port ?? 443,
-      servername: "chatgpt.com", ca: peer?.ca, rejectUnauthorized: true, ALPNProtocols: ["http/1.1"] });
-    sockets.add(upstream);
-    let established = false;
-    const fail = () => {
-      if (!established && !client.destroyed) client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-      else client.destroy();
-      upstream.destroy();
-    };
-    upstream.setTimeout(10_000, fail);
-    upstream.once("secureConnect", () => {
-      if (client.destroyed) { upstream.destroy(); return; }
-      established = true; upstream.setTimeout(0);
+    const abort = new AbortController(); requests.add(abort);
+    client.once("close", () => { requests.delete(abort); abort.abort(); });
+    client.once("error", () => abort.abort());
+    void dialDesktopUpstream({ ...options.websocketTransport, ...(peer ? { target: { host: peer.host, port: peer.port }, ca: peer.ca } : {}), signal: abort.signal }).then(upstream => {
+      requests.delete(abort);
+      if (client.destroyed || abort.signal.aborted) { upstream.destroy(); return; }
+      sockets.add(upstream);
+      upstream.once("error", () => client.destroy());
+      upstream.once("close", () => { sockets.delete(upstream); client.destroy(); });
+      client.once("close", () => upstream.destroy());
       const lines = [`${req.method ?? "GET"} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         if (!/^proxy-(?:authorization|connection)$/i.test(req.rawHeaders[i]!)) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
@@ -75,10 +69,10 @@ export async function startDesktopRelay(options: DesktopRelayOptions) {
       upstream.write(lines.join("\r\n") + "\r\n\r\n");
       if (head.length) upstream.write(head);
       client.pipe(upstream).pipe(client);
+    }).catch(() => {
+      requests.delete(abort);
+      if (!client.destroyed) client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     });
-    upstream.once("error", fail); client.once("error", () => upstream.destroy());
-    upstream.once("close", () => { sockets.delete(upstream); client.destroy(); });
-    client.once("close", () => upstream.destroy());
   });
   try {
     await new Promise<void>((resolve, reject) => {

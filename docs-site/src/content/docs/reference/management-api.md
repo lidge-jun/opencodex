@@ -728,8 +728,9 @@ local controls or forward them to the shared hub.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
 ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
-An outbound proxy configuration is currently unsupported and refuses startup rather than
-routing some app connections outside that proxy. Start never registers a certificate or changes
+HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
+identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
+An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
 login. Launch preserves package identity and refuses an app that is already running.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`

@@ -4,7 +4,7 @@ import type { ManagementContext } from "./context";
 import type { DesktopCompatibilityRuntime } from "../../codex/desktop-compatibility/runtime";
 
 const PATH = "/api/codex/desktop-compatibility/runtime";
-const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stopping", "build_unverified", "egress_proxy_unsupported",
+const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stopping", "build_unverified", "egress_proxy_invalid",
   "trust_required", "certificate_expiring", "certificate_not_prepared", "certificate_invalid", "certificate_expired",
   "native_identity_unverified", "native_routing_unverified", "cleanup_incomplete", "not_running", "connection_invalid", "connection_changed", "connection_cleanup_required", "connection_unavailable"]);
 
