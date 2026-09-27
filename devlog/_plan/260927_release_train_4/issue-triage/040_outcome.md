@@ -59,3 +59,16 @@ At posting, remote `dev` remained `24b2f39b`; each of the 21 PRs retained its au
 | #3742 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/3742#issuecomment-5857057185) |
 | #3463 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/3463#issuecomment-5857057686) |
 | #3025 | [release train 4 decision](https://github.com/lidge-jun/opencodex/pull/3025#issuecomment-5857058233) |
+
+## wp3 resume plan (receiving thread, 2026-09-28 KST)
+
+The previous thread stopped in wp3 Build with the carry commit `08271bdf` unpushed and `test:changed` interrupted. This thread resumes from that state. Fresh `origin/dev` is still `24b2f39b`, so no carry rebase is needed yet, and #6079 is still at `9068502a`.
+
+Inventory recheck found one owned issue created after the audit: [#6093](https://github.com/lidge-jun/opencodex/issues/6093) asks the provider pacing panel to expose `requestPacing.maxConcurrentRequests`, whose backend landed in #5954. Its author opened [#6094](https://github.com/lidge-jun/opencodex/pull/6094) with the GUI change. Decision: review #6094 on its merits for this release; if it is correct and the exact-head product CI can be run, land it and close #6093 after the change is on `dev`; otherwise leave a specific English review on #6094 and a status comment on #6093.
+
+Ordered steps:
+
+1. Carry PR. Confirm the verify checkout HEAD equals `08271bdf`, rerun `bun run test:changed` there, push `codex/t4-issue-triage-standalone`, open a `dev` PR with the full template and the `luvs01` co-author trailer, dispatch `ci.yml` on the branch if it does not start, and merge only on exact-head success with reviewer findings resolved. Then edit the existing #6079 decision comment with the carry PR link and thanks, keeping #6079 open. A compiled macOS probe already showed `import.meta.url` = `file:///$bunfs/root/probe` and the new helper returning true; Windows compiled proof stays with CI and the contributor.
+2. #6094 review by a Sol reviewer in `/private/tmp/t4-issue-triage-6094` (diff against backend contract, locale completeness, file-size ratchet, test layout, screenshot, gates). Act on the verdict as above; pushing to a contributor fork is not allowed, so a small blocker is fixed only by a maintainer carry PR with a co-author trailer.
+3. Sol re-verification of the prior 12 issue and 21 PR decisions, which another model produced. Any DISAGREE is reconciled here with a recorded reason before the docs PR; #5782 and #5800 are rechecked for a narrow, low-risk bug slice.
+4. Docs PR. Rebase this audit branch on the post-merge `dev`, fill the evidence table (carry PR/head/merge SHA/CI, #6079 comment edit, #6093/#6094 outcome, re-verification result), run `privacy:scan`, `structure:check` and diff checks, then open, CI-verify and merge a devlog-only PR and confirm `dev` CI after merge.
