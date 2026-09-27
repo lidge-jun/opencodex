@@ -1,0 +1,21 @@
+# 030 — Carry the independent Bun virtual-URL fix from #6079
+
+This is a bounded reimplementation from [#6079](https://github.com/lidge-jun/opencodex/pull/6079), **not** the Windows Desktop compatibility feature. The author is `luvs01`; the carry commit or PR description must include `Co-authored-by: luvs01 <27862058+luvs01@users.noreply.github.com>` (the name/email on the source PR commits). Keep #6079 open and comment with the carry PR URL because its feature remains under review.
+
+## Diff-level change map
+
+| Path | Operation | Before → after | Reachable proof |
+|---|---|---|---|
+| `src/lib/standalone.ts` | MODIFY | `isStandaloneModuleUrl` uses substring `/$bunfs/` and a literal `~BUN` regex; Windows `file:///B:/%7EBUN/...` is false. Parse a `file:` URL, decode exactly one pathname URL layer, and match only the virtual-root boundary `/$bunfs/` or `/[drive]:/~BUN/`. Invalid URL/percent encoding and non-`file:` protocols return false. | Existing helper test calls literal, encoded upper/lower-case and double-encoded marker; malformed and HTTPS URL reject. |
+| `tests/lib/standalone.test.ts` | MODIFY | Existing test covers only literal markers. Add the encoded Windows cases, double-encoding rejection, wrong scheme and malformed encoding; run red before implementation and green after. | `bun test tests/lib/standalone.test.ts` shows red/green under the same checkout. |
+| `structure/ops/service-and-sidecars.md` | MODIFY | This service document already names `src/lib/standalone.ts`; document one-layer decoding and the `file:` gate, preserving source-process behavior. | `bun run structure:check`, source/doc comparison. |
+| `structure/manifest.json`, generated `structure/INDEX.md` | MODIFY | The source-to-doc map omits `ops/service-and-sidecars.md` under `src/lib/` even though it describes this helper. Add `src/lib/` to that doc's `documents` list and run `bun run structure:index`. Review all currently mapped `src/lib/` docs for a conflicting standalone claim. | `bun run structure:check` and generated index diff. |
+| `devlog/_plan/260927_release_train_4/issue-triage/040_outcome.md` | MODIFY after CI | Planned carry becomes actual PR/head/CI/merge receipts; any unrun Windows package test is named as a limitation. | GH readback at exact head and post-merge `dev` CI. |
+
+No new test file is planned, so test-layout registries do not change. No config or union member changes. Before edit, inspect `tests/fixtures/file-size-baseline.json` for both touched code files and `structure/INDEX.md` for source ownership; do not raise a cap. The helper is public to service/standalone callers, so check the direct callers and avoid accepting non-file schemes or treating a double-encoded marker as compiled. The source edit belongs to `src/lib`, so `src/AGENTS.md` and the owning structure document apply.
+
+## Verification and merge gate
+
+Use a new `codex/t4-issue-triage-*` branch based on the then-current `origin/dev` for the carry PR. Commit the docs-first roadmap on `codex/t4-issue-triage-audit`, then switch this worktree to a separate `codex/t4-issue-triage-standalone` branch from fresh `origin/dev` for the focused code PR. After that PR merges, return to the docs branch, update the outcome, rebase it on fresh `dev`, and publish a docs-only report PR. Run `bun test tests/lib/standalone.test.ts`, `bun run test:changed`, `bun run typecheck`, `bun run structure:check`, `bun run privacy:scan` and `git diff --cached --check` before commit and `git diff --check origin/dev...HEAD` after commit. The full suite may be omitted for seven-lane resource contention only if the focused and changed tests execute, the PR Verification records exact commands/results and explains the exception, and CI supplies broad validation. Inspect every required CI job for the final head and base, Codex/CodeRabbit findings, current `origin/dev` ancestry, and merged-union checks before merge. A local helper test cannot claim a Windows packaged binary passed; record that risk.
+
+If any test or exact-head required CI is unavailable, keep the carry PR draft/open and record the blocker. Do not merge by treating a skipped, cancelled or older-head check as success. The original #6079 feature is not closed by this partial carry.
