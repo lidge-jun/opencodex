@@ -87,9 +87,17 @@
         .spinner, #phases li[data-state="active"] .mark::before { animation: breathe 1.6s ease-in-out infinite; }
         .progress-bar { transition: none; }
       }
+      /*
+        macOS draws its traffic lights over the webview (overlay title bar), so the window
+        stays movable only if the page provides the grip. This strip is that grip; the
+        script unhides it on macOS only — every other platform keeps native decorations.
+      */
+      #titlebar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 1; user-select: none; -webkit-user-select: none; }
+      #titlebar[hidden] { display: none; }
     </style>
   </head>
   <body>
+    <div id="titlebar" hidden></div>
     <main data-state="running" aria-busy="true">
       <div class="brand">
         <span class="brand-logo" aria-hidden="true"></span>
@@ -195,6 +203,7 @@ const consentOwner = document.querySelector("#consentOwner");
 const takeOver = document.querySelector("#takeOver");
 const stayGuest = document.querySelector("#stayGuest");
 const surface = document.querySelector("main");
+const titlebar = document.querySelector("#titlebar");
 const statusMark = document.querySelector("#statusMark");
 const progressBar = document.querySelector("#progressBar");
 const stepCount = document.querySelector("#stepCount");
@@ -344,6 +353,23 @@ async function start() {
   } catch (error) {
     reportPageFailure("The startup surface could not reach the shell.", error);
   }
+}
+
+// The strip exists so the overlay title bar keeps the window movable on macOS. Other
+// platforms keep native decorations, so it stays hidden there.
+const macWebview = typeof navigator === "object" && /Mac OS X|Macintosh/.test(navigator.userAgent || "");
+if (invoke && macWebview) {
+  titlebar.hidden = false;
+  titlebar.addEventListener("mousedown", (event) => {
+    if (event.button === 0 && event.target === titlebar) {
+      invoke("plugin:window|start_dragging").catch(() => {});
+    }
+  });
+  titlebar.addEventListener("dblclick", (event) => {
+    if (event.target === titlebar) {
+      invoke("plugin:window|toggle_maximize").catch(() => {});
+    }
+  });
 }
 
 start();

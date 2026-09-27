@@ -147,7 +147,7 @@ test("validates prompted tokens with a safe read before retrying the failed requ
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
     const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
     seenRequests.push([url.pathname, key]);
-    if (url.pathname === "/api/settings" && key === "fresh-token") {
+    if (url.pathname === "/api/combos" && key === "fresh-token") {
       return new Response("{}", { status: 200 });
     }
     if (url.pathname === "/api/config" && key === "fresh-token") {
@@ -159,8 +159,8 @@ test("validates prompted tokens with a safe read before retrying the failed requ
 
   expect((await fetch("/api/config")).status).toBe(200);
   expect(validationResults).toEqual(["rejected", "accepted"]);
-  expect(seenRequests).toContainEqual(["/api/settings", "wrong-token"]);
-  expect(seenRequests).toContainEqual(["/api/settings", "fresh-token"]);
+  expect(seenRequests).toContainEqual(["/api/combos", "wrong-token"]);
+  expect(seenRequests).toContainEqual(["/api/combos", "fresh-token"]);
   expect(seenRequests).not.toContainEqual(["/api/config", "wrong-token"]);
   expect(sessionStorage.length).toBe(0);
 });

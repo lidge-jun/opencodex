@@ -564,7 +564,10 @@ export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessT
 /** The provider's Messages endpoint, refusing a base URL with an unresolved `{placeholder}`. */
 export function resolveAnthropicMessagesUrl(provider: Pick<OcxProviderConfig, "baseUrl">): string {
   const url = anthropicMessagesUrl(provider.baseUrl);
-  const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
+  // indexOf instead of a regex: \{[^}]*\} is quadratic on brace-only input (CodeQL js/polynomial-redos).
+  const openBrace = url.indexOf("{");
+  const closeBrace = openBrace === -1 ? -1 : url.indexOf("}", openBrace);
+  const unresolvedPlaceholder = closeBrace === -1 ? undefined : url.slice(openBrace, closeBrace + 1);
   if (unresolvedPlaceholder) {
     throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
   }
@@ -1099,7 +1102,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
           // output, so high effort needs the same total-token headroom as budget thinking or a
           // default 8192-token request can spend everything on thought and return empty text.
-          body.thinking = { type: "adaptive" };
+          // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
+          // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
+          // during a long think (#5824). Ask for summarized thinking unless the caller hides it.
+          body.thinking = parsed.options.hideThinkingSummary
+            ? { type: "adaptive" }
+            : { type: "adaptive", display: "summarized" };
           const effort = adaptiveEffort(effectiveReasoning);
           body.output_config = { effort };
           const explicitMaxOut = parsed.options.maxOutputTokens;

@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
-import { findAvailablePort } from "../server/ports";
-import { isLinkPort } from "../link/ports";
-import { buildExecArgv } from "../link/ssh-argv";
-import type { SshRunner } from "../link/ssh-runner";
+import { isPortAvailable } from "../server/ports";
+import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../link/ports";
+import { buildExecArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../link/ssh-argv";
+import { sshFailureHint, sshRunnerErrorHint, type SshRunner, type SshRunResult } from "../link/ssh-runner";
 import { connectClient, type ClientConnectDeps } from "./connect";
 import {
   clearClientLinkState,
@@ -24,6 +24,7 @@ const JOIN_TUNNEL_READY_TIMEOUT_MS = 15_000;
 const JOIN_TUNNEL_POLL_MS = 100;
 const JOIN_REVOKE_TIMEOUT_MS = 30_000;
 const JOIN_CONFIRM_TTL_MS = 5 * 60_000;
+const JOIN_PORT_ATTEMPTS = 32;
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
 const DATA_KEY = /^ocx_data_[0-9a-f]{40}$/;
@@ -40,6 +41,7 @@ export type JoinFailureCode =
   | "host_confirmation_expired"
   | "join_port_failed"
   | "join_issue_failed"
+  | "remote_ocx_missing"
   | "join_tunnel_failed"
   | "admission_failed"
   | "join_connect_failed"
@@ -47,7 +49,8 @@ export type JoinFailureCode =
   | "join_restart_failed";
 
 export class ClientLinkJoinError extends Error {
-  constructor(readonly code: JoinFailureCode, readonly linkId?: string) {
+  /** `hint` is a bounded line from ssh stderr or the ssh runner's own failure, for the dashboard; it is not part of the message. */
+  constructor(readonly code: JoinFailureCode, readonly linkId?: string, readonly hint?: string) {
     super(linkId ? `${code}: ${linkId}` : code);
     this.name = "ClientLinkJoinError";
   }
@@ -118,6 +121,24 @@ function parseIssuedLink(stdout: string): IssuedLink | null {
   };
 }
 
+/**
+ * A free loopback port in the join range (`JOIN_TUNNEL_PORT_MIN`-`JOIN_TUNNEL_PORT_MAX`), tried at
+ * random so a fixed-port service on this computer is not hit every time.
+ */
+export async function chooseJoinTunnelPort(deps: {
+  isAvailable?: (port: number) => Promise<boolean>;
+  random?: () => number;
+} = {}): Promise<number> {
+  const isAvailable = deps.isAvailable ?? (port => isPortAvailable(port, "127.0.0.1"));
+  const random = deps.random ?? Math.random;
+  const span = JOIN_TUNNEL_PORT_MAX - JOIN_TUNNEL_PORT_MIN + 1;
+  for (let attempt = 0; attempt < JOIN_PORT_ATTEMPTS; attempt += 1) {
+    const port = JOIN_TUNNEL_PORT_MIN + Math.min(span - 1, Math.floor(random() * span));
+    if (await isAvailable(port)) return port;
+  }
+  throw new Error("no free port in the join tunnel range");
+}
+
 function localAlias(deps: ClientLinkJoinDeps): string {
   const raw = (deps.hostname ?? hostname)().trim();
   const normalized = raw.replace(/[^A-Za-z0-9_\.\-]/g, "-").replace(/^-+/, "").slice(0, 253);
@@ -148,7 +169,7 @@ async function revokeIssuedLink(deps: ClientLinkJoinDeps, linkId: string, alias 
     const result = await deps.runner.run(
       buildExecArgv({
         alias,
-        argv: ["ocx", "link", "revoke", "--link-id", linkId],
+        argv: remoteOcxArgv(["link", "revoke", "--link-id", linkId]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
@@ -240,7 +261,7 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   await compensateStaleSidecar(deps);
   let tunnelPort: number;
   try {
-    tunnelPort = await (deps.choosePort ?? (() => findAvailablePort(0, "127.0.0.1")))();
+    tunnelPort = await (deps.choosePort ?? (() => chooseJoinTunnelPort()))();
     if (!isLinkPort(tunnelPort)) throw new Error("invalid link port");
   } catch (error) {
     void error;
@@ -248,24 +269,24 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   }
 
   const thisAlias = localAlias(deps);
-  let issued: IssuedLink;
+  let result: SshRunResult;
   try {
-    const result = await deps.runner.run(
+    result = await deps.runner.run(
       buildExecArgv({
         alias: input.alias,
-        argv: ["ocx", "link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"],
+        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
     );
-    if (result.code !== 0) throw new Error("issue failed");
-    const parsed = parseIssuedLink(result.stdout);
-    if (!parsed) throw new Error("invalid issue response");
-    issued = parsed;
   } catch (error) {
-    void error;
-    throw new ClientLinkJoinError("join_issue_failed");
+    throw new ClientLinkJoinError("join_issue_failed", undefined, sshRunnerErrorHint(error));
   }
+  // Hints come from stderr only: a successful issue prints the new data key on stdout.
+  if (result.code === REMOTE_COMMAND_NOT_FOUND) throw new ClientLinkJoinError("remote_ocx_missing", undefined, sshFailureHint(result.stderr));
+  const parsed = result.code === 0 ? parseIssuedLink(result.stdout) : null;
+  if (!parsed) throw new ClientLinkJoinError("join_issue_failed", undefined, result.code === 0 ? undefined : sshFailureHint(result.stderr));
+  const issued: IssuedLink = parsed;
 
   let tunnel: ClientLinkTunnelHandle | null = null;
   try {

@@ -50,6 +50,7 @@ import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-li
 import type { OcxConfig } from "../types";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { withoutSiblingMarker } from "../codex/sibling-start";
 
 /**
  * The provider-block serializer, its constants, and the config-path helpers now live in
@@ -101,6 +102,8 @@ export interface OpencodeProxyModelRow {
   displayName?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
+  /** Authoritative output limit (CatalogModel.maxOutputTokens); optional. */
+  maxOutputTokens?: number;
   /** Declared input modalities from `/api/models`; carried into opencode model capabilities. */
   inputModalities?: string[];
   /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
@@ -427,6 +430,7 @@ export function opencodeCatalogFromProxyRows(
       provider: row.provider,
       id: row.id,
       contextWindow: row.contextWindow,
+      ...(typeof row.maxOutputTokens === "number" ? { maxTokens: row.maxOutputTokens } : {}),
       displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
       ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
         ? { inputModalities: [...row.inputModalities] }
@@ -641,7 +645,8 @@ async function ensureProxyForOpencode(config: OcxConfig): Promise<LiveProxy | nu
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: withProcessRuntimeProvenance(opencodeProxyStartEnv(process.env) as NodeJS.ProcessEnv),
+    // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
+    env: withProcessRuntimeProvenance(opencodeProxyStartEnv(withoutSiblingMarker(process.env)) as NodeJS.ProcessEnv),
   });
   // Without a listener an 'error' (bad argv[1], EMFILE, AV denial) throws synchronously
   // and kills this process; the health poll below already reports the failure properly.

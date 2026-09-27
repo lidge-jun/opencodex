@@ -11,7 +11,7 @@ import {
   createLocalAttestationSecret,
 } from "../../src/lib/local-management-attestation";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
-import { findLiveProxy, proxyIdentityAt, type LivenessIo } from "../../src/server/proxy-liveness";
+import { findLiveProxy, proveLiveProxyOwnedByHome, proxyIdentityAt, type LivenessIo } from "../../src/server/proxy-liveness";
 
 const PID = 4242;
 const PORT = 10100;
@@ -32,7 +32,7 @@ function fencedBody(pid = PID, port = PORT, code = "package_tree_changed") {
 }
 
 /** A listener that serves the fenced body and signs challenges with `signingSecret`. */
-function fencedListener(signingSecret: string | null, body: Record<string, unknown> = fencedBody()) {
+function fencedListener(signingSecret: string | null, body: Record<string, unknown> = fencedBody(), status = 503) {
   const seen = { plain: 0, challenged: 0 };
   const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
@@ -47,7 +47,7 @@ function fencedListener(signingSecret: string | null, body: Record<string, unkno
     } else {
       seen.plain += 1;
     }
-    return new Response(JSON.stringify(body), { status: 503, headers: responseHeaders });
+    return new Response(JSON.stringify(body), { status, headers: responseHeaders });
   }) as typeof fetch;
   return { fetchFn, seen };
 }
@@ -68,6 +68,17 @@ function ownedIo(secret: string, fetchFn: typeof fetch, overrides: Partial<Liven
 
 // INV-FENCE-01 (structure/overview.md).
 describe("package-tree fenced liveness (#5496)", () => {
+  test("an orphan stop requires this home's fresh challenge proof even from a healthy listener", async () => {
+    const secret = createLocalAttestationSecret();
+    const body = { service: "opencodex", status: "ok", version: "2.59.0", uptime: 12, pid: PID, port: PORT };
+    const listener = fencedListener(secret, body, 200);
+    const live = { pid: PID, port: PORT, hostname: "127.0.0.1", source: "config" as const };
+    expect(await proveLiveProxyOwnedByHome(live, ownedIo(secret, listener.fetchFn))).toBe(true);
+    expect(await proveLiveProxyOwnedByHome(live, ownedIo(createLocalAttestationSecret(), listener.fetchFn))).toBe(false);
+    expect(await proveLiveProxyOwnedByHome(live, ownedIo(secret, listener.fetchFn, { readRuntimeFn: () => null }))).toBe(false);
+    expect(listener.seen.challenged).toBe(2);
+  });
+
   test("a fenced proxy stays invisible to callers that did not opt in", async () => {
     const secret = createLocalAttestationSecret();
     const listener = fencedListener(secret);

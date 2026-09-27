@@ -138,9 +138,12 @@ describe("streaming citation marker filter (#3150)", () => {
       `a${span}b${S}cite${P}turn2view0${E}c`,
       // An over-bound span that is eventually terminated: the streaming filter has already
       // released it verbatim, so whole-string stripping must keep it too.
-      `late ${S}${"z".repeat(4_096)}${E} end`,
+      `late ${S}cite${P}${"z".repeat(4_090)}${E} end`,
       // Exactly at the bound (4096 chars START..END inclusive) is still a span.
-      `edge ${S}${"z".repeat(4_094)}${E} end`,
+      `edge ${S}cite${P}${"z".repeat(4_089)}${E} end`,
+      // Non-citation directives pass through on both paths (#6039).
+      `a ${S}visualize${P}{"path":"/tmp/x.html"}${E} b${span}c`,
+      `${S}cit${S}filecite${P}turn0file0${E}${S}citex${P}y${E}`,
     ];
     for (const input of inputs) {
       for (const size of [1, 7, 4_097, input.length]) {
@@ -149,5 +152,70 @@ describe("streaming citation marker filter (#3150)", () => {
         expect(drain(chunks)).toBe(stripCitationMarkers(input));
       }
     }
+  });
+});
+
+describe("non-citation directive spans pass through (#6039)", () => {
+  // The Codex App draws inline visualizations from a span in the same private-use grammar.
+  // Deleting it meant a correctly formed reference never reached the app.
+  const viz = `${S}visualize${P}{"path":"/tmp/x.html","mode":"wide"}${E}`;
+  const drain = (chunks: readonly string[]): string => {
+    const filter = createCitationMarkerFilter();
+    let out = "";
+    for (const chunk of chunks) out += filter.push(chunk);
+    return out + filter.flush();
+  };
+
+  test("a visualize directive survives whole-string stripping", () => {
+    const text = `before\n${viz}\nafter`;
+    expect(stripCitationMarkers(text)).toBe(text);
+  });
+
+  test("a visualize directive survives streaming at every chunk size", () => {
+    const text = `before\n${viz}\nafter`;
+    for (const size of [1, 2, 5, text.length]) {
+      const chunks: string[] = [];
+      for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+      expect(drain(chunks)).toBe(text);
+    }
+  });
+
+  test("citations next to a directive are still removed", () => {
+    expect(stripCitationMarkers(`a${span}${viz}b`)).toBe(`a${viz}b`);
+    expect(drain([...`a${span}${viz}b`])).toBe(`a${viz}b`);
+  });
+
+  test("private-use characters inside a directive payload are not read as new spans", () => {
+    const nested = `a${S}visualize${P}{"path":"/tmp/${S}cite${P}chart.html"}${E}b${span}c`;
+    const expected = `a${S}visualize${P}{"path":"/tmp/${S}cite${P}chart.html"}${E}bc`;
+    expect(stripCitationMarkers(nested)).toBe(expected);
+    for (const size of [1, 3, nested.length]) {
+      const chunks: string[] = [];
+      for (let i = 0; i < nested.length; i += size) chunks.push(nested.slice(i, i + size));
+      expect(drain(chunks)).toBe(expected);
+    }
+  });
+
+  test("an unterminated directive stops shielding STARTs at the span bound", () => {
+    const open = `${S}visualize${P}${"q".repeat(5_000)}`;
+    expect(stripCitationMarkers(`${open}${span}end`)).toBe(`${open}end`);
+  });
+
+  test("filecite spans are citations too", () => {
+    expect(stripCitationMarkers(`x${S}filecite${P}turn0file0${E}y`)).toBe("xy");
+  });
+
+  test("a keyword split across deltas is decided before the span is removed or released", () => {
+    // "ci" could still become "cite", so the filter must wait; "cit" + "y" rules it out.
+    expect(drain(["a", S, "ci", `te${P}turn1view0${E}`, "b"])).toBe("ab");
+    expect(drain(["a", S, "ci", "ty", `${P}x${E}b`])).toBe(`a${S}city${P}x${E}b`);
+  });
+
+  test("a directive is released as soon as its keyword rules out a citation", () => {
+    // Streaming must stay streaming: the directive is not held until its END arrives.
+    const filter = createCitationMarkerFilter();
+    expect(filter.push(`go ${S}vis`)).toBe(`go ${S}vis`);
+    expect(filter.push(`ualize${P}{"path"`)).toBe(`ualize${P}{"path"`);
+    expect(filter.flush()).toBe("");
   });
 });

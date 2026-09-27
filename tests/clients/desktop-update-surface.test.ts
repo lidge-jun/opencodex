@@ -10,19 +10,22 @@ const updater = read("desktop/src-tauri/src/updater.rs");
 const tray = read("desktop/src-tauri/src/tray.rs");
 const windowPolicy = read("desktop/src-tauri/src/window.rs");
 
-function evaluatePage(invoke?: (name: string) => Promise<unknown>) {
+function evaluatePage(invoke?: (name: string) => Promise<unknown>, userAgent?: string) {
   const script = page.match(/<script nonce="__TAURI_SCRIPT_NONCE__">([\s\S]*?)<\/script>/)?.[1];
   if (!script) throw new Error("update page script missing");
-  const handlers = new Map<string, () => void>();
-  const nodes = new Map(["state", "error", "check", "install", "back"].map(id => [id, {
+  const handlers = new Map<string, (event?: unknown) => void>();
+  const nodes = new Map(["titlebar", "state", "error", "check", "install", "back"].map(id => [id, {
     textContent: "", hidden: true, disabled: false,
-    addEventListener: (name: string, callback: () => void) => { handlers.set(`${id}:${name}`, callback); },
+    addEventListener: (name: string, callback: (event?: unknown) => void) => { handlers.set(`${id}:${name}`, callback); },
   }]));
   const timers = new Map<number, () => void>();
   let nextTimer = 0;
   runInNewContext(script, {
     window: { __TAURI__: invoke ? { core: { invoke } } : undefined },
     document: { querySelector: (selector: string) => nodes.get(selector.slice(1)) },
+    // No `navigator` key at all when absent: several node vm contexts lack the binding,
+    // and that bare-identifier crash is exactly what this harness must keep covered.
+    ...(userAgent === undefined ? {} : { navigator: { userAgent } }),
     setTimeout: (callback: () => void) => { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout: (id: number) => { timers.delete(id); },
     Promise, Error,
@@ -65,6 +68,20 @@ describe("bundled desktop update surface", () => {
     expect(nodes.get("check")?.disabled).toBe(true);
     expect(nodes.get("install")?.disabled).toBe(true);
     expect(nodes.get("back")?.disabled).toBe(true);
+  });
+  test("the macOS grip drags and zooms, and stays hidden elsewhere", async () => {
+    const calls: string[] = [];
+    const mac = evaluatePage(name => { calls.push(name); return Promise.resolve({}); }, "Macintosh");
+    expect(mac.nodes.get("titlebar")?.hidden).toBe(false);
+    const titlebar = mac.nodes.get("titlebar");
+    mac.handlers.get("titlebar:mousedown")?.({ button: 0, target: titlebar });
+    mac.handlers.get("titlebar:dblclick")?.({ target: titlebar });
+    await settle();
+    expect(calls).toEqual(["update_status", "plugin:window|start_dragging", "plugin:window|toggle_maximize"]);
+
+    const win = evaluatePage(name => { calls.push(name); return Promise.resolve({}); }, "Windows NT");
+    expect(win.nodes.get("titlebar")?.hidden).toBe(true);
+    expect(win.handlers.get("titlebar:mousedown")).toBeUndefined();
   });
   test("a silent native status call becomes a visible retryable error", async () => {
     const { nodes, timers } = evaluatePage(() => new Promise(() => {}));

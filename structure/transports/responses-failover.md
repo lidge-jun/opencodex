@@ -1,5 +1,26 @@
 # Responses Failover And Replay
 
+`src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher.
+It requires explicit configuration and normalized attempt evidence, preserves ordinary requests,
+and refuses cancellation, committed semantic output, tool effects, protected failures, exhausted
+send budgets and repeated recovery. Its Devin `invalid_argument` exception is separately opted in;
+an opaque HTTP 400 alone never grants replay. The caller owns canonical target resolution, output
+validation and shared-budget reservation. `compaction-recovery.ts` connects this policy to
+self-contained routed v1/v2 compaction in `core.ts` and `compact.ts`; normal and successful
+requests keep their original route. One configured emergency target shares the original send
+and translation budgets. Physical-send receipts and explicit retry-helper reports reconcile legacy
+fetch sends without double charging external reservations; one prepaid emergency permit is shared
+with adapter dispatch, and only additional retries draw from the remainder. Adapter observers retain partial-output and structured denial evidence
+before response projection. Native encrypted compaction, uploaded files, stored continuations,
+and policy/combo routes are excluded. Emergency output must contain one readable portable
+compaction item; recent original user messages are retained verbatim, and recovery failure keeps
+the original failure. A source Kiro account lease is returned before the emergency child is
+admitted: the child shares its holder and may select the same account, so replacing that holder
+without returning the source lease would block cap-one fallback and leak capacity at higher caps.
+`tests/responses/responses-compaction-recovery-policy.test.ts`,
+`tests/responses/responses-compaction-recovery.test.ts` and
+`tests/providers/kiro/kiro-leased-responses.test.ts` pin these boundaries.
+
 Retry, replay, and combo failover on the Responses data plane: upstream reset retry, the
 ambiguous-resend gate and replay boundary, combo quota fallback and commit boundaries, compaction
 routing overrides, and output headroom. The endpoint and dispatch rules they build on are in
@@ -83,6 +104,17 @@ leaves the grant unspent. The replacement is one HTTP send, never a second socke
 is sorted exactly like the pre-header row's (see
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary)) before
 it goes round the recovery loop again.
+
+The boundary is the first non-control Responses event, not the first visible text delta:
+`response.created`, output/tool events and response usage all close the WebSocket replacement
+window. Quota metadata and ping/pong liveness alone do not. Cancellation and connect/silence
+deadlines never acquire the socket-death marker, even if a late close follows them.
+`tests/responses/ws-ambiguous-resend.test.ts` covers these boundaries through the exchange and
+the existing HTTP-only dispatch, including request-field preservation and terminal fallback
+answers. The replacement uses the shared credential-selection guard and physical-send ledger;
+there is no transport-local retry budget or credential snapshot with independent authority.
+
+> Decision record: [ADR-4191](../decisions/ADR-4191-established-websocket-fallback.md)
 
 ## Console upload rejection recovery
 
@@ -191,6 +223,28 @@ Chat helper admission in `src/server/responses/core.ts` follows the [deferred st
 The management quota DTO keeps Combo editing aligned with scoped inference evidence; see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
 Lite and routing metadata use the same suffix-normalized model object as serialization, including configured bracket-suffix removal.
+
+## Grok Devin pre-output rate limits
+
+For direct Grok Responses requests served by the Devin runTurn adapter,
+`src/server/responses/run-turn-execution.ts` uses `preflightAdapterEvents` before creating the
+streaming Response. A first-event 429 without a replay-unsafe heartbeat becomes an HTTP 429 JSON
+error through the shared error formatter and client Retry-After resolver. The buffered first event
+is replayed for every other outcome. The preflight is bounded by the configured stall timeout,
+including any earlier OAuth failover preflight on this path. On expiry, its pending iterator read is
+handed to SSE replay exactly once; timeout therefore starts a 200 SSE response. An opted-in Devin
+cooldown heartbeat also starts SSE before its wait ends. Once SSE begins, the stream forwards safe
+heartbeats and checks the first meaningful event: a pre-output 429 may rotate to an eligible OAuth
+account and replay the unchanged request. Without an eligible account it remains an in-stream
+failure, since HTTP status is already committed. Text, reasoning, and tool output commit the stream
+and prevent later rotation. Buffered Responses turns ignore the cooldown-ready heartbeat during
+preflight and apply the same HTTP 429 formatter to a final refusal after OAuth failover. Other
+buffered results retain the original event list, including output preceding a late error. Combo
+children ignore cooldown readiness during their own preflight, so a final 429 without output can
+still move to the next combo target. Devin combo children bypass opted-in stated-reset waiting and
+surface the pre-output 429 immediately, because the outer response cannot forward their wait
+heartbeats while it is choosing a target. An earlier replay-unsafe heartbeat or meaningful output keeps
+the failure on the current target.
 
 ## Optional client transport hints
 
@@ -460,10 +514,22 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 ## Account refusal and rotation boundaries
 
-Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum,
-cooldown and the three-rotation request cap remain in force, the complete credential/transport/replay
-identity is refreshed, and usage is attributed to the serving account. Single-account installs do not
-retry; a missing alternate credential preserves the original error. Organization or project exhaustion
+Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum and
+cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
+complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
+account. Single-account installs do not rotate; a missing alternate credential preserves the original
+error while transient recovery remains available.
+
+Kiro adapter additionally classifies bounded HTTP 400/403/429 refusals before output.
+Confirmed monthly exhaustion is persisted for the sent login, suspension is quarantined
+in process, and an eligible alternate is admitted under the shared rotation and physical
+send budget. The original response remains readable if alternate admission fails. A
+terminal OAuth refresh rejection can use an eligible alternate only after the original
+generation is marked for reauthentication. Final Kiro 5xx errors have fixed public text.
+The Kiro replacement reserves a no-wait account lease before committing OAuth selection;
+a full replacement leaves the original refusal in place. A successful rotation transfers
+the request's lease before the replacement send, and the final response body releases it.
+Organization or project exhaustion
 allows an initial alternate attempt because the response does not identify the refusing scope. After
 resolving an alternate, organization-level retry is withheld only when both credentials have the same
 known workspace account id. Stored Pool/main-pool alternates supply that id directly; a request-owned
@@ -478,6 +544,12 @@ credential has been resolved.
 Send-budget refusal is attributed as a withheld rotation only when a model-family-aware eligibility
 check confirms from the live roster that at least two accounts exist and an alternate is not currently
 cooled. That check applies no cooldown and advances no rotation.
+
+Generic OAuth snapshots its eligible roster before dispatch. Its request rotation ceiling is
+`max(3, min(eligibleCount, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) - 1)` (the cap is six); the live picker still filters cooldowns, so the snapshot supplies the
+stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
+physical target, rather than a diagnostic key, and a real send is charged once even when recovery
+rebuilds the request.
 
 Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes

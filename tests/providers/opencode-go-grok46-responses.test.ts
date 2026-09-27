@@ -69,50 +69,38 @@ describe("OpenCode Go Grok Responses compatibility", () => {
       .toEqual({ effort: "xhigh" });
   });
 
-  test("drops the hosted search tool that this exact destination rejects", () => {
+  test.each(["grok-4.6", "grok-4.7"])("keeps hosted search for %s and removes only the fields xAI refuses", model => {
     const functionTool = { type: "function", name: "lookup", parameters: { type: "object" } };
-    const body = build("grok-4.6", {
+    const userLocation = { type: "approximate", country: "IT" };
+    const body = build(model, {
       tools: [
-        { type: "web_search", search_context_size: "medium" },
-        { type: "web_search_preview" },
+        {
+          type: "web_search",
+          external_web_access: true,
+          search_context_size: "medium",
+          user_location: userLocation,
+          search_content_types: ["text", "image"],
+        },
+        { type: "web_search_preview", external_web_access: true },
         functionTool,
       ],
     });
 
-    expect(body.tools).toEqual([functionTool]);
+    expect(body.tools).toEqual([
+      { type: "web_search", user_location: userLocation, search_content_types: ["text", "image"], enable_image_search: true },
+      { type: "web_search" },
+      functionTool,
+    ]);
   });
 
-  test("promotes additional_tools-only declarations before dropping refused hosted search", () => {
+  test("omits a cached-only search declaration instead of widening it to live search", () => {
     const functionTool = { type: "function", name: "lookup", parameters: { type: "object" } };
-    const body = build("grok-4.6", {
-      input: [{
-        type: "additional_tools",
-        tools: [{ type: "web_search_preview" }, functionTool],
-      }],
-    });
-
-    expect(body.input).toEqual([]);
-    expect(body.tools).toEqual([functionTool]);
-  });
-
-  test("disables an explicit choice for a removed hosted tool", () => {
-    const body = build("grok-4.6", {
-      tools: [{ type: "web_search" }],
-      tool_choice: { type: "web_search" },
-    });
-
-    expect(body.tools).toEqual([]);
-    expect(body.tool_choice).toBe("none");
-  });
-
-  test("narrows allowed_tools to declarations that remain", () => {
-    const functionTool = { type: "function", name: "lookup", parameters: { type: "object" } };
-    const body = build("grok-4.6", {
-      tools: [{ type: "web_search_preview" }, functionTool],
+    const body = build("grok-4.7", {
+      tools: [{ type: "web_search", external_web_access: false }, functionTool],
       tool_choice: {
         type: "allowed_tools",
         mode: "required",
-        tools: [{ type: "web_search_preview" }, { type: "function", name: "lookup" }],
+        tools: [{ type: "web_search" }, { type: "function", name: "lookup" }],
       },
     });
 
@@ -124,19 +112,54 @@ describe("OpenCode Go Grok Responses compatibility", () => {
     });
   });
 
-  test("disables required mode when every declared tool is removed", () => {
-    const body = build("grok-4.6", {
-      tools: [{ type: "web_search" }],
-      tool_choice: "required",
+  test("normalizes hosted search promoted out of additional_tools", () => {
+    const functionTool = { type: "function", name: "lookup", parameters: { type: "object" } };
+    const body = build("grok-4.7", {
+      input: [{
+        type: "additional_tools",
+        tools: [{ type: "web_search_preview", external_web_access: true, search_context_size: "low" }, functionTool],
+      }],
     });
 
-    expect(body.tools).toEqual([]);
-    expect(body.tool_choice).toBe("none");
+    expect(body.input).toEqual([]);
+    expect(body.tools).toEqual([{ type: "web_search" }, functionTool]);
+  });
+
+  test("removing replayed cached-only search does not shift the current turn into history", () => {
+    // The replayed wrapper empties once its cached-only search is omitted. Dropping it would move
+    // the current-turn wrapper below _replayPrefixLen, and Go promotion would then discard it as
+    // history instead of promoting its live search.
+    const request = buildRequest("grok-4.7", {
+      input: [
+        { type: "additional_tools", tools: [{ type: "web_search", external_web_access: false }] },
+        { type: "message", role: "assistant", content: "history" },
+        { type: "additional_tools", tools: [{ type: "web_search", external_web_access: true }] },
+        { type: "message", role: "user", content: "search now" },
+      ],
+    }, provider(), 2);
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body.input).toEqual([
+      { type: "message", role: "assistant", content: "history" },
+      { type: "message", role: "user", content: "search now" },
+    ]);
+    expect(body.tools).toEqual([{ type: "web_search" }]);
   });
 
   test("preserves hosted search for another model on OpenCode Go", () => {
-    const webSearch = { type: "web_search", search_context_size: "medium" };
+    const webSearch = { type: "web_search", external_web_access: true, search_context_size: "medium" };
     const body = build("gpt-5.6-luna", { tools: [webSearch] });
+
+    expect(body.tools).toEqual([webSearch]);
+  });
+
+  test.each([
+    "https://opencode.ai/zen/v1",
+    "https://opencode.ai.evil.test/zen/go/v1",
+    "https://example.test/v1",
+  ])("leaves Grok web_search fields alone on the unrelated destination %s", baseUrl => {
+    const webSearch = { type: "web_search", external_web_access: true, search_context_size: "medium" };
+    const body = build("grok-4.7", { tools: [webSearch] }, provider(baseUrl));
 
     expect(body.tools).toEqual([webSearch]);
   });
@@ -195,19 +218,21 @@ describe("OpenCode Go additional_tools placement", () => {
     });
   });
 
-  test("keeps nameless hosted tools for Luna and prunes Go Grok selectors after promotion", () => {
+  test("keeps nameless hosted tools for Luna and keeps them for Go Grok after promotion", () => {
     const web = { type: "web_search" };
     const raw = { input: [{ type: "additional_tools", tools: [web, lookup] }], tool_choice: {
       type: "allowed_tools", mode: "required", tools: [web, { type: "function", name: "lookup" }],
     } };
     expect(build("gpt-5.6-luna", raw).tools).toEqual([web, lookup]);
     const grok = build("grok-4.6", raw);
-    expect(grok.tools).toEqual([lookup]);
-    expect(grok.tool_choice).toEqual({
-      type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "lookup" }],
-    });
-    expect(build("grok-4.6", { input: [{ type: "additional_tools", tools: [web] }], tool_choice: "required" }))
-      .toMatchObject({ input: [], tools: [], tool_choice: "none" });
+    expect(grok.tools).toEqual([web, lookup]);
+    expect(grok.tool_choice).toEqual(raw.tool_choice);
+    const cachedOnly = { type: "web_search", external_web_access: false };
+    // xAI 400s a `none` selector with nothing to select, so the deny-all is restated as the
+    // explicit empty catalog, exactly as on the direct xAI destinations.
+    const denied = build("grok-4.6", { input: [{ type: "additional_tools", tools: [cachedOnly] }], tool_choice: "required" });
+    expect(denied).toMatchObject({ input: [], tools: [] });
+    expect(denied).not.toHaveProperty("tool_choice");
   });
 
   test("does not promote additional tools restored from continuation history", () => {

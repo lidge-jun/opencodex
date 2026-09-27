@@ -1,10 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { budgetOwner } from "../helpers/send-budget-owner";
+import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import type { OcxProviderConfig } from "../../src/types";
 
 const url = "https://adapter-fixture.invalid/inference";
+afterEach(() => resetProviderRequestPacingForTest());
 
 /**
  * A credential hop has already reserved the replay it hands to the adapter, so the adapter's
@@ -23,6 +27,22 @@ function prepaid() {
 }
 
 describe("adapter physical inference admission", () => {
+  test("returns a concurrency lease after body completion and a pre-dispatch refusal", async () => {
+    const configured = {
+      adapter: "openai-chat", baseUrl: "https://adapter-fixture.invalid",
+      requestPacing: { enabled: true, maxConcurrentRequests: 1 },
+      fetch: Object.assign(async () => new Response("ok"), { preconnect() {} }) as typeof fetch,
+    } as OcxProviderConfig & { fetch: typeof fetch };
+    const executor = providerFetch(configured, undefined, { providerName: "physical", modelId: "a" });
+    const controller = new AbortController();
+    const send = createAdapterPhysicalSend({ abortSignal: controller.signal }, executor);
+    await expect(send({ url, beforeDispatch: () => { throw new Error("refused"); },
+      dispatch: physical => physical(url) })).rejects.toThrow("refused");
+    const first = await send({ url, dispatch: physical => physical(url) });
+    expect(await first.text()).toBe("ok");
+    expect(await (await send({ url, dispatch: physical => physical(url) })).text()).toBe("ok");
+  });
+
   test("a prepaid scope admits exactly one physical send and rejects replay before backoff", async () => {
     const { parent, scope, dispose } = prepaid();
     let sends = 0, waits = 0, pacingSlots = 0;

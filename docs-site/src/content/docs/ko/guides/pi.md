@@ -37,7 +37,7 @@ ocx export --client pi
           "name": "Claude Opus 5 (anthropic)",
           "input": ["text"],
           "contextWindow": 200000,
-          "maxTokens": 32000
+          "maxTokens": 128000
         }
       ]
     }
@@ -107,9 +107,7 @@ export OPENCODEX_API_KEY=<your key>
 출력됩니다. 그렇지 않으면 두 필드 모두 해당 모델에서 생략되고, Pi는 자체 기본값을
 적용합니다. `ocx export`는 그 경우가 몇 줄이었는지도 함께 출력합니다.
 
-`maxTokens`는 스키마를 만족시키기 위한 `32000` 예산이며, context window보다 더 크게
-잡히지 않도록 아래로 잘립니다. 즉, 작은 context 모델에 그보다 많은 출력을 주겠다는
-의미가 아닙니다.
+출력 한도는 카탈로그 또는 생성된 메타데이터의 알려진 모델 한도를 사용합니다. 알 수 없는 경우에만 `32000`을 사용합니다. 출력 한도는 항상 context window 이하로 제한되며, `32000`보다 작은 알려진 한도도 유지됩니다.
 
 의도적으로 빠진 필드도 두 개 있습니다. `cost`는 네 개의 가격 필드가 모두 있어야
 하는데, opencodex는 라우팅된 모델의 가격 데이터를 갖고 있지 않습니다. 0을 넣으면

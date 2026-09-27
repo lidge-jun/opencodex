@@ -87,6 +87,7 @@ import {
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { responseWithDeferredRequestLog } from "../relay";
 import { createRequestMetricsOwner } from "../request-metrics";
+import { cachedKiroQuotaMetricRows } from "../../providers/kiro-quota-metrics";
 import {
   corsHeaders,
   managementCorsHeaders,
@@ -292,7 +293,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     port,
   } = ctx;
   void port;
-  const requestMetrics = metricsExportEnabled(config) ? createRequestMetricsOwner() : undefined;
+  const requestMetrics = metricsExportEnabled(config)
+    ? createRequestMetricsOwner(Date.now() / 1000, cachedKiroQuotaMetricRows) : undefined;
   const requestMetricsLogContext = requestMetrics ? { requestMetricsRecorder: requestMetrics } : {};
   const requestManagementApiDeps: ManagementApiDeps = requestMetrics
     ? { ...managementApiDeps, requestMetrics: { snapshot: () => requestMetrics.snapshot() } }
@@ -1398,7 +1400,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleContextHistory(req, config, logCtx, contextEndpoint(url.pathname)!,
-            turnAdmissionLease, admission, () => resolveApiAuth(req, policy));
+            turnAdmissionLease, admission, () => resolveApiAuth(req, ingress === "hub-link" ? linkPolicy() : policy));
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);

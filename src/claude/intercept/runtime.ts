@@ -2,6 +2,8 @@ import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
+import type { ClaudeFirstPartyDesired } from "../first-party-settings";
+import { classifyInterceptClient, interceptRouteFor } from "./client-class";
 import { CLAUDE_INTERCEPT_HOSTS, isBrowserConnect, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
 import { startClaudeInterceptListener } from "./listener";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocalInterceptLeaf } from "./local-ca";
@@ -107,12 +109,16 @@ export interface StartClaudeInterceptOptions<T> {
    */
   requestedPort?: number;
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
+  /** Live first-party intent; absent preserves router behavior. */
+  desiredClients?: () => ClaudeFirstPartyDesired;
   maxRequestBodySize?: number;
   configDir?: string;
   /** Routes for Desktop's Code-tab picker. Picker mode is wired only when this is given. */
   loadPickerRoutes?: () => Promise<PickerRouteInput>;
   /** Test seam: builds the picker runtime. */
   createPicker?: (options: CreatePickerRuntimeOptions) => PickerRuntime;
+  /** Test seam: bind real CONNECT handlers on kernel-assigned ports without probe-and-release races. */
+  startProxy?: typeof startConnectProxy;
   /** Test seams: the macOS `security` runner and platform for the picker runtime and controller. */
   pickerSecurity?: SecurityRunner;
   pickerPlatform?: NodeJS.Platform;
@@ -128,6 +134,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   if (options.requestedPort === 0 && !explicitPort) return null;
   const configDir = options.configDir ?? getConfigDir();
   const ca = await ensureLocalInterceptCaForStartup(configDir);
+  const startProxy = options.startProxy ?? startConnectProxy;
   const authToken = ensureClaudeInterceptProxyToken(configDir);
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
   // Refresh an env we already own (e.g. a pre-auth proxy URL left by an upgrade) before the
@@ -145,12 +152,14 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const listener = startClaudeInterceptListener<T>({
     leaf,
     dispatch: options.dispatch,
+    ...(options.desiredClients ? { route: (req: Request) =>
+      interceptRouteFor(classifyInterceptClient(req.headers.get("user-agent")), options.desiredClients!()) } : {}),
     upstreamBase: options.config.claudeCode?.anthropicBaseUrl,
     ...(options.maxRequestBodySize !== undefined ? { maxRequestBodySize: options.maxRequestBodySize } : {}),
   });
   let proxy: ConnectProxyHandle;
   try {
-    proxy = await startConnectProxy(claudeInterceptProxyPort(options.config, options.publicPort), {
+    proxy = await startProxy(claudeInterceptProxyPort(options.config, options.publicPort), {
       interceptPort: listener.port!,
       // A real apply may recreate a missing token while this listener remains live.
       // Read current validated authority per CONNECT; absent/invalid means deny, not mint.
@@ -181,7 +190,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       const runtime = picker;
       const interceptPort = listener.port!;
       try {
-        pickerProxy = await startConnectProxy(claudePickerProxyPort(options.config, options.publicPort), {
+        pickerProxy = await startProxy(claudePickerProxyPort(options.config, options.publicPort), {
           interceptPort,
           // No authToken: Desktop's egressProxyUrl cannot present proxy credentials, so this
           // listener stays an unauthenticated loopback relay until the profile format can carry

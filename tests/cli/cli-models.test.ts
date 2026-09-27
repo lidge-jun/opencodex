@@ -60,6 +60,29 @@ describe("ocx models", () => {
     await warmModuleGraph({ graph: "cli-index/models", entry: cliPath });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
+  test("configured models expose automatic prices, overrides and unknowns without persisting defaults", () => {
+    const { dir } = freshConfig({ providers: { relay: {
+      adapter: "openai-chat", baseUrl: "https://example.com/v1",
+      models: ["claude-sonnet-4-6", "gpt-4o", "unknown-model"],
+      modelCosts: { "gpt-4o": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    } } });
+    try {
+      const before = readFileSync(join(dir, "config.json"), "utf8");
+      const result = runCli(["models", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const rows = JSON.parse(result.stdout).models;
+      expect(rows[0].price.cost4).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+      expect(rows[1].price).toMatchObject({ source: "user", cost4: { input: 0, output: 0 } });
+      expect(rows[2].price).toBeNull();
+      expect(readFileSync(join(dir, "config.json"), "utf8")).toBe(before);
+      const human = runCli(["models"], { OPENCODEX_HOME: dir });
+      expect(human.stdout).toContain("~$3/$15 input/output per 1M tokens");
+      expect(human.stdout).toContain("price unknown");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("models lists all provider models", () => {
     const { dir } = freshConfig();
     try {

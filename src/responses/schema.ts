@@ -14,6 +14,10 @@ const inputImageBlockSchema = z.object({
 const inputVideoBlockSchema = z.object({
   type: z.literal("input_video"),
   video_url: z.string().min(1),
+  // Gemini agentic video understanding (#3271). z.object() strips unknown keys,
+  // so without declaring it here the mode is dropped before any adapter sees it
+  // and the request silently degrades to frame-by-frame decoding.
+  processing: z.string().min(1).optional(),
 });
 const inputFileBlockSchema = z.object({
   type: z.literal("input_file"),

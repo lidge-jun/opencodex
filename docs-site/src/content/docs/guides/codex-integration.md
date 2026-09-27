@@ -15,6 +15,11 @@ file, removes OpenCodex's generated routing artifacts, and leaves the proxy runn
 clients. Re-enabling rebuilds the catalog from the models available at that time, so it does not
 restore the Codex files byte for byte.
 
+For bare native Codex models and OpenCodex-generated account-selector rows, the catalog carries
+authenticated access program metadata. Bare models use the main Codex account; account-qualified
+models use their selected account. Refreshing the integration updates these rows when upstream
+changes the account's access programs.
+
 The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
 plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
@@ -472,6 +477,42 @@ While the mode is active, the realtime voice sideband override
 (`experimental_realtime_ws_base_url`) is not injected — the dedicated provider-table form cannot
 carry it — so Codex Desktop voice uses its native endpoint rather than the proxy.
 
+### Emergency compaction model (opt-in)
+
+`compactionRecovery` leaves the initial compaction on the conversation's selected route. It
+permits one emergency attempt only after a supported, pre-output compaction failure. It is
+separate from `compactionRouting`, which chooses another model before compaction starts, and
+from `codexClientCompaction`, which changes Codex's provider form.
+
+```json
+{
+  "compactionRecovery": {
+    "enabled": true,
+    "model": "provider/emergency-model",
+    "allowDevinInvalidArgument": false
+  }
+}
+```
+
+Use an independently configured, authorized model with enough context for the failed input.
+Enabling recovery permits that model's provider to receive the compaction history and charge
+for the extra attempt when recovery runs; ordinary successful compactions incur no extra call.
+The option is off when absent or disabled. The existing authenticated management API accepts
+this block through `PUT /api/settings`; send `compactionRecovery: null` to remove it. A direct
+file edit should follow the normal stopped-proxy configuration workflow. This setting does not
+change sign-in, the conversation's ordinary model, Codex's provider ID, or the desktop composer.
+
+Recovery does not replay after cancellation, semantic output, tool side effects, an exhausted
+send budget, or an authentication, admission or policy refusal. Generic `400` errors do not
+enable fallback. The separately opted-in Devin `invalid_argument` case applies only to an
+identified compaction failure from that adapter. The emergency attempt shares the original
+request's send budget and never starts a second recovery attempt.
+
+Native encrypted compaction is outside this recovery path: its original error is retained.
+There is no automatic local truncation mode. A response being accepted is not proof that a
+long conversation retained its goals; verify the next turn on the original model before
+treating an emergency summary as a recovered task.
+
 ### Authless Codex Desktop (opt-in)
 
 In **Dashboard → Overview**, **Open Codex without signing in** controls this existing
@@ -635,6 +676,19 @@ mode unchanged.
 
 After `ocx sync` changes this metadata, restart Codex App and open a fresh task. Existing app-server
 processes and tasks may retain the catalog and tool plan they loaded at startup.
+
+### Inline visualizations with routed models
+
+The Codex App's Visualize plugin asks the model to reply with a reference wrapped in private-use
+characters (U+E200 … U+E201). Some providers remove those characters before the model sees them —
+every Claude route we checked does — so the model used to answer with a bare
+`visualize{"path":…}` line that Codex App printed as text.
+
+opencodex rewrites those references into the directive the app itself renders,
+`::codex-inline-vis{path="/absolute/path/chart.html"}`, in the conversation text sent to routed
+models. Any model can read and repeat that form, so the visualization renders inline. Native OpenAI
+passthrough requests are forwarded unchanged. Replies that were already saved in the bare
+`visualize{…}` form stay as they are; ask for the visualization again in a new reply.
 
 ### Custom model display names
 
@@ -904,6 +958,32 @@ When cancelling main-account device reauthentication, a temporary DELETE or netw
 When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.
 
 A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
+
+### Optional idle-window steering
+
+`codexPool.startIdleWindows` is an optional boolean and defaults to `false`. When enabled, a new
+unbound real request may be placed on an eligible account whose observed short quota window is at
+0% with evidence that its five-hour clock has not started. This check runs after conversation and family affinity, so an existing
+binding remains authoritative; an explicit account pin or manual account preference also wins.
+Independent model quota scopes are skipped, and the shared active cursor is unchanged. After the
+idle-window choice, normal strategy selection resumes for other conversations.
+
+The observation must be no older than five minutes, and the short window must explicitly be
+18,000 seconds. Its reset must be observed within 60 seconds of `observation + 5h` (rather than an already ticking or elapsed reset). A synchronous,
+process-local reservation prevents duplicate selections for the same account and window. The
+reservation deadline is at least 5h plus one minute after selection; a fresh observation is
+required after that deadline before the same account can be steered again. Reservations are cleared when the proxy
+process restarts and are never persisted to disk.
+
+Enable it in your existing configuration:
+
+```json
+{
+  "codexPool": { "startIdleWindows": true }
+}
+```
+
+If no account meets the criteria, ordinary routing applies. This feature only steers an actual incoming request. It creates no synthetic request and no timer.
 
 ### Keeping a downgraded account out of rotation
 

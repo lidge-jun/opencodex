@@ -119,7 +119,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -166,9 +166,15 @@ Sans fournisseur, répertorie le groupe de comptes Codex, les comptes OAuth et l
 sont ignorés à moins que `--all` soit présent. Avec un fournisseur, répertorie uniquement cette famille d’informations d’identification.
 La sortie destinée aux utilisateurs utilise `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` ; une ligne Codex sélectionnée manuellement porte la mention
 `selected`. `PRIORITY` est l'ordre de sélection Codex signé (`0` lorsqu'il n'est pas défini) et affiche `-` pour les lignes
-où l'ordre ne s'applique pas, comme les comptes OAuth et les clés API. Avec au moins deux comptes Kiro enregistrés et éligibles, par défaut une réponse 429 entraîne automatiquement une rotation vers un autre
-compte, en privilégiant celui dont l'allocation restante connue est la plus élevée ; la rotation est activée par la présence de plusieurs comptes et ne peut pas être désactivée — `oauthAccountFailover.enabled: false` refuse la préférence de compte avant envoi, pas la récupération après un 429 ; `ocx account login kiro` ajoute les comptes au pool un par un. Un résultat vide est toujours un succès. `--json`
-renvoie :
+où l'ordre ne s'applique pas, comme les comptes OAuth et les clés API. Avec au moins deux comptes Kiro enregistrés, par défaut une réponse 429 peut entraîner une rotation vers un autre compte éligible
+en privilégiant celui dont l'allocation restante connue est la plus élevée ; la rotation est activée par la présence de plusieurs comptes et ne peut pas être désactivée — `oauthAccountFailover.enabled: false` refuse la préférence de compte avant envoi, pas la récupération après un 429 ; `ocx account login kiro` ajoute les comptes au pool un par un. Un résultat vide est toujours un succès.
+
+Pour Kiro, les refus de débit, de quota mensuel confirmé et de suspension confirmée peuvent changer de compte avant toute sortie. Le quota mensuel exclut seulement ce compte jusqu’à la réinitialisation ou l’expiration des données ; une réponse terminée du même compte efface un ancien verdict. Le réglage du fournisseur prime sur le réglage global pour la préférence proactive, sans désactiver la rotation réactive.
+Kiro peut choisir `least-loaded` pour placer les requêtes de façon proactive lorsque `pool.kernel` et la préférence proactive sont activés. `maxConcurrentPerAccount` (1–100) crée une file bornée par compte et par processus : un compte sélectionné saturé attend au plus 250 ms, puis renvoie 503 `account_capacity` avec `Retry-After: 1`. Cette limite ne déplace pas la requête vers un autre compte.
+
+`ocx account list kiro` affiche `not-auto-selected(<raison>)` pour un compte exclu de la sélection automatique. Le JSON contient `autoSelectable` et, si la valeur est fausse, un `skipReason` fermé (`needs_reauth`, `suspended`, `cooldown` ou `quota_exhausted`). Un compte actif unique peut encore servir. Les crédits `providerCredits` sont mesurés par `meteringEvent` : la dernière valeur d'une réponse est retenue et les envois facturés séparément sont additionnés, sans estimation à partir des jetons.
+
+`--json` renvoie :
 
 ```text
 { accounts: AccountRow[], notes: string[] }
@@ -409,7 +415,7 @@ proxy en cours d'exécution (`ocx start` ou un service installé).
 | `provider <name> <on\|off>` | `--json` | Activez ou désactivez chaque modèle d'un fournisseur en une seule écriture. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Lisez ou remplacez la liste autorisée du modèle de fournisseur. `--clear` supprime la liste blanche afin que chaque modèle soit proposé. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Lisez ou définissez la limite de la fenêtre contextuelle, globalement ou par fournisseur. `value <tokens> --set-all` redirige également chaque fournisseur acheminé (comme la bascule du tableau de bord) ; sans cela, la valeur devient uniquement la valeur par défaut. `provider ... on --value <tokens>` définit un plafond explicite pour ce fournisseur uniquement (`--value` est valide avec `on` uniquement). |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Lisez ou définissez le modèle de remplacement pour les appels d'assistance en arrière-plan de Codex. `-` efface le modèle. `status` signale également `sourceModels`, l'assistant supprime les interceptions du proxy (par défaut : `gpt-5.6-luna` ; les clients via 0.144.x ont utilisé `gpt-5.4-mini`, qu'une substitution explicite de `sourceModels` peut restaurer). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Lisez ou définissez le modèle de remplacement pour les appels d'assistance en arrière-plan de Codex. `-` efface le modèle. `status` signale également `sourceModels`, l'assistant supprime les interceptions du proxy (par défaut : `gpt-6-luna`, `gpt-5.6-luna` ; les clients via 0.144.x ont utilisé `gpt-5.4-mini`, qu'une substitution explicite de `sourceModels` peut restaurer). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

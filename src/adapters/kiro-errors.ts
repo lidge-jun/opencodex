@@ -1,5 +1,7 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
+import { debugProviderDiagnostic } from "../lib/debug";
 const DETAIL_KEYS = ["__type", "code", "error", "name", "reason", "message", "Message", "errorMessage"];
+const KIRO_5XX_DIAGNOSTIC_STATUSES = new Set([500, 502, 503, 504]);
 
 export interface KiroErrorClassification {
   message: string;
@@ -204,5 +206,13 @@ export function classifyKiroEventError(reason: string | undefined, message: stri
 }
 
 export function safeKiroHttpErrorMessage(status: number, headers: Headers | Record<string, unknown>, payloadText: string): string {
-  return classifyKiroFailure(headers, payloadText, status).message;
+  const failure = classifyKiroFailure(headers, payloadText, status);
+  if (status >= 500) {
+    debugProviderDiagnostic("kiro", "http_error", {
+      status: KIRO_5XX_DIAGNOSTIC_STATUSES.has(status) ? status : "other_5xx",
+      code: failure.code === "server_is_overloaded" ? "server_is_overloaded" : "upstream_server_error",
+    });
+    return status === 504 ? "Kiro upstream gateway timeout" : "Kiro upstream service unavailable";
+  }
+  return failure.message;
 }

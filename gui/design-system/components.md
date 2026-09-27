@@ -4,6 +4,7 @@
 
 - 데스크톱은 232px sidebar와 main content의 2열 구조다.
 - 760px 이하에서는 sidebar가 off-canvas drawer로 전환된다.
+- macOS 데스크톱에서는 네이티브 신호등과 겹치지 않도록 축소 줌에서 sidebar 폭과 모바일 상단 여백이 커진다.
 - `.nav-item`은 아이콘 17px, control text, 4px 세로 간격을 사용한다.
 - hover와 active는 같은 surface family를 쓰되 active는 semibold로 구분한다.
 - 메뉴마다 margin을 직접 추가하지 않고 `.sidebar nav`의 `gap`을 사용한다.

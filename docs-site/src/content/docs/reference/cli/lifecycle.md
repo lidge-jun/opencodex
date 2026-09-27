@@ -27,7 +27,14 @@ would leave the first proxy running and re-point Codex at the second. An explici
 and enforced spend accounting both write the same journal. Use a separate `OPENCODEX_HOME` for an
 independent sibling; `port: 0` only asks the OS for that instance's port and does not separate its
 state. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
-native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`).
+native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`). A sibling started
+beside a running proxy does neither: it serves direct requests on its own port only, and Codex,
+Grok and Claude stay pointed at the proxy that was already running. Stopping that sibling, with
+`ocx stop` or a signal, leaves their configuration alone as well. While it runs, the proxy also
+keeps Codex pointed at itself: when the opencodex routing in `~/.codex/config.toml` names another
+local port where no opencodex has answered for about 20 seconds (an instance that re-pointed it and
+then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex
+threads opened in the meantime keep the dead address until you reopen them.
 
 `--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
 HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
@@ -46,6 +53,11 @@ ocx start --socks5-off
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
+While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
+it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
+a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app
+started) or **Quit** to keep it stopped. For the same reason the dashboard's **Stop** button refuses
+with `desktop_supervised`, and changes nothing, for a proxy the app started.
 The web dashboard's **Stop** button runs the same action (`POST /api/stop`) on every backend
 except Windows Task Scheduler. There the wrapper can respawn the proxy after the task ends,
 and only a stop running outside the proxy can verify that restart window before restoring
@@ -79,6 +91,12 @@ When a proxy is running, ask that exact attested PID and port to restart in plac
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
 separate stop/start. If no proxy is running, the command falls back to the normal `ensure` start.
+When the proxy starts its own replacement (no background service supervises it) after the drain
+finished normally, a replacement that exits before it answers is started again up to twice. What
+the replacement prints goes to `~/.opencodex/restart-handoff.log`, which stays near 256 KiB: a
+restart empties it once it reaches that size, and the running replacement checks it once a minute.
+A proxy the OpenCodex desktop app started does not start its own replacement: it exits, and the app
+starts the new proxy on the same port.
 If a live listener cannot be attested to a runtime PID (including a pre-update proxy), restart fails
 closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by
@@ -162,7 +180,10 @@ is not normalized. JSON exposes the same advice in `versionSkew`, whose fields r
 Print a read-only diagnostic summary: proxy PID, `/healthz` reachability, dashboard URL, config path,
 default provider, Codex autostart setting, service state, shim state, and the redacted effective Codex
 home. Only the explicit, high-confidence Windows Orca runtime-home signature adds an actionable App-home
-mismatch warning; it never changes `CODEX_HOME` automatically.
+mismatch warning; it never changes `CODEX_HOME` automatically. It also warns when the Codex routing
+opencodex wrote names a local port the running proxy does not serve. `ocx sync` repairs it
+immediately, and a running owner proxy may also re-point it on its own once nothing answers on that
+port. A sibling's status does not report it, because its routing names the proxy it runs beside.
 
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
@@ -400,6 +421,12 @@ previous catalog from memory.
 
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
+On Windows Task Scheduler, the service wrapper restarts the proxy after five seconds
+even when an external tool terminates it with exit code 0. If another opencodex proxy
+already owns the port, the wrapper exits deliberately. Use `ocx stop` or
+`ocx service stop` to stop the service and its restart loop. After upgrading an
+existing installation, run `ocx service repair` to refresh the generated wrapper.
+
 Run opencodex as a login-managed background service (macOS **launchd**, Linux **systemd user unit**,
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
 `OCX_SERVICE=1` so a restart does not churn the Codex config.
@@ -462,6 +489,12 @@ supersedes it rather than replacing it.
 
 A state file with no ownership record means the CLI installation owns the runtime, which is what
 every installation made before this feature is in. Nothing changes for you until an app takes over.
+
+Home paths inside a state record are compared with the current home by the physical directory they
+resolve to, not just their spelling. A junction or symlink recorded under an older install still
+names the same home and keeps working after the move; an alias that no longer resolves is only
+treated as a different home when its recorded spelling also differs from the current one, so a
+stale mount still produces the foreign-owner refusal instead of silently claiming the runtime.
 
 While something other than this CLI owns the runtime, the subcommands that would **activate** your
 registration refuse instead:
@@ -585,6 +618,9 @@ deleted as an unsafe best-effort rollback.
 
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
+If installation is refused or the resulting shim is unhealthy, the command exits nonzero and
+the dashboard reports the failure reason. A healthy existing shim still counts as success.
+For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
 
 Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
 service startup is bypassed. It refuses the change and rolls back when the launcher resolves
@@ -707,6 +743,8 @@ package registry or install an update.
 ### `ocx update [--tag latest|preview]`
 
 When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
+
+On Linux, a background service whose recorded launcher is mise's package launcher (`<tool>/latest/node_modules/.bin/ocx`, not a mise shim) follows `mise upgrade` by itself: within about ten seconds of the new version settling, it drains active requests and restarts onto it, and it recovers the same way if mise later prunes the version it was running. On macOS, for a service installed through a mise shim, and for a foreground proxy, restart it yourself after upgrading (on macOS, `ocx service repair` first).
 
 Self-update opencodex from npm. Stable installs use `@latest`; preview installs stay on `@preview`
 unless you pass `--tag latest|preview`. It detects a source checkout and tells you to

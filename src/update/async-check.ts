@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { PKG, registrySpawnTarget, type Channel, type Installer } from "./index";
 import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
+import { PNPM_READ_CWD, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 
 export const REGISTRY_DEADLINE_MS = 12_000;
 export const REGISTRY_OUTPUT_LIMIT = 4_096;
@@ -64,7 +65,10 @@ export async function latestVersionAsync(
       child = deps.spawnFn(target.bin, target.args, {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-        env: unprivilegedOwnershipMutationEnvironment(target.env ?? process.env),
+        cwd: installer === "pnpm" ? PNPM_READ_CWD : undefined,
+        env: installer === "pnpm"
+          ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env ?? process.env))
+          : unprivilegedOwnershipMutationEnvironment(target.env ?? process.env),
         ...target.options,
       }) as ChildProcessWithoutNullStreams;
     } catch {

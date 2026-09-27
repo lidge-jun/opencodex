@@ -75,6 +75,28 @@ describe("service install state Codex SQLite home binding", () => {
     expect(() => assertServiceEnvironmentMatchesInstall()).toThrow("Codex SQLite home");
   });
 
+  test("accepts a recorded SQLite home that names the same physical directory through an alias", () => {
+    const codexHome = join(TEST_DIR, "codex-home");
+    const sqliteHome = join(TEST_DIR, "sqlite-home");
+    const sqliteAlias = join(TEST_DIR, "sqlite-alias");
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_SQLITE_HOME = sqliteHome;
+    writeInstallState({
+      version: 2,
+      codexHome,
+      codexSqliteHome: sqliteAlias,
+      opencodexHome: TEST_DIR,
+      backend: "scheduler",
+    });
+
+    const realpathSync = (path: string) => path === sqliteAlias ? sqliteHome : path;
+    expect(() => assertServiceEnvironmentMatchesInstall({ realpathSync })).not.toThrow();
+
+    const otherHome = join(TEST_DIR, "other-sqlite-home");
+    const divergentRealpath = (path: string) => path === sqliteAlias ? otherHome : path;
+    expect(() => assertServiceEnvironmentMatchesInstall({ realpathSync: divergentRealpath })).toThrow("Codex SQLite home");
+  });
+
   test("parses codexSqliteHome and rejects an empty value", () => {
     const valid = {
       version: 2,

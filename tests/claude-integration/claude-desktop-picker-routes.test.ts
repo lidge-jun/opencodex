@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyDesktopPickerProfile, inspectDesktopPickerProfile } from "../../src/claude/desktop-picker-profile";
+import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { pickerCaCertPath, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
 import type { PickerListenerOptions } from "../../src/claude/intercept/picker-listener";
 import { createPickerRuntime } from "../../src/claude/intercept/picker-runtime";
@@ -21,6 +21,7 @@ let handle: ClaudeInterceptHandle | null = null;
 const previous: Record<string, string | undefined> = {};
 const ENV_KEYS = ["OPENCODEX_HOME", "OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR", "CLAUDE_CONFIG_DIR"] as const;
 const LISTENER_PORT = 45_679;
+const REQUESTED_PROXY_PORT = 45_600;
 const INTERCEPT = { kind: "intercept", port: LISTENER_PORT };
 const BLIND = { kind: "blind" };
 
@@ -49,34 +50,26 @@ const security: SecurityRunner = async args => {
   }
 };
 
-async function canBind(port: number): Promise<boolean> {
-  return new Promise(resolve => {
-    const server = createServer();
-    server.once("error", () => resolve(false));
-    server.listen({ port, host: "127.0.0.1", exclusive: true }, () => server.close(() => resolve(true)));
-  });
-}
-
-async function freePortPair(): Promise<number> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const port = 20_000 + Math.floor(Math.random() * 30_000);
-    if (await canBind(port) && await canBind(port + 1)) return port;
-  }
-  throw new Error("no free port pair");
-}
-
 /** Start the intercept pair with picker mode wired, as the server lifecycle does. */
-async function startPicker(saved: OcxConfig): Promise<number> {
+async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Response): Promise<number> {
   writeFileSync(join(root, "config.json"), JSON.stringify(saved));
-  const port = await freePortPair();
+  const requestedProxyPorts: number[] = [];
   handle = await startClaudeIntercept({
-    config: config({ claudeCode: { intercept: { port } } }),
+    config: config({ claudeCode: { intercept: { port: REQUESTED_PROXY_PORT } } }),
     publicPort: 10100,
     configDir: root,
-    dispatch: async () => new Response("unused"),
+    dispatch: async req => onDispatch?.(req) ?? new Response("unused"),
+    ...(onDispatch ? { desiredClients: () => ({ desktop: true, cli: false }) } : {}),
     loadPickerRoutes: async () => ({ nativeSlugs: [], routedModels: [{ provider: "xai", id: "grok-4.7", contextWindow: 256_000 }] }),
     pickerSecurity: security,
     pickerPlatform: "darwin",
+    // A probe that closes before startup does not reserve anything: the lifecycle's own
+    // ephemeral TLS listener or another process can take the observed pair. Bind the real proxy
+    // handlers directly on port 0 so the kernel owns both allocations until teardown.
+    startProxy: async (requestedPort, proxyOptions) => {
+      requestedProxyPorts.push(requestedPort);
+      return startConnectProxy(0, proxyOptions);
+    },
     createPicker: options => createPickerRuntime({
       ...options,
       startListener: (async (_: PickerListenerOptions) => ({ port: LISTENER_PORT, close: async () => {} })) as never,
@@ -84,7 +77,14 @@ async function startPicker(saved: OcxConfig): Promise<number> {
       refreshIntervalMs: 3_600_000,
     }),
   });
-  return port;
+  if (!handle || handle.pickerProxyPort === null || !getClaudePickerRuntime()) {
+    throw new Error("picker fixture did not start every runtime component");
+  }
+  expect(requestedProxyPorts).toEqual([REQUESTED_PROXY_PORT, REQUESTED_PROXY_PORT + 1]);
+  const boundPorts = [handle.listener.port, handle.proxyPort, handle.pickerProxyPort];
+  expect(boundPorts.every(port => typeof port === "number" && Number.isInteger(port) && port > 0)).toBe(true);
+  expect(new Set(boundPorts).size).toBe(boundPorts.length);
+  return handle.pickerProxyPort;
 }
 
 async function dispatch(path: string, init: RequestInit = {}, deps: Parameters<typeof handleManagementAPI>[3] = {}) {
@@ -98,6 +98,23 @@ async function dispatch(path: string, init: RequestInit = {}, deps: Parameters<t
 
 const put = (body: unknown) => dispatch("/api/claude-desktop/picker", { method: "PUT", body: JSON.stringify(body) });
 const decision = () => getClaudePickerRuntime()!.selectTunnel("claude.ai", 443);
+
+test("picker egress uses HTTPS Desktop entrypoint after a UA-less CONNECT", async () => {
+  const seen: string[] = [];
+  await startPicker(config(), req => {
+    seen.push(req.headers.get("user-agent") ?? "");
+    return Response.json({ via: "router" });
+  });
+  const result = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    proxy: `http://127.0.0.1:${handle!.pickerProxyPort}`,
+    tls: { ca: readFileSync(handle!.caCertPath, "utf8") },
+    headers: { "user-agent": "claude-cli/2.1.282 (external, claude-desktop)", "anthropic-version": "2023-06-01" },
+    body: "{}",
+  });
+  expect(await result.json()).toEqual({ via: "router" });
+  expect(seen).toEqual(["claude-cli/2.1.282 (external, claude-desktop)"]);
+});
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-picker-routes-"));
@@ -128,7 +145,7 @@ describe("first-party turns picker mode on by default", () => {
     expect(applied.status).toBe(200);
     expect(applied.body.picker).toMatchObject({ effective: true, reason: "restart_required", trust: "trusted", profile: "applied" });
     expect(decision()).toEqual(INTERCEPT);
-    expect(inspectDesktopPickerProfile()).toMatchObject({ kind: "applied", proxyUrl: `http://127.0.0.1:${port + 1}` });
+    expect(inspectDesktopPickerProfile()).toMatchObject({ kind: "applied", proxyUrl: `http://127.0.0.1:${port}` });
     expect(keychain.trusted).toBe(true);
     expect(persisted().claudeCode?.intercept?.picker).toBeUndefined();
 

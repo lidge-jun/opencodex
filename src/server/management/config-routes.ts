@@ -1,4 +1,5 @@
 import { compactionRoutingSchema } from "../../config/schema/leaf-validators";
+import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
@@ -69,6 +70,7 @@ import {
   initializeDefaultCodexAccountNamespaces,
 } from "../../codex/account-namespaces";
 import { catalogRefreshIsPending } from "../../codex/catalog-refresh-status";
+import { siblingOfLivePort } from "../../codex/sibling-start";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -119,10 +121,10 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { withProviderCatalogCapabilityDTO } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
-import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
+import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
-import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, getCodexRuntimeSnapshot, liveRemovedEfforts, loadLastEffortClamp } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -196,7 +198,9 @@ export async function syncEnabledClientIntegrations(
   deps: Pick<ManagementContext["deps"],
     "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
-  if (port === undefined) return [];
+  // A sibling instance passes its OWN port here; the Grok fence and the Desktop gateway profile
+  // stay on the live owner's (`src/codex/sibling-start.ts`).
+  if (port === undefined || siblingOfLivePort() !== null) return [];
   const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
   const out: ClientIntegrationSyncOutcome[] = [];
 
@@ -291,6 +295,10 @@ function publicVisionSidecarSettings(
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
+  // Settings only seed the dashboard chip; /api/startup-health owns the bounded fresh read.
+  // Waiting on the Windows service-manager probe here held settings reads and saves open
+  // for up to 15s, including the admin-token check. An injected reader stays authoritative.
+  const readStartupHealthSnapshot = deps.getCachedStartupHealth ?? getStartupHealthSnapshot;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(withProviderCatalogCapabilityDTO(safeConfigDTO(config), config));
   }
@@ -300,10 +308,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
-    let resolved: ReturnType<typeof resolveCodexRuntime>;
+    let resolved: ReturnType<typeof getCodexRuntimeSnapshot>;
     try {
-      // Full alternative discovery (memoized) so newerAvailable warnings work.
-      resolved = resolveCodexRuntime();
+      // Full alternative discovery so newerAvailable warnings work, served stale-while-
+      // revalidate: the sync resolver ran `codex --version` per candidate on this request and
+      // froze the whole proxy for ~0.6s every memo expiry while the dashboard polled here.
+      resolved = getCodexRuntimeSnapshot();
     } catch {
       resolved = {
         runtime: { command: "codex", version: null, source: "fallback" },
@@ -363,7 +373,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexClientCompaction: config.codexClientCompaction === true,
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
       compactionRouting: config.compactionRouting ?? null,
-      startupHealth: await readStartupHealth(config),
+      compactionRecovery: config.compactionRecovery ?? null,
+      startupHealth: await readStartupHealthSnapshot(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,
@@ -455,6 +466,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
+      compactionRecovery?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -467,8 +479,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
-      && body.compactionRouting === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, or compactionRouting" }, 400);
+      && body.compactionRouting === undefined && body.compactionRecovery === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, compactionRouting, or compactionRecovery" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -501,6 +513,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const compactionRouting = body.compactionRouting == null
       ? body.compactionRouting
       : compactionRoutingSchema.safeParse(body.compactionRouting);
+    const compactionRecovery = body.compactionRecovery == null ? body.compactionRecovery : compactionRecoverySchema.safeParse(body.compactionRecovery);
+    if (compactionRecovery != null && !compactionRecovery.success) return jsonResponse({ error: "compactionRecovery requires enabled, a model, and optional boolean allowDevinInvalidArgument" }, 400);
     if (compactionRouting != null && !compactionRouting.success) {
       return jsonResponse({ error: "compactionRouting requires a model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" }, 400);
     }
@@ -533,7 +547,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
-    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting"]);
+    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery"]);
     const previousSettings = {
       codexAutoStart: config.codexAutoStart,
       hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -604,6 +618,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.codexClientCompaction === false) deleteConfigTopLevelKey(config, "codexClientCompaction");
       if (compactionRouting === null) deleteConfigTopLevelKey(config, "compactionRouting");
       else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
+      if (compactionRecovery === null) deleteConfigTopLevelKey(config, "compactionRecovery");
+      else if (compactionRecovery?.success) config.compactionRecovery = compactionRecovery.data;
       if (quotaAutoRefreshChange) {
         const { id, window, enabled } = quotaAutoRefreshChange;
         const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
@@ -705,9 +721,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
+      compactionRecovery: config.compactionRecovery ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
       mainAccountHardLock: getMainAccountHardLockStatus(config),
-      startupHealth: await readStartupHealth(config),
+      startupHealth: await readStartupHealthSnapshot(config),
     });
   }
 

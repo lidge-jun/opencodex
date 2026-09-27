@@ -149,6 +149,17 @@ describe("enforceAnthropicImageLimits", () => {
     expect(content[1].type).toBe("image");
   });
 
+  test("a cache_control breakpoint survives textification", () => {
+    const huge = { ...imageBlock(HUGE), cache_control: { type: "ephemeral", ttl: "1h" } };
+    const messages = [userMsg([huge, imageBlock(SMALL)])];
+    enforceAnthropicImageLimits(messages);
+    const content = (messages[0] as { content: Array<Record<string, unknown>> }).content;
+    expect(content[0].type).toBe("text");
+    expect(content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    // The image block's own properties must NOT ride along onto a text block.
+    expect(content[0].source).toBeUndefined();
+  });
+
   test("C4: >100 small images trimmed to 100", () => {
     const messages = [userMsg(Array.from({ length: 110 }, () => imageBlock(SMALL)))];
     enforceAnthropicImageLimits(messages);

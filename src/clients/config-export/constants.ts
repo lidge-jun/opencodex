@@ -45,18 +45,7 @@ export const GAJAE_API_KEY_ENV = "OPENCODEX_GAJAE_API_KEY";
 /** Pi's wire-dialect selector for an OpenAI-compatible endpoint. */
 export const PI_API_DIALECT = "openai-completions";
 
-/**
- * opencode's config schema rejects a `limit` block that carries `context` without
- * `output`, but CatalogModel has no authoritative per-model output field. Dropping
- * `limit` entirely would also throw away the authoritative context window we DO have,
- * so the block is emitted with this budget standing in for the missing half.
- *
- * The value matches REASONING_MAX_TOKENS_CEILING in src/adapters/anthropic.ts — the
- * project's existing "safe ceiling across current models" figure. It is a ceiling for
- * schema validity, NOT a claim about any specific model's true maximum, and it is
- * clamped to the context window so a small-context model can never be emitted with
- * output > context. Pi's `maxTokens` uses the same stand-in and the same clamp.
- */
+/** Fallback only when the model has no known output limit; always clamped to context. */
 export const SCHEMA_REQUIRED_OUTPUT_BUDGET = 32_000;
 
 /** Deterministic loopback default for exported provider-block helpers in tests. */

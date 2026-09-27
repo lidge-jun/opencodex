@@ -27,6 +27,8 @@ import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool
 import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
 import { useAnthropicResetGrants } from "../../hooks/useAnthropicResetGrants";
 import { Switch } from "../../ui";
+import { kiroSkipReasonKey } from "../../kiro-device-login-helpers";
+import KiroDeviceLoginDialog from "../KiroDeviceLoginDialog";
 import type {
   AccountLoadState,
   OAuthAccountRow,
@@ -197,6 +199,13 @@ export default function ProviderAuthPanel({
 }) {
   const t = useT();
   const [addingKey, setAddingKey] = useState(false);
+  const [kiroChooser, setKiroChooser] = useState<{ addAccount: boolean } | null>(null);
+  const kiroLoginTriggerRef = useRef<HTMLButtonElement>(null);
+  const kiroAddTriggerRef = useRef<HTMLButtonElement>(null);
+  const openLogin = (addAccount: boolean) => {
+    if (item.name === "kiro") setKiroChooser({ addAccount });
+    else void authHandlers?.onLogin(item.name, addAccount);
+  };
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
@@ -470,7 +479,7 @@ export default function ProviderAuthPanel({
                 {loggedIn ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
                 ) : (
-                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onLogin(item.name, false)}>
+                  <button ref={item.name === "kiro" ? kiroLoginTriggerRef : undefined} type="button" className="btn btn-primary btn-sm" disabled={busy || (item.name === "kiro" && Boolean(kiroChooser))} onClick={() => openLogin(false)}>
                     {busy ? <span className="pwi-spin-inline" aria-hidden="true" /> : <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" />}
                     {busy ? t("prov.waitingBrowser") : t("prov.login")}
                   </button>
@@ -556,6 +565,7 @@ export default function ProviderAuthPanel({
                         <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
                       )}
                       {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
+                      {kiroSkipReasonKey(account, item.name) && <span className="badge badge-amber">{t(kiroSkipReasonKey(account, item.name)!)}</span>}
                       {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                       {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
@@ -623,8 +633,8 @@ export default function ProviderAuthPanel({
             )}
             {loggedIn && (
               <div className="pwi-auth-actions">
-                <button type="button" className="btn btn-ghost btn-sm"
-                  onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
+                <button ref={item.name === "kiro" ? kiroAddTriggerRef : undefined} type="button" className="btn btn-ghost btn-sm"
+                  onClick={() => openLogin(true)} disabled={busy || Boolean(switchingAccountId) || (item.name === "kiro" && Boolean(kiroChooser))}>
                   {t("pws.addAccount")}
                 </button>
                 {canRefreshQuota && (
@@ -647,6 +657,12 @@ export default function ProviderAuthPanel({
               </div>
             )}
           </>
+        )}
+        {item.name === "kiro" && kiroChooser && (
+          <KiroDeviceLoginDialog apiBase={apiBase} triggerRef={kiroChooser.addAccount ? kiroAddTriggerRef : kiroLoginTriggerRef}
+            addAccount={kiroChooser.addAccount} busy={busy} onClose={() => setKiroChooser(null)}
+            onCli={addAccount => { void authHandlers.onLogin(item.name, addAccount); }}
+            onSettled={authHandlers.onNativeLoginSettled} />
         )}
 
         {isKeyAuth && (

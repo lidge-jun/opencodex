@@ -1,4 +1,5 @@
 import { readdirSync, statSync } from "node:fs";
+import { readdir, stat as statAsync } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Database, constants } from "bun:sqlite";
@@ -110,6 +111,81 @@ function walkFiles(dir: string, relPrefix: string, out: FileEntry[]): void {
   }
 }
 
+/** Upper bound on concurrent readdir/stat calls within one async scan. */
+const SCAN_FS_CONCURRENCY = 64;
+
+type FsLimit = <T>(op: () => Promise<T>) => Promise<T>;
+
+/**
+ * FIFO limiter for filesystem calls. A finishing call hands its slot straight to the next
+ * waiter, so the bound holds exactly. Only leaf fs calls take a slot: a directory walk
+ * never holds one while awaiting its children, so recursion cannot deadlock the pool.
+ */
+function createFsLimit(max: number): FsLimit {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async <T>(op: () => Promise<T>): Promise<T> => {
+    if (active < max) active += 1;
+    else await new Promise<void>(resolve => waiting.push(resolve));
+    try {
+      return await op();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else active -= 1;
+    }
+  };
+}
+
+/** Entries started together at one directory level of an async scan. */
+const SCAN_BATCH_SIZE = 256;
+
+/**
+ * Map `items` through `fn` a batch at a time, keeping input order. A directory with tens of
+ * thousands of entries then has at most one batch of pending tasks at its level, instead of
+ * one promise per entry queued behind the fs limiter.
+ */
+async function mapInBatches<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += SCAN_BATCH_SIZE) {
+    const batch = await Promise.all(items.slice(start, start + SCAN_BATCH_SIZE).map(fn));
+    for (const result of batch) results.push(result);
+  }
+  return results;
+}
+
+/**
+ * Async twin of {@link walkFiles}: same skip rules, and entries come back in readdir
+ * order so the report (including `largest` tie order) matches the synchronous scan.
+ */
+async function walkFilesAsync(dir: string, relPrefix: string, limit: FsLimit): Promise<FileEntry[]> {
+  let entries;
+  try {
+    entries = await limit(() => readdir(dir, { withFileTypes: true }));
+  } catch {
+    return [];
+  }
+  // Bun can settle small async fs calls on the microtask queue alone, so a walk of cached
+  // directories would otherwise finish without ever giving the event loop a turn. One timer
+  // turn per directory keeps request handling live during a large scan.
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  const parts = await mapInBatches(entries, async (entry): Promise<FileEntry[]> => {
+    const full = join(dir, entry.name);
+    const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+    try {
+      if (entry.isDirectory()) return await walkFilesAsync(full, relPath, limit);
+      if (entry.isFile()) {
+        const stat = await limit(() => statAsync(full));
+        return [{ relPath, bytes: stat.size, mtimeMs: stat.mtimeMs }];
+      }
+    } catch {
+      /* entry vanished mid-scan — diagnostics tolerate racy trees */
+    }
+    return [];
+  });
+  return parts.flat();
+}
+
 function buildBucket(key: StorageBucketKey, files: FileEntry[]): StorageBucket {
   const bucket: StorageBucket = {
     key,
@@ -169,8 +245,8 @@ function newestVersionedDb(names: string[], pattern: RegExp): string | null {
   return best;
 }
 
-export function scanStorage(codexHome: string = resolveCodexHomeDir()): StorageReport {
-  const files: Record<StorageBucketKey, FileEntry[]> = {
+function emptyFiles(): Record<StorageBucketKey, FileEntry[]> {
+  return {
     sessions: [],
     archived_sessions: [],
     logs_db: [],
@@ -179,36 +255,27 @@ export function scanStorage(codexHome: string = resolveCodexHomeDir()): StorageR
     deletion_manifests: [],
     other: [],
   };
+}
 
-  let rootNames: string[] = [];
-  try {
-    rootNames = readdirSync(codexHome);
-  } catch (error) {
-    // A missing home is a normal fresh-machine state — report zeros. Anything else
-    // (e.g. ENOTDIR: CODEX_HOME points at a file) is a broken setup the caller
-    // must surface as a scan failure, not silently render as an empty home.
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw error;
-  }
+/** A missing home is a normal fresh-machine state; any other readdir failure is rethrown. */
+function rootReadFailure(error: unknown): string[] {
+  // A missing home is a normal fresh-machine state — report zeros. Anything else
+  // (e.g. ENOTDIR: CODEX_HOME points at a file) is a broken setup the caller
+  // must surface as a scan failure, not silently render as an empty home.
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code !== "ENOENT") throw error;
+  return [];
+}
 
-  for (const name of rootNames) {
-    const full = join(codexHome, name);
-    let stat;
-    try {
-      stat = statSync(full);
-    } catch {
-      continue;
-    }
-    if (stat.isDirectory()) {
-      // Quarantine trash (Phase 2) must not inflate "other" or totals.
-      if (name === TRASH_DIR) continue;
-      walkFiles(full, name, files[DIR_BUCKETS[name] ?? "other"]);
-    } else if (stat.isFile()) {
-      const key: StorageBucketKey = STATE_DB_FILE.test(name) ? "state_db" : LOGS_DB_FILE.test(name) ? "logs_db" : "other";
-      files[key].push({ relPath: name, bytes: stat.size, mtimeMs: stat.mtimeMs });
-    }
-  }
+function rootFileBucket(name: string): StorageBucketKey {
+  return STATE_DB_FILE.test(name) ? "state_db" : LOGS_DB_FILE.test(name) ? "logs_db" : "other";
+}
 
+function finishReport(
+  codexHome: string,
+  rootNames: string[],
+  files: Record<StorageBucketKey, FileEntry[]>,
+): StorageReport {
   const buckets = (Object.keys(files) as StorageBucketKey[]).map(key => buildBucket(key, files[key]));
 
   const stateDbName = newestVersionedDb(rootNames, STATE_DB_FILE);
@@ -235,4 +302,85 @@ export function scanStorage(codexHome: string = resolveCodexHomeDir()): StorageR
     total: { bytes: totalBytes, fileCount: totalFiles },
     buckets,
   };
+}
+
+export function scanStorage(codexHome: string = resolveCodexHomeDir()): StorageReport {
+  const files = emptyFiles();
+
+  let rootNames: string[] = [];
+  try {
+    rootNames = readdirSync(codexHome);
+  } catch (error) {
+    rootNames = rootReadFailure(error);
+  }
+
+  for (const name of rootNames) {
+    const full = join(codexHome, name);
+    let stat;
+    try {
+      stat = statSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      // Quarantine trash (Phase 2) must not inflate "other" or totals.
+      if (name === TRASH_DIR) continue;
+      walkFiles(full, name, files[DIR_BUCKETS[name] ?? "other"]);
+    } else if (stat.isFile()) {
+      files[rootFileBucket(name)].push({ relPath: name, bytes: stat.size, mtimeMs: stat.mtimeMs });
+    }
+  }
+
+  return finishReport(codexHome, rootNames, files);
+}
+
+/**
+ * Same report as {@link scanStorage}, but the tree walk uses async fs calls so the server's
+ * event loop keeps serving while it runs. The synchronous walk measured ~3.7s for a
+ * 40k-file / 7.5GB CODEX_HOME on Windows, during which every listener (proxy traffic
+ * included) stalled each time the Storage page loaded. The two sqlite row counts stay
+ * synchronous: immutable readonly opens measured ~0.1s on the same home.
+ */
+export async function scanStorageAsync(codexHome: string = resolveCodexHomeDir()): Promise<StorageReport> {
+  const files = emptyFiles();
+  const limit = createFsLimit(SCAN_FS_CONCURRENCY);
+
+  let rootNames: string[] = [];
+  try {
+    rootNames = await readdir(codexHome);
+  } catch (error) {
+    rootNames = rootReadFailure(error);
+  }
+
+  const roots = await mapInBatches(rootNames, async name => {
+    const full = join(codexHome, name);
+    try {
+      return { name, full, stat: await limit(() => statAsync(full)) };
+    } catch {
+      return null;
+    }
+  });
+  const walks = await mapInBatches(roots, async root => {
+    if (!root) return;
+    if (root.stat.isDirectory()) {
+      // Quarantine trash (Phase 2) must not inflate "other" or totals.
+      if (root.name === TRASH_DIR) return;
+      return { key: DIR_BUCKETS[root.name] ?? "other", entries: await walkFilesAsync(root.full, root.name, limit) };
+    }
+    if (root.stat.isFile()) {
+      return {
+        key: rootFileBucket(root.name),
+        entries: [{ relPath: root.name, bytes: root.stat.size, mtimeMs: root.stat.mtimeMs }],
+      };
+    }
+  });
+  // Appended in root order so bucket contents match the synchronous scan. One entry at a
+  // time: spreading a large bucket into push() can exceed the engine's argument limit.
+  for (const walk of walks) {
+    if (!walk) continue;
+    const bucket = files[walk.key];
+    for (const entry of walk.entries) bucket.push(entry);
+  }
+
+  return finishReport(codexHome, rootNames, files);
 }

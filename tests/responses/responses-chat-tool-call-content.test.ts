@@ -10,16 +10,19 @@ afterEach(() => {
   releaseSpendHome = undefined;
 });
 
+/** Checks the dispatched freeform input and visible text from a streamed Chat reply. */
 async function checkEchoedToolCall(
   repeated: boolean,
   trailingNewline = false,
   newlineJoinedInput = false,
   rawFreeform = false,
+  emptyStructuredArguments = false,
+  parameterPrefix = false,
 ): Promise<void> {
   const savedFetch = globalThis.fetch;
   const script = "const result = await tools.exec_command({cmd: \"pwd\"});\ntext(result.output);";
-  const leaked = `<tool_call><function=exec>${script}${rawFreeform ? "" : "\n"}</parameter></function></tool_call>`;
-  const commentary = "I'll run it now.\n";
+  const leaked = `<tool_call><function=exec>${parameterPrefix ? "<parameter=" : ""}${script}${rawFreeform ? "" : "\n"}</parameter></function></tool_call>`;
+  const commentary = emptyStructuredArguments ? "" : "I'll run it now.\n";
   const content = commentary + leaked + (repeated ? leaked : "") + (trailingNewline ? "\n" : "");
   const split = commentary.length + 5;
   const frames = [
@@ -33,7 +36,7 @@ async function checkEchoedToolCall(
             id: "call_exec",
             function: {
               name: "exec",
-              arguments: rawFreeform ? script : repeated
+              arguments: emptyStructuredArguments ? "{}" : rawFreeform ? script : repeated
                 ? JSON.stringify({ input: script + (newlineJoinedInput ? "\n" : "") + script })
                 : script + JSON.stringify({ input: script }),
             },
@@ -103,3 +106,7 @@ test("/v1/responses suppresses one echoed block with raw freeform arguments", ()
 test("/v1/responses suppresses two echoed blocks with doubled input", () => checkEchoedToolCall(true));
 test("/v1/responses suppresses trailing newline and repairs newline-joined doubled input", () =>
   checkEchoedToolCall(true, true, true));
+test("/v1/responses restores MiMo freeform input from the echoed block when structured arguments are empty", () =>
+  checkEchoedToolCall(false, false, false, false, true));
+test("/v1/responses restores MiMo freeform input from a malformed parameter wrapper", () =>
+  checkEchoedToolCall(false, false, false, false, true, true));
