@@ -61,6 +61,47 @@ export function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bu
 }
 
 /**
+ * Version managers may put a shell-local bin directory ahead of their durable shims.
+ * fnm calls these directories `fnm_multishells/<shell-id>/bin`; once that shell exits,
+ * the lexical path can remain long enough to fool an install while its node runtime is
+ * already gone. The same marker is used by compatible shell-scoped integrations, so
+ * keep the check component-based rather than pinning a shell id or version.
+ */
+export function isTransientServiceLauncherPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const normalized = (platform === "win32"
+    ? win32.normalize(path).replace(/\\/g, "/")
+    : posix.normalize(path).replace(/\\/g, "/")).toLowerCase();
+  return normalized.split("/").some(component =>
+    /^(?:asdf|fnm|mise|nvm|volta)_multishells?$/.test(component));
+}
+
+/** Remove shell-scoped version-manager entries before baking PATH into systemd. */
+export function filterTransientServicePath(
+  path: string,
+  pathDelimiter = delimiter,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return path
+    .split(pathDelimiter)
+    .filter(entry => !isTransientServiceLauncherPath(entry, platform))
+    .join(pathDelimiter);
+}
+
+/** Explain a recorded launcher that can survive the install but not the shell that created it. */
+export function serviceLauncherPathDiagnostic(
+  state: ServiceInstallState | null = readServiceInstallState(),
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const launcher = state?.launcherPath;
+  if (!launcher || !isTransientServiceLauncherPath(launcher, platform)) return null;
+  return `STALE temporary launcher path (${launcher}) from a shell-local version manager — `
+    + "run 'ocx service repair' to replace it with a durable launcher or direct Bun runtime";
+}
+
+/**
  * The stable `ocx` launcher to bake into a systemd unit, or null to fall back to the
  * Bun + CLI pair.
  *
@@ -99,8 +140,11 @@ export function stableLauncherEntry(deps: {
   isExecutableFile?: (path: string) => boolean;
   pathDelimiter?: string;
   state?: ServiceInstallState | null;
+  platform?: NodeJS.Platform;
 } = {}): string | null {
   const env = deps.env ?? process.env;
+  const platform = deps.platform ?? process.platform;
+  const pathTools = platform === "win32" ? win32 : posix;
   const isExecutableFile = deps.isExecutableFile ?? ((path: string): boolean => {
     try {
       if (!statSync(path).isFile()) return false;
@@ -111,11 +155,14 @@ export function stableLauncherEntry(deps: {
     }
   });
   const recorded = (deps.state === undefined ? readServiceInstallState() : deps.state)?.launcherPath;
-  if (recorded && isAbsolute(recorded) && isExecutableFile(recorded)) return recorded;
+  if (recorded
+    && !isTransientServiceLauncherPath(recorded, platform)
+    && pathTools.isAbsolute(recorded)
+    && isExecutableFile(recorded)) return recorded;
   const entries = (env.PATH ?? "").split(deps.pathDelimiter ?? delimiter);
   for (const entry of entries) {
-    if (!entry || !isAbsolute(entry)) continue;
-    const candidate = join(entry, "ocx");
+    if (!entry || isTransientServiceLauncherPath(entry, platform) || !pathTools.isAbsolute(entry)) continue;
+    const candidate = pathTools.join(entry, "ocx");
     if (isExecutableFile(candidate)) return candidate;
   }
   return null;

@@ -4,11 +4,12 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, delimiter, dirname, extname, join, posix } from "node:path";
+import { basename, delimiter, dirname, extname, join, posix, win32 } from "node:path";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
@@ -135,6 +136,8 @@ export type CodexPathScanDeps = {
   exists?: (path: string) => boolean;
   isShimFile?: (path: string) => boolean;
   isDirectory?: (path: string) => boolean;
+  /** Resolve shell-local fnm launcher links to the durable node installation before wrapping. */
+  realpath?: (path: string) => string;
 };
 
 function realIsDirectory(path: string): boolean {
@@ -145,11 +148,35 @@ function realIsDirectory(path: string): boolean {
   }
 }
 
+function isFnmMultishellPath(path: string, usePosix: boolean): boolean {
+  const normalized = (usePosix
+    ? posix.normalize(path)
+    : win32.normalize(path).replace(/\\/g, "/")).toLowerCase();
+  return /\/fnm_multishells?(?:\/|$)/.test(normalized);
+}
+
+function stableDiscoveredCodexPath(
+  path: string,
+  usePosix: boolean,
+  realpath: (path: string) => string,
+): string {
+  if (!isFnmMultishellPath(path, usePosix)) return path;
+  try {
+    const resolved = realpath(path);
+    // A realpath that still points into fnm's shell-local directory did not give
+    // us a durable target; keep the discovered path so the caller can report it.
+    return resolved && !isFnmMultishellPath(resolved, usePosix) ? resolved : path;
+  } catch {
+    return path;
+  }
+}
+
 export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
   lastShimDiscoveryError = null;
   const exists = deps.exists ?? existsSync;
   const shimFile = deps.isShimFile ?? isShim;
   const isDir = deps.isDirectory ?? realIsDirectory;
+  const realpath = deps.realpath ?? realpathSync;
   const wsl = deps.wsl ?? (process.platform === "linux" && isWslRuntime());
   const usePosix = deps.posixPaths ?? (wsl || process.platform !== "win32");
   const joinPath = usePosix ? posix.join : join;
@@ -176,7 +203,7 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
     for (const name of names) {
       const path = joinPath(dir, name);
       if (!exists(path) || shimFile(path)) continue;
-      if (!isDir(path)) return path;
+      if (!isDir(path)) return stableDiscoveredCodexPath(path, usePosix, realpath);
     }
   }
 

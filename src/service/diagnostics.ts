@@ -5,7 +5,7 @@ import { sh } from "./guards";
 import { installedServiceListenPort, confirmServiceServing } from "./health";
 import { expectedLaunchdCommand, launchdJobMatchesPlist, probeLaunchdLoadState } from "./launchd";
 import type { LaunchdLoadProbe } from "./launchd";
-import { plistPath, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath, readServiceInstallState } from "./state";
+import { plistPath, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath, readServiceInstallState, serviceLauncherPathDiagnostic } from "./state";
 import type { ServiceBackend } from "./state";
 import { unitPath, isSystemd } from "./systemd";
 import { statusWindowsXml } from "./windows-ops";
@@ -21,8 +21,12 @@ import { LABEL, TASK, serviceLogPath } from "./state";
  * moved, nvm switch, reinstall) — the service manager would restart-loop on a dead path
  * while `schtasks`/`launchctl` still report "installed".
  */
-export function bakedServicePathsDiagnostic(platform: NodeJS.Platform = process.platform): string | null {
-  const state = readServiceInstallState();
+export function bakedServicePathsDiagnostic(
+  platform: NodeJS.Platform = process.platform,
+  state = readServiceInstallState(),
+): string | null {
+  const transientLauncher = serviceLauncherPathDiagnostic(state, platform);
+  if (transientLauncher) return transientLauncher;
   // A launcher install runs the launcher, not the baked pair, so the pair's existence says
   // nothing about whether the service can start. Judging the recorded launcher is both
   // necessary (a deleted launcher IS stale) and sufficient (a replaced version directory

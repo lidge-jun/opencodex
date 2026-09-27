@@ -3,6 +3,7 @@ import {
   getCodexRoutingKind,
   type CodexRoutingKind,
 } from "../codex/inject";
+import { diagnoseCodexShim, findCodexOnPath, type CodexShimDiagnostic } from "../codex/shim";
 import { loadConfig, resolveEnvValue } from "../config";
 
 const PROXY_ENV_KEYS = [
@@ -19,6 +20,63 @@ export interface CodexShimReadinessInputs {
   externalProvider: string | null;
   processProxyEnvPresent: boolean;
   configuredProxyResolved: boolean;
+}
+
+export type CodexConnectShimStatus = "ready" | "missing" | "unhealthy";
+
+export interface CodexConnectShimReadiness {
+  status: CodexConnectShimStatus;
+  /** Secret-free, actionable text rendered by ocx connect. */
+  message: string;
+}
+
+export function codexConnectShimReadiness(inputs: {
+  diagnosis: Pick<CodexShimDiagnostic, "installed" | "healthy" | "summary">;
+  commandPath: string | null;
+}): CodexConnectShimReadiness {
+  if (inputs.diagnosis.installed && inputs.diagnosis.healthy) {
+    return { status: "ready", message: "installed and healthy" };
+  }
+  if (inputs.diagnosis.installed) {
+    return {
+      status: "unhealthy",
+      message: "installed but unhealthy: " + inputs.diagnosis.summary + " Re-run 'ocx codex-shim install'.",
+    };
+  }
+  if (inputs.commandPath) {
+    return {
+      status: "missing",
+      message: "not active; PATH resolves 'codex' to " + inputs.commandPath
+        + ", not an OpenCodex shim. The connected Codex config requires OPENCODEX_API_AUTH_TOKEN, "
+        + "so this command may fail with \"Missing environment variable\". "
+        + "Run 'ocx codex-shim install' (or update that wrapper to provide the token).",
+    };
+  }
+  return {
+    status: "missing",
+    message: "not installed and no 'codex' executable was found on PATH. "
+      + "Install Codex, then run 'ocx codex-shim install' before launching it.",
+  };
+}
+
+export function inspectCodexShimForConnect(): CodexConnectShimReadiness {
+  let diagnosis: CodexShimDiagnostic;
+  try {
+    diagnosis = diagnoseCodexShim();
+  } catch {
+    diagnosis = {
+      installed: true,
+      healthy: false,
+      summary: "diagnostic state could not be read",
+    };
+  }
+  let commandPath: string | null = null;
+  try {
+    commandPath = findCodexOnPath();
+  } catch {
+    // The diagnosis above still gives the operator a repair path.
+  }
+  return codexConnectShimReadiness({ diagnosis, commandPath });
 }
 
 function externalProviderLabel(provider: string | null): string {

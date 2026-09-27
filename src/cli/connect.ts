@@ -40,6 +40,7 @@ import {
   terminalSafeText,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { inspectCodexShimForConnect } from "./codex-shim-readiness";
 
 export interface ClientCommandDeps extends RuntimeApiDeps {
   lifecycleLockDeps?: ClientLifecycleLockDeps;
@@ -414,6 +415,10 @@ async function runHubConnect(argv: string[], deps: ClientCommandDeps): Promise<v
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
   const report = connectCompletionReport(connection, clients, readiness);
   for (const line of report.lines) console.log(line);
+  if (clients.includes("codex")) {
+    const shim = inspectCodexShimForConnect();
+    console.log("Codex autostart shim: " + terminalSafeText(shim.message));
+  }
   if (report.failure) throw new Error(report.failure);
 }
 
@@ -463,6 +468,10 @@ async function runLinkConnect(argv: string[], deps: ClientCommandDeps): Promise<
   const readiness = inspectInstalledCatalogReadiness(installedCatalogFileState(), deps.catalogProbeDeps ?? {});
   const report = connectCompletionReport(connection, clients, readiness);
   for (const line of report.lines) console.log(line);
+  if (clients.includes("codex")) {
+    const shim = inspectCodexShimForConnect();
+    console.log("Codex autostart shim: " + terminalSafeText(shim.message));
+  }
   if (report.failure) throw new Error(report.failure);
 }
 

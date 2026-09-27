@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { defaultWinswEntry, installWinswService } from "../lib/winsw";
-import { resolveWindowsTaskDiagnosticUserId, diagnoseService } from "./diagnostics";
+import { bakedServicePathsDiagnostic, resolveWindowsTaskDiagnosticUserId, diagnoseService } from "./diagnostics";
 import type { ServiceDiagnostic } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall, assertServiceAuthEnvironment } from "./guards";
 import { installLaunchd, restartLaunchdJob } from "./launchd";
@@ -62,6 +62,8 @@ export interface RepairServiceDeps {
   schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+  /** Test seam for the recorded launcher diagnostic; production reads the install state. */
+  bakedPathsDiagnostic?: () => string | null;
 }
 
 /**
@@ -161,6 +163,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   if (!diag.installed) {
     throw new Error("Background service is not installed. Run 'ocx service install' first.");
   }
+
+  const staleLauncher = (deps.bakedPathsDiagnostic ?? (() => bakedServicePathsDiagnostic(platform)))();
+  if (staleLauncher) console.warn(`⚠️ ${staleLauncher}`);
 
   // Before anything is asserted, written, stopped or started. A repair that has already
   // rewritten the assets has changed the thing it was supposed to leave alone.

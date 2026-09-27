@@ -1688,6 +1688,7 @@
     "server-xai-responses-streaming.test.ts": "server",
     "service-auth-qualified-localhost.test.ts": "service",
     "service-claim.test.ts": "service",
+    "service-fnm-launcher.test.ts": "service",
     "service-ownership-compatibility.test.ts": "service",
     "service-ownership-handover.test.ts": "service",
     "service-ownership-state.test.ts": "service",

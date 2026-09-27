@@ -21,6 +21,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { connectCompletionReport } from "../../src/cli/connect";
+import { codexConnectShimReadiness } from "../../src/cli/codex-shim-readiness";
 import { dispatchCommand } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import { ClientCatalogIncompatibleError } from "../../src/client/catalog-compatibility";
@@ -623,6 +624,30 @@ describe("#4207 what ocx connect reports when the local CLI cannot use the catal
     expect(report.failure).toBeNull();
     expect(report.lines.join(" ")).toContain("nothing here launches Codex");
     expect(report.lines[0]).toContain("Connected to");
+  });
+
+  test("a Codex connection gets an actionable missing-shim warning", () => {
+    const shim = codexConnectShimReadiness({
+      diagnosis: { installed: false, healthy: false, summary: "Codex autostart shim is not installed." },
+      commandPath: "/home/u/.local/share/fnm/fnm_multishells/619109/bin/codex",
+    });
+
+    expect(shim.status).toBe("missing");
+    expect(shim.message).toContain("fnm_multishells");
+    expect(shim.message).toContain("OPENCODEX_API_AUTH_TOKEN");
+    expect(shim.message).toContain("Missing environment variable");
+    expect(shim.message).toContain("ocx codex-shim install");
+  });
+
+  test("a damaged shim is reported as unhealthy instead of looking connected-only", () => {
+    const shim = codexConnectShimReadiness({
+      diagnosis: { installed: true, healthy: false, summary: "wrapper missing; original backup present" },
+      commandPath: null,
+    });
+
+    expect(shim.status).toBe("unhealthy");
+    expect(shim.message).toContain("wrapper missing");
+    expect(shim.message).toContain("ocx codex-shim install");
   });
 });
 
