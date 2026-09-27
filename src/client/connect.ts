@@ -543,12 +543,12 @@ export async function connectClient(
 ): Promise<OcxClientConnectionConfig> {
   deps.signal?.throwIfAborted();
   const rawFetch = deps.fetchImpl ?? fetch;
-  const fetchImpl: typeof fetch = deps.signal ? async (input, init = {}) => {
+  const fetchImpl: typeof fetch = deps.signal ? Object.assign(async (...[input, init = {}]: Parameters<typeof fetch>) => {
     deps.signal!.throwIfAborted();
     const signals = [deps.signal, init.signal, input instanceof Request ? input.signal : undefined]
       .filter((signal): signal is AbortSignal => signal != null);
     return rawFetch(input, { ...init, signal: AbortSignal.any(signals), redirect: "manual" });
-  } : rawFetch;
+  }, { preconnect: rawFetch.preconnect }) : rawFetch;
   const assertActiveConnectingState = (fingerprint?: string) => {
     deps.signal?.throwIfAborted();
     assertConnectingState(fingerprint);
