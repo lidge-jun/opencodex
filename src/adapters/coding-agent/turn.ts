@@ -409,7 +409,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     try {
       let initValidated = false;
       let toolCallStarts = 0;
-      let admittedToolStarts = 0;
       let failClosed = false;
       for await (const message of readJsonLines(stdout)) {
         if (incoming.abortSignal?.aborted) break;
@@ -451,22 +450,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             });
             kill();
             break;
-          }
-          if (rawToolStart) {
-            admittedToolStarts += 1;
-            if (admittedToolStarts > toolBridge.maxTurnToolCalls) {
-              emitOnce({
-                type: "error",
-                message: `Coding-agent CLI returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
-                status: 502,
-                errorType: "upstream_error",
-                code: "tool_call_limit",
-                retryable: false,
-              });
-              failClosed = true;
-              kill();
-              break;
-            }
           }
         }
         const mappedEvents = mapStreamMessageToEvents(message, state);
