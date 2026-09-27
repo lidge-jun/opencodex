@@ -233,9 +233,12 @@ The service loads the optional `compactionRouting` block from persisted configur
 [Responses ingress](../transports/responses-failover.md#compaction-routing-overrides) applies it to individual compaction
 requests whose trigger the block names.
 
-Standalone binaries use `src/lib/standalone.ts` to detect the Bun `$bunfs` runtime and
-`src/service/state.ts` to compose durable service commands as `<execPath> start`, without a
-source-tree CLI path. The copied `gui/dist` directory is located by `src/server/gui-static.ts`;
+Standalone binaries use `src/lib/standalone.ts` to recognize hostless `file:` module URLs
+whose decoded pathname begins at Bun's `$bunfs` or Windows `~BUN` virtual root. The helper
+decodes one URL layer, so encoded Windows tildes work while network-host and nested source
+paths do not impersonate a bundled module. `src/service/state.ts` composes durable service
+commands as `<execPath> start`, without a source-tree CLI path. The copied `gui/dist`
+directory is located by `src/server/gui-static.ts`;
 `OPENCODEX_GUI_DIST` remains an explicit override.
 
 ## Bun updater ownership transaction
