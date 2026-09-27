@@ -40,7 +40,7 @@ import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-updat
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { packageVersion } from "../lib/package-version";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
-import { PNPM_READ_CWD, pnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
+import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -142,25 +142,26 @@ function ownerPnpmTarget(
   };
 }
 
-function runOwnedPnpm(
+export function runOwnedPnpm(
   owner: PnpmGlobalOwner,
   args: readonly string[],
   capture: boolean,
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
+  spawn: typeof spawnSync = spawnSync,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
   const target = ownerPnpmTarget(owner, args);
   if (!target) return { status: 1 };
-  return spawnSync(target.bin, target.args, {
+  return withPnpmCommandCwd(args, cwd => spawn(target.bin, target.args, {
     stdio,
     encoding: "utf8",
     timeout: 180_000,
     windowsHide: true,
     // Reads probe from the package dir; `add -g`/rollback children run from a neutral
     // directory so a Windows cwd handle never pins open the package pnpm is replacing.
-    cwd: pnpmCommandCwd(args),
+    cwd,
     env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env)),
     ...target.options,
-  });
+  }));
 }
 
 /** Re-read the owning group's active package and return its verified launcher. */

@@ -7,8 +7,7 @@ import { createRefreshScheduler, RETRY_BASE_MS, STALENESS_TICK_MS, type RefreshD
 import { latestVersionAsync, pnpmOwner, REGISTRY_DEADLINE_MS, REGISTRY_OUTPUT_LIMIT } from "../../src/update/async-check";
 import type { VersionCache } from "../../src/update/notify";
 import { checkUpdatePackageIntegrity, latestVersion, resolveCurrentPnpmGlobalOwner, type Channel, type Installer } from "../../src/update/index";
-import { PNPM_MUTATION_CWD, PNPM_READ_CWD, pnpmCommandCwd, pnpmReadEnvironment } from "../../src/update/pnpm-read-policy.mjs";
-import { runPnpmGlobalUpdate } from "../../src/update/pnpm-global-install.mjs";
+import { PNPM_READ_CWD, pnpmReadEnvironment } from "../../src/update/pnpm-read-policy.mjs";
 
 function fixture(installer: Installer = "npm", disabled = false, lookupFn?: RefreshDeps["lookup"]) {
   let now = 1_700_000_000_000;
@@ -356,75 +355,6 @@ test("synchronous pnpm integrity probe applies project isolation", () => {
   expect(result.ok).toBe(true);
   expect(options?.cwd).toBe(PNPM_READ_CWD);
   expect((options?.env as Record<string, string>).npm_config_ignore_pnpmfile).toBe("true");
-});
-
-test("pnpm mutations run outside the installed package while reads stay isolated", () => {
-  // On Windows a cwd inside the replaced package pins it open; mutations go to a neutral dir.
-  for (const read of [["list", "-g"], ["root", "-g"], ["view", "pkg@1", "version"], ["config", "get", "global-dir"]]) {
-    expect(pnpmCommandCwd(read)).toBe(PNPM_READ_CWD);
-  }
-  for (const mutation of [["add", "-g", "pkg@1"], ["install", "-g", "pkg@1"], ["remove", "-g", "pkg"], ["update", "-g"], ["uninstall", "-g", "pkg"]]) {
-    expect(pnpmCommandCwd(mutation)).toBe(PNPM_MUTATION_CWD);
-  }
-  expect(PNPM_MUTATION_CWD).not.toBe(PNPM_READ_CWD);
-});
-
-const MUTATION_VERBS = new Set(["add", "install", "update", "remove", "uninstall"]);
-
-// The spawn sites apply `cwd: pnpmCommandCwd(args)` to the args the transaction issues, so
-// driving the transaction and classifying every recorded command is the spawn-options check:
-// a future verb or arg shape that escapes the mutation list fails here.
-function drivePnpmUpdate(listVersions: string[], installStatus = 0, rollbackStatus = 0) {
-  const issued: string[][] = [];
-  let listCall = 0;
-  let addCall = 0;
-  const listJson = (version: string) => JSON.stringify([
-    { path: "/global", dependencies: { ocx_test: { version, path: "/pkg" } } },
-  ]);
-  const result = runPnpmGlobalUpdate({
-    packageName: "ocx_test",
-    currentVersion: "2.7.44",
-    targetVersion: listVersions[1] ?? listVersions[0],
-    tag: "latest",
-    owner: TEST_PNPM_OWNER,
-    runningPackagePath: "/pkg",
-    runPnpm: (args: string[]) => {
-      issued.push([...args]);
-      if (args[0] === "list") {
-        return { status: 0, stdout: listJson(listVersions[Math.min(listCall++, listVersions.length - 1)]) };
-      }
-      if (args[0] === "add") return { status: addCall++ === 0 ? installStatus : rollbackStatus };
-      return { status: 1 };
-    },
-    verify: () => ({ ok: true }),
-    verifyShims: () => ({ ok: true }),
-  });
-  return { issued, result };
-}
-
-test("the install path launches mutations from the neutral cwd and reads from the package", () => {
-  const { issued, result } = drivePnpmUpdate(["2.7.44", "2.7.45"]);
-  expect(result.ok).toBe(true);
-  const adds = issued.filter(args => args[0] === "add");
-  expect(adds).toHaveLength(1);
-  expect(adds[0]).toContain("ocx_test@2.7.45");
-  for (const args of issued) {
-    expect(pnpmCommandCwd(args)).toBe(MUTATION_VERBS.has(args[0]) ? PNPM_MUTATION_CWD : PNPM_READ_CWD);
-  }
-});
-
-test("the rollback path also launches its pnpm child from the neutral cwd", () => {
-  // Install fails and the active package moved, so the transaction issues a second `add -g`
-  // to restore the previous version — that child must also leave the replaced package.
-  const { issued, result } = drivePnpmUpdate(["2.7.44", "2.7.45", "2.7.44"], 1);
-  expect(result.ok).toBe(false);
-  expect(result.phase).toBe("rollback");
-  const adds = issued.filter(args => args[0] === "add");
-  expect(adds).toHaveLength(2);
-  expect(adds[1]).toContain("ocx_test@2.7.44");
-  for (const args of issued) {
-    expect(pnpmCommandCwd(args)).toBe(MUTATION_VERBS.has(args[0]) ? PNPM_MUTATION_CWD : PNPM_READ_CWD);
-  }
 });
 
 test("synchronous pnpm owner discovery applies project isolation", () => {

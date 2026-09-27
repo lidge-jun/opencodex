@@ -42,7 +42,7 @@ import {
   resolvePnpmGlobalOwner,
   runPnpmGlobalUpdate,
 } from "../src/update/pnpm-global-install.mjs";
-import { PNPM_READ_CWD, pnpmCommandCwd, pnpmReadEnvironment } from "../src/update/pnpm-read-policy.mjs";
+import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "../src/update/pnpm-read-policy.mjs";
 import { checkRegistryPackageIntegrity } from "../src/update/registry-integrity.mjs";
 import { hasPendingTeardownIn } from "../src/config/pending-teardown-names.mjs";
 import {
@@ -770,7 +770,7 @@ function runPackageManagerSelfUpdate(manager) {
           runPnpm: (args, capture = false) => {
             const invocation = pnpmOwnerInvocation(owner, args);
             if (!invocation) return { status: 1 };
-            return spawnSync(invocation.file, invocation.args, {
+            return withPnpmCommandCwd(args, cwd => spawnSync(invocation.file, invocation.args, {
               ...invocation.options,
               stdio: capture ? "pipe" : "inherit",
               encoding: "utf8",
@@ -778,9 +778,9 @@ function runPackageManagerSelfUpdate(manager) {
               windowsHide: true,
               // Reads probe from the package dir; mutations (add -g, rollback) must not
               // keep a cwd handle inside the package Windows is replacing.
-              cwd: pnpmCommandCwd(args),
+              cwd,
               env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)),
-            });
+            }));
           },
           log: line => console.log(line),
         });

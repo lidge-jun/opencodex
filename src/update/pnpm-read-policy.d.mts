@@ -1,9 +1,4 @@
 export declare const PNPM_READ_CWD: string;
-
-export declare const PNPM_MUTATION_CWD: string;
-
-export declare function pnpmCommandCwd(args?: readonly string[]): string;
-
-export declare function pnpmReadEnvironment(
-  env?: Record<string, string | undefined>,
-): Record<string, string | undefined>;
+/** The callback must complete synchronously before its temporary workspace is cleaned. */
+export declare function withPnpmCommandCwd<T>(args: readonly string[], run: (cwd: string) => T): T;
+export declare function pnpmReadEnvironment(env?: Record<string, string | undefined>): Record<string, string | undefined>;
