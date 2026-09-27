@@ -23,8 +23,8 @@ const hasPrivateUse = (text: string): boolean => /[\uE000-\uF8FF]/.test(text);
 
 describe("visualization reference rewrite", () => {
   test("an absolute path becomes the inline directive", () => {
-    expect(normalizeVisualizationText(`see\n${json({ path: "/Users/u/viz/chart.html" })}\nend`))
-      .toBe('see\n::codex-inline-vis{path="/Users/u/viz/chart.html"}\nend');
+    expect(normalizeVisualizationText(`see\n${json({ path: "/workspace/viz/chart.html" })}\nend`))
+      .toBe('see\n::codex-inline-vis{path="/workspace/viz/chart.html"}\nend');
   });
 
   test("title and wide mode are carried in the app's attribute order", () => {
@@ -131,8 +131,8 @@ describe("visualization reference rewrite", () => {
 });
 
 describe("visualization references in the parsed request", () => {
-  const reference = json({ path: "/Users/u/viz/chart.html" });
-  const directive = '::codex-inline-vis{path="/Users/u/viz/chart.html"}';
+  const reference = json({ path: "/workspace/viz/chart.html" });
+  const directive = '::codex-inline-vis{path="/workspace/viz/chart.html"}';
 
   const deepFreeze = <T>(value: T): T => {
     if (value && typeof value === "object") {
