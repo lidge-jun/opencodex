@@ -570,6 +570,9 @@ describe("headless GUI parity CLI", () => {
       // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
       // registry) and spending is dashboard-session-only by design.
       ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
+      // The registry records read-only status as an owed CLI verb; trust, launch,
+      // settings and the account-wide trial intentionally require local GUI consent.
+      ["/api/codex/desktop-compatibility", "(none — local GUI confirmation; status CLI deferred in clients/codex-desktop.md)"],
       ["/api/protocols", "ocx api protocols/explain/policy"],
       ["/api/settings", "ocx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
