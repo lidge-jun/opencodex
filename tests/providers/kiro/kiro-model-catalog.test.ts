@@ -265,3 +265,28 @@ test("the roster adds at most 64 observed ids to the catalog", async () => {
   expect(result.models).toHaveLength(1 + 64);
 });
 
+test("a first discovery failure backs off even with no last good list", async () => {
+  // After a restart there is no cached row to carry the retry time, so a failing endpoint
+  // must still be tried once per retry window rather than once per serving request.
+  setup();
+  const account = await add("fresh");
+  let calls = 0;
+  const failing = {
+    resolveAddresses: async (url: string) => ({ hostname: new URL(url).hostname,
+      addresses: [{ address: "1.1.1.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async () => { calls++; return new Response("unavailable", { status: 503 }); },
+  } as never;
+  refreshKiroAccountModelsDetached(account, provider, failing);
+  await awaitKiroModelRefreshForTests(account.id);
+  await Bun.sleep(1); // let the finished flight leave the join table
+  refreshKiroAccountModelsDetached(account, provider, failing);
+  await awaitKiroModelRefreshForTests(account.id);
+  await Bun.sleep(1); // let the finished flight leave the join table
+  expect(calls).toBe(1);
+  expect(readKiroAccountModels(account)).toBeUndefined();
+  clearKiroAccountModels(account.id);
+  refreshKiroAccountModelsDetached(account, provider, failing);
+  await awaitKiroModelRefreshForTests(account.id);
+  await Bun.sleep(1); // let the finished flight leave the join table
+  expect(calls).toBe(2);
+});

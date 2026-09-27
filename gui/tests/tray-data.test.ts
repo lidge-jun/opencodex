@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, parseAccounts, providerSources, quotaWindows, relativeReset, resetTimestamp } from '../src/pages/tray-data';
+import { accountSwitchRequest, fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, parseAccounts, providerSources, quotaWindows, relativeReset, resetTimestamp } from '../src/pages/tray-data';
 import type { CompanionSettings } from '../src/pages/usage-companion-utils';
 
 describe('tray data', () => {
@@ -92,4 +92,36 @@ test('tray fetch works without AbortSignal static helpers and forwards cancellat
     Object.defineProperty(AbortSignal, 'any', any);
     Object.defineProperty(AbortSignal, 'timeout', timeout);
   }
+});
+
+describe('tray account switching (parity with the native panel)', () => {
+  test('each source names the switch route the native panel uses, and forward sources have none', () => {
+    const sources = providerSources({ providers: { openai: {}, claude: { authMode: 'oauth' }, key: { hasApiKey: true }, fwd: { hasApiKey: true, authMode: 'forward' } } });
+    expect(sources.map(s => [s.name, s.switchKind])).toEqual([['openai', 'codex'], ['claude', 'oauth'], ['key', 'apiKey'], ['fwd', null]]);
+    expect(accountSwitchRequest('openai', 'codex', 'a1')).toEqual({ path: '/api/codex-auth/active', body: { accountId: 'a1' } });
+    expect(accountSwitchRequest('claude', 'oauth', 'a2')).toEqual({ path: '/api/oauth/accounts/active', body: { provider: 'claude', accountId: 'a2' } });
+    expect(accountSwitchRequest('key', 'apiKey', 'k3')).toEqual({ path: '/api/providers/keys/active', body: { name: 'key', id: 'k3' } });
+  });
+
+  test('only what the switch route refuses is blocked; an exhausted account stays switchable', () => {
+    const rows = parseAccounts({ activeAccountId: 'on', accounts: [
+      { id: 'on', quota: { weeklyPercent: 10 } },
+      { id: 'lock', mainAccountHardLock: { state: 'blocked' }, quota: { weeklyPercent: 98 } },
+      { id: 'paused', paused: true, quota: { weeklyPercent: 1 } },
+      { id: 'pending', health: { reason: 'validation_pending' }, quota: { weeklyPercent: 1 } },
+      { id: 'spent', quota: { weeklyPercent: 100 } },
+      { id: 'burst', plan: 'go', quota: { weeklyPercent: 100, fiveHourPercent: 40, monthlyPercent: 20 } },
+      { id: 'short', quota: { shortPercent: 100, weeklyPercent: 20 } },
+    ] });
+    expect(rows.map(r => [r.id, r.switchState, r.blockedReason ?? null, r.exhausted])).toEqual([
+      ['on', 'active', null, false],
+      ['lock', 'blocked', 'mainHardLock', false],
+      ['paused', 'blocked', 'paused', false],
+      ['pending', 'blocked', 'validationPending', false],
+      ['spent', 'available', null, true],
+      // A monthly-only plan is not governed by its weekly window.
+      ['burst', 'available', null, false],
+      ['short', 'available', null, true],
+    ]);
+  });
 });

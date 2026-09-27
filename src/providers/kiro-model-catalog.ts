@@ -19,6 +19,8 @@ interface Row { identity: string; models: KiroAccountModel[]; observedAt: number
 interface Flight { identity: string; promise: Promise<void> }
 const rows = new Map<string, Row>();
 const flights = new Map<string, Flight>();
+/** Retry time after a failed discovery for an account that has no last good row to carry it. */
+const failedUntil = new Map<string, { identity: string; at: number }>();
 
 export function kiroModelDiscoveryEnabled(): boolean {
   return process.env.OPENCODEX_KIRO_MODEL_DISCOVERY !== "0";
@@ -77,6 +79,8 @@ export function refreshKiroAccountModelsDetached(
   if (currentIdentity(account.id) !== identity) return;
   const old = validRow(account);
   if (old && Date.now() < old.nextRefreshAt) return;
+  const failed = failedUntil.get(account.id);
+  if (!old && failed?.identity === identity && Date.now() < failed.at) return;
   if (flights.get(account.id)?.identity === identity) return;
 
   const flight = (async (): Promise<void> => {
@@ -107,9 +111,14 @@ export function refreshKiroAccountModelsDetached(
     }
     if (currentIdentity(account.id) !== identity) return;
     const now = Date.now();
-    if (fresh) rows.set(account.id, { identity, models: fresh, observedAt: now,
-      nextRefreshAt: now + KIRO_MODEL_CATALOG_TTL_MS });
-    else if (old) rows.set(account.id, { ...old, nextRefreshAt: now + FAILURE_RETRY_MS });
+    if (fresh) {
+      rows.set(account.id, { identity, models: fresh, observedAt: now,
+        nextRefreshAt: now + KIRO_MODEL_CATALOG_TTL_MS });
+      failedUntil.delete(account.id);
+    } else if (old) rows.set(account.id, { ...old, nextRefreshAt: now + FAILURE_RETRY_MS });
+    // Without a last good row the failure still has to back off, or every serving request
+    // after a restart would start another discovery while the endpoint is failing.
+    else failedUntil.set(account.id, { identity, at: now + FAILURE_RETRY_MS });
   })();
   flights.set(account.id, { identity, promise: flight });
   void flight.catch(() => {}).finally(() => {
@@ -143,8 +152,8 @@ export function kiroObservedContextWindow(model: string): number | undefined {
 }
 
 export function clearKiroAccountModels(accountId?: string): void {
-  if (accountId) { rows.delete(accountId); flights.delete(accountId); }
-  else { rows.clear(); flights.clear(); }
+  if (accountId) { rows.delete(accountId); flights.delete(accountId); failedUntil.delete(accountId); }
+  else { rows.clear(); flights.clear(); failedUntil.clear(); }
 }
 
 /** Deterministic test seam; production requests never call this. */

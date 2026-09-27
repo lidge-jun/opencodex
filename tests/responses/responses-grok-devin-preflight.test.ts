@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { saveCredential } from "../../src/oauth/store";
@@ -9,6 +9,8 @@ import { createTempHome } from "../helpers/temp-home";
 
 const resolver = await import("../../src/server/adapter-resolve");
 const originalResolve = resolver.resolveAdapter;
+// A snapshot, not the live namespace: mock.module rewrites that namespace in place.
+const originalResolverModule = { ...resolver };
 let events: AdapterEvent[] = [];
 let calls = 0;
 let blockedRun: ProviderAdapter["runTurn"];
@@ -45,6 +47,11 @@ beforeEach(async () => {
     access: "synthetic-devin-preflight", refresh: "synthetic-refresh",
     expires: Date.now() + 3_600_000, accountId: "fixture",
   });
+});
+// Bun keeps a module mock for the rest of the process. Without this, every later file in a
+// non-isolated run resolves Devin through the synthetic rate-limited adapter above.
+afterAll(() => {
+  mock.module("../../src/server/adapter-resolve", () => originalResolverModule);
 });
 afterEach(() => {
   try {

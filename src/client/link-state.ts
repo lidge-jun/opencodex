@@ -38,6 +38,52 @@ export function clientLinkStatePath(configDir?: string): string {
   return join(linkDir(configDir), "client-link.json");
 }
 
+/**
+ * Durable evidence that this machine joined its link itself. It survives a lost sidecar, so a
+ * Child-initiated link whose sidecar is gone fails closed instead of being mistaken for a
+ * Home-initiated one, which the relay forwards without a tunnel ownership proof.
+ */
+export function childLinkMarkerPath(configDir?: string): string {
+  return join(linkDir(configDir), "child-initiated.json");
+}
+
+/** True when the marker names `linkId`, or when a marker exists but cannot be read. */
+export function isChildInitiatedLink(linkId: string, path: string = childLinkMarkerPath()): boolean {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    return !isMissingPathError(error);
+  }
+  try {
+    const raw = JSON.parse(text) as { linkId?: unknown };
+    return typeof raw?.linkId !== "string" || raw.linkId === linkId;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Record the marker for a join made before markers existed. Called at runtime start while the
+ * sidecar is still intact, so a sidecar deleted afterwards cannot turn that link into a
+ * Home-initiated one. A missing or unreadable sidecar records nothing.
+ */
+export function recordChildInitiatedLink(
+  linkId: string,
+  path: string = clientLinkStatePath(),
+  marker: string = join(dirname(path), "child-initiated.json"),
+): void {
+  let sidecar: ClientLinkState | null;
+  try {
+    sidecar = readClientLinkState(path);
+  } catch {
+    return;
+  }
+  if (!sidecar || sidecar.linkId !== linkId || isChildInitiatedLink(linkId, marker)) return;
+  atomicWriteFile(marker, `${JSON.stringify({ linkId })}\n`);
+  if (process.platform !== "win32") chmodSync(marker, 0o600);
+}
+
 export function parseClientLinkState(value: unknown): ClientLinkState {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ClientLinkStateError("client-link.json is not an object");
   const raw = value as Record<string, unknown>;
@@ -91,6 +137,9 @@ export function writeClientLinkState(state: ClientLinkState, path: string = clie
   // the explicit mode on the final path.
   atomicWriteFile(path, `${JSON.stringify(normalized, null, 2)}\n`);
   if (process.platform !== "win32") chmodSync(path, 0o600);
+  const marker = join(dir, "child-initiated.json");
+  atomicWriteFile(marker, `${JSON.stringify({ linkId: normalized.linkId })}\n`);
+  if (process.platform !== "win32") chmodSync(marker, 0o600);
 }
 
 /**
@@ -105,6 +154,11 @@ export function clearClientLinkState(expectedLinkId: string, path: string = clie
   } catch (error) {
     if (isMissingPathError(error)) return false;
     throw error;
+  }
+  try {
+    unlinkSync(join(dirname(path), "child-initiated.json"));
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
   }
   return true;
 }

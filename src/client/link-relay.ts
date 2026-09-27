@@ -39,6 +39,19 @@ export interface LinkTunnelGate {
   waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
 }
 
+/**
+ * The gate for a Home-initiated link. The Home runs `ssh -R` and owns the forward, so the Child
+ * has no tunnel supervisor and no local SSH process whose socket it could prove. This gate keeps
+ * the 2.67.0 behaviour for that link only: forward to the tunnel port without an ownership proof,
+ * never hold, and answer 503 when the connection is refused. Child-initiated links keep their
+ * supervisor, and a relay with no gate at all still refuses every request.
+ */
+export const HOME_INITIATED_LINK_TUNNEL: LinkTunnelGate = {
+  connected: () => true,
+  pending: () => false,
+  waitForConnected: async () => false,
+};
+
 export interface LinkRelayDeps {
   fetchImpl?: typeof fetch;
   clock?: LinkRelayClock;

@@ -334,9 +334,19 @@ fn publish(app: &AppHandle, generation: u64, binding: Option<RuntimeBinding>, sn
             *state
                 .cache
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = (binding, snapshot);
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = (binding, cached(snapshot));
         }
     });
+}
+
+/// The cached copy every later refresh starts from. `switchFailed` answers one switch, so it is
+/// delivered once and never cached: carried forward, it would settle the next switch's spinner on
+/// that switch's first loading publish.
+fn cached(mut snapshot: Value) -> Value {
+    if let Some(fields) = snapshot.as_object_mut() {
+        fields.remove("switchFailed");
+    }
+    snapshot
 }
 
 fn display_payload(snapshot: Value) -> Option<(Value, Vec<u8>)> {
@@ -406,6 +416,11 @@ mod tests {
     }
     #[test]
     fn refresh_failure_preserves_age_and_clears_busy_state() {
+        let reported = json!({"refreshing":false,"errors":["refused"],"switchFailed":true});
+        let kept = cached(reported);
+        assert!(kept.get("switchFailed").is_none());
+        assert_eq!(kept["errors"], json!(["refused"]));
+
         let before = json!({"updatedAt":12,"refreshing":true,"today":{"totalTokens":30}});
         let after = failed(before, "Unavailable");
         assert_eq!(after["updatedAt"], 12);

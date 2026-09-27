@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Server } from "bun";
 import {
   forwardLinkRequestHeaders,
+  HOME_INITIATED_LINK_TUNNEL,
   LINK_RELAY_BODY_MAX_BYTES,
   LINK_RELAY_HEADER_TIMEOUT_MS,
   LINK_RELAY_HOLD_MS,
@@ -473,6 +474,25 @@ describe("client link relay while the tunnel reconnects", () => {
       expect(forwarded).toEqual([]);
     });
   }
+
+  test("a Home-initiated link forwards like 2.67.0 and never holds a refused request", async () => {
+    // The Home owns the `ssh -R` forward, so this Child has no supervisor to prove it. The explicit
+    // Home-initiated gate forwards (a missing gate above still refuses); a refused connection is
+    // answered at once with a retryable 503 instead of waiting for a reconnect nobody drives.
+    let sends = 0;
+    const ok = await relayLinkDataRequestImpl(relayRequest({ method: "POST", body: "{}" }), target, {
+      tunnel: HOME_INITIATED_LINK_TUNNEL,
+      fetchImpl: (async () => { sends += 1; return Response.json({ forwarded: true }); }) as typeof fetch,
+    });
+    expect(ok.status).toBe(200);
+    expect(sends).toBe(1);
+    const refused = await relayLinkDataRequestImpl(relayRequest({ method: "POST", body: "{}" }), target, {
+      tunnel: HOME_INITIATED_LINK_TUNNEL,
+      fetchImpl: (async () => { sends += 1; throw new Error("connection refused"); }) as typeof fetch,
+    });
+    expect(refused.status).toBe(503);
+    expect(sends).toBe(2);
+  });
 
   test("rechecks connected state before retrying a refused fetch", async () => {
     let connected = true;

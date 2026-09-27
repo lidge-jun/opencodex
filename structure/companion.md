@@ -77,6 +77,8 @@ and `exhausted` follows `isCodexQuotaExhausted` (100% in a governing window or t
 The "Use" action (`app/Sources/NativeTray/AccountSwitch.swift`) appears on hover, keyboard focus
 and as an accessibility action; an exhausted account stays switchable with a warning.
 
+The web tray (`gui/src/pages/Tray.tsx`, the Windows and Linux popup) shows the same account state. `gui/src/pages/tray-data.ts` mirrors the native projection: `providerSources` names each provider's switch kind from the same config rules, `parseAccounts` derives `switchState`, `blockedReason` and `exhausted` with the same rules, and `accountSwitchRequest` builds the same route and body. The popup sends it with the dashboard session instead of the desktop capability, then reloads. Provider headings use the dashboard's `ProviderIcon`, and bars use `quotaSeverity` (warn 70%, critical 90%). `gui/tests/tray-data.test.ts` pins the parity.
+
 The Tauri title reads `usage_today()`, matching the widget and retained Swift client. Every refresh
 applies the resulting optional title so icon-only clears an old counter. A nonblank custom template
 takes precedence over icon-only; unavailable measurements render as an em dash, not as a request

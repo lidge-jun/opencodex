@@ -17,8 +17,9 @@ import { findAvailablePort, isAddrInUse, PortUnavailableError, waitForPortAvaila
 import type { ReplacementStartRequest } from "../server/restart-replacement";
 import type { OcxClientConnectionConfig } from "../types";
 import { createLinkKeySource } from "./link-ingress";
+import { HOME_INITIATED_LINK_TUNNEL } from "./link-relay";
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
-import { clientLinkStatePath } from "./link-state";
+import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
 
@@ -278,12 +279,21 @@ export async function startClientRuntime(
   const preferred = linkMode ? config.port : options.port ?? config.port ?? 10100;
   // Share one cached key source between the listener and its tunnel supervisor.
   const linkKey = linkMode ? createLinkKeySource(state.value.tokenFingerprint) : undefined;
+  // Joins made before the marker existed get one now, while their sidecar is still here.
+  if (linkMode && state.value.link) {
+    try { recordChildInitiatedLink(state.value.link.linkId); } catch { /* the sidecar check below still applies */ }
+  }
   const supervisor = linkMode && existsSync(clientLinkStatePath())
     ? createClientLinkSupervisor({
       onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
       linkKey,
     })
     : null;
+  // A Child with no sidecar and no record of joining itself was connected by its Home over
+  // `ssh -R`; that link keeps 2.67.0's unproven forward. A Child-initiated link that lost its
+  // sidecar gets no gate at all, so the relay refuses it.
+  const homeInitiated = linkMode && !supervisor && !!state.value.link
+    && !isChildInitiatedLink(state.value.link.linkId);
   const { server, port: boundPort } = await bindClientListener({
     state: state.value,
     linkMode,
@@ -291,7 +301,7 @@ export async function startClientRuntime(
     explicitPort: options.port !== undefined,
     configuredPort: config.port,
     ...(linkMode ? { linkStatus: () => supervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
-    ...(supervisor ? { linkTunnel: supervisor } : {}),
+    ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
   }, io);
   activeServer = server;
   activePort = boundPort;
