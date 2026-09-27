@@ -253,7 +253,7 @@ MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Cod
 **OpenCode Zen**（`opencode-zen`）与免密钥的 **OpenCode Free** 预设共用
 `https://opencode.ai/zen/v1`。该网关上的免费模型常会触发约每分钟 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。Zen 可能返回不带 `Retry-After` / `X-RateLimit-*` 的通用 429。这与免密钥桌面配额（`opencode-free` 上约每 5 小时 200 次 Big Pickle/免费模型请求）是分开的。当这类 429 省略 `Retry-After` 时，opencodex 会在客户端错误中补充说明并附带合成的 `Retry-After`；若上游已提供 `Retry-After`，则仍以它为准。同密钥等待重试仍可通过 [`retryOn429`](/zh-cn/reference/configuration/) 选择开启。
 
-**免密钥的 `opencode-free` 层级会呈现 OpenCode 官方 CLI 自身发送的匿名客户端身份。** 非 forward 身份配置生效时，请求会携带从会话派生的 `x-opencode-session`（没有会话身份时则限定在单次请求）、带版本号的 `opencode/<version>` User-Agent 和 `x-opencode-client` 标记。仅当请求没有 Authorization 头时，配置才会添加 `Authorization: Bearer public`；Zen 会将其归入匿名配额。`authMode: "forward"` 请求会跳过此配置。显式配置的 `x-opencode-session` 或 API 密钥始终优先；有密钥时请求计费到该账户。Muse Spark contributor-free 模型会路由到 Zen 的 `/v1/responses` 端点。此准入只是观测到的兼容行为，并非第三方契约；OpenCode 可随时更改或限制它，届时路由会返回上游错误。
+**免密钥的 `opencode-free` 层级会呈现 OpenCode 官方 CLI 自身发送的匿名客户端身份。** 非 forward 身份配置生效时，请求会携带从会话派生的 `x-opencode-session`（没有会话身份时则限定在单次请求）和 `x-opencode-client` 标记，并默认使用带版本号的 `opencode/<version>` User-Agent；操作员显式配置的 User-Agent 优先。仅当请求没有 Authorization 头时，配置才会添加 `Authorization: Bearer public`；Zen 会将其归入匿名配额。`authMode: "forward"` 请求会跳过此配置。显式配置的 `x-opencode-session` 或 API 密钥始终优先；有密钥时请求计费到该账户。Muse Spark contributor-free 模型会路由到 Zen 的 `/v1/responses` 端点。此准入只是观测到的兼容行为，并非第三方契约；OpenCode 可随时更改或限制它，届时路由会返回上游错误。
 
 Zen 的匿名准入还要求小写的 `shell` 和 `read` 声明。opencodex 只补充请求中缺少的声明，并将其标记为仅用于兼容。若模型仍选择其中之一，代理会把这个合成调用转换为提示模型使用请求中真实工具的助手文本，而不会执行兼容声明。调用方自己声明的 `shell` 或 `read` 仍是普通的可执行工具。
 
