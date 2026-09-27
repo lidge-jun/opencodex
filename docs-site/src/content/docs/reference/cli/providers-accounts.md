@@ -351,7 +351,7 @@ returns:
 ```
 
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
-per-account probe (Anthropic, Kiro, and Google Antigravity today). It is opt-in because the proxy probes the upstream
+per-account probe (Anthropic, Kiro, Google Antigravity, and Devin today). It is opt-in because the proxy probes the upstream
 once per stored credential; the default listing stays a local read. `--refresh` bypasses the
 cached result. An account with no per-account quota shows `-`, and one whose probe failed shows
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
@@ -363,6 +363,10 @@ talks to Google's Cloud Code Assist host through the pinned outbound transport, 
 configured `baseUrl`: a custom base URL is a routing choice for requests, not a second source of
 Google's accounting for a stored credential. An account without a project id, or one whose probe
 is redirected or fails, shows `unavailable`.
+
+Devin rows come from Cognition's `GetUserStatus` for that account's own key, sent only to its
+allowlisted api-server host. They show the dated daily and weekly windows the plan exposes, and a
+monthly credit window only on a credit-billed plan; an unlimited balance shows no credit window.
 
 ```text
 $ ocx account list anthropic --quota
