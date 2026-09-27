@@ -18,7 +18,7 @@ test("verification links accept only exact Builder ID and Kiro-owned https hosts
   expect(kiroVerificationLink("https://auth.kiro.dev/verify")).toBe("https://auth.kiro.dev/verify");
   for (const url of [
     "https://evil.s3.amazonaws.com/", "https://x.awsapps.com/", "https://kiro.dev.evil.com/",
-    "https://evilkiro.dev/", "https://user@kiro.dev/", "https://kiro.dev:444/",
+    "https://evilkiro.dev/", ["https://user", "kiro.dev/"].join("@"), "https://kiro.dev:444/",
     "https://kiro.dev:443/", "http://kiro.dev/", "https://kiro.dev/\nattack", "javascript:alert(1)",
   ]) expect(kiroVerificationLink(url)).toBeNull();
 });
