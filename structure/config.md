@@ -382,7 +382,7 @@ report is additive.
 
 When opencodex owns routing, it also writes `$CODEX_HOME/opencodex.config.toml` as an explicit profile
 target. Codex config uses `service_tier = "fast"` and `[features].fast_mode = true`;
-catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value.
+catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value. Provider `responseTierAuthoritative` is an optional strict boolean validated by `src/config/schema/leaf-validators.ts`; it changes response evidence only, as defined in the [response-tier observation contract](transports/responses.md#response-tier-observation-authority).
 
 ## Provider output defaults
 

@@ -25,6 +25,15 @@ export function isCanonicalOpenAiForwardProvider(provider: OcxProviderConfig): b
     && normalizedBaseUrl(provider.baseUrl) === CODEX_FORWARD_BASE_URL;
 }
 
+/**
+ * Response evidence is separate from Fast capability and request serialization. Preserve the
+ * known Codex exception (#2558); other destinations may declare their response contract without
+ * a gateway-name or URL heuristic. Absence retains the authoritative legacy default.
+ */
+export function responseTierAuthorityForProvider(provider: OcxProviderConfig): boolean | undefined {
+  return isCanonicalOpenAiForwardProvider(provider) ? false : provider.responseTierAuthoritative;
+}
+
 const OPENAI_API_ORIGIN = "https://api.openai.com";
 const OPENAI_API_BASE_URL = `${OPENAI_API_ORIGIN}/v1`;
 const OPENAI_API_RESPONSES_URL = `${OPENAI_API_BASE_URL}/responses`;

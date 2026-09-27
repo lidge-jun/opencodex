@@ -275,11 +275,8 @@ cancellation terminates dispatch before rotation can persist another key.
 
 ### Routed service-tier capability
 
-OpenAI-compatible service-tier support is resolved only after the final provider/model wire is
-known. `supportsServiceTier` remains the provider fallback, while the exact
-`modelSupportsServiceTier` map can override it per upstream model, including an explicit `false`.
-The catalog and request path share this decision: a routed row publishes `service_tiers` only when
-the resolved policy is eligible, and the final-route normalizer applies the same gate to
+OpenAI-compatible service-tier support is resolved only after the final provider/model wire is known. `supportsServiceTier` remains the provider fallback, while the exact `modelSupportsServiceTier` map can override it per upstream model, including an explicit `false`.
+The catalog and request path share this decision: a routed row publishes `service_tiers` only when the resolved policy is eligible, and the final-route normalizer applies the same gate to
 `service_tier`. Both `openai-responses` and `openai-chat` use the resolved provider/model capability
 for catalog publication, routing evidence, and fingerprints. Canonical Fast injection additionally
 requires a compatible FastWire mapping on the final adapter and an eligible policy. Setting
@@ -288,10 +285,13 @@ foreign caller values; an exact-model `true` does not grant that forwarding perm
 unclassified Chat routes it gates every caller tier because no canonical Fast capability has been
 validated. An object-form registry wire default may also set `forwardCallerServiceTier: false` to
 close a known subscription gateway while leaving generic unclassified Responses passthrough
-unchanged. Exact `false`
-narrows provider defaults, and provider-level `supportsServiceTier: false` cannot be reopened.
+unchanged. Exact `false` narrows provider defaults, and provider-level `supportsServiceTier: false` cannot be reopened.
 Capability is namespaced by the selected provider and model; model-name similarity and adapter type
-alone never opt a gateway in.
+alone never opt a gateway in. Response-tier evidence is governed by `src/providers/openai-tiers-destination.ts`: canonical ChatGPT Codex forwarding is non-authoritative (#2558); other destinations honor the optional provider boolean `responseTierAuthoritative`, with omission retaining legacy response authority. No gateway name or address infers a declaration. The final route captures this in `TierObservationContext` through `src/server/responses/core-normalize.ts`, without changing capability, `TierDecision`, or outgoing parameters.
+
+### Response-tier observation authority
+
+`src/providers/fastwire.ts` copies a defined authority flag into `AttemptTierOutcome`. With false, an eligible serialized priority request remains `fastOutcome: applied` and `confirmation: assumed`: the parameter was sent, while actual scheduling is unconfirmed. Neither a `default` nor a `priority` echo can confirm or deny Fast; sanitized `responseServiceTier` remains for inspection, while local capability and wire failures still downgrade. Logs and persisted attempts retain the flag, and `src/usage/cost.ts` uses requested-tier estimation without promoting an untrusted echo or a confirmed label to response-confirmed pricing. Official API and undeclared destinations retain legacy response judgments.
 
 Anthropic Fast eligibility and downgrade recovery use the [Responses failover contract](responses-failover.md#anthropic-fast-downgrade-recovery).
 

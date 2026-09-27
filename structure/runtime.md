@@ -4,7 +4,7 @@ The minute sweep checks persisted activation deadlines locally; only missing dea
 
 ## Resolved static model policy
 
-`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
+`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Fast observation, persistence and cost provenance follow the [response-tier authority contract](transports/responses.md#response-tier-observation-authority); outbound Fast policy is unchanged. Policy/combo
 route spreads retain that object. Every initial, fallback, and recovery route is recaptured for the
 request's original inbound protocol before route-dependent normalization, and all adapter rebuilds
 consume its recorded adapter. A translated Chat or Anthropic replay therefore cannot inherit a

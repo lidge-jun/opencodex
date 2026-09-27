@@ -297,6 +297,7 @@ export const providerConfigSchema = z.object({
   annotateEmptyToolOutputs: z.boolean().optional(),
   foldDeveloperRoleToSystem: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
+  responseTierAuthoritative: z.boolean().optional(),
   fastEnabled: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
