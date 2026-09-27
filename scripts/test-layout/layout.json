@@ -174,7 +174,7 @@
     "desktop-supervised-restart.test.ts": "clients", "cli-restart-handoff.test.ts": "cli",
     "restart-replacement.test.ts": "server", "deepseek-artifact-tool-schema.test.ts": "providers",
     "client-config-export-output-limit.test.ts": "config", "responses-skills-snapshot.test.ts": "responses", "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
-    "link-relay-bound-transport.test.ts": "clients", "claude-desktop-system-proxy.test.ts": "claude-integration",
+    "link-relay-bound-transport.test.ts": "clients", "claude-desktop-system-proxy.test.ts": "claude-integration", "codex-config-drift-heal.test.ts": "codex-integration",
     "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
     "openai-chat-tool-call-id-remint.test.ts": "adapters/openai",
     "coding-agent-json-lines-scaling.test.ts": "providers",

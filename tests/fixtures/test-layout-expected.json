@@ -472,6 +472,7 @@
   "codex-forward-access-programs-writer.test.ts": "codex-integration",
   "codex-composed-acceptance.test.ts": "codex-integration",
   "codex-config-generation.test.ts": "codex-integration",
+  "codex-config-drift-heal.test.ts": "codex-integration",
   "codex-context-owner.test.ts": "codex-integration",
   "codex-convergence-account-selectors.test.ts": "codex-integration",
   "codex-convergence-contract.test.ts": "codex-integration",

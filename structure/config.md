@@ -86,12 +86,10 @@ one that cannot be observed, retires the memo and the pre-rename call performs t
 
 > Decision record: [ADR-0016](decisions/ADR-0016-config-surface.md)
 
-`src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
-matters for maintainers is which groups exist and who resolves them:
+`src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What matters for maintainers is which groups exist and who resolves them:
 
 A schema-invalid top-level JSON value is repairable only when it is a non-array object.
-`loadConfig` backs up arrays, primitives, and null before using defaults, so the repair
-merge cannot turn them into a valid config while discarding the original bytes.
+`loadConfig` backs up arrays, primitives, and null before using defaults, so the repair merge cannot turn them into a valid config while discarding the original bytes.
 
 `src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
 
@@ -110,27 +108,21 @@ merge cannot turn them into a valid config while discarding the original bytes.
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
 
-Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
-the secret itself.
+Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists the secret itself.
 
-`ocx doctor` reports proxy state on three separate surfaces: its own process environment, the
-effective `config.proxy`, and the running proxy process environment (read from
-`/proc/<pid>/environ` on Linux and WSL, reported as unavailable elsewhere). Each proxy key is shown
-as present or absent only; `src/cli/doctor.ts` never prints or persists a proxy value, because proxy
-URLs can carry credentials.
+`ocx doctor` reports proxy state on three separate surfaces: its own process environment, the effective `config.proxy`, and the running proxy process environment (read from
+`/proc/<pid>/environ` on Linux and WSL, reported as unavailable elsewhere). Each proxy key is shown as present or absent only; `src/cli/doctor.ts` never prints or persists a proxy value, because proxy URLs can carry credentials.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
-The `ocx config show` reader in `src/cli/config-command.ts` uses those diagnostics directly. Its
-client annotation compares only the bounded service-token fingerprint with the validated client
+The `ocx config show` reader in `src/cli/config-command.ts` uses those diagnostics directly. Its client annotation compares only the bounded service-token fingerprint with the validated client
 record; it does not call `loadConfig`, mutate permissions, or import the write-capable connect flow.
 All config publication continues through the existing required ACL-hardened writers above.
 
 `claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
 `claudeCode.cliFirstParty` is an optional boolean in `src/types/config.ts`. The schema passes it through; the load normalizer (`src/config/load-degrade.ts`) drops a non-boolean hand edit, every reader treats only `true` as on, and `PUT /api/claude-code` accepts only a boolean. Absence means off. It is independent of `claudeCode.desktopMode`; changing CLI first-party pins an absent Desktop mode from the observation that will apply after the flag flips — an opt-out observes with `cliFirstParty` already cleared, so a shared env that predates the marker stays attributed to Desktop instead of being pinned `gateway` and removed from under it, and an owned env cannot be mistaken for CLI-only intent. The flag is written by a standalone `PUT /api/claude-code { cliFirstParty }`, including `ocx claude config set --first-party`; the mutation pins an absent `desktopMode` at the same time. The shared settings proxy status follows the ordered classifier in `src/claude/first-party-settings.ts`: unreadable settings are `unknown`; absent or unrecognized proxy URLs are `none`; a token-bearing opencodex URL beside a foreign CA is `foreign`, while a tokenless loopback URL beside that CA is `local` with unconfirmed ownership. An attributed proxy with no bound listener is `stopped`; a usable applied pair on a bound listener is `disabled` when Claude routing is ineligible and `live` when eligible; remaining mismatches are `broken` regardless of eligibility. Inspection never mints a token. A separate `ocx ensure` may write a config-derived port while this server remains bound elsewhere; status is then `broken` until the server restarts or ensure runs after restart.
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.
-It is absent from the typed settings contract and cannot re-enable Spark quota through the
-management API. Retirement does not migrate user-selected model ids or erase usage history.
+It is absent from the typed settings contract and cannot re-enable Spark quota through the management API. Retirement does not migrate user-selected model ids or erase usage history.
 
 ## Config injection
 
@@ -266,7 +258,14 @@ If the root config selects a provider other than `openai` or `opencodex`, inject
 config byte-for-byte unchanged and skip profile creation/updates and history metadata restoration. External
 provider managers own that routing configuration, and replacing their provider id can hide
 otherwise intact Codex sessions. This ownership check must run before catalog/cache refresh,
-journal creation, and the background history restoration guardian.
+journal creation, and the background history restoration guardian. A provider table counts as an
+external owner only when it carries a `base_url` — a gateway names somebody else's endpoint. A
+base-url-less table is the Codex desktop app's own native-routing placeholder (since app 26.924
+each app-managed rewrite writes `model_provider = "custom"` plus such a table, stripping the
+injected root keys alongside), which re-injects cleanly because the injector strips a root
+`model_provider` line first. Recovery is drift detection (`src/codex/config-drift-heal.ts`): the
+auto-refresh tick re-runs the standard sync when a root key the journal says was injected is
+missing on disk (presence only; a present key with another value is left alone).
 
 `ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
 discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore

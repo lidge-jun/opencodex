@@ -247,3 +247,51 @@ describe("catalog auto-refresh scheduler", () => {
     expect(catalogAutoRefreshTickCountForTests()).toBe(1);
   });
 });
+
+describe("catalog auto-refresh drift heal", () => {
+  // The heal loads its collaborators through dynamic imports; stub each so the test pins the
+  // tick glue (gate, drift, live runtime port, sync, outcome) without touching a real home.
+  async function runHealTick(afterSyncDrifted: boolean) {
+    const drift = await import("../../src/codex/config-drift-heal");
+    const desired = await import("../../src/codex/desired-state");
+    const processState = await import("../../src/config/process-state");
+    const sync = await import("../../src/codex/sync");
+    let driftCalls = 0;
+    const syncedPorts: number[] = [];
+    const info: string[] = [];
+    const spies = [
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
+      spyOn(drift, "codexConfigDrift").mockImplementation(() => {
+        driftCalls += 1;
+        const drifted = driftCalls === 1 || afterSyncDrifted;
+        return { drifted, missingKeys: drifted ? ["openai_base_url"] : [] };
+      }),
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(sync, "syncModelsToCodex").mockImplementation((async (port: number) => {
+        syncedPorts.push(port);
+        return { ok: true } as never;
+      }) as never),
+      spyOn(console, "info").mockImplementation((...args: unknown[]) => { info.push(args.join(" ")); }),
+    ];
+    try {
+      writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+      await runCatalogAutoRefreshTickForTests();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+    return { syncedPorts, info };
+  }
+
+  test("re-injects through the live runtime port and reports it only when the keys return", async () => {
+    const healed = await runHealTick(false);
+    expect(healed.syncedPorts).toEqual([43_210]);
+    expect(healed.info.some(line => line.includes("re-injected"))).toBe(true);
+  });
+
+  test("a sync that leaves the keys missing is not reported as a heal", async () => {
+    const ceded = await runHealTick(true);
+    expect(ceded.syncedPorts).toEqual([43_210]);
+    expect(ceded.info.some(line => line.includes("; re-injected"))).toBe(false);
+    expect(ceded.info.some(line => line.includes("not re-injected this tick"))).toBe(true);
+  });
+});
