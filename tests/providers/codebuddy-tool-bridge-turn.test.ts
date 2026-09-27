@@ -66,8 +66,8 @@ function provider(): OcxProviderConfig {
   } as OcxProviderConfig;
 }
 
-function incoming() {
-  return { headers: new Headers(), translatorBudget: createTestTranslatorBudget() };
+function incoming(translatorBudget = createTestTranslatorBudget()) {
+  return { headers: new Headers(), translatorBudget };
 }
 
 async function run(adapter: ReturnType<typeof createCodeBuddyAdapter>, p: OcxParsedRequest): Promise<AdapterEvent[]> {
@@ -836,5 +836,34 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     const events = await run(adapter, p);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_call_limit", status: 502, retryable: false });
     expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
+  });
+
+  test("buffered tool arguments beyond the call bound fail with translation_buffer_limit and release the budget", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const translatorBudget = createTestTranslatorBudget({ maxCallArgumentBytes: 4 });
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        INIT_OK,
+        toolUseStart(cliName),
+        // Five retained bytes overflow the four-byte per-call bound while the block stays open;
+        // turn cleanup must release the parser's reservation with the stream error.
+        inputJsonDelta("12345"),
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(p, incoming(translatorBudget), e => events.push(e));
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "translation_buffer_limit",
+      status: 502,
+      errorType: "upstream_error",
+      retryable: false,
+    });
+    expect(events.some(event => event.type === "tool_call_start" || event.type === "done")).toBe(false);
+    expect(translatorBudget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, overflows: 1 });
   });
 });
