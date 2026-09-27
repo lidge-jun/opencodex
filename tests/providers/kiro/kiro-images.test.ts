@@ -182,6 +182,20 @@ describe("kiro generous image pipeline", () => {
     expect(state.currentMessage.userInputMessage).toEqual({ content: "current", images: [img(ONE_PX_PNG)] });
   });
 
+  test("K2e2: an undecodable current image does not evict valid history at the request cap", async () => {
+    const payload = kiroPayload([
+      ...Array.from({ length: 5 }, (_, i) => ({ content: `history${i}`, images: Array.from({ length: 20 }, () => img(ONE_PX_PNG)) })),
+      { content: "current", images: [img(Buffer.from("not an image").toString("base64"))] },
+    ]);
+    await normalizeKiroImages(payload);
+    const state = payload.conversationState as Record<string, any>;
+    const history = state.history.map((h: any) => h.userInputMessage);
+    expect(history.flatMap((c: any) => c.images ?? [])).toHaveLength(KIRO_MAX_IMAGES_PER_REQUEST);
+    expect(history.every((c: any) => c.images.length === 20 && !c.content.includes("request cap"))).toBe(true);
+    expect(state.currentMessage.userInputMessage.images).toBeUndefined();
+    expect(state.currentMessage.userInputMessage.content).toContain("undecodable");
+  });
+
   test("K2f: request cap removes whole oldest carriers and leaves omission markers", async () => {
     const payload = kiroPayload([
       { content: "oldest", images: [img(ONE_PX_PNG)] },

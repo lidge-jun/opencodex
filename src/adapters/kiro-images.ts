@@ -109,10 +109,10 @@ function appendNote(carrier: KiroImageCarrier, note: string): void {
 
 /**
  * Apply the generous image pipeline to a built CodeWhisperer payload (mutates in
- * place): per-message 20-image cap first, then the 100-image request cap (oldest
- * dropped), then the shared tier machinery with the kiro budget and
- * terminal-overflow DROP (kiro has no downstream guard). Test seams
- * (encode/validate) forward into the core.
+ * place): per-message 20-image cap first, then the shared tier machinery with
+ * the kiro budget and terminal-overflow DROP (kiro has no downstream guard),
+ * then the 100-image request cap over surviving images (oldest dropped).
+ * Test seams (encode/validate) forward into the core.
  */
 export async function normalizeKiroImages(
   payload: unknown,
@@ -127,18 +127,6 @@ export async function normalizeKiroImages(
     if (!images || images.length <= KIRO_MAX_IMAGES_PER_MESSAGE) continue;
     images.splice(0, images.length - KIRO_MAX_IMAGES_PER_MESSAGE);
     appendNote(carrier, COUNT_CAP_NOTE);
-  }
-
-  let excess = carriers.reduce((count, carrier) => count + (carrier.images?.length ?? 0), 0) - KIRO_MAX_IMAGES_PER_REQUEST;
-  for (const carrier of carriers) {
-    if (excess <= 0) break;
-    const images = carrier.images;
-    if (!images?.length) continue;
-    const dropped = Math.min(images.length, excess);
-    images.splice(0, dropped);
-    if (images.length === 0) delete carrier.images;
-    appendNote(carrier, REQUEST_CAP_NOTE);
-    excess -= dropped;
   }
 
   // Targets over the survivors, oldest→newest across carriers. Drops resolve the image
@@ -171,4 +159,18 @@ export async function normalizeKiroImages(
     overflowAction: "drop",
     ...(opts ?? {}),
   });
+
+  // Count only images that survived decoding and the byte budget. Otherwise an
+  // undecodable current image could evict a valid history image unnecessarily.
+  let excess = carriers.reduce((count, carrier) => count + (carrier.images?.length ?? 0), 0) - KIRO_MAX_IMAGES_PER_REQUEST;
+  for (const carrier of carriers) {
+    if (excess <= 0) break;
+    const images = carrier.images;
+    if (!images?.length) continue;
+    const dropped = Math.min(images.length, excess);
+    images.splice(0, dropped);
+    if (images.length === 0) delete carrier.images;
+    appendNote(carrier, REQUEST_CAP_NOTE);
+    excess -= dropped;
+  }
 }
