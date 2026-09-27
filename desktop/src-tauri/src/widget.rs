@@ -296,8 +296,15 @@ mod macos {
         last_reload: Option<f64>,
         now: f64,
     ) -> bool {
-        previous.map_or(true, |previous| displayed(previous) != displayed(snapshot))
-            && last_reload.map_or(true, |last| now - last >= RELOAD_INTERVAL_SECONDS)
+        let previous_changed = match previous {
+            Some(previous) => displayed(previous) != displayed(snapshot),
+            None => true,
+        };
+        let interval_elapsed = match last_reload {
+            Some(last) => now - last >= RELOAD_INTERVAL_SECONDS,
+            None => true,
+        };
+        previous_changed && interval_elapsed
     }
 
     static LAST_RELOAD: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);

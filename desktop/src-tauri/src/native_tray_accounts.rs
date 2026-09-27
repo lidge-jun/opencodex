@@ -180,7 +180,10 @@ fn parse_accounts(body: &Value) -> Option<Vec<Value>> {
             .into_iter().flatten().find(|v| !v.is_empty()).unwrap_or(id);
         let unavailable = row["quotaUnavailable"].as_bool()==Some(true)
             || text(row,"quotaMode")=="unsupported" || !row["quota"].is_object();
-        let is_active = active.map_or(row["active"].as_bool()==Some(true),|selected|selected==id);
+        let is_active = match active {
+            Some(selected) => selected == id,
+            None => row["active"].as_bool() == Some(true),
+        };
         let (switch_state, blocked_reason) = switch_state(row, is_active);
         Some(json!({"id":format!("{id}:{index}"),"accountId":id,"label":label,"email":email,"plan":row["plan"].as_str(),
             "active":is_active,
