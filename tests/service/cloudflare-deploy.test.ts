@@ -487,6 +487,24 @@ async function readArchive(bytes: Uint8Array, file: string): Promise<string> {
 const IDLE_CHILD = ["bun", "-e", "setInterval(() => {}, 1000)"];
 
 describe("cloudflare supervisor lifecycle", () => {
+  test("renewals failing for a whole lease lifetime fence the container", async () => {
+    // Not a 409: the state endpoint is unreachable, so the lease may be reassigned without this
+    // container ever hearing about it.
+    const state = fakeStateServer({ "PUT /lease": () => new Response("down", { status: 503 }) });
+    const home = scratch();
+    writeFileSync(join(home, "config.json"), "{}");
+    const { code, exit } = recordingExit();
+    const supervisor = new Supervisor({ roots: [{ prefix: "opencodex", dir: home }], intervalMs: 150, port: 0, stateOrigin: state.origin, exit, handleSignals: false, leaseStaleMs: 600 });
+    void supervisor.main(IDLE_CHILD);
+    try {
+      expect(await code).toBe(1);
+      expect(state.events.filter(event => event === "PUT /lease").length).toBeGreaterThan(1);
+      expect(state.events).not.toContain("DELETE /lease");
+    } finally {
+      state.stop();
+    }
+  });
+
   test("a clean shutdown stops ocx, uploads the final state, then releases the lease", async () => {
     const state = fakeStateServer();
     const home = scratch();

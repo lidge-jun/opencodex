@@ -155,6 +155,8 @@ export type SupervisorOptions = {
   /** Must not return; tests substitute one that records the code and parks. */
   exit?: (code: number) => Promise<never>;
   handleSignals?: boolean;
+  /** The Durable Object's lease staleness window (LEASE_STALE_MS in deploy/cloudflare/src/lease.ts). */
+  leaseStaleMs?: number;
 };
 
 export class Supervisor {
@@ -164,6 +166,8 @@ export class Supervisor {
   private readonly port: number;
   private readonly stateOrigin: string;
   private readonly exitProcess: (code: number) => Promise<never>;
+  private readonly leaseStaleMs: number;
+  private lastRenewedAt = 0;
   private readonly handleSignals: boolean;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   // Aborted by fence(): an upload already in flight must not keep running after the lease is gone.
@@ -185,6 +189,7 @@ export class Supervisor {
     this.stateOrigin = options.stateOrigin ?? STATE_ORIGIN;
     this.exitProcess = options.exit ?? (code => process.exit(code));
     this.handleSignals = options.handleSignals ?? true;
+    this.leaseStaleMs = options.leaseStaleMs ?? 120_000;
   }
 
   private async exit(code: number): Promise<never> {
@@ -221,6 +226,7 @@ export class Supervisor {
     const response = await this.state("/lease", { method: "PUT" });
     if (response.status === 409) throw new LeaseLostError("another container holds the state lease");
     if (!response.ok) throw new Error(`lease request failed: ${response.status}`);
+    this.lastRenewedAt = Date.now();
   }
 
   private async releaseLease(): Promise<void> {
@@ -237,6 +243,7 @@ export class Supervisor {
       const response = await this.state("/lease", { method: "POST" });
       if (response.ok) {
         this.leaseHeld = true;
+        this.lastRenewedAt = Date.now();
         return;
       }
       if (response.status !== 409) throw new Error(`lease request failed: ${response.status}`);
@@ -361,6 +368,11 @@ export class Supervisor {
       this.renewLease().catch(error => {
         if (error instanceof LeaseLostError) return this.fence(error);
         console.error(`Lease renewal failed: ${errorText(error)}`);
+        // Once renewals have failed for a whole lease lifetime, the lease may already belong to
+        // another container; serving on would answer from state this one no longer owns.
+        if (Date.now() - this.lastRenewedAt >= this.leaseStaleMs) {
+          return this.fence(new LeaseLostError("lease renewal has failed for longer than the lease lifetime"));
+        }
       });
     }, Math.min(this.intervalMs, 30_000));
     try {

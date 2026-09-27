@@ -156,8 +156,8 @@ are; the final snapshot is taken after `ocx` has exited, so it cannot catch a fi
 
 If a container dies without `SIGTERM`, changes since its last snapshot are lost, and the next
 container waits up to two minutes for the dead one's lease to expire. A container that loses its
-lease stops without uploading, and its late uploads are discarded, so it cannot overwrite newer
-state.
+lease, or cannot renew it for two minutes because the state endpoint is unreachable, stops
+without uploading, and its late uploads are discarded, so it cannot overwrite newer state.
 
 Two settings tune this. Neither is secret, but store them with `npx wrangler secret put` like the
 others, so that deploying the repository's `wrangler.jsonc` does not reset them:
