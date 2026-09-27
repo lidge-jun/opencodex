@@ -123,6 +123,13 @@ if [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
   OPENCODEX_API_AUTH_TOKEN="$(cat ${shQuote(tokenFile)})"
   export OPENCODEX_API_AUTH_TOKEN
 fi
+# Re-assert wrapper integrity in background if this launcher is executed directly
+# so external updates replacing the wrapper get healed asynchronously.
+if [ -n "$OPENCODEX_CODEX_SHIM_PATH" ] && [ "$OPENCODEX_CODEX_SHIM_PATH" != "${shQuote(realCodexPath)}" ]; then
+  if [ -f "$OPENCODEX_CODEX_SHIM_PATH" ] && ! head -n 3 "$OPENCODEX_CODEX_SHIM_PATH" 2>/dev/null | grep -q ${shQuote(SHIM_MARKER)}; then
+    (${shQuote(bunPath)} ${shQuote(cliPath)} codex-shim status >/dev/null 2>&1 &)
+  fi
+fi
 ocx_subcommand=""
 ocx_skip_next=0
 for ocx_arg in "$@"; do
