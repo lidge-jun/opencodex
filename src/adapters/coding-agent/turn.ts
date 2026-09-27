@@ -381,6 +381,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     sawPartialThinking: false,
     sawTerminalResult: false,
     openToolBlocks: new Map(),
+    strictToolBlockCapture: Boolean(toolBridge),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -459,6 +460,25 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           kill();
           break;
         }
+        if (toolBridge && (state.toolBlockStarts ?? 0) > toolCallStarts) {
+          // The parser buffers a block until its stop (or same-index replacement), so the
+          // per-turn limit must be checked when the block opens, not when its buffered
+          // tool_call_start is finally emitted. The init handshake is already gated above.
+          toolCallStarts = state.toolBlockStarts!;
+          if (toolCallStarts > toolBridge.maxTurnToolCalls) {
+            emitOnce({
+              type: "error",
+              message: `Coding-agent CLI returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_call_limit",
+              retryable: false,
+            });
+            failClosed = true;
+            kill();
+            break;
+          }
+        }
         for (const event of mappedEvents) {
           if (toolBridge && !initValidated && event.type === "done") {
             emitOnce({
@@ -474,20 +494,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
           if (toolBridge && event.type === "tool_call_start") {
-            toolCallStarts += 1;
-            if (toolCallStarts > toolBridge.maxTurnToolCalls) {
-              emitOnce({
-                type: "error",
-                message: `Coding-agent CLI returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
-                status: 502,
-                errorType: "upstream_error",
-                code: "tool_call_limit",
-                retryable: false,
-              });
-              failClosed = true;
-              kill();
-              break;
-            }
             const wireName = toolBridge.emittedNameMap.get(event.name);
             if (wireName === undefined) {
               emitOnce({
@@ -593,8 +599,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           break;
         }
         if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
-          // Raw tool_use starts are gated before buffering, so every completed call was admitted
-          // after the bridge init handshake.
+          // The raw-start gate above already refused any call opened before the handshake.
           // The capture-only MCP handler never answers, so the CLI parks after message_stop.
           // The completed tool_use blocks are this turn's structured output: end the leg here
           // and terminate the tree; the client executes, and the next request continues.
