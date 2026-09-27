@@ -159,6 +159,10 @@ function remainingToUsed(remaining: number): number {
  * with no dated window. A quota-billed plan still reports credit balances, and a zero
  * balance there does not gate anything.
  *
+ * Flow credits are decoded but not published. They meter agent tool actions, not chat
+ * turns, and account ranking reads the fullest custom window as the account's limit, so an
+ * empty flow balance would retire an account that can still serve chat.
+ *
  * Credits are measured against the server's own balance rather than the plan grant, so
  * top-ups count. Flex credits back prompt credits once those run out, so both share one
  * pool: an account with prompt credits spent and flex remaining can still serve.
@@ -177,16 +181,16 @@ export function devinQuotaFromStatus(status: DevinUserStatus, now = Date.now()):
   const strategy = status.plan.billingStrategy;
   const creditBilled = strategy === BILLING_STRATEGY_CREDITS
     || (strategy === 0 && !ahead(status.dailyResetMs) && !ahead(status.weeklyResetMs));
+  const available = status.availablePromptCredits + status.availableFlexCredits;
   const credits = !creditBilled || status.availablePromptCredits < 0 || status.availableFlexCredits < 0
     ? undefined
-    : usedPercent(status.usedPromptCredits + status.usedFlexCredits, status.availablePromptCredits + status.availableFlexCredits);
+    // A credit-billed plan with nothing used and nothing left has no balance to serve from;
+    // leaving it unmeasured would rank it as untested headroom.
+    : available === 0 ? 100
+    : usedPercent(status.usedPromptCredits + status.usedFlexCredits, available);
   if (credits !== undefined) {
     quota.monthlyPercent = credits;
     if (status.planEndMs !== undefined) quota.monthlyResetAt = status.planEndMs;
-  }
-  const flow = status.plan.monthlyFlowCredits > 0 ? usedPercent(status.usedFlowCredits, status.availableFlowCredits) : undefined;
-  if (flow !== undefined) {
-    customWindows.push({ label: "Flow credits", percent: flow, ...(status.planEndMs !== undefined ? { resetAt: status.planEndMs } : {}) });
   }
   if (customWindows.length > 0) quota.customWindows = customWindows;
   return quota;

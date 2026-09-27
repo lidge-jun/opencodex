@@ -126,13 +126,19 @@ describe("Devin GetUserStatus decode and mapping", () => {
     });
   });
 
-  test("flow credits read used #5 against available #9 only when the plan grants them (#13)", () => {
-    const granted = creditPlanWithFlow(100, { 5: 30, 9: 70 });
-    expect(devinQuotaFromStatus(decodeDevinUserStatus(granted)!, 1).customWindows).toEqual([
-      { label: "Flow credits", percent: 30, resetAt: PLAN_END * 1000 },
-    ]);
-    const ungranted = creditPlanWithFlow(0, { 5: 30, 9: 70 });
-    expect(devinQuotaFromStatus(decodeDevinUserStatus(ungranted)!, 1).customWindows).toBeUndefined();
+  test("flow credits decode from #5/#9/#13 but never gate the account", () => {
+    const status = decodeDevinUserStatus(creditPlanWithFlow(100, { 5: 30, 9: 70 }))!;
+    expect(status.usedFlowCredits).toBe(30);
+    expect(status.availableFlowCredits).toBe(70);
+    expect(status.plan.monthlyFlowCredits).toBe(100);
+    const exhausted = decodeDevinUserStatus(creditPlanWithFlow(100, { 5: 100, 9: 0, 6: 10, 8: 90 }))!;
+    const quota = devinQuotaFromStatus(exhausted, 1);
+    expect(quota.customWindows).toBeUndefined();
+    expect(quota.monthlyPercent).toBe(10);
+  });
+
+  test("a credit-billed plan with nothing used and nothing left reads exhausted, not unmeasured", () => {
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 6: 0, 8: 0 }))!, 1).monthlyPercent).toBe(100);
   });
 
   test("a response without PlanStatus is not a usable status", () => {
@@ -235,5 +241,17 @@ describe("Devin provider quota through the aggregator", () => {
     globalThis.fetch = (async () => new Response("", { status: 401 })) as unknown as typeof fetch;
     const result = await fetchProviderQuotaReports(config, true);
     expect(result.reports.filter(r => r.provider === "devin")).toEqual([]);
+  });
+});
+
+describe("Devin quota cache identity", () => {
+  test("a tenant host change invalidates the cached reading; a credential without one keeps its key", async () => {
+    const { quotaCredentialIdentity } = await import("../../src/providers/quota/account-cache");
+    const target = { adapter: "devin", authMode: "oauth" } as any;
+    const base = { access: KEY, refresh: "", expires: Number.MAX_SAFE_INTEGER } as any;
+    const us = quotaCredentialIdentity("devin", "a1", { ...base, apiBaseUrl: "https://server.codeium.com" }, target);
+    const eu = quotaCredentialIdentity("devin", "a1", { ...base, apiBaseUrl: "https://eu.windsurf.com/_route/api_server" }, target);
+    expect(us).not.toBe(eu);
+    expect(quotaCredentialIdentity("devin", "a1", base, target)).toBe(quotaCredentialIdentity("devin", "a1", { ...base, apiBaseUrl: undefined }, target));
   });
 });

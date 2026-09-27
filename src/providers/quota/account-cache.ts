@@ -466,6 +466,9 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
     target.adapter, target.baseUrl, target.authMode, target.disabled === true,
+    // Only credentials that carry their own endpoint (Devin tenants) extend the identity, so
+    // every other provider's existing cache keys stay valid.
+    ...(credential.apiBaseUrl ? [credential.apiBaseUrl] : []),
   ])).digest("hex");
 }
 
