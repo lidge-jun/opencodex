@@ -477,13 +477,13 @@ export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem
   if (system) items.push({ role: "system", content: system });
 
   for (const message of parsed.context.messages) {
-    const mapped = mapOneMessage(message);
+    const mapped = mapOneMessage(message, parsed.modelId);
     if (mapped) items.push(mapped);
   }
   return items;
 }
 
-function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
+function mapOneMessage(message: OcxMessage, modelId: string): ChatHistoryItem | undefined {
   if (message.role === "user" || message.role === "developer") {
     const content = mapOcxContentToWire(message.content);
     // An image with no caption text is a complete user message on its own.
@@ -495,7 +495,7 @@ function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
   if (message.role === "assistant") {
     const toolCalls = assistantToolCalls(message);
     const text = assistantText(message);
-    const reasoning = devinAssistantReasoning(message);
+    const reasoning = devinAssistantReasoning(message, modelId);
     // A turn that produced only reasoning is still worth replaying: dropping it
     // is what makes the next turn re-derive the same chain.
     if (!text && toolCalls.length === 0 && !reasoning.thinking && !reasoning.signature) return undefined;
