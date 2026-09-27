@@ -449,6 +449,11 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       if (partial) {
         const key = resolveToolBlockKey(state, event);
         const block = key === undefined ? undefined : state.openToolBlocks?.get(key);
+        if (state.strictToolBlockCapture && !block) {
+          throw new CodingAgentProtocolError(
+            "Coding-agent CLI sent a tool argument delta that cannot be attributed to an open tool block.",
+          );
+        }
         if (block) block.argParts.push(partial);
       }
     }

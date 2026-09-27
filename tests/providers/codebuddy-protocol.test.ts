@@ -346,7 +346,7 @@ describe("codebuddy stream-json event mapping", () => {
     expect(state.openToolBlocks?.get(2)?.id).toBe("tu_a");
   });
 
-  test("an unindexed stop cannot close an indexed CodeBuddy tool block", () => {
+  test("an unindexed argument delta cannot be dropped from the sole indexed CodeBuddy tool block", () => {
     const state: StreamParseState = {
       sawPartialText: false,
       sawPartialThinking: false,
@@ -355,17 +355,11 @@ describe("codebuddy stream-json event mapping", () => {
     };
     const feed = (event: unknown) => mapStreamMessageToEvents({ type: "stream_event", event: event as Record<string, unknown> }, state);
     feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: "alpha" } });
-    expect(feed({ type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{\"wrong\":true}" } })).toEqual([]);
-    feed({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{}" } });
 
-    expect(feed({ type: "content_block_stop" })).toEqual([]);
-    expect(state.openToolBlocks?.has(2)).toBe(true);
+    expect(() => feed({ type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{\"wrong\":true}" } }))
+      .toThrow("tool argument delta that cannot be attributed");
+    expect(state.openToolBlocks?.get(2)?.argParts).toEqual([]);
     expect(state.completedToolCalls ?? 0).toBe(0);
-    expect(feed({ type: "content_block_stop", index: 2 })).toEqual([
-      { type: "tool_call_start", id: "tu_a", name: "alpha" },
-      { type: "tool_call_delta", arguments: "{}" },
-      { type: "tool_call_end" },
-    ]);
   });
 
   test("usageFromResult returns undefined when no usage is present", () => {

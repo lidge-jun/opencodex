@@ -417,6 +417,28 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(child?.killed).toBe(true);
   });
 
+  test("an indexless argument delta for the sole indexed tool block fails before a later indexed stop", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = () => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        { type: "stream_event", event: { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: cliName } } },
+        inputJsonDelta("{\"wrong\":true}"),
+        { type: "stream_event", event: { type: "content_block_stop", index: 2 } },
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+
+    expect(events).toEqual([expect.objectContaining({ type: "error", code: "protocol_error", status: 502, retryable: false })]);
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "tool_call_delta" || e.type === "done")).toBe(false);
+    expect(child?.killed).toBe(true);
+  });
+
   test("a parallel batch on one shared block index completes every call in the leg", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
