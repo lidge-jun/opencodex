@@ -720,6 +720,7 @@ export const en = {
   "dash.codexDesktopAuthlessHint": "Off by default. Skip the separate Desktop sign-in for eligible local connections. Upstream credentials are still required. Restart Codex after changing this setting. Account-gated Desktop features may be unavailable.",
   "dash.codexClientCompaction": "Use client-side compaction",
   "dash.codexClientCompactionHint": "Off by default; authenticated loopback only. Future compactions store portable plaintext summaries while OpenCodeX and V2 provider routing stay active; the configured provider may process them and consume quota. History is left untouched, and existing threads keep routing through the proxy via the openai_base_url override OpenCodeX manages; if you set that line yourself it is kept, and those threads follow your destination instead. Existing ocx1 history stays recoverable; recover a thread separately only before replaying it in native Codex. Restart Codex after changing this setting.",
+  "dash.codexRemoteHistoryHint": "Provider-table routing can hide existing openai-tagged threads in some mobile remote lists. History is not deleted. The remote client must list all providers; this switch does not repair that client filter.",
   "models.v2Conflict": "[agents] max_threads is set — codex will refuse to start; remove it from config.toml",
   "models.v2Applied": "Sub-agent mode updated — applies to new sessions (restart the Codex app to refresh the picker)",
   "models.v2ThreadsLabel": "Max threads",

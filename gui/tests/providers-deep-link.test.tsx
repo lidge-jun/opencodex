@@ -59,8 +59,15 @@ async function mount(names: string[] | null, onAccounts?: (name: string, choose:
 
 async function hash(next: string) {
   await act(async () => {
+    const previous = testWindow.location.hash;
     testWindow.location.hash = next;
-    testWindow.dispatchEvent(new testWindow.HashChangeEvent("hashchange"));
+    // A changed location emits its own hashchange in browsers and Happy DOM. Dispatching
+    // another one raced that native task and occasionally applied one navigation twice.
+    // Only an unchanged hash needs the explicit re-application event used by production.
+    if (testWindow.location.hash === previous) {
+      testWindow.dispatchEvent(new testWindow.HashChangeEvent("hashchange"));
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
   });
 }
 

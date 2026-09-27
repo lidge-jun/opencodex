@@ -30,6 +30,7 @@ export const RESPONSES_CORE_MODULES = [
   "core-combo.ts",
   "core-combo-native.ts",
   "request-prepare.ts",
+  "skills-snapshot.ts",
   "shadow-target-availability.ts",
   "compaction-routing.ts",
   "compaction-recovery.ts",

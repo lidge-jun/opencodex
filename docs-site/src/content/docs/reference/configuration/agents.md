@@ -8,6 +8,15 @@ routes, and limits delegated work.
 
 ## Agent fields
 
+### Skills catalog refresh
+
+`skills.catalog_refresh` accepts `"per_session"` (the default) or `"per_turn"`
+in opencodex's `config.json`. Session mode reuses the first received skills
+instructions for a conversation, protecting the prompt cache prefix from catalog
+changes between turns. Turn mode forwards the client's current catalog.
+See [Keeping the skills catalog stable](/guides/codex-prompt/#keeping-the-skills-catalog-stable)
+for configuration and snapshot lifetime details.
+
 ### Astra roster upgrade
 
 On the first start after upgrading, existing `subagentModels` lists receive

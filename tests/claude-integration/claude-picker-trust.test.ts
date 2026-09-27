@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   inspectPickerTrust, loginKeychainPath, trustPickerCa, untrustPickerCa,
   type SecurityResult, type SecurityRunner,
@@ -119,4 +121,31 @@ test("non-darwin never invokes the runner", async () => {
   expect(await inspectPickerTrust("/leaf.pem", sha1, run, "linux")).toBe("unsupported");
   expect(await trustPickerCa("/ca.pem", run, "linux")).toEqual({ ok: false, reason: "unsupported" });
   expect(await untrustPickerCa("/ca.pem", sha1, run, "linux")).toEqual({ ok: false });
+});
+
+test("trust installs a private copy of the verified certificate, not the shared ca.pem", async () => {
+  // The shared picker ca.pem is writable by same-user processes; the install must read the bytes
+  // the caller already fingerprinted from a private path, so a swap cannot change what is trusted.
+  let installedPath = "";
+  let installedContent = "";
+  const capture: SecurityRunner = async args => {
+    if (args[0] === "add-trusted-cert") {
+      installedPath = args.at(-1) ?? "";
+      installedContent = readFileSync(installedPath, "utf8");
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const shared = join(mkdtempSync(join(tmpdir(), "ocx-picker-trust-shared-")), "ca.pem");
+  const pem = "-----BEGIN CERTIFICATE-----\nfake-pem\n-----END CERTIFICATE-----\n";
+  writeFileSync(shared, pem);
+  try {
+    expect(await trustPickerCa(shared, capture, "darwin", { pem })).toEqual({ ok: true });
+    expect(installedPath).not.toBe(shared);
+    expect(installedPath).not.toBe("");
+    expect(installedContent).toBe(pem);
+    // The private copy is cleaned up after the install.
+    expect(existsSync(installedPath)).toBe(false);
+  } finally {
+    rmSync(dirname(shared), { recursive: true, force: true });
+  }
 });

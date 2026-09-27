@@ -1,3 +1,4 @@
+import { fetchBoundLinkRelay, LinkRelayAuthenticationError } from "./link-relay-transport";
 import {
   boundedRelayResponseStream,
   filterRelayHeaders,
@@ -10,6 +11,8 @@ import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
+  linkId?: string;
+  apiKeyId?: string;
   /**
    * The stored link key. The relay sends it in place of every caller credential, so the Home
    * admits the request as this link and serves it with its own accounts.
@@ -42,8 +45,8 @@ export interface LinkTunnelGate {
 /**
  * The gate for a Home-initiated link. The Home runs `ssh -R` and owns the forward, so the Child
  * has no tunnel supervisor and no local SSH process whose socket it could prove. This gate keeps
- * the 2.67.0 behaviour for that link only: forward to the tunnel port without an ownership proof,
- * never hold, and answer 503 when the connection is refused. Child-initiated links keep their
+ * the absence of local process ownership proof for that link only. The data transport still
+ * authenticates its physical connection; this gate never holds a reconnect. Child-initiated links keep their
  * supervisor, and a relay with no gate at all still refuses every request.
  */
 export const HOME_INITIATED_LINK_TUNNEL: LinkTunnelGate = {
@@ -53,6 +56,7 @@ export const HOME_INITIATED_LINK_TUNNEL: LinkTunnelGate = {
 };
 
 export interface LinkRelayDeps {
+  /** Trusted complete-send test seam. Production always uses the connection-bound transport. */
   fetchImpl?: typeof fetch;
   clock?: LinkRelayClock;
   /** Time allowed for the Home's response headers; a caller abort still ends the wait sooner. */
@@ -379,8 +383,13 @@ export async function relayLinkDataRequest(
         signal: relayAbort.signal,
         ...(body ? { body, duplex: "half" } : {}),
       };
-      upstream = await (deps.fetchImpl ?? fetch)(destination, init);
+      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init));
     } catch (error) {
+      if (error instanceof LinkRelayAuthenticationError) {
+        cleanup();
+        try { await body?.cancel(); } catch { /* an upload might already be drained */ }
+        return jsonError(503, error.message, true);
+      }
       if (bodyOverflow) {
         cleanup();
         return jsonError(413, "link relay request body too large");

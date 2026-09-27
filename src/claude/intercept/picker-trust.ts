@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "./picker-ca";
@@ -84,17 +84,30 @@ export async function trustPickerCa(
   caPath: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
+  cert?: { pem?: string },
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
+  // `cert.pem` is the caller-verified certificate bytes: the shared on-disk ca.pem is writable by
+  // same-user processes and could be swapped between fingerprint inspection and this install, so
+  // the keychain command reads a private copy under a fresh 0700 directory instead.
+  let installPath = caPath;
+  let privateDir: string | undefined;
+  if (cert?.pem !== undefined) {
+    privateDir = mkdtempSync(join(tmpdir(), "ocx-picker-ca-"));
+    installPath = join(privateDir, "ca.pem");
+    writeFileSync(installPath, cert.pem, { mode: 0o600 });
+  }
   try {
     // No `-s <host>` policy string: Chromium (Claude Desktop) skips trust settings that carry one,
     // so a host-scoped setting leaves Desktop rejecting the picker leaf. The CA's critical name
     // constraints already limit it to claude.ai; macOS verify-cert rejects any other name.
     const result = await run(["add-trusted-cert", "-r", "trustRoot", "-p", "ssl",
-      "-k", loginKeychainPath(), caPath]);
+      "-k", loginKeychainPath(), installPath]);
     return result.code === 0 ? { ok: true } : { ok: false, reason: "declined_or_failed" };
   } catch { // no-excuse-ok: catch -- user decline and command failure share a safe result.
     return { ok: false, reason: "declined_or_failed" };
+  } finally {
+    if (privateDir) rmSync(privateDir, { recursive: true, force: true });
   }
 }
 

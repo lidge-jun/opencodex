@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { afterOAuthCancellation } from "../oauth-cancellation-barrier";
-import { finalizeKiroDeviceFlow, observeKiroDeviceFinal, type KiroFinalOutcome } from "../kiro-device-login-finalizer";
+import {
+  finalizeKiroDeviceFlow, observeKiroDeviceFinal, readKiroDeviceStatus,
+  type KiroFinalOutcome, type KiroStatusRead,
+} from "../kiro-device-login-finalizer";
 import { parseKiroDeviceView, type KiroDeviceMethod, type KiroDeviceView } from "../kiro-device-login-helpers";
 
 type Phase = "idle" | "starting" | "pending" | "done" | "expired" | "failed" | "cancelled" | "ended";
 export type KiroLoginState = { phase: Phase; view?: KiroDeviceView; error?: "start" | "network" | "invalid" };
-type Session = { closed: boolean; view?: KiroDeviceView; inFlight?: Promise<Response | null>;
-  waitController?: AbortController; terminal?: KiroFinalOutcome };
+type Session = { closed: boolean; closedController: AbortController; view?: KiroDeviceView;
+  inFlight?: KiroStatusRead; waitController?: AbortController; terminal?: KiroFinalOutcome };
 const wait = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
   if (signal.aborted) { resolve(); return; }
   const timer = setTimeout(() => { signal.removeEventListener("abort", stop); resolve(); }, ms);
@@ -16,7 +19,19 @@ const wait = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
 const CLOSED = Symbol("closed");
 /** The awaited value, or CLOSED when the session closed while it was pending (a late reply belongs to the finalizer). */
 const unlessClosed = <T,>(session: Session, value: Promise<T>): Promise<T | typeof CLOSED> =>
-  value.then(result => (session.closed ? CLOSED : result));
+  new Promise(resolve => {
+    if (session.closed) { resolve(CLOSED); return; }
+    let done = false;
+    const settle = (result: T | typeof CLOSED) => {
+      if (done) return;
+      done = true;
+      session.closedController.signal.removeEventListener("abort", stop);
+      resolve(result);
+    };
+    const stop = () => settle(CLOSED);
+    session.closedController.signal.addEventListener("abort", stop, { once: true });
+    void value.then(result => settle(session.closed ? CLOSED : result), () => settle(CLOSED));
+  });
 
 export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: string, outcome: KiroFinalOutcome) => void,
   pollDelay: (ms: number, signal: AbortSignal) => Promise<void> = wait) {
@@ -44,6 +59,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
     const session = sessionRef.current;
     if (!session || session.closed) return;
     session.closed = true;
+    session.closedController.abort();
     sessionRef.current = null;
     session.waitController?.abort();
     if (mountedRef.current) setState({ phase: "cancelled" });
@@ -64,7 +80,7 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
 
   const start = useCallback(async (method: KiroDeviceMethod) => {
     if (sessionRef.current) return;
-    const session: Session = { closed: false };
+    const session: Session = { closed: false, closedController: new AbortController() };
     sessionRef.current = session;
     setState({ phase: "starting" });
     let response: Response | undefined;
@@ -114,21 +130,18 @@ export function useKiroDeviceLogin(apiBase: string, onSettled?: (provider: strin
         break;
       }
       const flowId = view.flowId;
-      const request = fetch(`${apiBase}/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(flowId)}`).catch(() => null);
-      session.inFlight = request.then(response => response?.clone() ?? null);
-      const status = await unlessClosed(session, request);
+      const request = readKiroDeviceStatus(apiBase, flowId);
+      session.inFlight = request;
+      const status = await unlessClosed(session, request.result);
       if (status === CLOSED) break;
-      if (status?.status === 404) {
-        session.inFlight = undefined;
+      session.inFlight = undefined;
+      if (status.kind === "missing") {
         session.terminal = "ended";
         settledRef.current?.("kiro", "ended");
         setState({ phase: "ended", view: session.view });
         break;
       }
-      const body = status?.ok ? await unlessClosed(session, status.json().catch(() => null)) : null;
-      if (body === CLOSED) break;
-      const next = body === null ? null : parseKiroDeviceView(body);
-      session.inFlight = undefined;
+      const next = status.kind === "view" ? status.view : null;
       if (!next || next.flowId !== flowId) continue;
       session.view = next;
       if (next.state === "pending") { setState({ phase: "pending", view: next }); continue; }

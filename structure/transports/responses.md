@@ -11,7 +11,7 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 When a successful streamed native response has a missing or unrecognized non-JSON content type, the plaintext V2 path confirms a bounded Responses SSE prefix, under the server's `stallTimeoutSec` probe budget, before applying that restoration; an `application/json` body takes the bounded JSON path instead, and an unknown, stalled, or unreadable body retains the fail-closed response.
 
 ## Responses HTTP/SSE
-
+Responses request preparation stabilizes incoming `<skills_instructions>` under `skills.catalog_refresh`: `per_session` (default) reuses the first received catalog for a conversation; `per_turn` leaves the supplied catalog unchanged. Other instruction sections and user/tool content remain untouched. Requests without a reliable conversation identity bypass snapshots; shared prompt-cache cohorts are not conversation identities. Only a body with exactly one catalog block across its instructions and developer/system content takes part; two or more pass through unchanged. A known snapshot is substituted before parsing, but a new catalog is stored only when preparation reaches its success return, so a request rejected by parsing or admission pins nothing. Without a named principal, snapshots are shared by conversation id only on a server that requires no data-plane auth. Snapshots are process-local, expire after four idle hours, and use bounded LRU retention; oversized blocks bypass caching. The dashboard's `src/codex/prompt-layers.ts` and `src/codex/prompt-text-probe.ts` continue observing current files for previews and do not own session snapshots.
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).
@@ -61,6 +61,8 @@ the code let a provider-scoped transport past it is what #4992 recorded, and it 
 regression for this policy has to enter through `handleResponses` rather than through a
 hand-written override that cooperates by calling the executor it was handed.
 
+`src/server/responses/sidecar-execution.ts` owns search probe settlement: local validation releases immediately, bodyless responses release before returning, and upstream bodies retain the lease through completion, error or cancellation regardless of HTTP status. The core dispatcher does not infer body completion from a non-success status.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
@@ -72,9 +74,7 @@ retention limits, and the stall watchdog is a silence limit. None is a cumulativ
 semantic no-progress budget.
 
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
-
 > Decision record: [ADR-0032](../decisions/ADR-0032-responses-http-sse.md)
-
 > Decision record: [ADR-0033](../decisions/ADR-0033-responses-http-sse.md)
 
 > Decision record: [ADR-0034](../decisions/ADR-0034-responses-http-sse.md)

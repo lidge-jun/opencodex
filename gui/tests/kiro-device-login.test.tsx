@@ -11,8 +11,9 @@ import type { ProviderAuthHandlers } from "../src/components/provider-workspace/
 import { en } from "../src/i18n/en";
 import { interpolate, type TFn } from "../src/i18n/shared";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
-import { finalizeKiroDeviceFlow } from "../src/kiro-device-login-finalizer";
-import { subscribeKiroDeviceFinal } from "../src/kiro-device-login-finalizer";
+import {
+  finalizeKiroDeviceFlow, readKiroDeviceStatus, subscribeKiroDeviceFinal,
+} from "../src/kiro-device-login-finalizer";
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -334,14 +335,19 @@ test("close during start dispatches cancel before detached status", async () => 
   unsubscribe();
 });
 
-test("close during status body parsing leaves finalizer as sole outcome owner", async () => {
-  const body = deferred<unknown>();
+test("close during a delayed status body transfers its sole reader to the finalizer", async () => {
+  let bodyController!: ReadableStreamDefaultController<Uint8Array>;
   let readingBody = false;
   responder = async url => {
     if (url.includes("/api/oauth/status?")) {
-      const response = json(view("done"));
-      Object.defineProperty(response, "json", { value: () => { readingBody = true; return body.promise; } });
-      return response;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodyController = controller;
+          readingBody = true;
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(view("done"))));
+          // The terminal JSON is not complete until EOF; close it only after the component unmounts.
+        },
+      }), { headers: { "Content-Type": "application/json" } });
     }
     return url.endsWith("/api/oauth/login/cancel") ? json(view("cancelled")) : json(view("pending"));
   };
@@ -352,11 +358,77 @@ test("close during status body parsing leaves finalizer as sole outcome owner", 
   expect(readingBody).toBe(true);
   await act(async () => { root!.unmount(); root = null; });
   await flush();
-  expect(received).toEqual(["added"]);
-  await act(async () => { body.resolve(view("done")); }); await flush();
+  expect(received).toEqual([]);
+  await act(async () => { bodyController.close(); }); await flush();
   expect(settled).toEqual([]);
   expect(received).toEqual(["added"]);
+  expect(requests.filter(r => r.url.includes("/api/oauth/status?"))).toHaveLength(1);
   unsubscribe();
+});
+
+test("status read deadline covers a body that never reaches EOF", async () => {
+  let bodyCancelled = 0;
+  responder = async url => url.includes("/api/oauth/status?")
+    ? new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(view("done"))));
+      },
+      cancel() { bodyCancelled++; },
+    }), { headers: { "Content-Type": "application/json" } })
+    : json({});
+  const read = readKiroDeviceStatus("", flowId, 20);
+  expect(await read.result).toEqual({ kind: "retry" });
+  expect(bodyCancelled).toBe(1);
+});
+
+test("status read deadline settles when fetch ignores abort and discards its late body", async () => {
+  const pending = deferred<Response>();
+  let lateBodyCancelled = 0;
+  responder = async url => url.includes("/api/oauth/status?") ? pending.promise : json({});
+  const read = readKiroDeviceStatus("", flowId, 20);
+  expect(await read.result).toEqual({ kind: "retry" });
+  pending.resolve(new Response(new ReadableStream<Uint8Array>({
+    cancel() { lateBodyCancelled++; },
+  })));
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(lateBodyCancelled).toBe(1);
+});
+
+test("the overall finalizer deadline cancels a longer inherited body read", async () => {
+  let bodyCancelled = 0;
+  responder = async url => url.includes("/api/oauth/status?")
+    ? new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(view("done"))));
+      },
+      cancel() { bodyCancelled++; },
+    }), { headers: { "Content-Type": "application/json" } })
+    : json({});
+  const inherited = readKiroDeviceStatus("", flowId, 45_000);
+  const first = finalizeKiroDeviceFlow("", flowId, Date.now() - 59_980, inherited);
+  expect(await first).toBe("ended");
+  expect(bodyCancelled).toBe(1);
+  const afterCleanup = finalizeKiroDeviceFlow("", flowId, Date.now() + 60_000);
+  expect(afterCleanup).not.toBe(first);
+  expect(await afterCleanup).toBe("ended");
+});
+
+test("an already-expired finalizer cancels its inherited read without polling", async () => {
+  let bodyCancelled = 0;
+  responder = async url => url.includes("/api/oauth/status?")
+    ? new Response(new ReadableStream<Uint8Array>({
+      cancel() { bodyCancelled++; },
+    }))
+    : json({});
+  const inherited = readKiroDeviceStatus("", flowId, 45_000);
+  expect(await finalizeKiroDeviceFlow("", flowId, Date.now() - 60_001, inherited)).toBe("ended");
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(bodyCancelled).toBe(1);
+  expect(requests.filter(r => r.url.includes("/api/oauth/status?"))).toHaveLength(1);
 });
 
 test("closing aborts the pending timer and never dispatches a hook status fetch", async () => {

@@ -221,7 +221,7 @@ TTL or lock-file deletion participates in recovery.
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 
-`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`.
+`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`. Linked-machine data uses the [connection-bound relay contract](remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
 the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,

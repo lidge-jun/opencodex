@@ -45,9 +45,12 @@ On a loopback bind, the dashboard bootstrap can receive a short-lived `ocx_sessi
 Each session lasts five minutes and is bound to the exact dashboard origin. Safe requests must
 match that origin. Unsafe methods also require the browser `Origin` and the session's CSRF token.
 
-Session issuance is disabled whenever data-plane authentication is required, which includes remote
-binds. A remote operator must authenticate with the raw admin token; no loopback-style GUI session
-is minted.
+When data-plane authentication is required, which includes remote binds, the loopback bootstrap
+does not mint a session. A remote dashboard gets a 12-hour session only through a trusted Tailscale
+identity (`remoteGui.allowedTailscaleUsers` on the Tailscale management ingress) or a one-use
+pairing grant; each authorized request extends it. Otherwise a remote operator authenticates with
+the raw admin token, and the dashboard asks for it again after a reload because the session lives
+only in page memory. See [Remote hub](/guides/remote-hub/).
 
 ## Common errors
 

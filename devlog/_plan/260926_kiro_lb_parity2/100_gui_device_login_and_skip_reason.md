@@ -215,7 +215,11 @@ cd docs-site && bun run build
   as a server follow-up candidate in 000 and in the PR.
 - **A8 In-flight terminal replies win.** The hook (and finalizer) processes a terminal reply from a status
   request already in flight even after Cancel; a later 404 still takes the neutral path (A3). A1's promise
-  becomes: success is shown only after a terminal `done` status reply is observed.
+  becomes: success is shown only after a terminal `done` status reply is observed. The handoff owns one
+  parsed status-read operation rather than cloned `Response` bodies. Its 45 s budget covers fetch, body EOF
+  and JSON parsing; the finalizer also cancels that reader when the flow-wide deadline wins and never waits
+  a full retry interval beyond the deadline. This preserves the already-sent terminal reply without letting
+  a stalled body retain the module-scoped singleflight entry indefinitely (#6021).
 - **A9 Settle split at the guard.** Two helpers: `reloadAccountsAfterLogin(provider)` (awaited
   `fetchAccountSets`) and `refreshDerivedAfterLogin()` (`fetchConfig`, `fetchProviderQuotas(true)`,
   `bumpModelsRefresh`). The existing loop keeps its generation/mounted guard **between** them, keeps its

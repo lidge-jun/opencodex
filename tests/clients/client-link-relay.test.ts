@@ -1,3 +1,4 @@
+import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,6 +52,14 @@ function linkConnection(tunnelPort: number): OcxClientConnectionConfig {
     connectedAt: "2026-09-25T00:00:00.000Z",
     catalogSyncedAt: "2026-09-25T00:00:01.000Z",
   };
+}
+
+/** A real Home socket implementing the same connection-bound admission as production. */
+function authenticatedHome(dispatch: (req: Request) => Promise<Response>) {
+  const sessions = createLinkRelaySessions({ fingerprints: (keyId, linkId) =>
+    keyId === "ocx_data_fixture" && linkId === `lnk_${"a".repeat(16)}` ? [serviceApiTokenFingerprint(LINK_KEY)] : [] });
+  return Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch: (req, server) => sessions.dispatch(req, server, dispatch) });
 }
 
 function relayRequest(init: RequestInit = {}): Request {
@@ -398,10 +407,7 @@ describe("client link HTTP relay", () => {
   test("relays POST /v1/responses through a real machine listener socket with the stored key", async () => {
     writeFileSync(join(root, "service-api-token"), `${LINK_KEY}\n`, { mode: 0o600 });
     let received: Record<string, string | null> | undefined;
-    const hub = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(req) {
+    const hub = authenticatedHome(async req => {
         received = {
           method: req.method,
           path: new URL(req.url).pathname + new URL(req.url).search,
@@ -415,7 +421,6 @@ describe("client link HTTP relay", () => {
           body: await req.text(),
         };
         return Response.json({ relayed: true });
-      },
     });
     servers.push(hub);
     const machine = startMachineListener(0, { state: linkConnection(hub.port!), linkTunnel: connectedTunnel });
@@ -707,7 +712,7 @@ describe("client link relay while the tunnel reconnects", () => {
 
   test("the Child's listener holds a relayed request on its tunnel gate", async () => {
     writeFileSync(join(root, "service-api-token"), `${LINK_KEY}\n`, { mode: 0o600 });
-    const hub = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ relayed: true }) });
+    const hub = authenticatedHome(async () => Response.json({ relayed: true }));
     servers.push(hub);
     const gate = manualGate();
     const machine = startMachineListener(0, { state: linkConnection(hub.port!), linkTunnel: gate.tunnel });

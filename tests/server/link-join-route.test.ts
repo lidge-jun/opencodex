@@ -471,23 +471,79 @@ describe("client initiated link join", () => {
     expect(revokeCalls(calls)).toHaveLength(1);
   });
 
+  test("readiness polling stops after tunnel exit without waiting for its deadline", async () => {
+    const calls: string[][] = [];
+    let clock = 1, scans = 0, sleeps = 0, fetched = 0, connected = 0;
+    let releaseExit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { releaseExit = resolve; });
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => clock,
+      sleep: async ms => {
+        sleeps += 1; clock += ms; releaseExit(255);
+        await Promise.resolve();
+      },
+      writeState: () => {}, clearState: () => {},
+      spawnTunnel: () => ({ pid: 123, exited, stop: async () => {} }),
+      scanListenPids: () => { scans += 1; return { ok: true, pids: [] }; },
+      fetchImpl: async () => { fetched += 1; return new Response(null, { status: 401 }); },
+      connect: (async () => { connected += 1; }) as typeof import("../../src/client/connect").connectClient,
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(scans).toBe(1);
+    expect(sleeps).toBe(1);
+    expect(clock).toBe(101);
+    expect(fetched).toBe(0);
+    expect(connected).toBe(0);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
   test("a tunnel that exits during connect cannot commit the connection", async () => {
     const calls: string[][] = [];
     let releaseExit!: (code: number) => void;
     const exited = new Promise<number>(resolve => { releaseExit = resolve; });
     let stopped = 0;
     let connectCommitted = false;
+    let connectDrained = false;
     await expect(joinHome(joinDeps({
       runner: runnerFor(calls),
       writeState: () => {},
       clearState: () => {},
       spawnTunnel: () => ({ pid: 1, exited, stop: async () => { stopped += 1; } }),
       fetchImpl: challengedFetch(),
-      connect: (async () => { releaseExit(255); await new Promise(() => {}); connectCommitted = true; }) as typeof import("../../src/client/connect").connectClient,
+      connect: (async (_options, deps) => {
+        releaseExit(255);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          deps?.signal?.throwIfAborted();
+          connectCommitted = true;
+        } finally { connectDrained = true; }
+      }) as typeof import("../../src/client/connect").connectClient,
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(connectDrained).toBe(true);
     expect(connectCommitted).toBe(false);
     expect(stopped).toBe(1);
     expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("an exit queued after enrollment commit does not revoke the committed link", async () => {
+    const calls: string[][] = [], order: string[] = [];
+    let releaseExit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { releaseExit = resolve; });
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      writeState: () => {}, clearState: () => { order.push("clear"); },
+      spawnTunnel: () => ({ pid: 123, exited, stop: async () => { order.push("stop"); } }),
+      fetchImpl: challengedFetch(),
+      connect: (async (_options, deps) => {
+        deps?.signal?.throwIfAborted();
+        // Mirrors connectClient's synchronous final commit: no await follows it.
+        order.push("commit");
+        releaseExit(255);
+      }) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => { order.push("restart"); },
+    }), { alias: "home" })).resolves.toEqual({ linkId: LINK_ID, apiKeyId: API_KEY_ID });
+    expect(order).toEqual(["commit", "stop", "restart"]);
+    expect(revokeCalls(calls)).toHaveLength(0);
   });
 
   test("does not disclose the issued key when the tunnel exits during its spawn grace", async () => {
@@ -597,6 +653,28 @@ describe("client initiated link join", () => {
     expect(revokeCalls(calls)).toHaveLength(1);
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
   });
+
+  for (const code of ["join_connect_failed", "admission_failed"] as const) {
+    test(`rollback tunnel exit preserves the original ${code} cause`, async () => {
+      const calls: string[][] = [];
+      let exit!: (code: number) => void;
+      const exited = new Promise<number>(resolve => { exit = resolve; });
+      let stopped = 0, cleared = 0;
+      await expect(joinHome(joinDeps({
+        runner: runnerFor(calls), writeState: () => {},
+        clearState: () => { cleared += 1; },
+        spawnTunnel: () => ({ pid: 123, exited, stop: async () => { stopped += 1; exit(0); } }),
+        fetchImpl: challengedFetch(),
+        connect: (async () => {
+          if (code === "admission_failed") throw new ClientLinkJoinError(code);
+          throw new Error("catalog validation failed");
+        }) as typeof import("../../src/client/connect").connectClient,
+      }), { alias: "home" })).rejects.toMatchObject({ code });
+      expect(stopped).toBe(1);
+      expect(cleared).toBe(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
+    });
+  }
 
   test("keeps the sidecar and reports the link id when rollback revoke fails, then compensates before the next join", async () => {
     const sidecar = {

@@ -362,6 +362,18 @@ export interface OcxConfigRebaseProvenance {
   deletedTopLevelKeys: string[];
 }
 
+
+export type SkillsCatalogRefresh = "per_session" | "per_turn";
+
+export interface OcxSkillsConfig {
+  /**
+   * Refresh policy for the runtime skills catalog (#5569).
+   * `per_session` (default): snapshots incoming `<skills_instructions>` on the first turn of a trustworthy session and reuses it across turns to preserve the Anthropic prompt cache.
+   * `per_turn`: re-derives/passes through incoming skills instructions every turn (previous behavior).
+   */
+  catalog_refresh?: SkillsCatalogRefresh;
+}
+
 export type OcxRuntimeRole = "standalone" | "hub" | "client";
 
 export interface OcxHubConfig {
@@ -487,6 +499,8 @@ export interface OcxConfig {
   client?: OcxClientConnectionConfig;
   /** Operator-facing redaction policy for management and CLI projections. */
   privacy?: OcxPrivacyConfig;
+  /** Runtime skills catalog session snapshotting settings (#5569). */
+  skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */

@@ -69,10 +69,12 @@ Codex compatibility certificate setup follows the [certificate setup API](client
 
 Kiro management login starts the native device flow only when `POST /api/oauth/login`
 supplies `method: "builder-id"`, `"google"`, or `"github"`. A method-less request retains
-the Kiro CLI flow used by the dashboard chooser. The KiroDeviceLoginDialog and useKiroDeviceLogin GUI modules own the native chooser and polling. The kiro-device-login-finalizer GUI module continues terminal status reads after dialog unmount; a provisional cancel result is never treated as confirmed success. Native status and cancellation require `flowId`;
+the Kiro CLI flow used by the dashboard chooser. The KiroDeviceLoginDialog and useKiroDeviceLogin GUI modules own the native chooser and polling. The kiro-device-login-finalizer GUI module continues terminal status reads after dialog unmount; a provisional cancel result is never treated as confirmed success. Hook and finalizer share one status-read operation that owns fetch, bounded body consumption, parsing and cancellation. The complete read has a 45-second ceiling, the detached loop remains bounded by flow expiry plus 60 seconds (and 16 minutes maximum), and closing the dialog transfers rather than clones an in-flight reader so an already-observed terminal reply can still win. Native status and cancellation require `flowId`;
 provider-keyed status and cancellation retain their previous behavior. Device-flow responses
 contain only the flow handle, method, public verification fields, state, expiry, and a
 duplicate-profile warning when applicable. The dashboard renders a native device dialog and links only exact Builder ID or Kiro-owned verification hosts. Kiro account rows show automatic-selection exclusion reasons when present.
+
+> Decision record: [ADR-6021](decisions/ADR-6021-kiro-status-read-ownership.md)
 
 OpenCodex uses three mutually exclusive reusable admission credential classes:
 
@@ -98,6 +100,13 @@ capability, and an unexpected management response so a reachable `401` cannot be
 "proxy not running." Legacy or configured-port-only listeners still satisfy ordinary liveness, but
 their detailed CLI health remains unavailable until restarted with an attested runtime record and
 capability-aware server.
+
+The server signs every response to a local-read capability with `x-opencodex-attestation-proof`
+over that request's nonce, PID, and port. A caller that decides something from the answer opts in
+with `requireResponseProof`, which refuses an unsigned or mismatched response: the capability
+proves the request to the server, and only the proof tells the caller that the answer came from it
+and not from a process that took the port. `ocx status` requires the proof before it prefers the
+live proxy's `/api/startup-health` verdict over its own shell-local probe (#5977).
 
 The desktop tray uses the same read-v1 contract for its fixed GET allowlist in
 `src/lib/local-management-capability.ts`, including `/api/oauth/accounts` and

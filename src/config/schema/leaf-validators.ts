@@ -1055,3 +1055,10 @@ export const spendSchema = z.object({
   pool: spendScopeSchema.optional(),
   retentionDays: z.number().int().min(1).max(365).optional(),
 }).strict();
+
+/**
+ * Runtime skills catalog configuration (#5569).
+ */
+export const skillsConfigSchema = z.object({
+  catalog_refresh: z.enum(["per_session", "per_turn"]).optional(),
+}).strict();

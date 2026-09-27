@@ -76,7 +76,7 @@ export function routedCustomToolTargetName(
   if (wireName === undefined) return undefined;
   if (names.has(wireName)) return wireName;
   if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
-  const normalized = normalizeDeclaredToolName(wireName, declaredNames);
+  const normalized = normalizeDeclaredToolName(wireName, declaredNames, undefined, names);
   return normalized !== wireName && names.has(normalized) ? normalized : undefined;
 }
 

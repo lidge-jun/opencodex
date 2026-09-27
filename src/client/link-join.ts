@@ -287,7 +287,7 @@ async function waitForReady(
     }
     const remaining = deadline - now();
     if (remaining <= 0) throw new ClientLinkJoinError("join_tunnel_failed");
-    await sleep(Math.min(JOIN_TUNNEL_POLL_MS, remaining));
+    await Promise.race([tunnelExited, sleep(Math.min(JOIN_TUNNEL_POLL_MS, remaining))]);
   }
 }
 
@@ -360,29 +360,45 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
     throw new ClientLinkJoinError(code);
   }
 
+  const enrollmentAbort = new AbortController();
+  let enrollmentFinished = false;
   try {
     if (!tunnel) throw new ClientLinkJoinError("join_tunnel_failed");
     const connect = deps.connect ?? connectClient;
-    // Keep watching the tunnel until the connection commits: an exited tunnel
-    // must not let the issued key ride out to whatever next holds the port.
-    await Promise.race([
-      tunnel.exited.then(() => { throw new ClientLinkJoinError("join_tunnel_failed"); }),
-      connect({
-        serverUrl: `http://127.0.0.1:${tunnelPort}`,
-        managementUrl: `http://127.0.0.1:${tunnelPort}`,
-        credential: { kind: "link", apiKeyId: issued.apiKeyId, key: issued.key },
-        transport: "link",
-        link: { tunnelPort, linkId: issued.linkId },
-        selectedClients: deps.selectedClients ?? ["codex", "claude"],
-        managementTransport: "direct",
-      }, {
-        fetchImpl: deps.fetchImpl,
-        ...deps.connectDeps,
-      }),
-    ]);
+    // A tunnel exit cancels work; it is NOT a competing terminal result. The connect
+    // transaction alone decides commit versus rollback, so an exit queued immediately
+    // after commit cannot revoke a key that a connected client has already retained.
+    void tunnel.exited.then(() => {
+      if (!enrollmentFinished) enrollmentAbort.abort(new ClientLinkJoinError("join_tunnel_failed"));
+    });
+    const signal = deps.connectDeps?.signal
+      ? AbortSignal.any([enrollmentAbort.signal, deps.connectDeps.signal]) : enrollmentAbort.signal;
+    // Observe a tunnel that exited after readiness before starting any enrollment write.
+    await Promise.resolve();
+    signal.throwIfAborted();
+    await connect({
+      serverUrl: `http://127.0.0.1:${tunnelPort}`,
+      managementUrl: `http://127.0.0.1:${tunnelPort}`,
+      credential: { kind: "link", apiKeyId: issued.apiKeyId, key: issued.key },
+      transport: "link",
+      link: { tunnelPort, linkId: issued.linkId },
+      selectedClients: deps.selectedClients ?? ["codex", "claude"],
+      managementTransport: "direct",
+    }, {
+      fetchImpl: deps.fetchImpl,
+      ...deps.connectDeps,
+      signal,
+    });
   } catch (error) {
+    // connectClient has drained its local rollback before rejecting. Only then can
+    // the tunnel and the remote key be compensated without racing a late writer.
+    const tunnelAborted = enrollmentAbort.signal.aborted;
+    enrollmentFinished = true;
     await rollback(deps, issued.linkId, tunnel);
-    throw new ClientLinkJoinError(error instanceof ClientLinkJoinError ? error.code : "join_connect_failed");
+    throw new ClientLinkJoinError(tunnelAborted ? "join_tunnel_failed"
+      : error instanceof ClientLinkJoinError ? error.code : "join_connect_failed");
+  } finally {
+    enrollmentFinished = true;
   }
 
   await stopTunnel(tunnel);

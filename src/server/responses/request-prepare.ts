@@ -22,6 +22,7 @@ import {
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
 import { resolveContextPrincipal } from "../auth-cors";
+import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
   isShadowSourceModel,
   shadowSourceModelPrefix,
@@ -313,6 +314,15 @@ export async function prepareResponsesRequest(
         `[opencodex] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
       );
   }
+
+  const skillsSnapshotScopeKey = resolveSkillsSnapshotScopeKey({
+    req,
+    config,
+    admission: options.admission,
+        promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort,
+  });
+  // Substitutes a known snapshot now; a new catalog is only stored once the request is prepared.
+  const commitSkillsSnapshot = snapshotSkillsCatalogInBody(body, skillsSnapshotScopeKey, config);
 
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
@@ -1263,6 +1273,7 @@ export async function prepareResponsesRequest(
     ? admissionState.authCtx.accountId
     : config.activeCodexAccountId ?? null;
 
+  commitSkillsSnapshot?.();
   return {
     inboundWire,
     translatorBudget,

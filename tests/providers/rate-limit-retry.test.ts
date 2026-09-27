@@ -109,6 +109,28 @@ describe("rateLimitRetryPolicyFor", () => {
     }
   });
 
+  // #5180: a single Command Code key cannot fail over and the Codex client does not retry a 429,
+  // so a burst on a long muse-spark turn aborted it. Both canonical endpoints wait patiently.
+  test("falls back to the patient policy for key-auth Command Code without the knob", () => {
+    const patient = { enabled: true, attempts: 6, intervalMs: 10_000, maxIntervalMs: 60_000, respectRetryAfter: true };
+    for (const baseUrl of ["https://api.commandcode.ai/provider/v1", "https://api.commandcode.ai"]) {
+      expect(rateLimitRetryPolicyFor({ baseUrl, authMode: "key", adapter: "openai-chat" } as OcxProviderConfig))
+        .toEqual(patient);
+      expect(rateLimitRetryPolicyFor({ baseUrl, adapter: "openai-chat" } as OcxProviderConfig)).toEqual(patient);
+    }
+    // OAuth Command Code is never replayed on the same token.
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://api.commandcode.ai", authMode: "oauth",
+    } as OcxProviderConfig)).toBeNull();
+    // An explicit opt-out wins, and a custom relay keeps fail-fast.
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://api.commandcode.ai/provider/v1", retryOn429: { enabled: false },
+    } as OcxProviderConfig)).toBeNull();
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://relay.example.test/provider/v1", authMode: "key",
+    } as OcxProviderConfig)).toBeNull();
+  });
+
   test("honors explicit values", () => {
     expect(rateLimitRetryPolicyFor({
       retryOn429: { attempts: 10, intervalMs: 1_000, maxIntervalMs: 5_000, respectRetryAfter: false },

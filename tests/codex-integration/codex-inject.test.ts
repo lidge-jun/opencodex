@@ -25,6 +25,7 @@ import {
   appendOcxProviderTableBlock,
   extractOcxProviderTableBlock,
 } from "../../src/codex/inject/remove";
+import { remoteThreadListCompatibilityWarning } from "../../src/codex/inject/routing-target";
 import { OCX_ROUTING_MARKER_LINE, OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
@@ -32,6 +33,26 @@ import {
 } from "../../src/codex/subagent-defaults";
 
 describe("Codex config injection", () => {
+  test("remote-list compatibility warning follows provider identity, not provider display name", () => {
+    const designB = standaloneCodexRoutingTarget(10100, {});
+    expect(remoteThreadListCompatibilityWarning(designB)).toBe("");
+    for (const config of [
+      { codexClientCompaction: true },
+      { codexDesktopAuthless: true },
+      { hostname: "192.168.1.20" },
+    ]) {
+      const target = standaloneCodexRoutingTarget(10100, config);
+      const before = structuredClone(target);
+      const warning = remoteThreadListCompatibilityWarning(target);
+      expect(warning).toContain("thread/list");
+      expect(warning).toContain("modelProviders: []");
+      expect(warning).toContain("not deleted history");
+      expect(target).toEqual(before);
+      expect(buildProfileFileForTarget(target, null, false, undefined, "Custom label"))
+        .toContain('model_provider = "opencodex"');
+    }
+  });
+
   describe("provider display name (#4810)", () => {
     const target = standaloneCodexRoutingTarget(10100, {});
     // The reference profile only carries a provider table when the target uses one; plain

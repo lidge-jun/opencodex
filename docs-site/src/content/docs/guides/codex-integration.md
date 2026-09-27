@@ -653,6 +653,15 @@ code-mode `exec` has the call converted into the matching `tools.<helper>(...)` 
 `exec`. A catalog that genuinely declares the bare goal tool keeps it, and a catalog that declares
 neither the tool nor `exec` still rejects the call as undeclared.
 
+On routed conversions with a verified freeform code-mode `exec` catalog, structured calls
+sent directly to
+`mcp__<server>__<tool>` (including a provider-added `default.` prefix) are also
+wrapped as nested host-tool calls. This avoids a retry
+caused solely by a model omitting the `exec` wrapper. Explicitly declared MCP tools
+keep their normal behavior; an ordinary JSON function named `exec` does not enable
+this repair. Unknown tools still fail at the host. Tool-call records printed as
+ordinary answer text are not executed by this compatibility rule.
+
 For routed Responses turns, an explicit tool-enforcement policy also rejects client tool calls if
 the request's declared-tool catalog is unavailable. An empty declared catalog rejects every client
 tool call; Chat and Anthropic clients retain their own tool-validation responsibility.
@@ -1104,6 +1113,27 @@ When returning to the root-override form, OpenCodex retains an existing `[model_
 `ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They take every OpenCodex root routing key out and keep the `[model_providers.opencodex]` definition on disk, so conversations whose rows still name that provider keep resolving while plain `codex` stops pointing at the proxy. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
 
 Enabling the integration in its provider-table form on a home whose `openai`-tagged conversations Codex has already paginated used to be refused outright with `history_paginated_openai_requires_native_writer`: nothing was written and the integration stayed disabled. OpenCodex now completes that transition by keeping the managed root `openai_base_url` override beside the `[model_providers.opencodex]` table. Codex merges the override onto its built-in `openai` provider, so those conversations keep reaching the proxy without being relabeled and no rollout byte or thread row is touched. Only a routing form that requires the `x-opencodex-api-key` admission header still refuses, because Codex's built-in provider cannot carry that header; its message names the two settings that resolve it — route Codex through the loopback listener so the override can be retained, or set `syncResumeHistory` to `false` to accept that those conversations resume against Codex's own OpenAI endpoint.
+
+### Remote thread-list provider filters
+
+Provider-table routing changes the default provider id for new conversations to `opencodex` while
+history that cannot safely be relabeled may remain tagged `openai`. Some native app-server/mobile
+versions treat an omitted `thread/list.modelProviders` filter as the current default provider only,
+so those existing conversations can disappear from that remote list even though their database row
+and rollout are intact. A compatible list client can send `modelProviders: []` to request all
+providers. OpenCodex cannot rewrite that RPC because the remote client talks directly to Codex's
+native app-server rather than the inference proxy.
+
+`ocx sync` and `ocx start` include the warning when they apply a provider-table route. If a
+user-owned root URL sends the command down the no-routing branch, the CLI omits the warning. In
+client-compaction mode, the CLI can retain that URL, apply the `opencodex` provider table, and
+include the warning. The dashboard shows a separate preference hint when either setting is enabled.
+It appears once if both settings are enabled, regardless of the root URL. The hint reports enabled
+preferences; it does not mean Authless Desktop is effective on the current route. Authless Desktop
+applies only to effective loopback authless routing and is ignored for remote-client routing or
+listeners that require an admission header. The warning is not a migration: OpenCodex does not edit
+provider tags merely to influence a client-side list filter. Verify the conversation in native Codex
+and the app-server/client version; do not rewrite paginated history to make a remote list include it.
 
 Do not rewrite an active paginated rollout or thread row to migrate those conversations yourself. Close the affected conversation before any recovery, and report the exact error and versions without uploading private history. A backup or a successful script alone does not prove the conversation is visible again. Check the restored conversation in Codex after reopening.
 

@@ -86,6 +86,8 @@ function buildResponseJSONWithBudget(
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
     /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
+    /** Bare custom declarations; unlike freeformToolNames, excludes foreign namespace children. */
+    bareCustomToolNames?: ReadonlySet<string>;
     /** See `bridgeToResponsesSSE`: enforcement is separate from normalization (#4735). */
     enforceDeclaredToolNames?: boolean;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
@@ -451,7 +453,7 @@ function buildResponseJSONWithBudget(
           rememberReasoningForCall(e.id, rawReasoningForNextToolCall, replayCacheScope);
         }
         flushToolCall();
-        const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames);
+        const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames, undefined, options?.bareCustomToolNames);
         if (
           (options?.enforceDeclaredToolNames === true || options?.declaredToolNames != null)
           && options?.enforceDeclaredToolNames !== false

@@ -17,6 +17,7 @@ import {
   remoteGuiConfigSchema,
   runtimeRoleSchema,
   spendSchema,
+  skillsConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -79,6 +80,7 @@ export const configSchema = z.object({
   // A malformed privacy block must never be read as "unmask": .catch(undefined) drops it and
   // emailMaskingEnabled then falls back to masked, which is also what an absent block means.
   privacy: z.object({ maskEmails: z.boolean().optional() }).strict().optional().catch(undefined),
+  skills: skillsConfigSchema.optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",

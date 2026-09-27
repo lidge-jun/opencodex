@@ -22,6 +22,7 @@ import {
   hasExplicitWireToolCatalog,
   collectDeclaredWireToolNames,
   collectDeclaredBareWireToolNames,
+  collectDeclaredBareCustomWireToolNames,
   collectDeclaredNamelessClientCallTypes,
   collectProviderExecutedCallTypes,
   undeclaredToolCallName,
@@ -314,6 +315,7 @@ export async function preparePassthroughExchange(
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
     const clientDeclaredBareWireToolNames = collectDeclaredBareWireToolNames(clientToolAuthorizationBody);
+    const clientDeclaredBareCustomWireToolNames = collectDeclaredBareCustomWireToolNames(clientToolAuthorizationBody);
     const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
       clientToolAuthorizationBody,
     );
@@ -361,6 +363,11 @@ export async function preparePassthroughExchange(
         ) routedCustomToolRepairNames.add(name);
       }
     }
+    // Only grant direct MCP recovery when this delivery actually restores converted custom
+    // calls. Native forward and injection paths have no such rewrite.
+    const recoverableBareCustomWireToolNames = new Set(
+      [...clientDeclaredBareCustomWireToolNames].filter(name => routedCustomToolNames.has(name)),
+    );
     for (const name of request.convertedRoutedToolSearchNames ?? []) {
       // The adapter already keeps this set empty when tool_choice forbids the private search.
       // Its wire name may be collision-aliased, so comparing it to the caller-facing name here
@@ -560,6 +567,7 @@ export async function preparePassthroughExchange(
         declaredNamelessClientCallTypes,
         providerExecutedCallTypes,
         declaredBareWireToolNames,
+        recoverableBareCustomWireToolNames,
       ) !== undefined) {
         inspectionSawUndeclaredTool = true;
       }
@@ -605,6 +613,7 @@ export async function preparePassthroughExchange(
           declaredNamelessClientCallTypes,
           providerExecutedCallTypes,
           declaredBareWireToolNames,
+          recoverableBareCustomWireToolNames,
         ) !== undefined
       ) {
         return;
@@ -1815,6 +1824,7 @@ export async function preparePassthroughExchange(
     },
     declaredWireToolNames,
     declaredBareWireToolNames,
+    recoverableBareCustomWireToolNames,
     declaredNamelessClientCallTypes,
     authorizedBareNamespaceToolAliases,
     normalizeFunctionCompletionJson,

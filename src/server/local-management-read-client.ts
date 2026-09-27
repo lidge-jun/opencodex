@@ -1,5 +1,9 @@
 import { readRuntimePort, type RuntimePortState } from "../config/process-state";
-import { createLocalAttestationChallenge } from "../lib/local-management-attestation";
+import {
+  LOCAL_ATTESTATION_PROOF_HEADER,
+  createLocalAttestationChallenge,
+  verifyLocalAttestationProof,
+} from "../lib/local-management-attestation";
 import {
   LOCAL_MANAGEMENT_CAPABILITY_HEADER,
   LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
@@ -14,7 +18,10 @@ import { probeHostname, type LiveProxy } from "./proxy-liveness";
 
 export type LocalManagementReadResult =
   | { kind: "response"; response: Response; targetPid: number }
-  | { kind: "unavailable"; reason: "unattested-target" | "runtime-mismatch" | "capability-unavailable" | "transport" };
+  | {
+    kind: "unavailable";
+    reason: "unattested-target" | "runtime-mismatch" | "capability-unavailable" | "transport" | "unattested-response";
+  };
 
 export interface LocalManagementReadDeps {
   fetchImpl?: typeof fetch;
@@ -25,6 +32,12 @@ export interface LocalManagementReadDeps {
 
 export interface LocalManagementReadRequestDeps extends LocalManagementReadDeps {
   timeoutMs?: number;
+  /**
+   * Require the response to carry the server's attestation over this request's nonce. The
+   * capability authenticates the request to the real server; only this proof tells the caller
+   * that the answer came from it and not from whatever process now holds the port.
+   */
+  requireResponseProof?: boolean;
 }
 
 /**
@@ -83,6 +96,12 @@ export async function fetchBoundLocalManagementRead(
         signal: AbortSignal.timeout(deps.timeoutMs ?? 4_000),
       },
     );
+    if (deps.requireResponseProof && !verifyLocalAttestationProof(
+      runtime.attestationSecret, nonce, target.pid, target.port, response.headers.get(LOCAL_ATTESTATION_PROOF_HEADER),
+    )) {
+      void response.body?.cancel().catch(() => {});
+      return { kind: "unavailable", reason: "unattested-response" };
+    }
     return { kind: "response", response, targetPid: target.pid };
   } catch {
     return { kind: "unavailable", reason: "transport" };

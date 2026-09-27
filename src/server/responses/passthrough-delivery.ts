@@ -313,6 +313,7 @@ export async function deliverPassthroughResponse(
     | "declaredNamelessClientCallTypes"
     | "providerExecutedCallTypes"
     | "declaredBareWireToolNames"
+    | "recoverableBareCustomWireToolNames"
     | "rememberPassthroughResponse"
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
@@ -336,6 +337,7 @@ export async function deliverPassthroughResponse(
     declaredNamelessClientCallTypes,
     providerExecutedCallTypes,
     declaredBareWireToolNames,
+    recoverableBareCustomWireToolNames,
     rememberPassthroughResponse,
     noteInspectedPayload,
     normalizeFunctionCompletionJson,
@@ -732,6 +734,7 @@ export async function deliverPassthroughResponse(
             declaredNamelessClientCallTypes,
             providerExecutedCallTypes,
             declaredBareWireToolNames,
+            recoverableBareCustomWireToolNames,
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -998,6 +1001,7 @@ export async function deliverPassthroughResponse(
               declaredNamelessClientCallTypes,
               providerExecutedCallTypes,
               declaredBareWireToolNames,
+              recoverableBareCustomWireToolNames,
             );
           } catch {
             return undefined;

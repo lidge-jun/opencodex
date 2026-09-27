@@ -101,6 +101,8 @@ export function bridgeToResponsesSSE(
     onUsage?: (usage: OcxUsage | undefined) => void;
     /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
+    /** Bare custom declarations; unlike freeformToolNames, excludes foreign namespace children. */
+    bareCustomToolNames?: ReadonlySet<string>;
     /**
      * Whether `declaredToolNames` is an authorization boundary this proxy enforces, or only the
      * catalog used to normalize provider-invented names back to declared ones.
@@ -1013,7 +1015,7 @@ export function bridgeToResponsesSSE(
                 rememberReasoningForCall(event.id, rawReasoningForNextToolCall, replayCacheScope);
               }
               if (currentToolCall) closeCurrentToolCall();
-              const effectiveName = normalizeDeclaredToolName(event.name, options?.declaredToolNames);
+              const effectiveName = normalizeDeclaredToolName(event.name, options?.declaredToolNames, undefined, options?.bareCustomToolNames);
               const codeModeHelperName = effectiveName === "exec" && event.name !== effectiveName
                 ? event.name
                 : undefined;

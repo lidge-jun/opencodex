@@ -3129,6 +3129,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.codexDesktopAuthlessHint": "預設關閉。為符合條件的本機連線略過獨立的 Desktop 登入。仍需上游供應商憑證。變更後請重新啟動 Codex。依賴帳戶的 Desktop 功能可能無法使用。",
   "dash.codexClientCompaction": "使用用戶端壓縮",
   "dash.codexClientCompactionHint": "預設關閉，僅適用於已驗證的 loopback 路由。未來壓縮會儲存可攜的純文字摘要，同時保留 OpenCodeX 與 V2 提供方路由；已設定的提供方可能處理摘要並消耗其額度。既有 ocx1 歷程仍須另行復原。變更後請重新啟動 Codex。",
+  "dash.codexRemoteHistoryHint": "供應商表路由可能使既有的 openai 標記對話在部分行動版遠端清單中隱藏。歷程並未刪除。遠端用戶端必須列出所有供應商；此開關不會修正用戶端的清單篩選器。",
   "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
   "models.fastProvider": "Fast 模式", "models.fastProviderHint": "以 2 倍價格消耗用量額度", "models.fastEnabled": "已開啟 Fast 模式", "models.fastDisabled": "已關閉 Fast 模式", "models.fastSaveFailed": "無法儲存 Fast 模式",
   "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",

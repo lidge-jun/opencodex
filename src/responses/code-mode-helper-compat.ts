@@ -3,12 +3,15 @@ import {
   normalizeApplyPatchDelimiters,
   unwrapFreeformToolInput,
 } from "./apply-patch-envelope";
-import { declaresCodeModeExec } from "../types/tools";
+import { declaresCodeModeExec, isCodeModeMcpDirectName } from "../types/tools";
 import { parseCodeModeShellInput } from "./code-mode-shell-input";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
+
+/** A nested host tool reachable as `tools.<name>` when the flattened name is one identifier. */
+const CODE_MODE_IDENTIFIER_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * Convert a nested Code Mode helper call into unified-exec JavaScript.
@@ -94,6 +97,16 @@ export function compileCodeModeHelperInput(
   }
   if (helperName === "create_goal" || helperName === "get_goal" || helperName === "update_goal") {
     return `const result = await tools.${helperName}(${JSON.stringify(args)});\ntext(result);`;
+  }
+  if (isCodeModeMcpDirectName(helperName)) {
+    // Direct `mcp__<server>__<tool>` call under a code-mode catalog: the emitted name IS the
+    // nested host tool's name, so compile to the same `tools.<name>(args)` the model could
+    // have written. Dot access when the name is a clean identifier (the common case); bracket
+    // access otherwise, so a hyphenated server name still addresses the same tool.
+    const target = CODE_MODE_IDENTIFIER_NAME.test(helperName)
+      ? `tools.${helperName}`
+      : `tools[${JSON.stringify(helperName)}]`;
+    return `const result = await ${target}(${JSON.stringify(args)});\ntext(result);`;
   }
   return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
 }
