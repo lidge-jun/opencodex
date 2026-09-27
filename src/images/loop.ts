@@ -1064,6 +1064,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      hideRawReasoning: parsed.options.hideRawReasoning,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? {

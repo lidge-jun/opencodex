@@ -479,6 +479,9 @@ the desktop thinking band shows the "Thinking…" placeholder, and raw text appe
 which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
 grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
 
+The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only, while
+`thinking_delta` summaries keep streaming; the hidden text still round-trips in a txt-only envelope.
+
 For models that require a reasoning placeholder, a preserved thinking-only assistant turn with no
 plaintext receives that placeholder even when it has no tool call. Otherwise the Chat serializer
 drops the turn and strict DeepSeek continuations can reject the following request (#5421).

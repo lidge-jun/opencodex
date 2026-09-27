@@ -1424,6 +1424,7 @@
     "responses-function-tool-repair.test.ts": "responses",
     "responses-hosted-tool-declaration.test.ts": "responses",
     "responses-hosted-tool-min-spread.test.ts": "responses",
+    "responses-hide-raw-reasoning.test.ts": "responses",
     "responses-image-gen-repair.test.ts": "responses",
     "responses-inbound-store-default.test.ts": "responses",
     "responses-item-id-repair.test.ts": "responses",

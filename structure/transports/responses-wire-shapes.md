@@ -561,6 +561,11 @@ summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
 active effort and omits summary; explicit `summary: "none"` still hides it.
+The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only —
+openai-chat `reasoning_content`, kiro tags, Gemini thought parts — while `thinking_delta`
+summaries keep streaming; the hidden text still round-trips in a txt-only envelope, and a fallback
+route without the option shows raw reasoning again. A native passthrough route relays the
+upstream's own frames and ignores the option.
 
 ## Codex App visualization references
 
