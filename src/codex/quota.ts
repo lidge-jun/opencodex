@@ -4,6 +4,7 @@ import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
 import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
+import { observeCodexLowQuota } from "./low-quota-observer";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
@@ -322,6 +323,8 @@ export function setAccountQuotaFromParsed(
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
+    if (!isMain) observeCodexLowQuota(accountId, quota);
+    else if (mainWriter && policyQuota) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
 }
@@ -650,6 +653,9 @@ export function updateAccountQuota(
   // otherwise bypass detection AND leave a stale baseline that corrupts the next real diff.
   // The credits-only path at setAccountQuotaFromParsed deliberately does not notify; this one
   // writes window percentages and deadlines, so it must.
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID) observeCodexLowQuota(accountId, {
+    weeklyPercent: nextWeekly, weeklyResetAt: nextWeeklyResetAt,
+  });
   notifyCodexQuotaSnapshot(accountId, quota);
 }
 

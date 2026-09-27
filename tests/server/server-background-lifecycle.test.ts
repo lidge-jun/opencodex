@@ -14,7 +14,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
+import { observeCodexLowQuota } from "../../src/codex/low-quota-observer";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { startServer, type StartServerDeps } from "../../src/server";
 import { registerStateSweepAfterTick } from "../../src/lib/state-store-sweeper";
 import { getActiveMemoryWatchdog } from "../../src/server/memory-watchdog";
@@ -291,6 +293,23 @@ afterEach(async () => {
 });
 
 describe("server background lifecycle", () => {
+  test("low-quota pause survives reload and server stop unregisters protection", async () => {
+    const config = baseConfig();
+    config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
+    config.codexPool = { lowQuotaProtection: {
+      enabled: true, threshold: 80,
+      windows: { short: true, weekly: true }, actions: { pause: true, notify: false },
+    } };
+    saveConfig(config);
+    const server = trackedStart();
+    observeCodexLowQuota("low-quota-pool", { shortPercent: 85 });
+    expect(loadConfig().pausedCodexAccountIds).toContain("low-quota-pool");
+    await stopTracked(server);
+    // An account not previously paused would act if stop leaked the registration.
+    observeCodexLowQuota(MAIN_CODEX_ACCOUNT_ID, { weeklyPercent: 95 });
+    expect(loadConfig().pausedCodexAccountIds).toEqual(["low-quota-pool"]);
+  });
+
   test("stopping the newer server preserves the older server's process-wide work", async () => {
     saveConfig(baseConfig());
     const probe = installBackgroundTimerProbe();

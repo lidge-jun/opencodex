@@ -1057,6 +1057,7 @@ describe("activation window stays synchronous", () => {
    * function is the hole this list exists to keep visible.
    */
   const UNRESOLVED_CALLEES: Record<string, string> = {
+    unregisterLowQuotaProtection: "let-binding holding registerCodexLowQuotaProtection's cleanup on bind failure; registerLowQuotaObserver returns a synchronous Map.delete closure.",
     unregisterQuotaAutoRefresh: "let-binding holding the return of registerCodexQuotaAutoRefreshWorker, optional-called on the bind-failure path. There is no `function unregisterQuotaAutoRefresh` to inspect; following the assignment would be depth 2.",
   };
 

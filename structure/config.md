@@ -504,7 +504,7 @@ Codex display-cache expiry, retained blocking main-policy evidence, and reset hi
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 `codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions). Optional `codexPool.startIdleWindows` defaults off and follows the [idle-window steering contract](providers/openai-accounts.md#idle-window-steering), using real new requests to start observed idle 5-hour windows.
-
+`codexPool.lowQuotaProtection` is opt-in: `src/codex/low-quota-protection.ts` persists pauses in `pausedCodexAccountIds` and emits identifier-free notices once per account/window threshold episode. Fresh accepted observations reach `src/codex/low-quota-observer.ts`; credits-only and expired windows do not act. A new reset boundary or a below-threshold observation re-arms notices, but never automatically resumes a paused account. Server shutdown unregisters the observer.
 Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 The unregistered executor CLI module stores Remote Workspace state separately from client configuration; see [Remote Workspace](remote-workspace.md).
@@ -596,5 +596,4 @@ so wrong types and unknown nested fields are rejected rather than silently saved
 `apiSurfaces` and `protocols` on `src/types/config.ts` are parsed by `src/protocols/settings.ts` only; [Protocol Paths](data-planes/protocol-paths.md#settings) owns their schema handling, meaning and the one writer (`PATCH /api/protocols/settings`), including why closing Messages also writes `claudeCode.enabled` through `commitClaudeCodeBlock` (`src/claude/claude-code-block.ts`, the sentinel-stamping block writer every management route uses).
 
 Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
-
 Proxy activation and credential-safe CLI output follow [Proxy Configuration](config-proxy.md).

@@ -1,4 +1,5 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
+import { registerCodexLowQuotaProtection } from "../codex/low-quota-protection";
 import { AuxiliaryListenerBindError } from "./ports";
 import { runAdmittedBodyWork } from "./inbound-body-admission";
 import {
@@ -636,6 +637,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const linkPolicy = (): RequestPolicyView => requestPolicyView(config, LINK_INGRESS_HOSTNAME, { allowedKeyIds: optionalListeners.linkAdmissionKeyIds() });
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   let unregisterQuotaAutoRefresh: (() => void) | null = null;
+  let unregisterLowQuotaProtection: (() => void) | null = null;
   let remoteWorkspaceStopping = false;
   let remoteWorkspaceShutdown: (() => Promise<void>) | undefined;
   const managementApiDeps: ManagementApiDeps = {
@@ -656,12 +658,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   };
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    unregisterLowQuotaProtection = registerCodexLowQuotaProtection(config);
     unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
       ?? registerCodexQuotaAutoRefreshWorker)(config);
-    // External `ocx config set` / direct config.json edits run in other
-    // processes; poll the file so Logs/Usage display prices follow them live.
-    // Started inside the guarded startup transaction so the catch below can
-    // release the owner-scoped lease on any listener failure.
+    // Poll external pricing edits; the startup catch releases this owner-scoped lease.
     userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
     const serveOptions = createServeOptions({
       drainingResponse,
@@ -737,6 +737,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort,
       maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
   } catch (error) {
+    unregisterLowQuotaProtection?.();
     unregisterQuotaAutoRefresh?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
@@ -753,10 +754,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
       remoteWorkspaceStopping = true;
+      unregisterLowQuotaProtection?.();
       liveCallBindings.clear();
-      // Disarm the package-tree restart timer before listener teardown: a queued
-      // replacement callback must not call acceptSystemRestart() after stop() has
-      // begun, or it would schedule a drain-and-restart on a stopped server.
+      // Disarm the package-tree restart timer before teardown can schedule another restart.
       if (!packageRefreshStopped) {
         packageRefreshStopped = true;
         stopPackageRefresh();
