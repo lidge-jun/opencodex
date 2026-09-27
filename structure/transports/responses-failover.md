@@ -565,19 +565,7 @@ stable ceiling without making a cooled account eligible. Same-provider auth reco
 physical target, rather than a diagnostic key, and a real send is charged once even when recovery
 rebuilds the request.
 
-On primary Antigravity inference through the Google adapter's main dispatch, a pre-output 401 first
-refreshes and replays the same account. A second 401, or a terminal credential-refresh failure that
-marks the failed account for reauthentication, may switch once to an eligible live sibling
-under the existing request rotation and credential-hop budgets. The sibling request keeps the Google
-adapter's ordinary transient retry policy, and every physical send is charged to the request's shared
-send budget. Transient refresh failures keep
-their sanitized authentication error. The initial pool activation
-is captured before the refused send, so marking the failed account for reauthentication does not
-remove an already eligible sibling. The failed credential generation gets a 60-second process-local
-cooldown; a newer credential generation is not cooled by stale refusal evidence. The sibling's bearer
-and Cloud Code Assist project travel as one snapshot. Continuations, native Responses passthrough,
-image and web-search sidecars, and committed output do not use this 401 rotation. A structured
-Antigravity validation-required 403 receives a clearer bounded error message but does not rotate.
+Antigravity main adapter dispatch: after same-account refresh, a second pre-output 401 or terminal refresh failure may switch once to a live sibling within existing budgets; continuations, passthrough, sidecars and 403s never rotate (contract: `docs-site/src/content/docs/reference/configuration/providers.md`, `rotateAntigravityAccountOnAuthRefusal` in `src/oauth/generic-account-failover.ts`).
 
 Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes
