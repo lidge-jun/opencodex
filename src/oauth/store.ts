@@ -1137,11 +1137,19 @@ export async function saveAccountCredential(
   const safe = normalizeCredential(cred);
   if (!safe) return;
   await mutateStore(store => {
-    const account = store[provider]?.accounts.find(a => a.id === accountId);
-    if (!account) return;
+    const set = store[provider];
+    const account = set?.accounts.find(a => a.id === accountId);
+    if (!set || !account) return;
     account.credential = safe;
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
+    // A pause that found no usable fallback leaves the active id on a paused row. Once this
+    // reauthentication makes an unpaused account usable, hand the selection to it.
+    const active = set.accounts.find(a => a.id === set.activeAccountId);
+    if (active?.paused === true && account.paused !== true && account.id !== active.id) {
+      set.activeAccountId = account.id;
+      set.selectionRevision = randomUUID();
+    }
   }, [provider, accountId, safe], { assertBeforePersist: opts.assertBeforePersist });
 }
 

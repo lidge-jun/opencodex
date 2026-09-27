@@ -683,6 +683,23 @@ describe("multi-account auth store", () => {
     expect(survivor?.needsReauth).not.toBe(true);
   });
 
+  test("reauthenticating the only other account takes over from a paused active account", async () => {
+    await saveCredential("xai", cred({ accountId: "held-a", access: "access-a" }));
+    await saveCredential("xai", cred({ accountId: "stale-b", access: "access-b" }));
+    const set = getAccountSet("xai")!;
+    const activeId = set.activeAccountId;
+    const otherId = set.accounts.find(account => account.id !== activeId)!.id;
+    await markAccountNeedsReauth("xai", otherId, true);
+    // No usable fallback: the paused account stays selected.
+    await setAccountPaused("xai", activeId, true);
+    expect(getAccountSet("xai")!.activeAccountId).toBe(activeId);
+
+    await saveAccountCredential("xai", otherId, cred({ accountId: "stale-b", access: "access-b2" }));
+    const after = getAccountSet("xai")!;
+    expect(after.activeAccountId).toBe(otherId);
+    expect(after.accounts.find(account => account.id === activeId)?.paused).toBe(true);
+  });
+
   test("needsReauth flag persists and clears on fresh save", async () => {
     await saveCredential("xai", cred({ email: "a@example.com", accountId: "acct-a" }));
     const id = getAccountSet("xai")!.activeAccountId;

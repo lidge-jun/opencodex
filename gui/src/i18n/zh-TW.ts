@@ -1342,7 +1342,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.noAccounts": "尚未連線任何帳號。",
   "pws.accountSwitching": "切換中…",
   "pws.accountCurrent": "當前帳號",
-  "pws.accountPausedHint": "恢復前不會參與自動切換、重試、冷卻恢復、手動選擇或主動 Token 刷新。",
+  "pws.accountPausedHint": "恢復前不會參與自動選取、重試、冷卻恢復、手動選擇或主動 Token 刷新。",
   "pws.defaultModelNone": "無（使用供應商預設值）",
   "pws.discardSettings": "放棄",
   "pws.jsonEditorDesc": "直接編輯供應商 JSON 配置。更改將立即儲存。",

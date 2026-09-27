@@ -541,7 +541,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["account", "pause"],
-    summary: "Stop routing new requests to one account in a Codex or supported generic OAuth pool.",
+    summary: "Exclude one account in a Codex or supported generic OAuth pool from automatic selection.",
     // Resume uses the same endpoints with `paused: false`.
     routes: [
       { method: "PUT", path: "/api/codex-auth/accounts/pause" },
@@ -552,7 +552,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "envelope",
     details: [
-      "Codex pause unbinds pinned threads and selects a fallback when possible. Generic OAuth pause excludes that account from new requests and failover; Anthropic is unsupported.",
+      "Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Generic OAuth pause never dispatches to that account: it is excluded from new requests, failover and refresh, and an all-paused pool answers 403. Anthropic is unsupported.",
     ],
   },
   {

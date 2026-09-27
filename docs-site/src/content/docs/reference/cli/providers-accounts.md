@@ -383,7 +383,7 @@ kiro      oauth  8b24de70  k***1@examp***.net  -                mo 88%
 
 `ocx account list kiro` marks an account excluded from automatic selection as
 `not-auto-selected(<reason>)`. JSON carries `autoSelectable` and, when false, a closed
-`skipReason` (`needs_reauth`, `suspended`, `cooldown`, or `quota_exhausted`). An active
+`skipReason` (`paused`, `needs_reauth`, `suspended`, `cooldown`, or `quota_exhausted`). An active
 singleton or all-excluded pool may still send. Kiro `providerCredits` comes from measured
 `meteringEvent` values: the last reading within a physical response is retained, and
 separately billed sends add to the request spend. Credits are never estimated from tokens.

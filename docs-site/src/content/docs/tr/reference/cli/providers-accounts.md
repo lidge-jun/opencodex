@@ -186,7 +186,7 @@ kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkin
 Kiro için hız sınırı, doğrulanmış aylık kota ve doğrulanmış askıya alma retleri çıktıdan önce uygun başka bir hesaba geçebilir. Aylık kota yalnızca o hesabı sıfırlamaya veya kanıtın süresinin dolmasına kadar dışlar; aynı hesaptaki tamamlanmış yanıt eski kararı temizler. Proaktif tercih için sağlayıcı ayarı genel ayardan önceliklidir; reaktif hesap değişimi açık kalır.
 Kiro, `pool.kernel` ve proaktif tercih açıkken `least-loaded` stratejisini seçebilir. `maxConcurrentPerAccount` (1–100), süreç başına hesap kuyruğu sınırıdır: seçili hesap doluysa en çok 250 ms bekler, ardından `Retry-After: 1` ile 503 `account_capacity` döner. Sınır, isteği başka bir hesaba taşımaz.
 
-`ocx account list kiro`, otomatik seçimden dışlanan hesaplar için `not-auto-selected(<neden>)` gösterir. JSON, `autoSelectable` ve false olduğunda kapalı kümeden bir `skipReason` (`needs_reauth`, `suspended`, `cooldown` veya `quota_exhausted`) içerir. Tek etkin hesap yine istek gönderebilir. `providerCredits`, `meteringEvent` ile ölçülür: fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler toplanır; tokenlardan kredi tahmini yapılmaz.
+`ocx account list kiro`, otomatik seçimden dışlanan hesaplar için `not-auto-selected(<neden>)` gösterir. JSON, `autoSelectable` ve false olduğunda kapalı kümeden bir `skipReason` (`paused`, `needs_reauth`, `suspended`, `cooldown` veya `quota_exhausted`) içerir. Tek etkin hesap yine istek gönderebilir. `providerCredits`, `meteringEvent` ile ölçülür: fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler toplanır; tokenlardan kredi tahmini yapılmaz.
 
 `--json` şunu döndürür:
 
