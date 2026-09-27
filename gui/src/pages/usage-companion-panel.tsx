@@ -173,7 +173,7 @@ export default function UsageCompanionPanel({
   onSettingsLoaded,
 }: {
   apiBase: string;
-  providers: CompanionProvider[];
+  providers: readonly CompanionProvider[];
   onSettingsLoaded?: (metric: CompanionSettings["menuBarMetric"]) => void;
 }) {
   const { t, locale } = useI18n();
@@ -320,6 +320,28 @@ export default function UsageCompanionPanel({
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
   }, [apiBase, availableModels, response?.corrupt, saveState, settings]);
+
+  const availableModelsRef = useRef(availableModels);
+  useEffect(() => {
+    availableModelsRef.current = availableModels;
+  }, [availableModels]);
+
+  // Leaving the view (switching to the Usage report tab, navigating away) unmounts the panel, and
+  // the cleanup above cancels an edit still inside the 300 ms autosave delay. Send that edit now;
+  // `keepalive` lets the request outlive the unmount. A duplicate of an in-flight save is the same
+  // settings and harmless.
+  useEffect(() => () => {
+    const pending = settingsRef.current;
+    if (!pending || !saveBaseline.current || saveBaseline.current === pending || saveStateRef.current !== "saving") return;
+    void fetch(`${apiBase}/api/companion/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: buildCompanionSettingsPatch(pending, availableModelsRef.current) }),
+      keepalive: true,
+    }).catch(() => {
+      // The panel is gone; the next visit reloads whatever the server kept.
+    });
+  }, [apiBase]);
 
   const reset = useCallback(async () => {
     setSaveState("saving");

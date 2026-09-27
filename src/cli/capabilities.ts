@@ -387,6 +387,23 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["account", "login"],
+    summary: "Log in to an OAuth provider; Kiro can add a native device account.",
+    routes: [
+      { method: "POST", path: "/api/oauth/login" },
+      { method: "GET", path: "/api/oauth/status" },
+    ],
+    flags: [
+      { name: "--method", value: "string", summary: "For Kiro: builder-id, google, or github device login (add only)." },
+      { name: "--reauth", value: "boolean", summary: "Reauthenticate a selected existing account." },
+      { name: "--id", value: "string", summary: "Account id for reauthentication." },
+      { name: "--no-wait", value: "boolean", summary: "Return after the login flow starts." },
+      { name: "--json", value: "boolean", summary: "Emit flow state as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+  },
+  {
     command: ["account", "history"],
     summary: "Cached quota observations for one stored Codex pool account.",
     routes: [{ method: "GET", path: "/api/codex-auth/quota/history" }],
@@ -835,6 +852,18 @@ export const CAPABILITIES: readonly Capability[] = [
       "Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.",
       "--yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.",
     ],
+  },
+  {
+    command: ["claude", "config"],
+    summary: "Read or update Claude Code settings, including independent CLI first-party routing.",
+    routes: [{ method: "GET", path: "/api/claude-code" }, { method: "PUT", path: "/api/claude-code" }],
+    flags: [
+      { name: "--first-party", value: "string", summary: "For `set`, on or off; route standalone Claude CLI subscription requests through the intercept." },
+      { name: "--json", value: "boolean", summary: "Emit the management response as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["`status` reads the route; `set` writes only submitted fields. Enabling first-party requires a running Claude intercept."],
   },
   {
     command: ["claude", "desktop", "status"],

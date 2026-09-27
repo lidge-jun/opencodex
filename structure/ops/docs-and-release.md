@@ -180,6 +180,14 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 ## Windows service wrapper and incomplete updates
 
+The scheduler wrapper retries child exits, including zero, after five seconds. Only the
+opt-in CLI stay-out code ends it successfully; missing Bun/CLI paths still exit with
+installation error 3. Explicit service stop terminates the wrapper itself.
+`src/service/windows-wrapper-exit.ts` defines the opt-in contract: new wrappers set
+`OCX_WINDOWS_WRAPPER_PROTOCOL=1`, and all three CLI live-owner exits return 42 in that
+service context. The wrapper translates 42 into a successful exit; legacy service
+contexts retain exit 0.
+
 > Decision record: [ADR-0082](../decisions/ADR-0082-windows-service-wrapper-and-incomplete-updates.md)
 
 ## GitHub workflow map
@@ -337,6 +345,22 @@ is polled until readable and then receives a fresh full stability interval, whil
 startup identity cancels the pending restart. Failed restart admission retries after the same
 bounded delay. Stopping the server before the accepted restart begins vetoes it, and a service child
 restarts only while it still owns the service home. Source checkouts and standalone binaries remain outside this fence.
+
+mise installs every version in its own directory and repoints a floating link, so `mise upgrade`
+never changes the manifest the fence watches: the proxy would keep serving the old version, and once
+mise pruned it the fence would report the tree unreadable and refuse traffic without restarting.
+`src/update/mise-launcher-target.ts` therefore plans a launcher watch, and
+`src/lib/package-tree-retarget.ts` runs it, only for the managed Linux service
+(`OCX_SERVICE_MANAGED=1`) of a verified mise owner whose recorded launcher is that tool's
+`<selector>/node_modules/.bin/ocx`, and only when that launcher resolves to the running package at
+boot. Shims, other layouts, launchd (which pins package paths) and foreground proxies are not
+followed. The watch re-resolves the launcher on its own unref'd timer, so an idle service notices an
+upgrade without a request. One complete target identity, canonical package root plus manifest
+identity, must hold for the settle interval; a change to either, an unresolvable target, a target
+outside the tool root, or a return to the running root restarts the wait. It then enters the same
+restart handler as the fence without fencing requests, retries a refused admission after another
+full interval, and reports the settled target's version as `installedVersion` when the fence has
+none. The replacement boots from the target, so it never restarts again.
 
 The fence withholds readiness, never identity (INV-FENCE-01). The fenced `/healthz` still answers a
 local attestation challenge and reports `restartCapability`, plus the `installedVersion` on disk

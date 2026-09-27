@@ -370,18 +370,113 @@ describe("Claude Desktop 3P models", () => {
     expect(resolveDesktop3pAlias("claude-opus-4-ncb")).toBe("native/gpt-5.6-sol");
   });
 
-  test("renders persisted family/date assignments and installs their decode registry", () => {
+  test("deduplicates repeated real Anthropic ids without a profile", () => {
+    const id = "claude-opus-4-6";
+    const rendered = generateDesktop3pModels([], [
+      { provider: "anthropic", id },
+      { provider: "anthropic", id },
+    ]);
+    expect(rendered.map(model => model.name)).toEqual([id]);
+    expect(resolveDesktop3pAlias(id)).toBeNull();
+    expect(resolveInboundModel(id)).toBe(id);
+  });
+
+  test("keeps real Anthropic ids authoritative without a profile", () => {
+    const currentCollision = { provider: "test", id: "model-14753" };
+    const currentAlias = desktop3pAlias(currentCollision.provider, currentCollision.id);
+    expect(currentAlias).toBe("claude-opus-4-8-a00");
+
+    const legacyCollision = { provider: "native", id: "gpt-5.6-sol" };
+    const legacyAlias = legacyDesktop3pAlias(legacyCollision.provider, legacyCollision.id);
+    expect(legacyAlias).toBe("claude-opus-4-ncb");
+
+    const rendered = generateDesktop3pModels([], [
+      currentCollision,
+      legacyCollision,
+      { provider: "anthropic", id: currentAlias },
+      { provider: "anthropic", id: legacyAlias },
+    ]);
+    const legacyCurrentAlias = desktop3pAlias(legacyCollision.provider, legacyCollision.id);
+    expect(rendered.map(model => model.name).sort()).toEqual([
+      currentAlias,
+      legacyAlias,
+      legacyCurrentAlias,
+    ].sort());
+    expect(resolveDesktop3pAlias(currentAlias)).toBeNull();
+    expect(resolveDesktop3pAlias(legacyAlias)).toBeNull();
+    expect(resolveInboundModel(currentAlias)).toBe(currentAlias);
+    expect(resolveInboundModel(legacyAlias)).toBe(legacyAlias);
+  });
+
+  test("profile wire ids do not rebind existing three-character aliases", () => {
+    const staleRoute = { provider: "test", id: "model-14753" };
+    const staleAlias = desktop3pAlias(staleRoute.provider, staleRoute.id);
+    expect(staleAlias).toBe("claude-opus-4-8-a00");
+    generateDesktop3pModels([], [staleRoute]);
+    expect(resolveDesktop3pAlias(staleAlias)).toBe("test/model-14753");
+
+    const profile = {
+      version: 1 as const,
+      assignments: {
+        "other/current": { family: "opus" as const, alias: "claude-opus-4-8-20260101" },
+      },
+      defaults: { opus: "other/current", fable: null, sonnet: null, haiku: null },
+    };
+    const rendered = generateDesktop3pModels([], [staleRoute, { provider: "other", id: "current" }], profile);
+    expect(rendered.find(model => model.labelOverride.includes("Current"))?.name).toBe("claude-opus-4-8-p000");
+    expect(resolveDesktop3pAlias(staleAlias)).toBe("test/model-14753");
+  });
+
+  test("fails closed when a managed wire id matches a real Anthropic id", () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    const collision = "claude-opus-4-8-p000";
+    const profile = {
+      version: 1 as const,
+      assignments: {
+        "test/routed": { family: "opus" as const, alias: "claude-opus-4-8-20260101" },
+        [`anthropic/${collision}`]: { family: "opus" as const, alias: collision },
+      },
+      defaults: { opus: "test/routed", fable: null, sonnet: null, haiku: null },
+    };
+    try {
+      const rendered = generateDesktop3pModels([], [
+        { provider: "test", id: "routed" },
+        { provider: "anthropic", id: collision },
+      ], profile);
+      expect(rendered.map(model => model.name)).toEqual([collision]);
+      expect(resolveDesktop3pAlias(collision)).toBeNull();
+      expect(resolveInboundModel(collision)).toBe(collision);
+      expect(warning.mock.calls.flat().join(" ")).toContain("conflicts with a real Anthropic model");
+    } finally {
+      warning.mockRestore();
+      buildDesktop3pRegistry([], []);
+    }
+  });
+
+  test("renders persisted date slots as Desktop-distinct aliases and keeps legacy decoding", () => {
     const routed = [{ provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000 }];
     let profile = reconcileDesktopProfile(undefined, [
       { route: "native/gpt-5.6-sol", label: "GPT 5.6 Sol" },
       { route: "cursor/gpt-5.6-luna", label: "GPT 5.6 Luna", contextWindow: 1_000_000 },
     ]);
     profile = moveDesktopRoute(profile, "cursor/gpt-5.6-luna", "haiku", true);
-    const models = generateDesktop3pModels(["gpt-5.6-sol"], routed, profile);
-    const luna = models.find(model => model.labelOverride.includes("Luna"));
+    const storedAliases = Object.values(profile.assignments).map(assignment => assignment.alias);
+    expect(storedAliases.every(alias => /^claude-opus-4-8-20\d{6}$/.test(alias))).toBe(true);
+
+    const rendered = generateDesktop3pModels(["gpt-5.6-sol"], routed, profile);
+    const luna = rendered.find(model => model.labelOverride.includes("Luna"));
     expect(luna).toMatchObject({ anthropicFamilyTier: "haiku", isFamilyDefault: true, supports1m: true });
-    expect(luna?.name).toMatch(/^claude-opus-4-8-20\d{6}$/);
+    expect(rendered.map(model => model.name)).toEqual([
+      expect.stringMatching(/^claude-opus-4-8-p[0-9a-z]{3}$/),
+      expect.stringMatching(/^claude-opus-4-8-p[0-9a-z]{3}$/),
+    ]);
+    const desktopIdentity = (id: string) => id.replace(/-(\d{8})$/, "");
+    expect(new Set(rendered.map(model => desktopIdentity(model.name))).size).toBe(2);
     expect(resolveDesktop3pAlias(luna!.name)).toBe("cursor/gpt-5.6-luna");
+    expect(resolveInboundModel(luna!.name)).toBe("cursor/gpt-5.6-luna");
+    const legacyDate = profile.assignments["cursor/gpt-5.6-luna"]!.alias;
+    expect(resolveDesktop3pAlias(legacyDate)).toBe("cursor/gpt-5.6-luna");
+    expect(resolveInboundModel(legacyDate)).toBe("cursor/gpt-5.6-luna");
   });
 
   test("backs up owned config and preserves old bytes when atomic replacement fails", () => {

@@ -546,9 +546,8 @@ describe("metrics management boundary", () => {
     }
     expect(source).not.toMatch(/(?:let|const)\s+activeRequestMetrics/);
     const composition = readFileSync(repoPath("src/server/index/serve-options.ts"), "utf8");
-    expect(composition).toContain(
-      "metricsExportEnabled(config) ? createRequestMetricsOwner() : undefined",
-    );
+    expect(composition).toContain("metricsExportEnabled(config)");
+    expect(composition).toContain("createRequestMetricsOwner(Date.now() / 1000, cachedKiroQuotaMetricRows)");
     expect(composition).toContain("requestMetrics ? { requestMetricsRecorder: requestMetrics } : {}");
     expect(composition).toContain("createWebsocketHandler(ctx, requestMetrics)");
     expect(readFileSync(repoPath("src/server/index/websocket-handler.ts"), "utf8"))

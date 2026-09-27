@@ -127,17 +127,16 @@ describe("provider-declared unsupported hosted tools", () => {
     }, ["web_search"]).input).toEqual([{ type: "additional_tools", tools: [functionTool] }]);
   });
 
-  test("the declaration is additive to the built-in destination table, not a replacement", () => {
-    // An operator who declares only image_generation must still be protected from the
-    // known-broken grok-4.6 destination, and a declaration must not disable that table.
+  test("the declaration denies only what it names", () => {
+    // OpenCode Go Grok accepts hosted
+    // web_search once the xAI-refused fields are normalized away (xai-web-search.ts), so
+    // neither an unrelated declaration nor the table may remove it there.
     const declaredImageOnly = declaredUnsupportedHostedTools({ unsupportedHostedTools: ["image_generation"] });
 
-    expect(isHostedToolUnsupportedForModel(
-      "grok-4.6",
-      "web_search",
-      "https://opencode.ai/zen/go/v1",
-      declaredImageOnly,
-    )).toBe(true);
+    for (const model of ["grok-4.6", "grok-4.7"]) {
+      expect(isHostedToolUnsupportedForModel(model, "web_search", "https://opencode.ai/zen/go/v1", declaredImageOnly))
+        .toBe(false);
+    }
     expect(isHostedToolUnsupportedForModel("grok-4.6", "web_search", GATEWAY_BASE_URL, declaredImageOnly))
       .toBe(false);
     expect(isHostedToolUnsupportedForModel(GATEWAY_MODEL, "image_gen", GATEWAY_BASE_URL, declaredImageOnly))
@@ -195,5 +194,53 @@ describe("unsupportedHostedTools configuration", () => {
 
     expect(error).toContain("cannot prefer image_generation");
     expect(error).toContain("unsupportedHostedTools");
+  });
+});
+
+// #5501: MiMo rejects hosted search before processing even a plain text prompt.
+describe("MiMo destination hosted-tool policy", () => {
+  for (const baseUrl of [
+    "https://api.xiaomimimo.com/v1",
+    "https://token-plan-cn.xiaomimimo.com/v1",
+    "https://xiaomimimo.com/v1",
+    "https://API.XIAOMIMIMO.COM:8443/v1",
+  ]) {
+    for (const type of ["web_search", "web_search_preview"]) {
+      test(`${baseUrl} strips ${type} on the serialized Responses request`, () => {
+        const body = build({ tools: [{ type }, functionTool] }, gateway({ baseUrl }));
+        expect(body.tools).toEqual([functionTool]);
+      });
+      test(`${baseUrl} reconciles ${type} selectors and loaded tools`, () => {
+        const provider = gateway({ baseUrl });
+        expect(stripUnsupportedHostedTools({
+          tools: [{ type }], tool_choice: { type },
+        }, provider)).toEqual({ tools: [], tool_choice: "none" });
+        expect(stripUnsupportedHostedTools({
+          input: [{ type: "additional_tools", tools: [{ type }, functionTool] }],
+          tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type }, functionTool] },
+        }, provider)).toEqual({
+          input: [{ type: "additional_tools", tools: [functionTool] }],
+          tool_choice: { type: "allowed_tools", mode: "auto", tools: [functionTool] },
+        });
+      });
+    }
+  }
+
+  for (const baseUrl of [
+    "https://api.openai.com/v1", GATEWAY_BASE_URL,
+    "https://xiaomimimo.com.example/v1", "https://notxiaomimimo.com/v1",
+    "https://gateway.example/api.xiaomimimo.com/v1",
+    "https://gateway.example/?next=api.xiaomimimo.com/v1",
+  ]) {
+    test(`${baseUrl} preserves hosted search even for a MiMo model`, () => {
+      const tools = [{ type: "web_search" }, { type: "web_search_preview" }, functionTool];
+      expect(build({ model: "mimo-v2-pro", tools }, gateway({ baseUrl })).tools).toEqual(tools);
+    });
+  }
+
+  test("missing or invalid URLs do not classify a destination as MiMo", () => {
+    for (const baseUrl of [undefined, "", "not a URL"]) {
+      expect(isHostedToolUnsupportedForModel("mimo-v2-pro", "web_search", baseUrl)).toBe(false);
+    }
   });
 });

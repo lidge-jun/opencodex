@@ -230,7 +230,9 @@ for (const storedProfile of [true, false]) {
     expect(snapshot.models.some(model => model.labelOverride.includes("(native)"))).toBe(true);
     const chosenEntry = snapshot.models.find(model => model.labelOverride === "Model Target (chosen)");
     expect(chosenEntry).toBeDefined();
-    if (storedProfile) expect(chosenEntry!.name).toBe("claude-opus-4-8-20260211");
+    // A stored date-shaped slot (20260211) is emitted as its p<base36day> wire id (#5862), so
+    // Desktop's date stripping cannot collapse it onto a real dated Anthropic id.
+    if (storedProfile) expect(chosenEntry!.name).toBe("claude-opus-4-8-p015");
     else expect(chosenEntry!.name).toMatch(/^claude-opus-4-8-[a-z][a-z0-9]{2}$/);
 
     const apply = spawnOwned(client, ["claude", "desktop", "apply", "--static"]);

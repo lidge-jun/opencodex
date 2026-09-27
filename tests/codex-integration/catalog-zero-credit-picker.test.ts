@@ -51,6 +51,16 @@ describe("quota-inactive catalog rows (#1711)", () => {
     expect(quotaInactiveReason(config(), [{ provider: "alpha" }], NOW)).toBe("no_credit");
   });
 
+  test("a model-scoped window only marks the row inactive for its own family", () => {
+    // Same rule as the request-time gate: a spent Opus week says nothing about a Sonnet row.
+    setCachedProviderQuotaForTests("alpha", {
+      updatedAt: NOW,
+      customWindows: [{ label: "Opus", percent: 100, scope: "model" }],
+    } as ProviderQuota);
+    expect(quotaInactiveReason(config(), [{ provider: "alpha", model: "claude-sonnet-5" }], NOW)).toBeUndefined();
+    expect(quotaInactiveReason(config(), [{ provider: "alpha", model: "claude-opus-5" }], NOW)).toBe("no_credit");
+  });
+
   test("display-only reports cannot mark a catalog row inactive", () => {
     replaceCachedProviderQuotas([{ provider: "alpha", label: "Alpha", source: "display", quota: exhausted(), updatedAt: NOW }]);
     expect(quotaInactiveReason(config(), [{ provider: "alpha" }], NOW)).toBeUndefined();

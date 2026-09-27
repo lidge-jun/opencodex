@@ -1,5 +1,5 @@
 import type { OcxClaudeCodeConfig } from "../types";
-import { isAnthropicOutputSchema } from "../adapters/anthropic-output-schema";
+import { isAnthropicOutputSchema, satisfiesOpenAiStrictSchema } from "../adapters/anthropic-output-schema";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
 import { isUnresolvedDesktop3pAlias, resolveDesktop3pAlias } from "./desktop-3p";
@@ -104,7 +104,19 @@ export function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
     || !isRec(format.schema)
     || !isAnthropicOutputSchema(format.schema)
   ) return undefined;
-  return { type: "json_schema", name: "response", schema: format.schema };
+  // `strict` is stated rather than left to the destination's default. A schema with an optional
+  // property is legal to Anthropic and a hard 400 under OpenAI strict mode ("'required' ... an
+  // array including every key in properties"), which takes down every structured-output turn on
+  // a route whose canonical target is unavailable. Satisfying strict by adding the missing keys
+  // to `required` would change the caller's contract, so the optionality is preserved and the
+  // strict claim is dropped instead.
+  return {
+    type: "json_schema",
+    name: "response",
+    schema: format.schema,
+    // Strict Structured Outputs also needs an object at the root; a root anyOf/oneOf is refused.
+    strict: format.schema.type === "object" && satisfiesOpenAiStrictSchema(format.schema),
+  };
 }
 
 /**

@@ -86,6 +86,8 @@ import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../suba
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 import { ModelCatalogDelivery } from "./models-catalog-state";
+import { CustomModelsSummary, InfoHint, ModelsSettingsPanel } from "./models-settings-panel";
+import { modelsSettingsSummary } from "./models-settings-summary";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -2120,7 +2122,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           </>
         )}
         <Switch on={allCapped} onClick={setAll} disabled={busy} label={t("models.setAll")} />
-        <span className="muted text-label leading-body">{t("models.setAllHint", { value: fmtK(contextCapValue) })}</span>
+        <InfoHint text={t("models.setAllHint", { value: fmtK(contextCapValue) })} />
       </div>
 
       <div className="row models-cap-row" aria-busy={pickerBusy || pickerResource.state.refreshing}>
@@ -2149,31 +2151,28 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             {t("models.pickerOrder.retry")}
           </button>
         </>}
-        <span className="muted text-label leading-body">{t("models.pickerOrder.hint")}</span>
+        <InfoHint text={t("models.pickerOrder.hint")} />
       </div>
       <ModelCatalogSettingsPanels showOrderEditor={pickerMode === "custom"} apiBase={apiBase} active={catalogActive}
         identities={models} onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} onSaved={() => catalogResource.refresh()} />
-
-
-      {(() => {
-        const customCount = models.filter(m => m.custom).length;
-        if (customCount === 0) return null;
-        return (
-          <div className="row muted text-label models-custom-summary">
-            <span className="models-chip mono text-caption">
-              {t("models.customSummary", { count: customCount })}
-            </span>
-          </div>
-        );
-      })()}
-
-      <div className="row muted text-label leading-body models-order-hint">
-        <IconInfo width={15} height={15} aria-hidden="true" />
-        <span>{t("models.orderHint")}</span>
-      </div>
+      {showAliases && (
+        <div className="card models-aliases-card" aria-label={t("models.aliasesTable")}>
+          <div className="row group-head"><strong>{t("models.aliases")}</strong></div>
+          {Object.entries(aliases.models).flatMap(([provider, rows]) => Object.entries(rows).map(([model, value]) => (
+            <div className="row models-model-row" key={`${provider}/${model}`}>
+              <code className="mono text-caption" style={{ flex: 1 }}>{provider}/{model}</code>
+              <strong className="mono text-control">{value.alias}</strong>
+              <span className="models-chip muted text-caption">{value.source === "builtin" ? t("models.aliasAuto") : t("models.aliasUser")}</span>
+              {value.stale && <span className="badge badge-amber">{t("models.aliasStale")}</span>}
+              <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, model)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+            </div>
+          )))}
+        </div>
+      )}
     </>
   );
 
+  const customCount = models.filter(m => m.custom).length;
   const collapseControls = (
     <div className="row models-collapse-controls">
       <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
@@ -2182,6 +2181,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(false)} disabled={busy}>
         <IconChevron width={12} height={12} aria-hidden="true" style={{ transform: "rotate(90deg)" }} /> {t("models.expandAll")}
       </button>
+      <InfoHint text={t("models.orderHint")} />
+      <CustomModelsSummary count={customCount} label={t("models.customSummary", { count: customCount })} />
     </div>
   );
 
@@ -2557,6 +2558,13 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           </li>)}</ul>
         </Notice>
       </div>}
+      <ModelsSettingsPanel title={t("models.settingsPanel.title")} attentionLabel={t("models.settingsPanel.attention")}
+        warn={!!(v2?.enabled && v2.agentsMaxThreadsConflict) || v2Note !== "" || pickerResource.state.showError}
+        summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2?.maxConcurrentThreadsPerSession, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
+          shadowEnabled: shadowCall?.enabled === true, shadowModel: shadowCall?.model, windowOn: allCapped, windowValue: contextCapValue, newModelsOff: modelDiscovery?.policy === "off", aliasesOn: aliases.defaults.global,
+          pickerMode: modelPickerOrderMode(pickerSettings?.pickerAvailable ?? [], pickerSettings?.pickerOrder ?? [], pickerSettings?.pickerOrderMode) })}>
+        {controlsBlock}
+      </ModelsSettingsPanel>
       <div className="models-workspace-root" aria-busy={catalogState.refreshing || undefined}>
         <aside className="models-workspace-rail" aria-label={t("nav.models")}>
           <div className="models-workspace-rail-header">
@@ -2599,22 +2607,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           </div>
         </aside>
         <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
-          {controlsBlock}
           {collapseControls}
-          {showAliases && (
-            <div className="card" aria-label={t("models.aliasesTable")}>
-              <div className="row group-head"><strong>{t("models.aliases")}</strong></div>
-              {Object.entries(aliases.models).flatMap(([provider, rows]) => Object.entries(rows).map(([model, value]) => (
-                <div className="row models-model-row" key={`${provider}/${model}`}>
-                  <code className="mono text-caption" style={{ flex: 1 }}>{provider}/{model}</code>
-                  <strong className="mono text-control">{value.alias}</strong>
-                  <span className="models-chip muted text-caption">{value.source === "builtin" ? t("models.aliasAuto") : t("models.aliasUser")}</span>
-                  {value.stale && <span className="badge badge-amber">{t("models.aliasStale")}</span>}
-                  <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, model)}><IconPencil style={{ width: 13, height: 13 }} /></button>
-                </div>
-              )))}
-            </div>
-          )}
           <div className="models-provider-list">
             {
               // eslint-disable-next-line react-hooks/refs, react/react-compiler -- The hover ref is only read by row event handlers nested in this renderer.

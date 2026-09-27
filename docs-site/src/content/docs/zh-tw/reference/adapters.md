@@ -99,6 +99,7 @@ interface ProviderAdapter {
 - **Extended thinking 計算：** Anthropic 要求 `max_tokens > thinking.budget_tokens`。adapter 把
   reasoning effort 對映成 budget（minimal 1024 … max 32000），再計算留有輸出餘量的安全
   `max_tokens`；啟用 thinking 後會**移除 `temperature`/`top_p`**，因為 Anthropic 禁止此組合。
+- **自適應 thinking 顯示：** 自適應 thinking 模型（Opus 4.7+、Sonnet 5、Fable）會收到 `thinking.display: "summarized"`，因此長時間思考會以 reasoning 增量送達 Chat 與 Responses 用戶端，而不是數分鐘的 heartbeat。隱藏推理摘要的請求（`reasoning.summary: "none"`）維持供應商預設值。
 - 始終傳送 `anthropic-version: 2023-06-01`。流式輸出
   `content_block_delta`（`text_delta`、`thinking_delta`、`input_json_delta`）。
 

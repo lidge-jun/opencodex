@@ -533,3 +533,18 @@ summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
 active effort and omits summary; explicit `summary: "none"` still hides it.
+
+## Codex App visualization references
+
+The Codex App draws an inline visualization from `U+E200 visualize U+E202 {json} U+E201` in an
+assistant message, and its renderer turns that span into the plain directive
+`::codex-inline-vis{path="…"}` before parsing. Several providers drop private-use characters before
+the model reads them (every Claude route checked), so the model saw and repeated a bare
+`visualize{…}` the app printed verbatim. `src/responses/visualization-directives.ts` rewrites each
+such span in the parsed context — system prompt, string content and text parts of every role — into
+that ASCII directive, following the app's own payload rules, and `parseRequest` applies it to the
+context it returns. `_rawBody` is not touched, so native passthrough stays byte-identical and stored
+`previous_response_id` history keeps the original text. The citation filter in
+`src/responses/citation-markers.ts` is separate and never removes these spans (#6040).
+`tests/responses/visualization-directives.test.ts` pins the payload rules, the linear-time scan and
+the parser and Anthropic request paths.

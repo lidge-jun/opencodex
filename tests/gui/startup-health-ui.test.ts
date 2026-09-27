@@ -38,7 +38,9 @@ describe("startup health UI decisions", () => {
   test("settings may seed while unknown or hard-error, but not overwrite a real status", () => {
     expect(seedStartupHealthFromSettings(null, { status: "protected", diagnosticStale: false })).toBe("protected");
     expect(seedStartupHealthFromSettings("error", { status: "protected", diagnosticStale: false })).toBe("protected");
-    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true })).toBe("at-risk");
+    // A stale seed is a server-side placeholder and must not color the chip.
+    expect(seedStartupHealthFromSettings(null, { status: "at-risk", diagnosticStale: true })).toBeNull();
+    expect(seedStartupHealthFromSettings("error", { status: "at-risk", diagnosticStale: true })).toBe("error");
     expect(seedStartupHealthFromSettings("at-risk", { status: "protected", diagnosticStale: false })).toBe("at-risk");
   });
 });

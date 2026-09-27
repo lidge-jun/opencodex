@@ -8,6 +8,7 @@ import {
 import { hostname } from "node:os";
 import { atomicWriteFile, loadConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow } from "../codex/desired-state";
+import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import {
   inspectRemoteDesktopStore, readDesktopDisconnectReceipt, writeDesktopDisconnectReceipt,
   replaceRemoteDesktopCredential, restoreRemoteDesktopStore, finishRemoteDesktopCleanup,
@@ -22,6 +23,7 @@ import {
   injectCodexConfig,
   currentExternalCodexModelProvider,
   isCodexRoutingInjected,
+  standaloneCodexRoutingTarget,
   type CodexRoutingTarget,
 } from "../codex/inject";
 import {
@@ -44,6 +46,7 @@ import {
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
 import type {
   OcxClientConnectionConfig,
+  OcxConfig,
   OcxConnectedClientId,
 } from "../types";
 import {
@@ -169,20 +172,31 @@ function catalogMatchesFingerprint(body: string, fingerprint: string | undefined
   return createHash("sha256").update(body).digest("base64url") === fingerprint;
 }
 
-export function routingTarget(serverUrl: string, localPort?: number): CodexRoutingTarget & { link?: true } {
-  const baseUrl = localPort === undefined
-    ? `${serverUrl}/v1`
-    : (() => {
-      if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
-        throw new Error("link mode requires a valid local config port");
-      }
-      return `http://localhost:${localPort}/v1`;
-    })();
+/**
+ * Codex routing for a connected client. A hub client points Codex at the hub with the admission
+ * token in `env_key`. A link Child (`localPort` given) keeps exactly the standalone loopback form,
+ * root `openai_base_url = "http://127.0.0.1:<port>/v1"` with no provider table and no `env_key`:
+ * its own listener relays to the Home and attaches the link key itself, so a GUI-launched Codex
+ * that never saw the key's environment variable still works, and joining changes no Codex bytes.
+ */
+export function routingTarget(
+  serverUrl: string,
+  localPort?: number,
+  config?: Pick<OcxConfig, "codexDesktopAuthless" | "codexClientCompaction">,
+): CodexRoutingTarget & { link?: true } {
+  if (localPort === undefined) {
+    return { baseUrl: `${serverUrl}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" };
+  }
+  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
+    throw new Error("link mode requires a valid local config port");
+  }
   return {
-    baseUrl,
-    requiresAdmissionToken: true,
-    tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
-    ...(localPort === undefined ? {} : { link: true as const }),
+    ...standaloneCodexRoutingTarget(localPort, {
+      hostname: "127.0.0.1",
+      codexDesktopAuthless: config?.codexDesktopAuthless,
+      codexClientCompaction: config?.codexClientCompaction,
+    }),
+    link: true as const,
   };
 }
 
@@ -538,6 +552,9 @@ export async function connectClient(
   let writtenCatalogFingerprint: string | null = null;
   let injectionCommitted = false;
   let committed = false;
+  // Before any catalog, journal, client-state or credential write: `CODEX_HOME` is shared with the
+  // live proxy a sibling instance runs beside, and connecting re-points it (`sibling-start.ts`).
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   try {
     linkMode = (options.transport ?? "hub") === "link";
     if (linkMode) {
@@ -655,7 +672,7 @@ export async function connectClient(
     }), deps.lifecycleLockDeps);
 
     const config = earlyConfig ?? loadConfig();
-    const target = routingTarget(serverUrl, linkMode ? config.port : undefined);
+    const target = routingTarget(serverUrl, linkMode ? config.port : undefined, config);
     const injectConfig = { ...config, syncResumeHistory: false };
     const preflight = await injectCodexConfig(config.port, injectConfig, {
       validateOnly: true,
@@ -750,6 +767,7 @@ export async function syncConnectedClient(
   _options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
 ): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean }> {
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertNoClientDisconnectPending();
     const state = readClientConnectionState();
@@ -796,7 +814,7 @@ export async function syncConnectedClient(
   if (next.selectedClients.includes("codex")) {
     const config = loadConfig();
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
-      routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined), catalogPath: DEFAULT_CATALOG_PATH,
+      routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
       journalOwner: { kind: "client", apiKeyId: next.apiKeyId }, beforeClientWrite,
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
@@ -891,6 +909,7 @@ export async function disconnectClient(
   desktopRestoration?: "owned_projection" | "standard_fallback" | "selection_preserved";
   restartRequired: boolean;
 }> {
+  if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const keepCatalog = options.keepCatalog === true;
   const prepared = withClientLifecycleSync(held => withConfigMutationLockSync(() => {
     const read = readDesktopDisconnectReceipt();

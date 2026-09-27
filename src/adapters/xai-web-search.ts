@@ -1,6 +1,7 @@
 import type { OcxProviderConfig } from "../types";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
+import { isOpenCodeGoResponsesUrl } from "./opencode-go-additional-tools";
 
 const CODEX_WEB_SEARCH_TOOL = "web_search";
 const CODEX_WEB_SEARCH_PREVIEW_TOOL = "web_search_preview";
@@ -147,6 +148,24 @@ function hasToolType(tools: unknown, type: string): boolean {
 }
 
 /**
+ * OpenCode Go serves Grok on its Responses endpoint by relaying to xAI, and relays xAI's schema
+ * verbatim. Probed 2026-09-26 on `https://opencode.ai/zen/go/v1/responses` with grok-4.6 and
+ * grok-4.7, one field per request: `external_web_access` and `search_context_size` -> 400
+ * "Argument not supported", `web_search_preview` -> 422 `unknown variant`, while a plain
+ * `web_search` with `search_content_types`, `enable_image_search`, `user_location` or
+ * `filters` -> 200 and performs live searches. That is the xAI dialect exactly, so the same
+ * normalization applies. Sibling Go models (Luna, Muse Spark) accept the OpenAI fields and are
+ * left alone. Membership is by family prefix: an exact-id match is what let grok-4.7 reach this
+ * endpoint unnormalized once it joined grok-4.6 on the Responses wire.
+ */
+function isOpenCodeGoGrokResponses(modelId: unknown, responseUrl: string | undefined): boolean {
+  return typeof modelId === "string"
+    && modelId.trim().toLowerCase().startsWith("grok-")
+    && typeof responseUrl === "string"
+    && isOpenCodeGoResponsesUrl(responseUrl);
+}
+
+/**
  * Make Codex's hosted web-search declaration acceptable to xAI Responses without changing other
  * providers or mutating the caller-owned request body.
  *
@@ -157,12 +176,23 @@ function hasToolType(tools: unknown, type: string): boolean {
  * `web_search_preview` -> 422 `unknown variant`, `external_web_access` -> 400 on every value,
  * `search_context_size` -> 400, while `user_location` and `search_content_types` -> 200. Identical
  * to the public API, which is what makes one shared gate correct.
+ *
+ * Grok models on the exact OpenCode Go Responses URL speak the same dialect and share this gate;
+ * see `isOpenCodeGoGrokResponses`. `target` carries the final model id and request URL for that
+ * check, and callers without it keep the xAI-host-only behavior.
  */
 export function normalizeXaiResponsesWebSearch(
   body: unknown,
   provider: Pick<OcxProviderConfig, "baseUrl">,
+  target?: { modelId?: unknown; responseUrl?: string },
 ): unknown {
-  if (!isXaiResponsesDestination(provider) || !isPlainObject(body)) return body;
+  if (!isPlainObject(body)) return body;
+  const xaiDestination = isXaiResponsesDestination(provider);
+  if (!xaiDestination && !isOpenCodeGoGrokResponses(target?.modelId, target?.responseUrl)) return body;
+  // On Go, a wrapper emptied here stays in place: Go promotion (opencode-go-additional-tools.ts)
+  // removes every wrapper before the wire and splits them into history and current turn by
+  // index against _replayPrefixLen, so deleting one would shift the current turn into history.
+  const keepEmptiedWrappers = !xaiDestination;
 
   let next: Record<string, unknown> = body;
   if (Array.isArray(body.tools)) {
@@ -188,7 +218,7 @@ export function normalizeXaiResponsesWebSearch(
         continue;
       }
       inputChanged = true;
-      if (rewritten.tools.length > 0) input.push({ ...item, tools: rewritten.tools });
+      if (rewritten.tools.length > 0 || keepEmptiedWrappers) input.push({ ...item, tools: rewritten.tools });
     }
     if (inputChanged) next = { ...next, input };
   }

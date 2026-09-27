@@ -159,12 +159,19 @@ mod macos {
                 continue;
             };
             let mut push = |percent: Option<&Value>, window_label: &str, reset: Option<&Value>| {
+                // JSON null (or any non-number) is an absent window, not a row of dashes: a
+                // weekly-only plan reports `fiveHourPercent: null` and must show weekly only.
+                let percent = number(percent).filter(|value| value.is_finite() && *value >= 0.0);
+                // Same bounds as the native panel's `reset`: after the millisecond conversion,
+                // a time past year 9999 is not a reset the widget can show.
+                let reset =
+                    reset_at(reset).filter(|value| *value > 0.0 && *value < 253_402_300_800.0);
                 if percent.is_some() || reset.is_some() {
                     rows.push(Quota {
                         provider_label: provider_label.clone(),
                         window_label: window_label.to_owned(),
-                        percent: number(percent),
-                        reset_at: reset_at(reset),
+                        percent,
+                        reset_at: reset,
                     });
                 }
             };
@@ -250,12 +257,57 @@ mod macos {
         snapshot
     }
 
+    /// What the widget displays apart from its age caption. `last_updated` moves on every
+    /// successful poll; reloading for it alone would spend WidgetKit's budget every five minutes
+    /// while the widget already renders that age as a self-updating relative date.
+    fn displayed(snapshot: &Snapshot) -> Snapshot {
+        let mut snapshot = without_generated_at(snapshot);
+        snapshot.last_updated = None;
+        snapshot
+    }
+
+    /// Rewrite an unchanged snapshot after this long, so the widget can still tell a live app from
+    /// one that stopped writing. The widget marks a snapshot stale after two heartbeats
+    /// (`WidgetSnapshot.staleAfter` in app/Sources/MenuBarCore/WidgetSnapshot.swift).
+    const HEARTBEAT_SECONDS: f64 = 15.0 * 60.0;
+
+    /// Whether `snapshot` should replace `previous` on disk. The heartbeat is measured from the
+    /// file's own `generated_at`, so a restarted app decides the same way as a running one.
+    /// Writing spends no WidgetKit budget, so the file always carries the latest poll time.
+    fn should_write(previous: Option<&Snapshot>, snapshot: &Snapshot) -> bool {
+        let Some(previous) = previous else {
+            return true;
+        };
+        without_generated_at(previous) != without_generated_at(snapshot)
+            || snapshot.generated_at - previous.generated_at >= HEARTBEAT_SECONDS
+    }
+
+    /// Minimum spacing between reload requests: at most 72 a day, inside the 40-70 Apple quotes
+    /// as a typical budget once the widget's own 30-minute fallback timeline is counted separately.
+    /// A change that lands inside the window is already on disk, and that fallback rereads it.
+    const RELOAD_INTERVAL_SECONDS: f64 = 20.0 * 60.0;
+
+    /// Whether a snapshot that was just written should ask WidgetKit for a reload: only when what
+    /// the widget displays changed, and not sooner than `RELOAD_INTERVAL_SECONDS` after the last
+    /// request. Timestamp-only writes and heartbeats never reload.
+    fn should_reload(
+        previous: Option<&Snapshot>,
+        snapshot: &Snapshot,
+        last_reload: Option<f64>,
+        now: f64,
+    ) -> bool {
+        previous.map_or(true, |previous| displayed(previous) != displayed(snapshot))
+            && last_reload.map_or(true, |last| now - last >= RELOAD_INTERVAL_SECONDS)
+    }
+
+    static LAST_RELOAD: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
+
     fn write_if_changed(
         path: &std::path::Path,
         previous: Option<&Snapshot>,
         snapshot: &Snapshot,
     ) -> std::io::Result<bool> {
-        if previous.map(without_generated_at).as_ref() == Some(&without_generated_at(snapshot)) {
+        if !should_write(previous, snapshot) {
             return Ok(false);
         }
         let Some(directory) = path.parent() else {
@@ -275,6 +327,35 @@ mod macos {
         }
         fs::rename(temporary, path)?;
         Ok(true)
+    }
+
+    extern "C" {
+        fn ocx_widget_reload_timelines();
+    }
+
+    /// Persist the snapshot and, when it was actually written, ask WidgetKit to reload the widget.
+    fn publish(snapshot: &Snapshot) {
+        let path = snapshot_path();
+        let previous = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
+        match write_if_changed(&path, previous.as_ref(), snapshot) {
+            Ok(true) => {
+                let now = now_seconds();
+                let mut last = LAST_RELOAD
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if should_reload(previous.as_ref(), snapshot, *last, now) {
+                    *last = Some(now);
+                    // SAFETY: a no-argument Swift export that only enqueues work on the main queue.
+                    unsafe { ocx_widget_reload_timelines() };
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                crate::logging::log_once("widget snapshot write failed", &error.to_string())
+            }
+        }
     }
 
     fn make_snapshot(
@@ -342,13 +423,7 @@ mod macos {
                     last_updated: None,
                     generated_at: now_seconds(),
                 };
-                let path = snapshot_path();
-                let previous = fs::read(&path)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
-                if let Err(error) = write_if_changed(&path, previous.as_ref(), &snapshot) {
-                    crate::logging::log_once("widget snapshot write failed", &error.to_string());
-                }
+                publish(&snapshot);
                 crate::logging::log_once("widget snapshot health failed", state);
                 return;
             }
@@ -368,13 +443,7 @@ mod macos {
             quota_value.as_ref(),
             timeline_value.as_ref(),
         );
-        let path = snapshot_path();
-        let previous = fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
-        if let Err(error) = write_if_changed(&path, previous.as_ref(), &snapshot) {
-            crate::logging::log_once("widget snapshot write failed", &error.to_string());
-        }
+        publish(&snapshot);
     }
 
     pub fn refresh(proxy: &ProxyClient) {
@@ -479,6 +548,107 @@ mod macos {
             changed.generated_at = 2.0;
             assert!(!write_if_changed(&path, Some(&snapshot), &changed).unwrap());
             let _ = fs::remove_file(path);
+        }
+
+        #[test]
+        fn polls_are_written_but_only_visible_changes_reload_and_not_too_often() {
+            let previous = Snapshot {
+                schema_version: 1,
+                state: "running".into(),
+                state_title: "Running".into(),
+                detail: None,
+                endpoint_display: "127.0.0.1:10100".into(),
+                menu_title: Some("12".into()),
+                today: None,
+                quotas: Vec::new(),
+                chart: None,
+                last_updated: Some(1_000.0),
+                generated_at: 1_000.0,
+            };
+            assert!(should_write(None, &previous), "first write");
+            assert!(
+                should_reload(None, &previous, None, 1_000.0),
+                "first write reloads"
+            );
+            // Same content and poll time: nothing to write before the heartbeat.
+            let mut idle = previous.clone();
+            idle.generated_at = 1_300.0;
+            assert!(!should_write(Some(&previous), &idle));
+            idle.generated_at = previous.generated_at + HEARTBEAT_SECONDS;
+            assert!(should_write(Some(&previous), &idle), "heartbeat rewrites");
+            assert!(
+                !should_reload(Some(&previous), &idle, None, idle.generated_at),
+                "heartbeat never reloads"
+            );
+            // A new poll time is written so the file's "Updated" is current, but costs no reload.
+            let mut polled = previous.clone();
+            polled.generated_at = 1_300.0;
+            polled.last_updated = Some(1_300.0);
+            assert!(should_write(Some(&previous), &polled));
+            assert!(!should_reload(Some(&previous), &polled, None, 1_300.0));
+            // A visible change reloads, but not within the interval of the previous request.
+            let mut counted = polled.clone();
+            counted.menu_title = Some("13".into());
+            assert!(should_write(Some(&previous), &counted));
+            assert!(should_reload(Some(&previous), &counted, None, 1_300.0));
+            assert!(!should_reload(
+                Some(&previous),
+                &counted,
+                Some(1_300.0 - 60.0),
+                1_300.0
+            ));
+            assert!(should_reload(
+                Some(&previous),
+                &counted,
+                Some(1_300.0 - RELOAD_INTERVAL_SECONDS),
+                1_300.0
+            ));
+        }
+
+        #[test]
+        fn a_failed_write_reports_an_error_instead_of_a_write() {
+            // The parent is a file, so the directory cannot be created: `publish` must see an
+            // error here and never reach the reload call.
+            let blocker =
+                std::env::temp_dir().join(format!("ocx-widget-blocker-{}", std::process::id()));
+            fs::write(&blocker, b"x").unwrap();
+            let snapshot = Snapshot {
+                schema_version: 1,
+                state: "running".into(),
+                state_title: "Running".into(),
+                detail: None,
+                endpoint_display: "127.0.0.1:10100".into(),
+                menu_title: None,
+                today: None,
+                quotas: Vec::new(),
+                chart: None,
+                last_updated: None,
+                generated_at: 1.0,
+            };
+            assert!(write_if_changed(&blocker.join("snapshot.json"), None, &snapshot).is_err());
+            let _ = fs::remove_file(blocker);
+        }
+
+        #[test]
+        fn quota_rows_skip_windows_the_plan_does_not_report() {
+            let reports = json!({ "reports": [
+                { "provider": "openai", "label": "OpenAI", "quota": {
+                    "fiveHourPercent": null, "fiveHourResetAt": null,
+                    "weeklyPercent": 49.0, "weeklyResetAt": 1_900_000_000 } },
+                { "provider": "kimi", "label": "Kimi", "quota": {
+                    "fiveHourPercent": 0, "weeklyPercent": 35 } },
+                // A reset-only window whose time is out of range is not a window either.
+                { "provider": "far", "label": "Far", "quota": { "weeklyResetAt": 1e20 } }
+            ] });
+            let rows = quotas(&reports, &json!({ "settings": {} }));
+            let windows: Vec<_> = rows
+                .iter()
+                .map(|row| (row.provider_label.as_str(), row.window_label.as_str()))
+                .collect();
+            assert_eq!(
+                windows,
+                [("OpenAI", "week"), ("Kimi", "5h"), ("Kimi", "week")]
+            );
         }
 
         #[test]

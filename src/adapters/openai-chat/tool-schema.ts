@@ -1,3 +1,4 @@
+import { isDeepseekArtifactTarget, relaxDeepseekArtifactSchema } from "./deepseek-artifact-schema";
 import { isNativeOpenAIChatTarget } from "./wire";
 import { createOpenAIChatToolNameRegistry, type OpenAIChatToolNameRegistry } from "./tool-name-registry";
 import { isXaiSchemaTarget, lookupLocalJsonPointer, normalizeXaiToolParameters } from "../xai-tool-schema";
@@ -548,7 +549,10 @@ export function toolsToChatFormat(
       : moonshotTarget
         ? normalizeMoonshotToolParameters(t.parameters, moonshotInlineByteBudget)
         : ensureRootObjectType(t.parameters);
-    const parameters = stripUnicodePropertyPatterns(stripResponsesOnlyEncryptedMarker(normalized));
+    const deepseekArtifact = isDeepseekArtifactTarget(provider, t.name, t.namespace);
+    const parameters = stripUnicodePropertyPatterns(stripResponsesOnlyEncryptedMarker(
+      deepseekArtifact ? relaxDeepseekArtifactSchema(normalized) : normalized,
+    ));
 
     if (parameters === undefined) return [];
     return [{
@@ -557,7 +561,7 @@ export function toolsToChatFormat(
         name: registry.alias(t),
         ...(t.description ? { description: t.description } : {}),
         parameters,
-        ...(t.strict !== undefined ? { strict: t.strict } : {}),
+        ...(t.strict !== undefined && !deepseekArtifact ? { strict: t.strict } : {}),
       },
     }];
   });

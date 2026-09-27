@@ -38,6 +38,8 @@ macOS에서는 `muse login` 뒤 Muse Code CLI가 이미 저장한 API 키를 ope
 
 다른 플랫폼에서는 키를 붙여넣도록 요청합니다. Meta는 네이티브 Windows CLI를 제공하지 않습니다. Linux에는 CLI가 있지만 자격 증명을 저장하는 위치가 검증되지 않아 opencodex가 저장소를 추측하지 않습니다. 같은 키는 [Meta 개발자 콘솔](https://dev.meta.ai)에서도 볼 수 있습니다. 붙여넣은 키도 가져온 키와 똑같은 형식 검사와 Model API에 대한 실시간 검증을 거칩니다.
 
+Meta로 보내는 Responses 요청은 tool 선택을 생략하거나 `auto`로 지정할 수 있습니다. 명시적인 `none`은 `tools: []`로 보내고 `input` 안의 `additional_tools` 항목을 제거합니다. 강제 선택, 함수 이름 지정, `allowed_tools` 선택은 Muse가 `auto`만 지원하므로 Meta로 보내기 전에 HTTP 400으로 거부합니다. 다른 Responses 대상의 tool 선택 동작은 바뀌지 않습니다.
+
 ## Windows 참고 사항
 
 Windows 서비스는 Task Scheduler 또는 네이티브 WinSW 서비스로 실행할 수 있으며 둘을 동시에 사용할 수는 없습니다. `ocx service repair`가 두 방식의 상태를 모두 발견하면 진행을 거부합니다. 어느 쪽을 원하는지 추측하면 한 컴퓨터에서 두 프록시가 같은 포트를 놓고 충돌할 수 있기 때문입니다.

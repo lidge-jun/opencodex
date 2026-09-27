@@ -64,6 +64,41 @@ describe("Claude Desktop profile", () => {
     expect(() => setDesktopFamilyDefault(selected, "opus", null)).toThrow(DesktopProfileError);
   });
 
+  test("reallocates a managed slot claimed by a newly active real Anthropic id", () => {
+    const datedId = "claude-opus-4-8-20260101";
+    const profile = parseDesktopProfile({
+      version: 1,
+      assignments: {
+        "test/routed": { family: "opus", alias: datedId },
+      },
+      defaults: { opus: "test/routed", fable: null, sonnet: null, haiku: null },
+    });
+    const reconciled = reconcileDesktopProfile(profile, [
+      { route: "test/routed", label: "Routed" },
+      { route: `anthropic/${datedId}`, label: "Real Anthropic" },
+    ]);
+    expect(reconciled.assignments["test/routed"]?.alias).not.toBe(datedId);
+    expect(reconciled.assignments[`anthropic/${datedId}`]?.alias).toBe(datedId);
+    const rendered = renderDesktopProfile(reconciled, [
+      { route: "test/routed", label: "Routed" },
+      { route: `anthropic/${datedId}`, label: "Real Anthropic" },
+    ]);
+    expect(new Set(rendered.map(model => model.name)).size).toBe(2);
+    expect(rendered.find(model => model.route === `anthropic/${datedId}`)?.name).toBe(datedId);
+  });
+
+  test("keeps a genuine dated Anthropic model id unchanged", () => {
+    const id = "claude-opus-4-8-20260101";
+    const profile = {
+      version: 1 as const,
+      assignments: {
+        [`anthropic/${id}`]: { family: "opus" as const, alias: id },
+      },
+      defaults: { opus: `anthropic/${id}`, fable: null, sonnet: null, haiku: null },
+    };
+    expect(renderDesktopProfile(profile, [{ route: `anthropic/${id}`, label: "Real Anthropic" }])[0]!.name).toBe(id);
+  });
+
   test("retains unavailable routes and promotes an active sibling only while rendering", () => {
     let profile = reconcileDesktopProfile(undefined, models);
     profile = setDesktopFamilyDefault(profile, "opus", "native/gpt-5.6-sol");
@@ -103,6 +138,9 @@ describe("Claude Desktop profile", () => {
       label: `Model ${index}`,
     }));
     const full = reconcileDesktopProfile(emptyDesktopProfile(), encoded);
+    const rendered = renderDesktopProfile(full, encoded);
+    expect(new Set(rendered.map(model => model.name)).size).toBe(TOTAL_ALIAS_SLOTS);
+    expect(rendered.every(model => /^claude-opus-4-8-p[0-9a-z]{3}$/.test(model.name))).toBe(true);
     const snapshot = structuredClone(full);
     expect(Object.keys(full.assignments)).toHaveLength(TOTAL_ALIAS_SLOTS);
     expect(() => reconcileDesktopProfile(full, [...encoded, { route: "test/overflow", label: "Overflow" }])).toThrow("encoded date slots");

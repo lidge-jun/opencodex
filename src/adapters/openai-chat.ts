@@ -340,7 +340,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           }
         }
         // Held markup is released only now, as one batch per response: the doubled-input repair needs every call.
-        const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformTools.get(call.name) })), toolCallContent.current());
+        const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformTools.get(call.name) })), toolCallContent.current(), !toolCallContent.releasedAnswerText && /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? ""));
         calls.forEach((call, index) => { call.args = references[index]!.argumentsText; });
         yield* toolCallContent.drain(references);
         for (const call of calls) {
@@ -803,7 +803,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             events.push({ type: "tool_call_start", id, name: toolNames.restore(name) }, delta, { type: "tool_call_end" });
           }
         }
-        const references = reconcileStructuredToolCalls(structuredCalls, answerText);
+        const references = reconcileStructuredToolCalls(structuredCalls, answerText, /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? ""));
         structuredCalls.forEach((call, index) => { call.delta.arguments = references[index]!.argumentsText; });
         reconcileSerializedToolCallEvents(events, contentStart, contentEnd, references, budget);
         const stopReason = stopReasonFor(choice.finish_reason);

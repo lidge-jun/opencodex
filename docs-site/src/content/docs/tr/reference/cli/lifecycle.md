@@ -32,7 +32,9 @@ yalnızca gözlem ve sınır uygulama kiplerinin ikisi de aynı harcama günlü�
 bir kardeş örnek için ayrı bir `OPENCODEX_HOME` kullanın. `port: 0` yalnızca port seçimini
 işletim sistemine bırakır, durumu ayırmaz. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
 senkronize eder. Kapatıldığında — yönetilen bir servis olarak başlatılmadığı sürece
-(`OCX_SERVICE=1`) — yerel Codex'i geri yükler.
+(`OCX_SERVICE=1`) — yerel Codex'i geri yükler. Çalışan bir proxy'nin yanında başlatılan kardeş örnek,
+`ocx stop` ya da bir sinyalle durdurulduğunda da dahil ikisini de yapmaz: yalnızca kendi portundaki
+doğrudan istekleri karşılar ve Codex, Grok ile Claude zaten çalışmakta olan proxy'yi göstermeye devam eder.
 
 `--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
 HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş
@@ -509,6 +511,8 @@ adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yö
 ### `ocx update [--tag latest|preview]`
 
 OpenCodex mise üzerinden kurulduğunda bu komut proxy'yi durdurmadan veya paket dosyalarını değiştirmeden önce başarısız olur ve doğrulanmış yerel mise diğer adını kullanarak `mise upgrade <tool>` komutunu gösterir. Güncelleme denetimi kullanılabilir kalır ve kurulumun harici olarak yönetildiğini bildirir. Okunamayan veya tutarsız mise sahiplik meta verileri de araç adını tahmin etmeden değişikliği reddeder; `--tag preview` mise içinde yapılandırılmış seçimi değiştirmez.
+
+Linux'ta kayıtlı başlatıcısı mise paket başlatıcısı (mise shim'i değil, `<tool>/latest/node_modules/.bin/ocx`) olan bir arka plan hizmeti `mise upgrade` işlemini kendiliğinden izler: yeni sürüm oturduktan yaklaşık on saniye sonra etkin istekleri boşaltır ve yeni sürümle yeniden başlar; mise daha sonra çalıştığı sürümü temizlerse de aynı şekilde toparlanır. macOS'ta, mise shim'i üzerinden kurulan bir hizmette ve ön plandaki bir proxy'de yükseltmeden sonra kendiniz yeniden başlatın (macOS'ta önce `ocx service repair`).
 
 opencodex'i npm'den kendi kendine güncelleyin. Kararlı kurulumlar `@latest`
 kullanır; önizleme kurulumları `--tag latest|preview` iletmediğiniz sürece

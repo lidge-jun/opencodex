@@ -183,8 +183,8 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET /api/debug/usage-logs` | 读取有上限的 usage-debug 条目 | — |
 | `GET /api/debug/injection-logs` | 读取有上限的 guidance-injection 调试条目 | — |
 | `GET /api/claude/inbound-debug` | 读取 Claude 入站调试状态和条目 | — |
-| `GET /api/usage` | 按范围和客户端界面汇总使用情况 | 若无法读取存储，则返回带有 `error: "read_failed"` 的摘要 |
-| `GET /api/metrics` | 返回进程本地的 Prometheus 文本指标，涵盖逻辑请求、实际发送、恢复类型、持续时间和 TTFT。标签仅使用协议、结果和恢复类别的封闭集合；绝不导出请求或凭据标识。 | 启动时 `metricsExport.enabled` 不为 true 则返回 404；需要普通管理认证，数据平面凭据不能访问 |
+| `GET /api/usage` | 按范围和客户端界面汇总使用情况 | 若无法读取存储，则返回 500 `{ "error": "read_failed" }` |
+| `GET /api/metrics` | 返回进程本地的 Prometheus 文本指标，涵盖逻辑请求、实际发送、恢复类型、持续时间和 TTFT。请求指标使用封闭标签集合；Kiro 指标仅增加有上限的不透明账户标签；绝不导出请求或凭据标识。 四个 Kiro 配额指标 `opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}` 只读取缓存，最多使用 32 个不透明账户标签；抓取时不发起网络请求。 | 启动时 `metricsExport.enabled` 不为 true 则返回 404；需要普通管理认证，数据平面凭据不能访问 |
 | `GET /api/storage` | 按桶扫描 Codex 存储使用情况 | 扫描失败时返回带有 `error: "scan_failed"` 的载荷 |
 | `POST /api/storage/cleanup/preview` | 预览已归档会话清理并返回绑定摘要 | 400 `invalid_json` 或 `invalid_percent` |
 | `POST /api/storage/cleanup` | 隔离或永久移除预览出的归档集合 | 400 输入无效；409 过期/忙碌/被引用状态；500 文件系统/数据库失败 |
@@ -233,7 +233,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `POST /api/oauth/login/cancel` | 取消一个公开进行中的 OAuth 流程 | 400 provider 未知 |
 | `GET /api/oauth/status` | 轮询某个 provider 的 OAuth 流程 | 400 provider 未知 |
 | `POST /api/oauth/logout` | 移除选定的 provider 凭证 | 400 provider 未知；`oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | 列出已脱敏账户或移除一个账户 | 400 provider/id 无效；404 账户缺失；`oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | 列出已脱敏账户或移除一个账户 Kiro 行包含自动选择状态 `autoSelectable`，被排除时还包含封闭集合的 `skipReason`。唯一的活动账户仍可发送请求，配额查询仍为可选。 | 400 provider/id 无效；404 账户缺失；`oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | 选择当前活跃的 OAuth 账户 | 400 provider/账户无效；`oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | 读取或更新 Anthropic OAuth 池策略 | 400 非 Anthropic provider 或策略无效 |
 | `POST /api/oauth/accounts/clear-cooldown` | 清除一个 OAuth 账户的运行时冷却 | 400 provider/账户无效 |

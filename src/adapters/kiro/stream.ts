@@ -12,6 +12,7 @@ import {
   classifyKiroHttpError,
   classifyKiroStreamError,
   safeKiroErrorMessage,
+  safeKiroHttpErrorMessage,
   type KiroErrorClassification,
 } from "../kiro-errors";
 import { parseKiroEvent } from "../kiro-events";
@@ -175,6 +176,7 @@ function mergeKiroUsage(
     ...(sumOptional("cachedInputTokens") !== undefined ? { cachedInputTokens: sumOptional("cachedInputTokens") } : {}),
     ...(sumOptional("cacheReadInputTokens") !== undefined ? { cacheReadInputTokens: sumOptional("cacheReadInputTokens") } : {}),
     ...(sumOptional("cacheCreationInputTokens") !== undefined ? { cacheCreationInputTokens: sumOptional("cacheCreationInputTokens") } : {}),
+    ...(sumOptional("providerCredits") !== undefined ? { providerCredits: sumOptional("providerCredits") } : {}),
     ...(sumOptional("reasoningOutputTokens") !== undefined ? { reasoningOutputTokens: sumOptional("reasoningOutputTokens") } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),
   };
@@ -319,6 +321,7 @@ async function* parseKiroAttemptEvents(
   let completionAnswer: string | undefined;
   let completionCalls = 0;
   let authoritativeUsage: OcxUsage | undefined;
+  let providerCredits: number | undefined;
   let stopReason: string | undefined;
   const fallbackEvents: AdapterEvent[] = [];
   const thinking = new InlineThinkTagParser(budget);
@@ -379,7 +382,11 @@ async function* parseKiroAttemptEvents(
       contextUsageTotalFloor() ?? 0,
       authoritativeTurnTotal,
     );
-    return contextTotal > 0 ? { ...base, contextTotalTokens: contextTotal } : base;
+    return {
+      ...base,
+      ...(contextTotal > 0 ? { contextTotalTokens: contextTotal } : {}),
+      ...(providerCredits !== undefined ? { providerCredits } : {}),
+    };
   };
 
   const classifiedTerminal = (failure: KiroErrorClassification): AdapterEvent => {
@@ -599,6 +606,9 @@ async function* parseKiroAttemptEvents(
       const ev = parseKiroEvent(eventType, msg.payload);
       if (!ev) continue;
       switch (ev.type) {
+        case "metering":
+          if (ev.unit === "credit" || ev.unit === "credits") providerCredits = ev.usage;
+          break;
         case "metadata":
           if (ev.usage) authoritativeUsage = ev.usage;
           if (ev.contextUsagePercentage !== undefined && ev.contextUsagePercentage > 0) {
@@ -1098,7 +1108,7 @@ export async function* parseKiroStream(
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
       yield {
         type: "error",
-        message: failure.message,
+        message: safeKiroHttpErrorMessage(fallback.response.status, fallback.response.headers, payload),
         status: failure.status,
         errorType: failure.errorType,
         code: failure.code,

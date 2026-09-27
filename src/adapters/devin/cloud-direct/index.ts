@@ -51,6 +51,7 @@ export {
 
 export {
   streamChatEventsWithResetRetry,
+  devinStatedResetWaitMs,
   STATED_RESET_MAX_REPLAYS,
   STATED_RESET_MAX_WAIT_MS,
   type StatedResetRetryOptions,

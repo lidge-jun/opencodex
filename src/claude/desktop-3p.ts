@@ -193,8 +193,26 @@ function collectDesktop3pModels(
     const rendered = renderDesktopProfile(reconciled, profileModels);
     const aliasesByRoute = new Map<string, string>();
     for (const model of rendered) {
+      const realAnthropic = model.route.startsWith("anthropic/claude-");
+      if (!realAnthropic && realAnthropicIds.has(model.name)) {
+        console.warn(`[opencodex] Claude Desktop profile alias ${model.name} for ${model.route} conflicts with a real Anthropic model; skipping the routed model`);
+        continue;
+      }
       aliasesByRoute.set(model.route, model.name);
-      if (!model.route.startsWith("anthropic/claude-")) registry.set(model.name, model.route);
+      if (!realAnthropic) {
+        registry.set(model.name, model.route);
+        // Profiles persist their historical date slots, while Desktop receives
+        // a non-date wire id. Keep the date form resolvable for running/stale
+        // sessions during the migration.
+        const storedAlias = reconciled.assignments[model.route]?.alias;
+        if (storedAlias && storedAlias !== model.name) {
+          if (realAnthropicIds.has(storedAlias)) {
+            console.warn(`[opencodex] Claude Desktop stored alias ${storedAlias} for ${model.route} conflicts with a real Anthropic model; ignoring the alias`);
+          } else {
+            registry.set(storedAlias, model.route);
+          }
+        }
+      }
       models.push({
         name: model.name,
         labelOverride: model.label,
@@ -203,25 +221,33 @@ function collectDesktop3pModels(
         ...(model.supports1m ? { supports1m: true, prefer1m: true } : {}),
       });
     }
-    // Legacy hashes are compatibility-only and can collide. Bind them in stable route order so
-    // changing a family default or rendered ordering can never silently rebind an old Desktop id.
+    // Hash aliases from both pre-profile generations are compatibility-only and can
+    // collide. Bind them in stable route order so changing a family default or
+    // rendered ordering can never silently rebind an old Desktop id.
     for (const model of [...rendered].sort((a, b) => a.route.localeCompare(b.route))) {
       if (model.route.startsWith("anthropic/claude-")) continue;
       const providerEnd = model.route.indexOf("/");
       const provider = model.route.slice(0, providerEnd);
       const id = model.route.slice(providerEnd + 1);
-      const legacy = legacyDesktop3pAlias(provider, id);
-      const existing = registry.get(legacy);
-      if (existing && existing !== model.route) {
-        console.warn(`[opencodex] Claude Desktop legacy alias collision: ${legacy} stays bound to ${existing}; ignoring ${model.route}`);
-        continue;
+      for (const legacy of [desktop3pAlias(provider, id), legacyDesktop3pAlias(provider, id)]) {
+        if (realAnthropicIds.has(legacy)) {
+          console.warn(`[opencodex] Claude Desktop legacy alias ${legacy} for ${model.route} conflicts with a real Anthropic model; ignoring the alias`);
+          continue;
+        }
+        const existing = registry.get(legacy);
+        if (existing && existing !== model.route) {
+          console.warn(`[opencodex] Claude Desktop legacy alias collision: ${legacy} stays bound to ${existing}; ignoring ${model.route}`);
+          continue;
+        }
+        registry.set(legacy, model.route);
       }
-      registry.set(legacy, model.route);
     }
     desktop3pAliasesByRoute = aliasesByRoute;
     return { models, registry, realAnthropicIds };
   }
 
+  const aliasesByRoute = new Map<string, string>();
+  const emittedNames = new Set<string>();
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
     const alias = desktop3pAlias(provider, id);
@@ -232,13 +258,20 @@ function collectDesktop3pModels(
       // Real Anthropic model: keep it OUT of the decode registry — registering it would
       // make resolveInboundModel() non-identity and kill the sk-ant native passthrough
       // (audit 133 #1). It still appears in the static Desktop model list below.
+      if (emittedNames.has(alias)) continue;
       models.push({
         name: alias,
         labelOverride: `${displayModelId(id)} (${provider})`,
         anthropicFamilyTier: "opus",
         ...supports1m,
-      ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
+        ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
       });
+      emittedNames.add(alias);
+      aliasesByRoute.set(route, alias);
+      continue;
+    }
+    if (realAnthropicIds.has(alias)) {
+      console.warn(`[opencodex] Claude Desktop 3P alias ${alias} for ${route} conflicts with a real Anthropic model; skipping the routed model`);
       continue;
     }
     const existingRoute = registry.get(alias);
@@ -250,7 +283,11 @@ function collectDesktop3pModels(
     registry.set(alias, route);
     // Back-compat decode for Desktop configs written before the opus-4-8 rename.
     const legacy = legacyDesktop3pAlias(provider, id);
-    if (!registry.has(legacy)) registry.set(legacy, route);
+    if (realAnthropicIds.has(legacy)) {
+      console.warn(`[opencodex] Claude Desktop legacy alias ${legacy} for ${route} conflicts with a real Anthropic model; ignoring the alias`);
+    } else if (!registry.has(legacy)) {
+      registry.set(legacy, route);
+    }
     models.push({
       name: alias,
       labelOverride: `${displayModelId(id)} (${provider})`,
@@ -258,10 +295,11 @@ function collectDesktop3pModels(
       ...supports1m,
       ...(supports1m.supports1m ? { prefer1m: true as const } : {}),
     });
+    aliasesByRoute.set(route, alias);
   }
 
   if (models[0]) models[0].isFamilyDefault = true;
-  desktop3pAliasesByRoute = new Map(candidates.map(({ provider, id }) => [`${provider}/${id}`, desktop3pAlias(provider, id)]));
+  desktop3pAliasesByRoute = aliasesByRoute;
   return { models, registry, realAnthropicIds };
 }
 
@@ -308,7 +346,9 @@ export function isUnresolvedDesktop3pAlias(id: string): boolean {
   // identity only; it neither enables a tier nor strips an exact full catalog ID.
   const base = id.endsWith("--fast") ? id.slice(0, -"--fast".length) : id;
   if (isKnownDesktop3pModelId(base)) return false;
-  return validDateAlias(base) || /^claude-opus-4-(?:8-)?[a-z][a-z0-9]{2}$/.test(base);
+  return validDateAlias(base)
+    || /^claude-opus-4-(?:8-)?[a-z][a-z0-9]{2}$/.test(base)
+    || /^claude-opus-4-8-p[0-9a-z]{3}$/.test(base);
 }
 
 /** Alias selected by the installed profile registry, falling back to the legacy hash shape. */

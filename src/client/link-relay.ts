@@ -2,17 +2,19 @@ import {
   boundedRelayResponseStream,
   filterRelayHeaders,
   headersWithinLimit,
-  HUB_RELAY_DEFAULT_TIMEOUT_MS,
-  HUB_RELAY_REQUEST_BODY_MAX_BYTES,
-  HUB_RELAY_RESPONSE_BODY_MAX_BYTES,
-  readBoundedRelayRequestBody,
   validateHubRelayRequestHeaders,
 } from "./hub-relay";
 import { linkRouteAllowed } from "../link/routes";
 import { isLinkPort } from "../link/ports";
+import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
+  /**
+   * The stored link key. The relay sends it in place of every caller credential, so the Home
+   * admits the request as this link and serves it with its own accounts.
+   */
+  admissionKey: string;
 }
 
 export interface LinkRelayClock {
@@ -20,15 +22,66 @@ export interface LinkRelayClock {
   clearTimeout: typeof clearTimeout;
 }
 
+/**
+ * The Child's tunnel as the relay sees it (the client link supervisor implements it). A request
+ * waits on it only while the tunnel is being (re)established. Every relayed fetch waits for a
+ * fresh bounded asynchronous ownership proof, including after a reconnect or refused retry.
+ */
+export interface LinkTunnelGate {
+  /** True only while a keyed probe has established this live tunnel. */
+  connected(): boolean | Promise<boolean>;
+  /** True while the tunnel is connecting or reconnecting. */
+  pending(): boolean;
+  /**
+   * Resolves true once the tunnel is connected, and false after `timeoutMs`, when `signal` aborts,
+   * when the tunnel stops being re-established (failed or stopped), or when too many requests wait.
+   */
+  waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+}
+
+/**
+ * The gate for a Home-initiated link. The Home runs `ssh -R` and owns the forward, so the Child
+ * has no tunnel supervisor and no local SSH process whose socket it could prove. This gate keeps
+ * the 2.67.0 behaviour for that link only: forward to the tunnel port without an ownership proof,
+ * never hold, and answer 503 when the connection is refused. Child-initiated links keep their
+ * supervisor, and a relay with no gate at all still refuses every request.
+ */
+export const HOME_INITIATED_LINK_TUNNEL: LinkTunnelGate = {
+  connected: () => true,
+  pending: () => false,
+  waitForConnected: async () => false,
+};
+
 export interface LinkRelayDeps {
   fetchImpl?: typeof fetch;
   clock?: LinkRelayClock;
-  timeoutMs?: number;
+  /** Time allowed for the Home's response headers; a caller abort still ends the wait sooner. */
+  headerTimeoutMs?: number;
   sseIdleTimeoutMs?: number;
+  /** Byte cap for the streamed request body and for a non-SSE response body. */
+  bodyLimitBytes?: number;
+  /** The Child's tunnel; without positive connected proof a request is refused. */
+  tunnel?: LinkTunnelGate;
+  /** The longest a request waits for a reconnecting tunnel, from its first wait. */
+  holdMs?: number;
+  now?: () => number;
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
 export const LINK_RELAY_SSE_IDLE_TIMEOUT_MS = 300_000;
+/**
+ * The Home may hold a turn (remote compaction, a slow first byte) far past the management
+ * relay's 15 s, so the data plane waits for response headers as long as its SSE idle limit.
+ */
+export const LINK_RELAY_HEADER_TIMEOUT_MS = 300_000;
+/** The data-plane default: the same inbound limit a standalone listener admits. */
+export const LINK_RELAY_BODY_MAX_BYTES = resolveInboundBodyLimitBytes(undefined);
+/**
+ * How long a request waits for a tunnel that is connecting or reconnecting (right after the
+ * restart into a Child, after sleep, after an ssh exit) before it is answered 503. Codex's own
+ * retries cover only a few seconds.
+ */
+export const LINK_RELAY_HOLD_MS = 15_000;
 
 const defaultClock: LinkRelayClock = {
   setTimeout: globalThis.setTimeout,
@@ -36,24 +89,59 @@ const defaultClock: LinkRelayClock = {
 };
 const REQUEST_OMITTED_HEADERS = new Set(["content-length", "host"]);
 const RESPONSE_OMITTED_HEADERS = new Set(["content-encoding", "content-length"]);
+/**
+ * Caller credentials never cross the tunnel. The Child's own ChatGPT or Anthropic credential
+ * stays on the Child, and the Home sees exactly one admission: the link key.
+ */
+const CALLER_CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-opencodex-api-key", "chatgpt-account-id", "cookie"] as const;
 
 function jsonError(status: number, error: string, retry = false): Response {
   const headers = retry ? { "Retry-After": String(LINK_RELAY_RETRY_AFTER_SECONDS) } : undefined;
   return Response.json({ error }, { status, headers });
 }
 
-export function linkRelayDestination(url: URL, target: LinkRelayTarget): string {
+export function linkRelayDestination(url: URL, target: Pick<LinkRelayTarget, "tunnelPort">): string {
   if (!isLinkPort(target.tunnelPort)) {
     throw new RangeError("invalid link tunnel port");
   }
   return `http://127.0.0.1:${target.tunnelPort}${url.pathname}${url.search}`;
 }
 
-export function forwardLinkRequestHeaders(source: Headers): Headers {
-  const validation = validateHubRelayRequestHeaders([...source]);
+/**
+ * The caller's headers for the framing check. The listener's HTTP parser has already de-chunked
+ * the body, and the relay re-frames it from the stream, so a lone `Transfer-Encoding: chunked`
+ * with no Content-Length is admitted, as a standalone admits it. Any other Transfer-Encoding, or
+ * one next to a Content-Length, stays in the list and is refused as ambiguous framing.
+ */
+function linkFramingHeaders(source: Headers): Array<[string, string]> {
+  const raw = [...source];
+  const transferEncoding = source.get("transfer-encoding");
+  if (transferEncoding === null || transferEncoding.trim().toLowerCase() !== "chunked" || source.has("content-length")) return raw;
+  return raw.filter(([name]) => name.toLowerCase() !== "transfer-encoding");
+}
+
+/**
+ * The headers sent to the Home: hop-by-hop, Connection-nominated and caller credential headers
+ * dropped, then the link key attached. `GET /v1/usage` admits only the dedicated header; every
+ * other link route takes the key as a Bearer, the same wire an `env_key` Codex config sent.
+ */
+export function forwardLinkRequestHeaders(source: Headers, admissionKey: string, pathname: string): Headers {
+  const validation = validateHubRelayRequestHeaders(linkFramingHeaders(source));
   if (!validation.ok) return new Headers();
-  const omitted = new Set([...REQUEST_OMITTED_HEADERS, ...validation.connectionNamed]);
-  return filterRelayHeaders(source, undefined, omitted);
+  return linkRequestHeaders(source, admissionKey, pathname, validation.connectionNamed);
+}
+
+function linkRequestHeaders(
+  source: Headers,
+  admissionKey: string,
+  pathname: string,
+  connectionNamed: ReadonlySet<string>,
+): Headers {
+  const omitted = new Set<string>([...REQUEST_OMITTED_HEADERS, ...CALLER_CREDENTIAL_HEADERS, ...connectionNamed]);
+  const headers = filterRelayHeaders(source, undefined, omitted);
+  if (pathname === "/v1/usage") headers.set("x-opencodex-api-key", admissionKey);
+  else headers.set("authorization", `Bearer ${admissionKey}`);
+  return headers;
 }
 
 export function sanitizeLinkResponseHeaders(source: Headers): Headers {
@@ -64,6 +152,60 @@ export function sanitizeLinkResponseHeaders(source: Headers): Headers {
 
 function isSse(headers: Headers): boolean {
   return headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream";
+}
+
+function positive(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+/**
+ * The caller's body streamed through unchanged while its bytes are counted. Nothing is
+ * buffered: each chunk goes to the upstream as it arrives, and crossing `limit` errors the
+ * stream, which fails the upstream fetch.
+ */
+function byteCappedRequestBody(
+  body: ReadableStream<Uint8Array>,
+  limit: number,
+  onOverflow: () => void,
+  onCancel: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let bytes = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        bytes += next.value.byteLength;
+        if (bytes > limit) {
+          const error = new RangeError("link relay request body too large");
+          onOverflow();
+          try { await reader.cancel(error); } catch { /* best effort */ }
+          controller.error(error);
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      onCancel();
+      try { await reader.cancel(reason); } catch { /* best effort */ }
+    },
+  });
+}
+
+/**
+ * The connection itself was refused: nothing reached the Home, so the request may be sent again.
+ * Any other failure (a reset, a timeout, an error after the body started) may have reached it.
+ */
+function connectionRefused(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "ConnectionRefused" || code === "ECONNREFUSED";
 }
 
 function idleBoundedStream(
@@ -159,51 +301,92 @@ export async function relayLinkDataRequest(
   if (!linkRouteAllowed(url, req)) return jsonError(404, "not_found");
   let destination: string;
   try { destination = linkRelayDestination(url, target); } catch { return jsonError(404, "not_found"); }
-  const validation = validateHubRelayRequestHeaders([...req.headers]);
+  const validation = validateHubRelayRequestHeaders(linkFramingHeaders(req.headers));
   if (!validation.ok) return jsonError(400, "link relay request headers refused");
 
-  let body: Uint8Array<ArrayBuffer> | null;
-  try {
-    body = req.method === "GET" || req.method === "HEAD"
-      ? null
-      : await readBoundedRelayRequestBody(req.body, req.headers.get("content-length"), HUB_RELAY_REQUEST_BODY_MAX_BYTES);
-  } catch {
+  const bodyLimit = positive(deps.bodyLimitBytes) ?? LINK_RELAY_BODY_MAX_BYTES;
+  // The check admits at most one all-digit Content-Length, and Transfer-Encoding only as a lone
+  // `chunked` without one; the byte cap below bounds a chunked body instead.
+  const declaredLength = req.headers.get("content-length")?.trim() ?? null;
+  if (declaredLength !== null && Number(declaredLength) > bodyLimit) {
     return jsonError(413, "link relay request body too large");
   }
-  const headers = forwardLinkRequestHeaders(req.headers);
+  const headers = linkRequestHeaders(req.headers, target.admissionKey, url.pathname, validation.connectionNamed);
   if (!headersWithinLimit(headers)) {
     return jsonError(431, "link relay request headers too large");
   }
 
   const relayAbort = new AbortController();
-  const timeoutMs = typeof deps.timeoutMs === "number" && Number.isFinite(deps.timeoutMs) && deps.timeoutMs > 0
-    ? Math.min(Math.floor(deps.timeoutMs), 120_000)
-    : HUB_RELAY_DEFAULT_TIMEOUT_MS;
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const onTimeout = () => relayAbort.abort(timeoutSignal.reason);
+  const clock = deps.clock ?? defaultClock;
+  let headerTimer: ReturnType<typeof setTimeout> | undefined = clock.setTimeout(() => {
+    headerTimer = undefined;
+    relayAbort.abort(new DOMException("link relay header deadline", "TimeoutError"));
+  }, positive(deps.headerTimeoutMs) ?? LINK_RELAY_HEADER_TIMEOUT_MS);
+  const stopHeaderDeadline = () => {
+    if (headerTimer !== undefined) clock.clearTimeout(headerTimer);
+    headerTimer = undefined;
+  };
   const onClientAbort = () => relayAbort.abort(req.signal.reason);
-  timeoutSignal.addEventListener("abort", onTimeout, { once: true });
   req.signal.addEventListener("abort", onClientAbort, { once: true });
   const cleanup = () => {
-    timeoutSignal.removeEventListener("abort", onTimeout);
+    stopHeaderDeadline();
     req.signal.removeEventListener("abort", onClientAbort);
   };
   if (req.signal.aborted) onClientAbort();
-  else if (timeoutSignal.aborted) onTimeout();
 
-  let upstream: Response;
-  try {
-    const init: RequestInit & { duplex?: "half" } = {
-      method: req.method,
-      headers,
-      redirect: "manual",
-      signal: relayAbort.signal,
-      ...(body ? { body, duplex: "half" } : {}),
-    };
-    upstream = await (deps.fetchImpl ?? fetch)(destination, init);
-  } catch {
+  let bodyOverflow = false;
+  let bodyCancelled = false;
+  const body = req.method === "GET" || req.method === "HEAD" || !req.body
+    ? null
+    : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; }, () => { bodyCancelled = true; });
+  // A streamed body keeps the caller's Content-Length, so the Home sees the same framing a
+  // buffered body produced instead of a chunked upload.
+  if (body && declaredLength !== null) headers.set("content-length", declaredLength);
+
+  // The hold: only while the tunnel is connecting or reconnecting, and at most `holdMs` from the
+  // first wait. A positive connected verdict is required again before every fetch.
+  const tunnel = deps.tunnel;
+  let holdUntil: number | undefined;
+  const holdForTunnel = async (gate: LinkTunnelGate): Promise<boolean> => {
+    const clockNow = deps.now ?? Date.now;
+    const now = clockNow();
+    holdUntil ??= now + (positive(deps.holdMs) ?? LINK_RELAY_HOLD_MS);
+    const remaining = holdUntil - now;
+    return remaining > 0 && await gate.waitForConnected(remaining, relayAbort.signal);
+  };
+  const tunnelUnavailable = async (): Promise<Response> => {
     cleanup();
+    try { await body?.cancel(); } catch { /* best effort */ }
     return jsonError(503, "link tunnel unavailable", true);
+  };
+  const readyForFetch = async (): Promise<boolean> => {
+    if (!tunnel) return false;
+    if (await tunnel.connected()) return true;
+    return tunnel.pending() && await holdForTunnel(tunnel) && await tunnel.connected();
+  };
+
+  let upstream: Response | undefined;
+  while (!upstream) {
+    if (!await readyForFetch()) return await tunnelUnavailable();
+    try {
+      const init: RequestInit & { duplex?: "half" } = {
+        method: req.method,
+        headers,
+        redirect: "manual",
+        signal: relayAbort.signal,
+        ...(body ? { body, duplex: "half" } : {}),
+      };
+      upstream = await (deps.fetchImpl ?? fetch)(destination, init);
+    } catch (error) {
+      if (bodyOverflow) {
+        cleanup();
+        return jsonError(413, "link relay request body too large");
+      }
+      // A refused connection sent nothing, and an untouched body can go again once the tunnel
+      // is back inside the same hold window. Anything else is never replayed.
+      const resendable = connectionRefused(error) && (body === null || (!body.locked && !bodyCancelled));
+      if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable();
+    }
   }
   if (relayAbort.signal.aborted) {
     cleanup();
@@ -218,9 +401,9 @@ export async function relayLinkDataRequest(
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return jsonError(502, "link relay response headers too large");
   }
-  const declaredLength = upstream.headers.get("content-length");
-  if (!sse && declaredLength !== null && (!/^\d+$/.test(declaredLength)
-    || Number(declaredLength) > HUB_RELAY_RESPONSE_BODY_MAX_BYTES)) {
+  const responseLength = upstream.headers.get("content-length");
+  if (!sse && responseLength !== null && (!/^\d+$/.test(responseLength)
+    || Number(responseLength) > bodyLimit)) {
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return jsonError(502, "link relay response body too large");
@@ -231,11 +414,11 @@ export async function relayLinkDataRequest(
     return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
   }
 
-  // The handshake deadline ends once a response exists. The body owns cleanup after that.
-  timeoutSignal.removeEventListener("abort", onTimeout);
+  // The header deadline ends once a response exists. The body owns cleanup after that.
+  stopHeaderDeadline();
   const responseBody = sse
-    ? idleBoundedStream(upstream.body, relayAbort.signal, deps.clock ?? defaultClock,
+    ? idleBoundedStream(upstream.body, relayAbort.signal, clock,
       deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), cleanup)
-    : boundedRelayResponseStream(upstream.body, HUB_RELAY_RESPONSE_BODY_MAX_BYTES, relayAbort.signal, cleanup);
+    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, cleanup);
   return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
 }

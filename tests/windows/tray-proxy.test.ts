@@ -296,7 +296,7 @@ describe("tray proxy coordinator", () => {
     expect(source).toContain('if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }');
     expect(source).toContain('if ($script:updateAvailable) { $onlineUpdateIcon } else { $onlineIcon }');
     expect(source).toContain('if ($script:updateAvailable) { $offlineUpdateIcon } else { $offlineIcon }');
-    expect(source).toContain('$updateItem = $menu.Items.Add("Update available")');
+    expect(source).toContain('$updateItem = $menu.Items.Add((Get-TrayText "Update available" "有可用更新"))');
     expect(source).toContain('$updateItem.add_Click({ Start-OcxCommand @("gui") })');
   });
 });
