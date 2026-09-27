@@ -7,13 +7,26 @@
  * full and never compacts, so every later turn dead-ends the same way. Only a
  * request large against the model's window is reclassified; a small request
  * with the same code stays an ordinary 400.
+ *
+ * Boundary, binary-searched live on swe-1-6 (200k catalog window, 8192 output):
+ * accepted at 199,186 prompt tokens of prose and 200,345 of JSON, refused at
+ * ~203k of either. Raising the output cap to 32000 did not move it (195,571
+ * input tokens still accepted), so the window is not reduced by the output
+ * reservation and the threshold is the window itself.
  */
 import type { AdapterEvent } from "../../types";
-import { estimateTokens } from "../../lib/token-estimate";
 import type { ChatHistoryItem, ToolDef } from "./cloud-direct";
 
-/** Share of the window the estimate must reach; the chars-per-token estimate can run ~25% low. */
-const WINDOW_SHARE = 0.8;
+/**
+ * Share of the window the estimate must reach. Characters per real token ran
+ * from 1.33 (Korean) through 2.31 (JSON) and 4.23 (source code) to 5.53
+ * (prose), so no character ratio separates "over the window" from "60% of it".
+ * The word-piece count below read 1.00x to 1.54x of the real count on those
+ * samples: at 0.95 every sample at the window is caught and none at 60% is.
+ */
+const WINDOW_SHARE = 0.95;
+/** One token per short letter run, 1-3 digit group, or other visible character. */
+const WORD_PIECE = /[A-Z]?[a-z]{1,8}|[A-Z]{1,8}(?![a-z])|\d{1,3}|\S/g;
 /** Text size that counts as oversized when the model's window is unknown. */
 const UNKNOWN_WINDOW_CHARS = 512 * 1024;
 
@@ -36,7 +49,6 @@ function requestText(messages: ChatHistoryItem[], tools: ToolDef[] | undefined):
 export function isDevinHistoryOverflow(input: {
   code: string | undefined;
   producedOutput: boolean;
-  modelUid: string;
   contextWindow: number | undefined;
   messages: ChatHistoryItem[];
   tools: ToolDef[] | undefined;
@@ -44,7 +56,9 @@ export function isDevinHistoryOverflow(input: {
   if (input.code !== "invalid_argument" || input.producedOutput) return false;
   const text = requestText(input.messages, input.tools);
   if (!input.contextWindow) return text.length >= UNKNOWN_WINDOW_CHARS;
-  return estimateTokens(text, input.modelUid) >= input.contextWindow * WINDOW_SHARE;
+  let pieces = 0;
+  for (const _ of text.matchAll(WORD_PIECE)) pieces++;
+  return pieces >= input.contextWindow * WINDOW_SHARE;
 }
 
 /** Same terminal shape the Kiro adapter uses, which Codex reads as "context full, compact". */

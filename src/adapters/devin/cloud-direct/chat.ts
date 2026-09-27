@@ -237,8 +237,8 @@ function encodeChatMessagePrompt(
   if (opts?.toolCallId) {
     parts.push(encodeString(7, opts.toolCallId));
   }
-  // Accepted live on a tool prompt, and the model reported the failure from the
-  // flag alone, so a failed tool result needs no in-band text marker.
+  // Accepted live on a tool prompt. Only some models act on it, so the adapter
+  // also keeps an in-band marker in the text.
   if (opts?.isError) parts.push(encodeVarintField(9, 1));
   // Assistant message with tool_calls: encode each as a ChatToolCall.
   if (opts?.toolCalls && opts.toolCalls.length > 0) {
@@ -672,8 +672,10 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   // from cache in #2, against 7072 of 7097 when the same text was collapsed
   // into the first user prompt, so the cache ratio is unchanged and the prompt
   // is smaller. The model obeyed an instruction given only in #2.
+  // A request with only system text keeps it as a user prompt: #2 alone would
+  // leave the request with no prompt at all.
   const firstNonSystem = args.messages.findIndex((m) => m.role !== 'system');
-  const leadingSystem = firstNonSystem === -1 ? args.messages : args.messages.slice(0, firstNonSystem);
+  const leadingSystem = firstNonSystem === -1 ? [] : args.messages.slice(0, firstNonSystem);
   const systemPrompt = leadingSystem
     .map((m) => normalizeContent(m.content)
       .filter((p): p is { type: 'text'; text: string } => p.type === 'text')

@@ -452,9 +452,19 @@ function mapOneMessage(message: OcxMessage): ChatHistoryItem | undefined {
     };
   }
   if (message.role === "toolResult") {
+    // #9 alone is not enough: live, with a neutral "hello world" result flagged
+    // as an error, only gemini-3-8-flash reported a failure; swe-1-6,
+    // gpt-6-sol-low and gpt-5-6-luna-low read it as success. So the flag rides
+    // with the in-band marker rather than replacing it.
+    const wireContent = mapOcxContentToWire(message.content);
+    const toolContent = message.isError
+      ? (typeof wireContent === "string"
+          ? `ERROR: ${wireContent}`
+          : [{ type: "text", text: "ERROR:" } as ContentPart, ...wireContent])
+      : wireContent;
     return {
       role: "tool",
-      content: mapOcxContentToWire(message.content),
+      content: toolContent,
       tool_call_id: message.toolCallId,
       ...(message.isError ? { is_error: true } : {}),
     };
@@ -761,7 +771,7 @@ export function createDevinAdapter(
         // Converting it to an adapter event would make it an ordinary untyped upstream error.
         if (error instanceof SendBudgetExhaustedError) throw error;
         if (error instanceof CloudChatError && isDevinHistoryOverflow({
-          code: error.code, producedOutput, modelUid, contextWindow: maxInputTokens, messages, tools,
+          code: error.code, producedOutput, contextWindow: maxInputTokens, messages, tools,
         })) {
           emit({ ...devinContextOverflowEvent(), ...(usage ? { usage } : {}) });
           return;
