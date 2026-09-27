@@ -83,6 +83,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   raycast: "integrations.semantics.raycast",
   omo: "integrations.semantics.omo",
   cline: "integrations.semantics.cline",
+  qoder: "integrations.semantics.qoder",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -101,6 +102,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   raycast: "integrations.tab.raycast",
   omo: "integrations.tab.omo",
   cline: "integrations.tab.cline",
+  qoder: "integrations.tab.qoder",
 };
 
 export default function FileIntegrationPage({

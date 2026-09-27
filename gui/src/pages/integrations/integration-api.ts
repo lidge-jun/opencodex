@@ -2,6 +2,7 @@ import { readJsonIfOk } from "../../fetch-json";
 import { parseAsideProfileStatus, parseAsideProfileOutcomes, type AsideProfileOutcome } from "./aside-profile-contract";
 
 export const FILE_INTEGRATION_CLIENTS = [
+  "qoder",
   "opencode",
   "pi",
   "omp",
@@ -233,6 +234,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "providers.opencodex",
   "models.providers.opencodex",
   "models.*",
+  "modelConfigs.customModels.*",
   "llm-pi-ai.providers.opencodex",
   "custom_provider.opencodex",
   "providers.[id=opencodex]",

@@ -21,7 +21,7 @@ Codex account panels expose no Spark quota toggle or setting and retain quota re
 Dashboard localization uses the English `gui/src/i18n/en.ts` catalog as the complete key and
 placeholder contract. Every registered locale, including Vietnamese, supplies the same keys;
 locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
-maps remain total rather than silently falling back to English.
+maps remain total rather than silently falling back to English. The Dashboard registers Qoder for export and managed integration under the [Qoder settings ownership contract](clients/integrations.md#qoder-settings-ownership).
 
 The Models catalog names three distinct delivery states. A successful management mutation confirms
 only that the catalog is saved on the hub. `gui/src/api-targets.ts` carries the local machine's

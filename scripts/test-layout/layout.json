@@ -168,6 +168,7 @@
     }
   },
   "explicit": {
+    "qoder-client.test.ts": "clients",
     "provider-antigravity-quota-retry.test.ts": "providers",
     "responses-compaction-recovery.test.ts": "responses", "compaction-recovery-settings.test.ts": "config", "responses-compaction-recovery-policy.test.ts": "responses", "plugin-loader.test.ts": "lib", "plugin-upstream-hooks.test.ts": "lib",
     "cli-kiro-auto-selection.test.ts": "cli", "codebuddy-live-models.test.ts": "providers", "kiro-auto-selection.test.ts": "providers/kiro", "kiro-quota-metrics.test.ts": "providers/kiro", "management-provider-request-pacing.test.ts": "server",

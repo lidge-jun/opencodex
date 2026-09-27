@@ -171,7 +171,7 @@ function rowButton(container: HTMLElement, name: string, label: string): HTMLBut
 }
 
 test("the API download surface includes DSH, MiniMax Code, Aside, Raycast and omo as clients", () => {
-  expect(CLIENTS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
+  expect(CLIENTS).toEqual(["qoder", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
   expect(CLIENT_LABEL_KEYS.dsh).toBe("api.clientConfig.clientDsh");
   expect(CLIENT_LABEL_KEYS.mcode).toBe("api.clientConfig.clientMcode");
   expect(CLIENT_LABEL_KEYS.zcode).toBe("api.clientConfig.clientZcode");
@@ -250,7 +250,7 @@ test("clients render as rows, not a switch", async () => {
   expect(container.querySelector(".awi-clientconfig-segmented")).toBeNull();
   const names = [...container.querySelectorAll(".awi-clientconfig-name")].map(el => el.textContent);
   // Row order follows the registry, so a new client appears without a code change here.
-  expect(names?.slice(0, 2)).toEqual(["OpenCode", "Pi"]);
+  expect(names?.slice(0, 2)).toEqual(["Qoder", "OpenCode"]);
   expect(names).toHaveLength(CLIENTS.length);
   // Each row states where its file goes; a Download with no destination is the
   // ambiguity the announcement text works to prevent.

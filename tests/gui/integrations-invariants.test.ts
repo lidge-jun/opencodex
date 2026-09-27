@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(15);
+    expect(expected).toHaveLength(16);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -251,6 +251,7 @@ describe("the journal is metadata, never a copy of the file", () => {
 describe("every client survives a full lifecycle", () => {
   /** A pre-existing user document in each client's own format. */
   const SEED: Record<IntegrationClientId, string> = {
+    qoder: '{"providers":{"mine":{"api":"http://keep-me"}},"theme":"dark"}\n',
     cline: '{"version":1,"modes":{},"providers":{"mine":{"settings":{"provider":"mine"},"updatedAt":"2026-01-01T00:00:00.000Z","tokenSource":"manual"}}}\n',
     opencode: '{\n  "provider": {\n    "mine": { "npm": "keep-me" }\n  }\n}\n',
     pi: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',

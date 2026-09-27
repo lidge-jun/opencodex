@@ -416,7 +416,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline> [--json] [--out <path>] [--force]",
+    usage: "ocx export --client <qoder|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline> [--json] [--out <path>] [--force]",
     summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
