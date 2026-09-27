@@ -178,6 +178,7 @@ describe("kiro generous image pipeline", () => {
     const history = state.history.map((h: any) => h.userInputMessage);
     expect(history[0].images).toHaveLength(19);
     expect(history[0].content).toContain("100-image request cap");
+    expect(history[0].content).toContain("oldest images in this message were dropped");
     expect(history.slice(1).every((c: any) => c.images.length === 20 && !c.content.includes("omitted"))).toBe(true);
     expect(state.currentMessage.userInputMessage).toEqual({ content: "current", images: [img(ONE_PX_PNG)] });
   });
@@ -209,6 +210,7 @@ describe("kiro generous image pipeline", () => {
     for (const carrier of carriers.slice(0, 2)) {
       expect(carrier.images).toBeUndefined();
       expect(carrier.content).toContain("100-image request cap");
+      expect(carrier.content).toContain("no images remain in this message");
     }
     expect(carriers.at(-1).images).toHaveLength(20);
   });

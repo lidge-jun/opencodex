@@ -66,8 +66,10 @@ export function kiroUninlinableImageMarker(count: number): string {
 }
 
 /**
- * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload,
- * whose limits are undocumented. Derived from adjacent AWS surfaces
+ * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload.
+ * The 100-image request cap comes from Kiro's IMAGE_COUNT_EXCEEDED error
+ * ("101 exceeds limit 100"); the per-message and byte limits are undocumented
+ * and derived from adjacent AWS surfaces
  * (devlog/260714_image_normalization_pipeline/050): Bedrock `Message` allows 20 images
  * per message (Converse), and `InvokeModel` caps requests at 25,000,000 bytes — 18MiB
  * bounds the IMAGE share of the body with headroom for text/tools.
@@ -78,6 +80,7 @@ export const KIRO_MAX_IMAGES_PER_REQUEST = 100;
 
 const COUNT_CAP_NOTE = "[image omitted: exceeded the 20-image per-message cap; oldest images in this message were dropped]";
 const REQUEST_CAP_NOTE = "[images omitted: exceeded the 100-image request cap; oldest images in this message were dropped]";
+const REQUEST_CAP_EMPTY_NOTE = "[images omitted: exceeded the 100-image request cap; no images remain in this message]";
 
 /** A kiro wire message that can carry images (history userInputMessage or currentMessage). */
 interface KiroImageCarrier {
@@ -170,7 +173,7 @@ export async function normalizeKiroImages(
     const dropped = Math.min(images.length, excess);
     images.splice(0, dropped);
     if (images.length === 0) delete carrier.images;
-    appendNote(carrier, REQUEST_CAP_NOTE);
+    appendNote(carrier, images.length === 0 ? REQUEST_CAP_EMPTY_NOTE : REQUEST_CAP_NOTE);
     excess -= dropped;
   }
 }
