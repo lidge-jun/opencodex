@@ -56,8 +56,11 @@ on: the ChatGPT forward account, the keyed provider, the xAI Imagine bridge, or 
 fallback. It is evaluated against that destination rather than the selector in the body, because
 the bridge and the fallback choose their own model, and a body that names no model cannot satisfy
 a model list. A refusal is the same 403 the scope returns on the routed path, and a key with no
-scope reaches every destination as before. Coverage lives in
-`tests/server/api-key-scope-images.test.ts`.
+scope reaches every destination as before. Forward candidates are filtered by that scope before any
+stored Pool credential is resolved, refreshed or leased, so a forbidden key never reaches account
+state; when no allowed destination remains, the 403 wins over the generic configuration 400.
+Coverage lives in `tests/server/api-key-scope-images.test.ts` and
+`tests/server/server-images-pool-admission.test.ts`.
 
 The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
 Responses tool surface. A complete `image_gen` namespace is lowered to safe

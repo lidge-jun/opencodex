@@ -681,14 +681,27 @@ export async function handleImages(
     }
   }
 
-  const eligibleForwardCandidates = callerBearerMayBeForwarded
-    ? candidates.forwardCandidates
-    : candidates.forwardCandidates.filter(candidate => candidate.accountMode !== "direct");
+  // Both relay branches copy the body upstream, so the destination is the
+  // provider chosen in that branch and the model the caller named. A scoped key
+  // is checked against each forward destination BEFORE any stored credential is
+  // resolved, refreshed or leased, so a forbidden destination spends nothing.
+  const relaySelector = requestedImageSelector(body);
+  let forwardScopeDenial: Response | undefined;
+  const eligibleForwardCandidates = candidates.forwardCandidates.filter(candidate => {
+    if (!callerBearerMayBeForwarded && candidate.accountMode === "direct") return false;
+    const denial = admissionScopeDenial(config, admission, relaySelector, {
+      providerName: candidate.providerName,
+      modelId: relaySelector,
+    });
+    if (denial) forwardScopeDenial ??= denial;
+    return denial === undefined;
+  });
   const canUseOpenAiForward = eligibleForwardCandidates.length > 0;
 
   if (!canUseOpenAiForward && !candidates.keyed) {
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint, admission);
     if (ccaResponse) return ccaResponse;
+    if (forwardScopeDenial) return forwardScopeDenial;
     // 400, not 5xx: codex retries every 5xx up to 5 total attempts, and this is a permanent
     // configuration state that must surface on the first attempt.
     return formatErrorResponse(
@@ -740,11 +753,9 @@ export async function handleImages(
     catch { console.error("[images] Failed to release probe lease"); }
   };
   let url: string;
-  // Both relay branches copy the body upstream, so the destination is the
-  // provider chosen in that branch and the model the caller named. Each branch
-  // is checked as it is entered, before it resolves a credential or commits a
-  // key rotation, so a refused request spends nothing.
-  const relaySelector = requestedImageSelector(body);
+  // Each branch is re-checked as it is entered: the forward check is defence in
+  // depth for the pre-filter above, and the keyed check runs before a key
+  // rotation is committed.
   if (forward) {
     const denial = admissionScopeDenial(config, admission, relaySelector, {
       providerName: forward.providerName,

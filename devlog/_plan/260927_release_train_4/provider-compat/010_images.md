@@ -36,3 +36,16 @@ Run `bun test tests/server/server-images-pool-admission.test.ts tests/server/api
 - The new fixture was red on the old handler: 1 pass, 5 fails, including Pool success returning 400 and Pool auth failure falling through to keyed 200. After the change, its eight cases pass, including the independent final admission guard case. `tests/server/api-key-scope-images.test.ts` and layout/ratchet guards passed in the 39-case focused run; typecheck, privacy scan, structure check, and docs-site frozen install/build completed successfully.
 - `bun run test:changed` ran 2,615 tests across 133 files: 2,352 pass, 1 skip, 262 fail. Every failure is a test fixture cleanup inside the protected real `.codex` tree of this managed worktree. The separate `fixture upstream connection reset` line belongs to a passing injected-failure test. Do not call this suite green or bypass the removal guard; hosted CI checks the full path outside this worktree layout.
 - Independent security reviewer `01a0e36a-9180-74e3-ab92-2034c4b753e8` first requested a distinct final admission-guard fixture. It was added and run; the same reviewer rechecked the staged diff and returned **SECURITY VERDICT: PASS**. This is a read-only security review, not a live-provider test.
+
+## wp1 re-entry: scope before Pool credential I/O (2026-09-28)
+
+Previous D direction (from `_handoff.md`): resolve the Codex P1 on #6097 so a scoped admission key cannot reach Pool credential resolution before `admissionScopeDenial`, keep the destination scope check for keyed/CCA fallback, then revalidate, push, and merge after exact-head CI.
+
+Plan, confirmed against `src/server/images.ts:667-760` at `acc750effa`:
+
+- Compute `relaySelector` before forward resolution. Filter `eligibleForwardCandidates` a second time with `admissionScopeDenial(config, admission, relaySelector, { providerName: candidate.providerName, modelId: relaySelector })` and keep the first denial response. Only allowed candidates reach `resolveFirstUsableOpenAiSidecar`, so a forbidden key never touches a stored credential, refresh, probe lease or account state.
+- Keep the post-resolution check on `forward.providerName` as defence in depth; it is a no-op for a candidate that passed the pre-filter.
+- When no forward candidate remains and no keyed provider exists, still try CCA (which applies its own scope check), then return the recorded scope denial (403) before the generic configuration 400. A keyed provider still runs its own branch check, so a key scoped to that provider keeps working.
+- Tests: the two local WIP cases (forbidden Pool → 403 with zero sends; allowed Pool+model → 200 with the Pool bearer). Add one more: a key allowed only for the keyed provider falls through to the keyed branch without Pool resolution.
+
+Review dispositions on #6097: the Codex co-author finding is already satisfied by the genuine trailer on `acc750effa`; the squash message will repeat it as a standalone trailer. The CodeRabbit request to apply an RFC 6750 `b64token` pattern to the managed Pool bearer is declined: the Pool token is a stored credential the proxy never builds from request input, the header is assembled through `Headers.set`, and a stricter local pattern would only turn an upstream 401 into a local 500 without closing a reachable path.

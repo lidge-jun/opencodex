@@ -11,6 +11,7 @@ import {
   recordCodexUpstreamOutcome,
 } from "../../src/codex/routing";
 import { saveConfig } from "../../src/config";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import { handleImages } from "../../src/server/images";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -118,8 +119,8 @@ function markRecoveryProbeDue(config: OcxConfig): number {
   return old;
 }
 
-async function callImages(config: OcxConfig): Promise<Response> {
-  return handleImages(request(), config, "generations", logContext());
+async function callImages(config: OcxConfig, admission?: DataPlaneAdmission): Promise<Response> {
+  return handleImages(request(), config, "generations", logContext(), undefined, admission);
 }
 
 test("proxy admission bearer uses managed Pool Images credentials", async () => {
@@ -149,6 +150,56 @@ test("Pool authentication failure does not fall back to a billed keyed Images pr
   expect(response.status).toBe(401);
   expect(sent).toHaveLength(0);
   expect(logs).toEqual(["[images] Pool credential failed; reauthentication required"]);
+});
+
+test("scoped admission denies Pool before resolving a forbidden credential", async () => {
+  const config = {
+    ...imageConfig(),
+    apiKeys: [{
+      id: "scoped-images", name: "scoped-images", key: ADMISSION_SECRET,
+      createdAt: "2026-09-27T00:00:00.000Z", allowedProviders: ["another-provider"],
+    }],
+  } as OcxConfig;
+  saveConfig(config);
+  const admission: DataPlaneAdmission = { kind: "configured", keyId: "scoped-images", source: "bearer" };
+  const response = await callImages(config, admission);
+  expect(response.status).toBe(403);
+  expect(sent).toHaveLength(0);
+});
+
+test("scoped admission still sends Images through an allowed Pool destination", async () => {
+  const config = {
+    ...imageConfig(),
+    apiKeys: [{
+      id: "scoped-images", name: "scoped-images", key: ADMISSION_SECRET,
+      createdAt: "2026-09-27T00:00:00.000Z", allowedProviders: ["openai"],
+      allowedModels: ["gpt-image-2"],
+    }],
+  } as OcxConfig;
+  savePool(config);
+  const admission: DataPlaneAdmission = { kind: "configured", keyId: "scoped-images", source: "bearer" };
+  const response = await callImages(config, admission);
+  expect(response.status).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${POOL_TOKEN}`);
+});
+
+test("key scoped to the keyed provider skips Pool resolution and sends keyed Images", async () => {
+  const config = {
+    ...imageConfig("pool", { keyed: true }),
+    apiKeys: [{
+      id: "scoped-images", name: "scoped-images", key: ADMISSION_SECRET,
+      createdAt: "2026-09-27T00:00:00.000Z", allowedProviders: ["openai-apikey"],
+    }],
+  } as OcxConfig;
+  // No Pool credential is stored: resolving Pool first would return its 401.
+  saveConfig(config);
+  const admission: DataPlaneAdmission = { kind: "configured", keyId: "scoped-images", source: "bearer" };
+  const response = await callImages(config, admission);
+  expect(response.status).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.url).toBe("https://api.openai.com/v1/images/generations");
+  expect(sent[0]!.headers.get("authorization")).toBe("Bearer keyed-image-fixture");
 });
 
 test("proxy admission bearer remains ineligible for Direct forwarding", async () => {
