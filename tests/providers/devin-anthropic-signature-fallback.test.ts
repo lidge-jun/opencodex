@@ -24,7 +24,7 @@ describe("Devin Anthropic signature fallback", () => {
   const previousFetch = globalThis.fetch;
   let home = "";
   let requests: Buffer[] = [];
-  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse"> = [];
+  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok"> = [];
 
   const frame = (body: Buffer, flags = 0) => {
     const header = Buffer.alloc(5);
@@ -73,6 +73,7 @@ describe("Devin Anthropic signature fallback", () => {
         : next === "text-then-refuse" ? Buffer.concat([frame(encodeString(3, "partial")), refusal])
         // The live shape: reasoning, its signature and a finish frame, then the refusal trailer.
         : next === "reasoning-then-refuse" ? Buffer.concat([frame(Buffer.concat([encodeString(9, "thinking"), encodeString(10, "EpcBNew"), encodeString(21, "anthropic"), encodeVarintField(5, 2)])), refusal])
+        : next === "reasoning-then-ok" ? Buffer.concat([frame(Buffer.concat([encodeString(9, "thinking"), encodeString(10, "EpcBNew"), encodeString(21, "anthropic")])), ok])
         : ok;
       return new Response(body, { headers: { "content-type": "application/connect+proto" } });
     }) as typeof fetch;
@@ -96,13 +97,26 @@ describe("Devin Anthropic signature fallback", () => {
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
   });
 
-  test("a refusal after reasoning alone is still retried", async () => {
+  test("a refusal after reasoning alone is still retried, and the refused attempt's reasoning never reaches the client", async () => {
     responses = ["reasoning-then-refuse", "ok"];
     const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
     expect(requests).toHaveLength(2);
     expect(assistantSignature(requests[1]!).signature).toBeUndefined();
     expect(events.some(e => e.type === "error")).toBe(false);
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+    // The refused attempt streamed "thinking" and signature EpcBNew; neither may leak into the turn.
+    expect(events.some(e => e.type === "thinking_delta")).toBe(false);
+    expect(events.some(e => e.type === "thinking_signature")).toBe(false);
+  });
+
+  test("an accepted signed turn still delivers its held reasoning", async () => {
+    responses = ["reasoning-then-ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    expect(requests).toHaveLength(1);
+    const kinds = events.map(e => e.type);
+    expect(kinds).toContain("thinking_delta");
+    expect(events).toContainEqual({ type: "thinking_signature", signature: encodeDevinSignature("EpcBNew", "anthropic") });
+    expect(kinds.indexOf("thinking_delta")).toBeLessThan(kinds.indexOf("text_delta"));
   });
 
   test("an accepted signed Claude turn is sent once, signature included", async () => {

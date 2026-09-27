@@ -10,7 +10,7 @@ import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, Ocx
 import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { streamChatEventsWithResetRetry, devinStatedResetWaitMs, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
-import type { ContentPart } from "./devin/cloud-direct/chat";
+import type { CloudChatEvent, ContentPart } from "./devin/cloud-direct/chat";
 import { getCachedCatalog, type CacheEntry, type ModelCatalogEntry } from "./devin/cloud-direct/catalog";
 import { collapseDevinModelUid, devinFamiliesOf, devinFamilyBaseId, selectDevinFamilyMember, type DevinVariantRequest } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
@@ -755,18 +755,36 @@ export function createDevinAdapter(
           },
         });
         async function* withSignatureFallback() {
-          let produced = false;
+          if (!unsignedMessages) {
+            yield* request(signedMessages);
+            return;
+          }
+          // Events from the signed attempt are held until its outcome is known: a refusal
+          // after reasoning would otherwise leave the client with the refused attempt's
+          // reasoning and signature, and the next turn would replay that signature against
+          // the retry's thinking.
+          const held: CloudChatEvent[] = [];
+          let visible = false;
           try {
             for await (const event of request(signedMessages)) {
               // Only visible output makes a retry unsafe. Live, the refusal often lands after the
               // model has streamed its reasoning, its signature and a finish frame, and nothing else.
-              produced ||= event.kind === "text" || event.kind === "tool_call_start" || event.kind === "tool_call_args";
-              yield event;
+              if (!visible && (event.kind === "text" || event.kind === "tool_call_start" || event.kind === "tool_call_args")) {
+                visible = true;
+                yield* held.splice(0);
+              }
+              if (visible) yield event;
+              else held.push(event);
             }
           } catch (error) {
-            if (!unsignedMessages || produced || !(error instanceof CloudChatError && error.code === "invalid_argument")) throw error;
+            if (visible || !(error instanceof CloudChatError && error.code === "invalid_argument")) {
+              yield* held.splice(0);
+              throw error;
+            }
             yield* request(unsignedMessages);
+            return;
           }
+          yield* held.splice(0);
         }
         for await (const event of withSignatureFallback()) {
           if (incoming.abortSignal?.aborted) {
