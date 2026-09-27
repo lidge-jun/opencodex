@@ -1,11 +1,13 @@
-# Account-pool lane handoff — 2026-09-28
+# Account-pool lane handoff
 
-Stopped on coordinator instruction. Worktree: `/Users/jun/.codex/worktrees/t4-account-pool/opencodex`; branch: `codex/t4-account-pool-roadmap`. Last observed base was `origin/dev` `24b2f39b77a29711c5064987de169ecf4a97c58b`. This handoff and the six numbered roadmap files are preserved in a local WIP commit; nothing was pushed.
+## 2026-09-28 successor thread (01a0e37e-5770-7fd1-b4a0-43d3e34747f5)
 
-No lane PR was opened, merged or closed. No GitHub issue/PR comment was posted. At last read, candidate PRs #6087, #5956, #5879, #5099 and #3738 were open; #6087 had advanced to `480083070ac4cb27863cee91452e3f65e8aa5dd0`. Refresh all remote states before action.
+The successor took over from thread 01a0e337-eb7e-7ff3-a507-5a360610e3e0 in the same worktree. Remote state was unchanged at pickup: `origin/dev` `24b2f39b77`, #6087 head `480083070a`, all candidate PRs and nine issues open.
 
-This session's host goal remains active and its `cxc` FSM reached **A** for docs-only wp0. First independent audit returned FAIL with five blockers and one test-scope finding. The staged plan was amended for the third #6087 commit, existing 401 refresh precedence, a structured 403 normalization seam, explicit 4 KiB/2 s body bounds, primary-inference-only sidecar scope, and path-specific tests. The same architect's recheck was interrupted by the stop order; **no re-audit or A→B transition occurred**. A successor should independently review this current plan before implementation and should not treat the interrupted recheck as approval.
+wp0 closed with a second audit round run on gpt-6-sol (see "Audit round 2 and repair" in [000_plan.md](000_plan.md)). The plan now ships two PRs: PR-1 for the #6087 pause carry (gate owned by wp1) and PR-2 for the bounded Antigravity 401/validated-403 slice (gate owned by wp3, cut from `dev` after PR-1 merges). A same-commit verification checkout exists at `/private/tmp/t4-account-pool-verify` with root and `gui` dependencies installed.
 
-Local environment work: `bun install --frozen-lockfile` succeeded; the second baseline `bun run typecheck` passed after an initial missing-`bun-types` attempt; `bun run privacy:scan` and staged `git diff --check` passed on the roadmap. No behavior tests, browser QA, security review, PR CI or `dev` CI ran. No proxy was started and no real user home/client files were intentionally touched.
+Next: wp1 on branch `codex/t4-account-pool-pause`.
 
-Next: refresh `origin/dev` and donor PR heads; finish architect reflection and independent roadmap audit; close the docs-only PABCD cycle; then carry #6087 with GUI/security/isolation QA and implement the narrower #5099 primary-inference slice only if fresh tests support it. For local proxy QA, isolate `HOME`, `OPENCODEX_HOME` and `CODEX_HOME` and disable client sync. Run `test:changed`/full from a same-commit verification checkout at `/private/tmp/t4-account-pool-verify`, never bypassing test-home protections. The roadmap records all PR/issue dispositions and required comments.
+## 2026-09-28 original thread (stopped)
+
+Stopped on coordinator instruction on branch `codex/t4-account-pool-roadmap` at base `24b2f39b77`. No PR was opened and no GitHub comment was posted. Round 1 audit returned FAIL with five blockers; the amended plan was not re-audited before the stop. Baseline `bun run typecheck` and `bun run privacy:scan` passed after `bun install --frozen-lockfile`. No proxy was started and no real home files were touched.
