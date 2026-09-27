@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { DEVIN_CLI_CREDENTIALS_ENV } from "../../src/oauth/devin/cli-import";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -355,4 +355,25 @@ test("a 429 is not treated as an authentication failure", async () => {
   expect(body.error.type).toBe("rate_limit_error");
   expect(sentKeys).toEqual([LIVE]);
   expect(account("limited")?.needsReauth).not.toBe(true);
+});
+
+test("a selection that leaves the revoked account and returns to it before the 401 still refreshes it", async () => {
+  await saveDevin(LIVE, "spare");
+  await saveDevin(DEAD, "revoked");
+  const revoked = account("revoked")!.id;
+  // Same account id at 401 time, newer selection revision: the refresh must still run, or the
+  // rejected key is replayed and the one allowed recovery is spent on it.
+  holdDeadSend = async () => {
+    holdDeadSend = undefined;
+    await setActiveAccount("devin", account("spare")!.id);
+    await setActiveAccount("devin", revoked);
+  };
+
+  const body = await (await run()).json() as { error: { message: string } };
+
+  expect(sentKeys.filter(key => key === DEAD)).toHaveLength(1);
+  expect(account("revoked")?.needsReauth).toBe(true);
+  // The operator's newer manual selection names the revoked account, so no automatic move
+  // overrides it; the client is told to log in rather than shown the raw upstream 401.
+  expect(body.error.message).toBe("Not logged in to devin. Run: ocx login devin");
 });
