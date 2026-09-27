@@ -44,6 +44,7 @@ import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuation
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 import { observeOutbound } from "../../usage/cache-diagnostic";
+import { normalizeMuseToolChoice } from "./muse-tool-choice";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -411,8 +412,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
-        // generic capability fallback removes the private OpenAI fields.
-        outBody = normalizeXaiResponsesWebSearch(outBody, provider);
+        // generic capability fallback removes the private OpenAI fields. Grok relayed through
+        // OpenCode Go speaks the same dialect, which the final model id and URL identify.
+        outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
@@ -494,7 +496,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed.modelId,
       );
       // Normalize the wire model before deriving model-dependent transport metadata.
-      const finalBody =
+      let finalBody =
         provider.modelSuffixBracketStrip
           && unnormalizedBody !== null
           && typeof unnormalizedBody === "object"
@@ -502,6 +504,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           && typeof (unnormalizedBody as { model?: unknown }).model === "string"
           ? { ...(unnormalizedBody as Record<string, unknown>), model: stripBracketedModelSuffix((unnormalizedBody as { model: string }).model) }
           : unnormalizedBody;
+      if (isMetaAiResponsesDestination(url)) {
+        const originalChoice = isPlainObject(parsed._rawBody) ? parsed._rawBody.tool_choice : undefined;
+        finalBody = normalizeMuseToolChoice(finalBody, originalChoice);
+      }
       if (isCanonicalOpenAiForwardProvider(provider)) {
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);

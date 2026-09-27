@@ -214,8 +214,8 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET /api/debug/usage-logs` | Прочитать ограниченные usage-debug-записи | — |
 | `GET /api/debug/injection-logs` | Прочитать ограниченные guidance-injection debug-записи | — |
 | `GET /api/claude/inbound-debug` | Прочитать состояние и записи Claude inbound debug | — |
-| `GET /api/usage` | Сводка usage по диапазону и client surface | При сбое чтения storage вернёт summary с `error: "read_failed"` |
-| `GET /api/metrics` | Вернуть локальные для процесса текстовые метрики Prometheus: логические запросы, физические отправки, виды восстановления, длительность и TTFT. Метки ограничены закрытыми наборами protocol, result и recovery class; идентификаторы запросов и учётных данных не экспортируются. | 404, если `metricsExport.enabled` не был true при запуске; требуется обычная management-аутентификация, data-plane credentials доступа не дают |
+| `GET /api/usage` | Сводка usage по диапазону и client surface | При сбое чтения storage вернёт 500 `{ "error": "read_failed" }` |
+| `GET /api/metrics` | Вернуть локальные для процесса текстовые метрики Prometheus: логические запросы, физические отправки, виды восстановления, длительность и TTFT. Метки запросов используют закрытые наборы, а метрики Kiro добавляют только ограниченные непрозрачные метки аккаунтов; идентификаторы запросов и учётных данных не экспортируются. Четыре метрики `opencodex_kiro_quota_{used_credits,limit_credits,used_percent,seconds_to_reset}` читают только кэш и используют не более 32 непрозрачных меток аккаунтов. При сборе сетевых запросов нет. | 404, если `metricsExport.enabled` не был true при запуске; требуется обычная management-аутентификация, data-plane credentials доступа не дают |
 | `GET /api/storage` | Просканировать использование storage Codex по bucket'ам | При ошибке scan вернёт payload с `error: "scan_failed"` |
 | `POST /api/storage/cleanup/preview` | Предпросмотр cleanup archived-session и возврат binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Поместить preview'нутый архивный набор в quarantine или удалить его навсегда | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -270,7 +270,7 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `POST /api/oauth/login/cancel` | Отменить публичный OAuth-flow в progress | 400 unknown provider |
 | `GET /api/oauth/status` | Опрашивать OAuth-flow одного провайдера | 400 unknown provider |
 | `POST /api/oauth/logout` | Удалить сохранённый credential выбранного провайдера | 400 unknown provider; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | Показать список masked-аккаунтов или удалить один аккаунт | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
+| `GET, DELETE /api/oauth/accounts` | Показать список masked-аккаунтов или удалить один аккаунт Строки Kiro содержат `autoSelectable` и закрытый `skipReason` при исключении из автоматического выбора; единственный активный аккаунт всё ещё может отправлять запросы. Чтение квоты остаётся необязательным. | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Выбрать активный OAuth-аккаунт | 400 invalid provider/account; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/pool/settings` | Прочитать или обновить policy пула любого вида (codex, anthropic, generic); все три отвечают одинаковыми ключами, а поля, которые вид действительно применяет, перечислены в `supported` | 400 неизвестный provider, поле, которое вид не поддерживает, или недопустимое значение |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Прежняя policy пула для Anthropic и обычных OAuth-провайдеров; заменена на `/api/pool/settings` и сохранена для существующих клиентов | 400 codex или api-key provider, либо недопустимая policy |

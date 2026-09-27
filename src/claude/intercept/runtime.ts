@@ -2,6 +2,8 @@ import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
+import type { ClaudeFirstPartyDesired } from "../first-party-settings";
+import { classifyInterceptClient, interceptRouteFor } from "./client-class";
 import { CLAUDE_INTERCEPT_HOSTS, isBrowserConnect, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
 import { startClaudeInterceptListener } from "./listener";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocalInterceptLeaf } from "./local-ca";
@@ -107,6 +109,8 @@ export interface StartClaudeInterceptOptions<T> {
    */
   requestedPort?: number;
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
+  /** Live first-party intent; absent preserves router behavior. */
+  desiredClients?: () => ClaudeFirstPartyDesired;
   maxRequestBodySize?: number;
   configDir?: string;
   /** Routes for Desktop's Code-tab picker. Picker mode is wired only when this is given. */
@@ -145,6 +149,8 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const listener = startClaudeInterceptListener<T>({
     leaf,
     dispatch: options.dispatch,
+    ...(options.desiredClients ? { route: (req: Request) =>
+      interceptRouteFor(classifyInterceptClient(req.headers.get("user-agent")), options.desiredClients!()) } : {}),
     upstreamBase: options.config.claudeCode?.anthropicBaseUrl,
     ...(options.maxRequestBodySize !== undefined ? { maxRequestBodySize: options.maxRequestBodySize } : {}),
   });

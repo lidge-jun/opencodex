@@ -8,6 +8,10 @@
 //!
 //! Stopping it is not here. D4 gives that to the bundled `ocx stop`, which owns the receipt-backed
 //! teardown this process cannot perform on itself; see `runtime_stop.rs`.
+//!
+//! The exit is also where supervision starts: once it is recorded, the hook `supervisor.rs`
+//! registered hears which child ended and how, so a runtime that went away is noticed at once
+//! instead of only when the next startup run reads the record.
 
 use crate::endpoint::ProxyEndpoint;
 use std::{
@@ -22,6 +26,15 @@ use tauri_plugin_shell::{
 /// How much sidecar output the diagnostic keeps. Enough to carry a stack trace or a startup
 /// refusal, bounded so a chatty runtime cannot grow the buffer for the life of the process.
 const MAX_LINES: usize = 40;
+
+/// The marker that tells the runtime this app waits on it (`DESKTOP_SUPERVISED_ENV` in
+/// `src/lib/system-restart-contract.ts`). Under it a restart exits with
+/// [`crate::supervisor::REQUESTED_RESTART_EXIT_CODE`] instead of spawning a detached replacement
+/// this app could neither see nor stop, and the supervisor starts the replacement.
+pub const SUPERVISED_ENV: &str = "OCX_DESKTOP_SUPERVISED";
+
+/// Told which child ended, and how, once its exit is recorded.
+pub type ExitHook = Arc<dyn Fn(u32, SidecarExit) + Send + Sync>;
 
 /// How the sidecar process ended.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,12 +88,51 @@ impl WatchInner {
 #[derive(Clone, Default)]
 pub struct SidecarWatch {
     inner: Arc<Mutex<WatchInner>>,
+    hook: Arc<Mutex<Option<ExitHook>>>,
+    /// The child this view follows. Only a view made by [`SidecarWatch::for_child`] has one, and
+    /// only such a view reports an exit to the hook: the record is shared across attempts, the pid
+    /// is what tells the supervisor which attempt ended.
+    pid: Option<u32>,
 }
 
 impl SidecarWatch {
     pub fn record(&self, event: SidecarEvent) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.record(event);
+        }
+    }
+
+    /// Register what hears about a child's exit. One hook for the life of the app.
+    pub fn on_exit(&self, hook: impl Fn(u32, SidecarExit) + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.hook.lock() {
+            *slot = Some(Arc::new(hook));
+        }
+    }
+
+    /// The same record, following one spawned child.
+    pub fn for_child(&self, pid: u32) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            hook: self.hook.clone(),
+            pid: Some(pid),
+        }
+    }
+
+    /// Record one event, and report an exit to the hook after it is recorded, so whatever the hook
+    /// starts reads the exit it was told about.
+    fn deliver(&self, event: SidecarEvent) {
+        let exit = match &event {
+            SidecarEvent::Exited(exit) => Some(*exit),
+            SidecarEvent::Line(_) => None,
+        };
+        self.record(event);
+        let (Some(exit), Some(pid)) = (exit, self.pid) else {
+            return;
+        };
+        // Cloned out so the hook never runs under this lock.
+        let hook = self.hook.lock().ok().and_then(|slot| slot.clone());
+        if let Some(hook) = hook {
+            hook(pid, exit);
         }
     }
 
@@ -109,7 +161,7 @@ impl SidecarWatch {
         tauri::async_runtime::spawn(async move {
             while let Some(event) = events.recv().await {
                 if let Some(event) = translate(event) {
-                    watch.record(event);
+                    watch.deliver(event);
                 }
             }
         });
@@ -151,8 +203,10 @@ pub fn start(
         .sidecar("ocx")
         .map_err(|error| error.to_string())?
         .args(["start", "--port", &endpoint.port.to_string()])
-        .env("OPENCODEX_GUI_DIST", gui_dist);
+        .env("OPENCODEX_GUI_DIST", gui_dist)
+        .env(SUPERVISED_ENV, "1");
     let (events, child) = command.spawn().map_err(|error| error.to_string())?;
+    let watch = watch.for_child(child.pid());
     watch.follow(events);
     Ok(child)
 }
@@ -160,6 +214,33 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::{SidecarEvent, SidecarExit, SidecarWatch, MAX_LINES};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn an_exit_reaches_the_hook_with_the_childs_pid_after_it_is_recorded() {
+        let watch = SidecarWatch::default();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = watch.clone();
+        let sink = seen.clone();
+        watch.on_exit(move |pid, exit| {
+            // Whatever the hook starts reads the exit it was told about.
+            let recorded = record.exit().and_then(|exit| exit.code);
+            sink.lock().unwrap().push((pid, exit.code, recorded));
+        });
+        // The shared record follows no child, so it names nobody to the hook.
+        watch.deliver(SidecarEvent::Exited(SidecarExit {
+            code: Some(1),
+            signal: None,
+        }));
+        let child = watch.for_child(4242);
+        child.deliver(SidecarEvent::Line("listening on 10100".into()));
+        child.deliver(SidecarEvent::Exited(SidecarExit {
+            code: Some(75),
+            signal: None,
+        }));
+        assert_eq!(*seen.lock().unwrap(), vec![(4242, Some(75), Some(75))]);
+        assert_eq!(watch.lines(), vec!["listening on 10100".to_owned()]);
+    }
 
     #[test]
     fn the_exit_code_survives_the_event_stream() {

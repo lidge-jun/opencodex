@@ -12,6 +12,8 @@ public struct NativeTraySnapshot: Decodable {
     public let models: [NativeTrayModel]
     public let chart: NativeTrayChart?
     public let providers: [NativeTrayProvider]
+    /// Set on the publish that reports a failed account switch.
+    public let switchFailed: Bool?
 
     public static func decode(_ data: Data) throws -> Self {
         let snapshot = try JSONDecoder().decode(Self.self, from: data)
@@ -21,6 +23,8 @@ public struct NativeTraySnapshot: Decodable {
 }
 
 public enum NativeTrayDecodeError: Error { case unsupportedSchema }
+
+public enum NativeTraySeverity: Equatable { case normal, warn, critical }
 
 public struct NativeTraySettings: Decodable {
     public let showToday: Bool
@@ -90,6 +94,12 @@ public struct NativeTrayProvider: Decodable, Identifiable {
     public let label: String
     public let unavailable: Bool
     public let accounts: [Account]
+    /// The provider's mark as SVG markup, and how to paint it (`image`, `mask`, `plate`,
+    /// `dark-plate`). Both are optional: older hosts and unknown providers send neither.
+    public let iconSvg: String?
+    public let iconPaint: String?
+    /// Whether the host can switch this provider's active account. Absent on older hosts.
+    public let switchable: Bool?
     public struct Account: Decodable, Identifiable {
         public let id: String
         public let label: String
@@ -98,6 +108,15 @@ public struct NativeTrayProvider: Decodable, Identifiable {
         public let active: Bool
         public let unavailable: Bool
         public let windows: [Window]
+        /// The provider's own account id; `id` is a display key and never leaves the panel.
+        public let accountId: String?
+        /// `active`, `available` or `blocked`, mirroring what the runtime refuses or drains.
+        public let switchState: String?
+        /// `mainHardLock` or `paused` when blocked.
+        public let blockedReason: String?
+        /// A window reads 100%; switching is allowed and the row warns.
+        public let exhausted: Bool?
+        public var canSwitch: Bool { !active && switchState == "available" && accountId != nil }
     }
     public struct Window: Decodable, Identifiable {
         public let id: String
@@ -129,6 +148,25 @@ public enum NativeTrayFormat {
         let seconds = timestamp >= 1e12 ? timestamp / 1000 : timestamp
         guard seconds < 253_402_300_800 else { return nil }
         return Date(timeIntervalSince1970: seconds)
+    }
+    /// Same thresholds as the dashboard quota strip (`gui/src/quota-summary.ts`): warn at 70%,
+    /// critical at 90%. An unknown value is never a severity.
+    public static func severity(_ percent: Double?) -> NativeTraySeverity {
+        guard let percent = number(percent) else { return .normal }
+        if percent >= 90 { return .critical }
+        if percent >= 70 { return .warn }
+        return .normal
+    }
+    /// Visible percentage. Floored like the dashboard's `formatQuotaPercent`, so the number never
+    /// reaches a threshold the bar color has not: 89.9% reads "89%" on an orange bar, never "90%".
+    public static func percentText(_ percent: Double?) -> String {
+        guard let percent = number(percent) else { return "—" }
+        return "\(Int(percent.rounded(.down)))%"
+    }
+    /// VoiceOver value for a quota bar, floored the same way as the visible text.
+    public static func percentDescription(_ percent: Double?) -> String {
+        guard let percent = number(percent) else { return "Unavailable" }
+        return "\(Int(percent.rounded(.down))) percent"
     }
     public static func reset(_ timestamp: Double?, now: Date = Date()) -> String {
         guard let date = date(timestamp), date > now else { return "—" }

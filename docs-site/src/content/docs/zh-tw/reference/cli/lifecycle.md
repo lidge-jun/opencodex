@@ -15,7 +15,7 @@ description: 安裝、啟動、停止、服務、診斷、同步與更新指令�
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-啟動代理伺服器（偏好連接埠 `10100`）。它寫入 PID/runtime-port 狀態，並拒絕啟動第二個即時實例。偏好連接埠被佔用時，`start` 會探測佔用者，且無論結果如何都會停止：若回應的是 opencodex，它會直接拒絕啟動；否則會回報無法識別的佔用者。它絕不會自行將監聽位置移到其他連接埠，因為這會讓第一個代理繼續執行，並將 Codex 重新指向第二個代理。即使明確指定不同的 `--port`，共用同一個 `OPENCODEX_HOME` 時仍會拒絕啟動，因為僅觀察模式和啟用上限的模式都會寫入同一份支出日誌。獨立的同層實例必須使用不同的 `OPENCODEX_HOME`；`port: 0` 只讓作業系統指派連接埠，不會隔離狀態。啟動時它將每個供應商的模型同步到 Codex 目錄。關閉時它還原原生 Codex——除非它是作為受管服務啟動的（`OCX_SERVICE=1`）。
+啟動代理伺服器（偏好連接埠 `10100`）。它寫入 PID/runtime-port 狀態，並拒絕啟動第二個即時實例。偏好連接埠被佔用時，`start` 會探測佔用者，且無論結果如何都會停止：若回應的是 opencodex，它會直接拒絕啟動；否則會回報無法識別的佔用者。它絕不會自行將監聽位置移到其他連接埠，因為這會讓第一個代理繼續執行，並將 Codex 重新指向第二個代理。即使明確指定不同的 `--port`，共用同一個 `OPENCODEX_HOME` 時仍會拒絕啟動，因為僅觀察模式和啟用上限的模式都會寫入同一份支出日誌。獨立的同層實例必須使用不同的 `OPENCODEX_HOME`；`port: 0` 只讓作業系統指派連接埠，不會隔離狀態。啟動時它將每個供應商的模型同步到 Codex 目錄。關閉時它還原原生 Codex——除非它是作為受管服務啟動的（`OCX_SERVICE=1`）。在已執行的代理旁啟動的同層實例兩者皆不做，即使透過 `ocx stop` 或訊號停止也一樣：它只在自己的連接埠上處理直接請求，Codex、Grok 和 Claude 仍指向原本已在執行的代理。
 
 `--socks5`（預設 `127.0.0.1:10808`）會將 SOCKS5 URL 儲存到 `config.proxy`，並透過真正的 SOCKS5 通道轉送對外 HTTP(S) 請求。`--socks5-off` 只會清除已儲存的 SOCKS5 代理，不會刪除 HTTP 代理。此值儲存在設定中，因此會在 `ocx update` 後保留。URL 可以包含使用者名稱和密碼，但啟動記錄會隱藏它們。
 
@@ -266,6 +266,8 @@ ocx codex-shim uninstall
 ### `ocx update [--tag latest|preview]`
 
 當 OpenCodex 由 mise 安裝時，此命令會在停止代理或修改套件檔案之前以失敗狀態結束，並使用經過驗證的本機 mise 別名顯示 `mise upgrade <tool>`。更新檢查仍可使用，並會回報該安裝由外部管理。無法讀取或不一致的 mise 擁有權中繼資料也會阻止修改，且不會猜測工具名稱；`--tag preview` 絕不會變更 mise 中設定的選擇。
+
+在 Linux 上，若背景服務記錄的啟動器是 mise 的套件啟動器（`<tool>/latest/node_modules/.bin/ocx`，而非 mise shim），服務會自動跟隨 `mise upgrade`：新版本穩定後約十秒內，它會排空進行中的請求並在新版本上重新啟動；若 mise 之後清除了它正在執行的版本，也會以相同方式復原。在 macOS 上、透過 mise shim 安裝的服務以及前景代理，請在升級後自行重新啟動（macOS 上先執行 `ocx service repair`）。
 
 從 npm 自我更新 opencodex。穩定安裝使用 `@latest`；預覽安裝停留在 `@preview`，除非你傳入 `--tag latest|preview`。它偵測原始碼 checkout 並告訴你改用
 `git pull && bun install`，且若你已是該 tag 的最新版本則為 no-op。執行中的代理會在檔案被替換前停止；已安裝的服務會自動重建並啟動，而前景安裝會印出 `ocx start` 作為下一步。

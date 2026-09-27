@@ -94,6 +94,8 @@ export interface ClientEncodedDelivery {
     toolSearchToolNames?: Set<string>;
   };
   stallTimeoutSec?: number;
+  /** Operator-trusted local upstream: an unset stall budget stays disabled there (#5876). */
+  localUpstream?: boolean;
   turnAdmissionLease?: AdmissionLease;
   onFirstOutput?: () => void;
   /** The bridge's `onCancel`: stop completion notification and abort the upstream. */
@@ -212,6 +214,7 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     translatorBudget,
     ...input.fold,
     ...(input.stallTimeoutSec !== undefined ? { stallTimeoutSec: input.stallTimeoutSec } : {}),
+    ...(input.localUpstream !== undefined ? { localUpstream: input.localUpstream } : {}),
     hooks,
   };
   const encoded = encoder.protocol === "chat"

@@ -41,10 +41,20 @@ describe("client link connection contracts", () => {
     expect(clientConnectionSchema.safeParse(client({ serverUrl: "https://127.0.0.1:34567" })).success).toBe(false);
   });
 
-  test("uses the local configured port for Codex while retaining link mode identity", () => {
+  test("keeps Codex on the standalone 127.0.0.1 form of the local configured port while retaining link identity", () => {
     const target = routingTarget("http://127.0.0.1:34567", 10100);
-    expect(target.baseUrl).toBe("http://localhost:10100/v1");
-    expect(target.requiresAdmissionToken).toBe(true);
+    expect(target).toEqual({
+      baseUrl: "http://127.0.0.1:10100/v1",
+      requiresAdmissionToken: false,
+      tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+      link: true,
+    });
+    // The loopback opt-ins follow the standalone target, so a join changes no Codex routing bytes.
+    expect(routingTarget("http://127.0.0.1:34567", 10100, { codexClientCompaction: true }).clientCompaction).toBe(true);
+    // A hub client still points Codex at the hub with the admission token in env_key.
+    expect(routingTarget("https://hub.example.test")).toEqual({
+      baseUrl: "https://hub.example.test/v1", requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+    });
     expect(isLinkConnection(client() as never)).toBe(true);
     expect(isLinkConnection(undefined)).toBe(false);
   });

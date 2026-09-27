@@ -280,6 +280,23 @@ describe("normalizeAnthropicImages — real Bun.Image path", () => {
     expect(block.text).toContain("undecodable");
   });
 
+  test("a cache_control breakpoint survives both re-encoding and textification", async () => {
+    // Claude Code's rolling cache breakpoint can sit on any block, including an image.
+    // Losing it re-writes the prefix instead of reading it.
+    const resized = { ...imageBlock(await realPngBase64(4000, 3000)), cache_control: { type: "ephemeral" } };
+    const garbage = { ...imageBlock(Buffer.from("this is not an image at all").toString("base64")), cache_control: { type: "ephemeral", ttl: "1h" } };
+    const messages = [userMsg([resized, garbage])];
+    await normalizeAnthropicImages(messages);
+    const content = contentOf(messages) as unknown as Array<Record<string, unknown>>;
+    expect(content[0].type).toBe("image");
+    expect((content[0].source as { data: string }).data).not.toBe((resized.source as { data: string }).data);
+    expect(content[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(content[1].type).toBe("text");
+    expect(content[1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    // The image block's own properties must NOT ride along onto a text block.
+    expect(content[1].source).toBeUndefined();
+  });
+
   test("N6b: sniffable-but-truncated PNG is caught by pass-through validation and textified", async () => {
     // Real PNG cut short: header (dimensions) survives sniffing, pixel data is gone.
     const whole = Buffer.from(await realPngBase64(400, 300), "base64");

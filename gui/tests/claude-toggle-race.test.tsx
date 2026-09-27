@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 /**
  * Rapid clicks on the Claude connection switch must serialize to a single
@@ -29,6 +30,8 @@ let container: HTMLElement;
 let root: Root | null = null;
 let putBodies: unknown[] = [];
 let claudeEnabled = false;
+let cliFirstParty = false;
+let firstPartyPutResponse: { body: unknown; status?: number } | null = null;
 let releasePut: (() => void) | null = null;
 let putGate: Promise<void> | null = null;
 
@@ -78,8 +81,13 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   (globalThis as Record<string, unknown>).__APP_VERSION__ = "0.0.0-test";
 
+  // The resource store is module-level: without this, the previous test's Claude Code state
+  // seeds the next mount and its cold-start GET is skipped (staleAfterMs).
+  clearClientResourceStoresForTests();
   putBodies = [];
   claudeEnabled = false;
+  cliFirstParty = false;
+  firstPartyPutResponse = null;
   putGate = new Promise<void>((resolve) => {
     releasePut = resolve;
   });
@@ -90,17 +98,39 @@ beforeEach(() => {
 
     if (url.includes("/api/machine/status")) return jsonResponse({}, 404);
     if (url.includes("/api/claude-code") && method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { enabled?: boolean };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { enabled?: boolean; cliFirstParty?: boolean };
       putBodies.push(body);
+      if (typeof body.cliFirstParty === "boolean" && firstPartyPutResponse) {
+        return jsonResponse(firstPartyPutResponse.body, firstPartyPutResponse.status ?? 200);
+      }
       await putGate;
       // The server persists what it was sent, so the following GET reports it.
       // A fixed response would let the page re-read `enabled: false` after
       // enabling and send the same value twice — hiding a real toggle bug.
       if (typeof body.enabled === "boolean") claudeEnabled = body.enabled;
-      return jsonResponse({ ...CLAUDE_CODE_STATE, enabled: claudeEnabled });
+      if (typeof body.cliFirstParty === "boolean") cliFirstParty = body.cliFirstParty;
+      return jsonResponse({
+        ...CLAUDE_CODE_STATE,
+        enabled: claudeEnabled,
+        cliFirstParty,
+        desktopFirstParty: false,
+        cliFirstPartyApplied: cliFirstParty && claudeEnabled,
+        interceptEligible: claudeEnabled,
+        interceptRunning: claudeEnabled,
+        sharedProxy: cliFirstParty ? (claudeEnabled ? "live" : "stopped") : "none",
+      });
     }
     if (url.includes("/api/claude-code")) {
-      return jsonResponse({ ...CLAUDE_CODE_STATE, enabled: claudeEnabled });
+      return jsonResponse({
+        ...CLAUDE_CODE_STATE,
+        enabled: claudeEnabled,
+        cliFirstParty,
+        desktopFirstParty: false,
+        cliFirstPartyApplied: cliFirstParty && claudeEnabled,
+        interceptEligible: claudeEnabled,
+        interceptRunning: claudeEnabled,
+        sharedProxy: cliFirstParty ? (claudeEnabled ? "live" : "stopped") : "none",
+      });
     }
     if (url.includes("/healthz")) {
       return jsonResponse({ status: "ok", version: "0.0.0-test", uptime: 1 });
@@ -148,6 +178,30 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
       await new Promise<void>((resolve) => testWindow.setTimeout(resolve, 10));
     });
   }
+}
+
+async function mountApp() {
+  const { resetApiAuthFetchForTests, installApiAuthFetch } = await import("../src/api");
+  resetApiAuthFetchForTests();
+  installApiAuthFetch();
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
+  const [{ createRoot }, { LanguageProvider }, { default: App }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/App"),
+  ]);
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><App /></LanguageProvider>);
+  });
+}
+
+function firstPartySwitch(): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    item => item.getAttribute("aria-label") === "Toggle Claude Code CLI first-party",
+  );
+  if (!button) throw new Error("Claude CLI first-party switch not found");
+  return button as HTMLButtonElement;
 }
 
 function claudeSwitch(): HTMLButtonElement {
@@ -222,4 +276,87 @@ test("rapid Claude toggle clicks issue only one PUT until the first settles", as
     releasePut = null;
   });
   await waitFor(() => !claudeSwitch().disabled);
+});
+
+test("CLI first-party waits for one PUT and a confirmed GET", async () => {
+  claudeEnabled = true;
+  await mountApp();
+  await waitFor(() => {
+    try { return !!firstPartySwitch(); } catch { return false; }
+  });
+
+  await act(async () => {
+    firstPartySwitch().click();
+    firstPartySwitch().click();
+    firstPartySwitch().click();
+  });
+  expect(putBodies).toEqual([{ cliFirstParty: true }]);
+  expect(firstPartySwitch().disabled).toBe(true);
+  expect(firstPartySwitch().getAttribute("aria-pressed")).toBe("false");
+
+  await act(async () => {
+    releasePut?.();
+    releasePut = null;
+    await Promise.resolve();
+  });
+  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "true");
+});
+
+const refusalCases = [
+  ["intercept_disabled", "The interception proxy is disabled."],
+  ["intercept_unavailable", "The interception proxy is not running in this process."],
+  ["foreign_env", "Another program owns the Claude proxy settings."],
+  ["ca_unavailable", "The local certificate authority is unavailable."],
+  ["unreadable", "Claude settings could not be read."],
+  ["write_failed", "Claude settings could not be written."],
+] as const;
+
+for (const [code, message] of refusalCases) {
+  test(`CLI first-party refusal ${code} leaves the switch off`, async () => {
+    firstPartyPutResponse = { status: code === "intercept_disabled" || code === "intercept_unavailable" || code === "foreign_env" ? 409 : 500, body: { error: message, code } };
+    await mountApp();
+    await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
+    await act(async () => { firstPartySwitch().click(); });
+    await waitFor(() => (container.textContent ?? "").includes(message));
+    expect(firstPartySwitch().getAttribute("aria-pressed")).toBe("false");
+  });
+}
+
+test("CLI first-party success trusts the divergent GET state", async () => {
+  firstPartyPutResponse = { body: { ok: true } };
+  await mountApp();
+  await waitFor(() => { try { return !!firstPartySwitch(); } catch { return false; } });
+  await act(async () => { firstPartySwitch().click(); });
+  await waitFor(() => !firstPartySwitch().disabled);
+  expect(firstPartySwitch().getAttribute("aria-pressed")).toBe("false");
+});
+
+test("CLI first-party can turn off while the proxy is stopped", async () => {
+  cliFirstParty = true;
+  claudeEnabled = false;
+  await mountApp();
+  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "true");
+  await act(async () => {
+    firstPartySwitch().click();
+    releasePut?.();
+    releasePut = null;
+  });
+  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "false");
+  expect(putBodies).toEqual([{ cliFirstParty: false }]);
+});
+
+test("the Save payload does not overwrite CLI first-party intent", async () => {
+  cliFirstParty = true;
+  claudeEnabled = true;
+  await mountApp();
+  await waitFor(() => firstPartySwitch().getAttribute("aria-pressed") === "true");
+  const save = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Save") as HTMLButtonElement | undefined;
+  if (!save) throw new Error("Claude Code Save button not found");
+  await act(async () => {
+    save.click();
+    releasePut?.();
+    releasePut = null;
+  });
+  await waitFor(() => putBodies.length === 1);
+  expect(putBodies[0]).not.toHaveProperty("cliFirstParty");
 });

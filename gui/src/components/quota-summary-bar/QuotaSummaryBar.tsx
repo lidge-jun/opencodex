@@ -18,6 +18,7 @@ import { freshQuotaReportsFromResponse, type ProviderQuotaReportView } from "../
 import { openProviderAccounts, providerAccountsHash } from "../../protocol-deep-links";
 import { buildQuotaSummary, formatQuotaPercent, type QuotaSummaryRow, type QuotaSummarySeverity, type QuotaSummaryWindow } from "../../quota-summary";
 import { formatResetFuture } from "../QuotaBars";
+import { publishStickyTop } from "./sticky-top";
 import "./quota-summary-bar.css";
 
 interface QuotaSummaryData {
@@ -337,7 +338,7 @@ export default function QuotaSummaryBar({ apiBase }: { apiBase: string }) {
   const stale = !resource.lastAttemptOk;
 
   return (
-    <section className="quota-summary-bar" aria-label={t("quotaSummary.aria")}>
+    <section className="quota-summary-bar" aria-label={t("quotaSummary.aria")} ref={publishStickyTop}>
       <QuotaSummaryChips rows={rows} t={t} locale={locale} />
       <span
         className={`quota-summary-updated${stale ? " quota-summary-updated--stale" : ""}`}

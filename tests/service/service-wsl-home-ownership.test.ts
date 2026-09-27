@@ -1,27 +1,31 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import * as os from "node:os";
 import { join, posix } from "node:path";
 import { assertServiceEnvironmentMatchesInstall } from "../../src/service/guards";
 import { repairService } from "../../src/service/repair";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { serviceStatePaths } from "../../src/service/state";
+import { createTempHome, type TempHome } from "../helpers/temp-home";
 
-const previousOpenCodexHome = process.env.OPENCODEX_HOME;
-let fixtureHome: string | undefined;
+let fixtureHome: TempHome | undefined;
+let restoreHomedir: (() => void) | undefined;
 
 afterEach(() => {
-  if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpenCodexHome;
-  if (fixtureHome) removeTreeWithRetry(fixtureHome);
+  restoreHomedir?.();
+  restoreHomedir = undefined;
+  fixtureHome?.remove();
   fixtureHome = undefined;
 });
 
 describe("WSL service ownership after Windows home discovery", () => {
   function fixture(recorded: "linux" | "windows") {
-    const root = mkdtempSync(join(tmpdir(), "ocx-wsl-service-home-"));
-    fixtureHome = root;
-    process.env.OPENCODEX_HOME = root;
+    const home = createTempHome("ocx-wsl-service-home-");
+    fixtureHome = home;
+    const root = home.root;
+    const homedir = spyOn(os, "homedir").mockReturnValue(root);
+    restoreHomedir = () => homedir.mockRestore();
+    expect(serviceStatePaths().every(path => path.startsWith(root))).toBe(true);
     const linuxHome = "/home/fixture/.codex";
     const usersRoot = "/mnt/c/Users";
     const windowsHome = posix.join(usersRoot, "profile", ".codex");

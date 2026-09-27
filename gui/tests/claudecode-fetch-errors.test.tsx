@@ -46,6 +46,12 @@ afterEach(() => {
 
 const CLAUDE_OK = {
   enabled: true,
+  cliFirstParty: false,
+  cliFirstPartyApplied: false,
+  desktopFirstParty: false,
+  interceptRunning: false,
+  interceptEligible: true,
+  sharedProxy: "none",
   authMode: "proxy",
   autoConnectSupported: false,
   systemEnv: false,

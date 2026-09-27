@@ -129,7 +129,7 @@ import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle"
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
-import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { formatErrorResponse } from "../../bridge";
 import { inspectResponseLogJson } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
@@ -316,6 +316,7 @@ export async function deliverPassthroughResponse(
     | "rememberPassthroughResponse"
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
+    | "localUpstream"
   >,
 ): Promise<Response> {
   const { logCtx, config, options, req } = requestContext;
@@ -354,7 +355,7 @@ export async function deliverPassthroughResponse(
     && !isCodexWsUpstreamResponse(upstreamResponse)
     && !(options.nativeControl && isNativeControlResponse(upstreamResponse))) {
     upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse, {
-      timeoutMs: resolveStallTimeoutSec(config.stallTimeoutSec) * 1000,
+      timeoutMs: resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: nativeExchange.localUpstream }),
       signal: options.abortSignal ?? req.signal,
     });
   }

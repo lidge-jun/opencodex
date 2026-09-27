@@ -131,7 +131,7 @@ describe("ocx opencode provider block", () => {
   test("native slugs pick up authoritative context windows from the resolver", () => {
     const block = buildOpencodeProviderBlock(10100, ["gpt-5.6-luna", "unknown-native"], [], slug =>
       slug === "gpt-5.6-luna" ? 1_000_000 : undefined);
-    expect(block.models["gpt-5.6-luna"]?.limit).toEqual({ context: 1_000_000, output: SCHEMA_REQUIRED_OUTPUT_BUDGET });
+    expect(block.models["gpt-5.6-luna"]?.limit).toEqual({ context: 1_000_000, output: 128_000 });
     expect(block.models["unknown-native"]?.limit).toBeUndefined();
   });
 

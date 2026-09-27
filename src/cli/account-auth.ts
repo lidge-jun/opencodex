@@ -34,7 +34,7 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
@@ -72,6 +72,13 @@ interface LoginStart {
   deviceCode?: string;
   /** Whether the host actually opened a browser. Absent from older proxies. */
   browserLaunch?: "started" | "failed" | "skipped";
+  method?: "builder-id" | "google" | "github";
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  expiresAt?: number;
+  state?: string;
+  warning?: string;
 }
 
 /**
@@ -94,6 +101,14 @@ const STDIN_SENTINEL = "-";
 
 /** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
+const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "");
+export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
+  return [
+    stripTerminalControls(start.verificationUriComplete ?? start.verificationUri ?? ""),
+    start.userCode ? `User code: ${stripTerminalControls(start.userCode)}` : "",
+    start.flowId ? `Flow: ${stripTerminalControls(start.flowId)}` : "",
+  ].filter(Boolean).join("\n");
+}
 
 const ARGV_WARNING =
   "warning: the authorization code was passed as a command-line argument, so it is now in your shell history and was visible in the process list while this ran. Pipe it on stdin instead, or pass `-` to read from stdin.";
@@ -128,9 +143,17 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const noWait = takeFlag(args, "--no-wait");
   const reauth = takeFlag(args, "--reauth");
   const device = takeFlag(args, "--device");
+  const method = takeOption(args, "--method");
   const id = takeOption(args, "--id");
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
+  if (method !== undefined) {
+    if (provider !== "kiro" || !["builder-id", "google", "github"].includes(method)) {
+      throw new CliUsageError("--method requires kiro and builder-id, google, or github", USAGE);
+    }
+    if (reauth || id) throw new CliUsageError("native Kiro device login only adds accounts; remove and re-add to reauthenticate", USAGE);
+    if (device || suppliedCode) throw new CliUsageError("--method cannot be combined with --device or --code", USAGE);
+  }
   // A bare leftover here is plausibly the authorization code itself: this flow takes one
   // through --code, and a user who pastes it as a positional would otherwise see it echoed
   // back in the usage error. `ocx login codex` reaches this parser too, so the paste lands
@@ -146,6 +169,30 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
   const code = await resolveCode(suppliedCode, deps, false);
+
+  if (method) {
+    const start = await runtimeRequest<LoginStart>("/api/oauth/login", {
+      method: "POST", body: JSON.stringify({ provider: "kiro", method }),
+    }, deps);
+    if (!wantsJson) {
+      const block = formatKiroDeviceInstructions(start);
+      if (block) writeStdoutFully(`${block}\n`);
+    }
+    if (noWait) { printData(start, wantsJson, []); return; }
+    if (!start.flowId) throw new CliUsageError("Kiro device login did not return a flow id");
+    for (let attempt = 0; attempt < 450; attempt++) {
+      await Bun.sleep(2_000);
+      const state = await runtimeRequest<LoginStart>(`/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(start.flowId)}`, {}, deps);
+      if (state.state === "done") {
+        printData(state, wantsJson, ["Logged in to kiro.", ...(state.warning ? [`Warning: ${state.warning}`] : [])]);
+        return;
+      }
+      if (state.state === "failed" || state.state === "expired" || state.state === "cancelled") {
+        throw new CliUsageError(`Kiro device login ${state.state}`);
+      }
+    }
+    throw new CliUsageError("Kiro device login timed out");
+  }
 
   if (CODEX_NAMES.has(provider)) {
     const start = await runtimeRequest<LoginStart>("/api/codex-auth/login", {
@@ -290,7 +337,7 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   const result = await runtimeRequest(codex ? "/api/codex-auth/login/cancel" : "/api/oauth/login/cancel", {
     method: "POST",
-    body: JSON.stringify(codex ? { flowId } : { provider }),
+    body: JSON.stringify(codex ? { flowId } : { provider, ...(provider === "kiro" && flowId ? { flowId } : {}) }),
   }, deps);
   printData(result, wantsJson, [`Cancelled ${provider} login.`]);
 }

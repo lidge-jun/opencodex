@@ -21,12 +21,12 @@ Native main reauthentication follows the [CLI JSON output contract](runtime.md#n
 
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
-`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command.
-Apply adds pool configuration under the shared mutation lock; the
-[source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs
-deduplication and credential storage separately from Codex config injection.
+`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command. Apply adds pool configuration under the shared mutation lock;
+the [source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs deduplication and credential storage separately from Codex config injection.
 
 ## Config surface
+
+`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged.
 
 Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
 `ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the
@@ -64,8 +64,8 @@ silently move the active installation.
 
 `src/config/process-state.ts` derives `ocx.pid` and `runtime-port.json` from that resolved directory.
 It owns their byte-compatible writes, parsing, expected-PID filters, cheap liveness, full OCX command
-identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` remains optional,
-owner-only state and is validated before a record is returned. `src/config.ts` re-exports the same
+identity, and snapshot-guarded removal. `RuntimePortState.attestationSecret` and `siblingOfPort` (the live owner's port, written only by a sibling instance) remain optional,
+owner-only state and are validated before a record is returned. `src/config.ts` re-exports the same
 symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
 
 Replacing config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
@@ -96,7 +96,8 @@ merge cannot turn them into a valid config while discarding the original bytes.
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
 | Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
-| Routing | `defaultProvider`, `providers`, per-provider `selectedModels`, `combos` | Explicit `provider/model` wins over `defaultProvider`; combo dispatch uses the selected target's existing capability ladder and does not create a second catalog authority. |
+| Routing | `defaultProvider`, `providers`, per-provider `selectedModels`, `combos` | Explicit `provider/model` wins over `defaultProvider`; combo dispatch uses the selected target's existing capability ladder and does not create a second catalog authority. For Kiro OAuth, the management API validates `providers.kiro.oauthAccountFailover.strategy` (`least-loaded`) and `maxConcurrentPerAccount` (1–100) only for Kiro; the cap persists, while active lease counts remain process-local. |
+| Request pacing | `providers.<name>.requestPacing`, `requestPacing.models.<model>` | Optional client-side request-start pacing supports interval limits and positive-integer `maxConcurrentRequests` caps. A provider or model rule may be concurrency-only; model entries target exact upstream IDs and can only add delay or narrow concurrency. |
 | Compaction routing | `compactionRouting.model`, optional `compactionRouting.reasoningEffort`, optional `compactionRouting.triggers` | Explicit Codex compaction metadata whose `compaction.trigger` is one the block names activates a request-local override; `triggers` defaults to `["manual"]`. See [Responses compaction](transports/responses-failover.md#compaction-routing-overrides). Invalid hand edits disable the block with a load warning without discarding providers; candidate writes reject invalid blocks. |
 | Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue`, per-provider `modelDisplayNames`, `codexAccountNamespaces`, `codexAccountPickerEnabled` | Catalog state is derived; config only records intent. Exact provider model display names are durable display only overlays. The picker flag is an explicit visibility override, while selector mappings remain the durable exact-routing contract. |
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
@@ -124,7 +125,7 @@ record; it does not call `loadConfig`, mutate permissions, or import the write-c
 All config publication continues through the existing required ACL-hardened writers above.
 
 `claudeCode.desktopProfile` follows the same preserve-the-rest rule. JSON `null` (or any non-string) `appliedFingerprint` / `appliedAt` is treated as unset. A profile that is still invalid after that is dropped as a whole — `src/config/salvage.ts` already does this for independent `routingProfiles` / `combos` entries — so one bad Desktop marker cannot replace the operator's providers with `getDefaultConfig()`. A `claudeCode` value that is not an object still fails the document, because there is no safe subtree to keep.
-
+`claudeCode.cliFirstParty` is an optional boolean in `src/types/config.ts`. The schema passes it through; the load normalizer (`src/config/load-degrade.ts`) drops a non-boolean hand edit, every reader treats only `true` as on, and `PUT /api/claude-code` accepts only a boolean. Absence means off. It is independent of `claudeCode.desktopMode`; enabling CLI first-party pins an absent Desktop mode from a pre-write observation, before writing the shared settings env, so later Desktop inference cannot mistake a CLI-only env for Desktop intent. The flag is written only by a standalone `PUT /api/claude-code { cliFirstParty }`, including `ocx claude config set --first-party`; enabling it pins an absent `desktopMode` in the same persisted mutation. The shared settings proxy status follows the ordered classifier in `src/claude/first-party-settings.ts`: unreadable settings are `unknown`; absent or unrecognized proxy URLs are `none`; a token-bearing opencodex URL beside a foreign CA is `foreign`, while a tokenless loopback URL beside that CA is `local` with unconfirmed ownership. An attributed proxy with no bound listener is `stopped`; a usable applied pair on a bound listener is `disabled` when Claude routing is ineligible and `live` when eligible; remaining mismatches are `broken` regardless of eligibility. Inspection never mints a token. A separate `ocx ensure` may write a config-derived port while this server remains bound elsewhere; status is then `broken` until the server restarts or ensure runs after restart.
 The former `showCodexSparkQuota` key is inert passthrough data when loading an old config.
 It is absent from the typed settings contract and cannot re-enable Spark quota through the
 management API. Retirement does not migrate user-selected model ids or erase usage history.
@@ -500,7 +501,7 @@ Client connection metadata stores a stable `apiKeyId` and a non-secret rotation 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-`codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions).
+`codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions). Optional `codexPool.startIdleWindows` defaults off and follows the [idle-window steering contract](providers/openai-accounts.md#idle-window-steering), using real new requests to start observed idle 5-hour windows.
 
 Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
@@ -555,7 +556,6 @@ The OpenCode launcher resolves the existing local management origin from the liv
 Provider `autoReviewModel` and `autoReviewModelOverrides` accept validated final-catalog selectors. Per-model keys preserve case and accept the existing raw/encoded slash equivalence. File-load degradation removes malformed optional selectors only; management writes reject malformed shapes. Omitted provider saves preserve selectors, explicit clears remove them, and raw editor candidates adopt normalized values before persistence and live replacement. See [catalog ownership](catalog.md#provider-scoped-approval-reviewer).
 
 Display-name validation retains prototype-shaped model IDs as data; reviewer-target map validation remains separate and rejects its reserved keys.
-
 ## Explicit per-model capability declarations
 
 `modelCapabilities` on `src/types/provider.ts` stores exact model-ID entries with optional inputModalities, contextTier and video.processing axes. `src/config/provider-validation.ts` strictly validates writes and merges PATCH axes without sharing live objects; null map/model/axis/processing tombstones delete, while empty PATCH objects do nothing. Complete POST/PUT replacements reject tombstones. File reads retain valid axes; malformed explicit modalities restrict to text with a diagnostic. The two catalog writers receive explicit config and gather fingerprints include the map. This storage contract alone does not activate a context tier, advertise a larger window or enable video processing.

@@ -40,7 +40,7 @@ const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
 const ZAI_BASE_URL = "https://api.z.ai";
 const ZAI_CN_BASE_URL = "https://open.bigmodel.cn";
-const MINIMAX_REMAINS_URL = "https://www.minimax.io/v1/token_plan/remains";
+const MINIMAX_REMAINS_PATH = "/v1/api/openplatform/coding_plan/remains";
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const SYNTHETIC_BASE_URL = "https://api.synthetic.new/v2";
@@ -652,20 +652,17 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
 }
 
 /**
- * MiniMax Token Plan `GET /v1/token_plan/remains` — the subscription's
- * remaining quota as a countdown-time value (ms). The endpoint does not expose
- * the plan's total duration, so no percentage is fabricated from a presumed
- * window: the remaining time is reported as a duration-only window. When the
- * API supplies a total (`total_time` / `plan_duration_ms`), a consumed share
- * is derived from it. Region selects the host: `minimax` → www.minimax.io,
- * `minimax-cn` → api.minimaxi.com.
+ * MiniMax Coding Plan `GET /v1/api/openplatform/coding_plan/remains` reports
+ * remaining percentages per model/window. Only the `general` model is the
+ * Coding Plan quota; video remains are unrelated. Region selects the host.
  */
 async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalMinimaxBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const cnHost = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.minimaxi.com");
-  const remainsUrl = cnHost ? "https://api.minimaxi.com/v1/token_plan/remains" : MINIMAX_REMAINS_URL;
+  const canonicalHost = cnHost ? "https://api.minimaxi.com" : "https://api.minimax.io";
+  const remainsUrl = `${canonicalHost}${MINIMAX_REMAINS_PATH}`;
   const response = await quotaFetch(provider, config, remainsUrl, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
@@ -677,24 +674,32 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
       : null;
   }
   const body = asRecord(await readQuotaJson(response));
-  if (!body || body.success === false) return null;
-  const data = asRecord(body.data) ?? body;
-  const remainsMs = toFiniteNumber(data.remains_time ?? data.remainsTime);
-  if (remainsMs === undefined || remainsMs < 0) return null;
-  const hours = Math.floor(remainsMs / 3_600_000);
-  const label = `Token Plan remaining (${hours}h)`;
-  // Only derive a consumed share when the API actually reports the plan total;
-  // a presumed window (e.g. 30 days) would fabricate utilization. A valid
-  // response that omits the total after a prior refresh had it is a DELIBERATE
-  // contract change — the old row must be dropped (terminal), not preserved as
-  // a transient last-good.
-  const totalMs = toFiniteNumber(data.total_time ?? data.plan_duration_ms ?? data.total_duration_ms);
-  if (totalMs === undefined || totalMs <= 0) return TERMINAL_QUOTA_FAILURE;
-  const consumed = Math.max(0, totalMs - remainsMs);
-  const percent = normalizePercent((consumed / totalMs) * 100);
-  if (percent === undefined) return null;
+  if (!body || asRecord(body.base_resp)?.status_code !== 0) return null;
+  const rows = Array.isArray(body.model_remains) ? body.model_remains : [];
+  const general = rows.map(asRecord).find(row => row?.model_name === "general");
+  if (!general) return null;
+  const customWindows: NonNullable<ProviderQuota["customWindows"]> = [];
+  const fiveHourRemaining = toFiniteNumber(general.current_interval_remaining_percent);
+  if (fiveHourRemaining !== undefined) {
+    const percent = normalizePercent(100 - fiveHourRemaining);
+    if (percent !== undefined) {
+      const resetAt = normalizeResetAt(general.end_time);
+      customWindows.push({ label: "Coding Plan 5-hour", percent, ...(resetAt ? { resetAt } : {}) });
+    }
+  }
+  if (general.current_weekly_status === 1) {
+    const weeklyRemaining = toFiniteNumber(general.current_weekly_remaining_percent);
+    if (weeklyRemaining !== undefined) {
+      const percent = normalizePercent(100 - weeklyRemaining);
+      if (percent !== undefined) {
+        const resetAt = normalizeResetAt(general.weekly_end_time);
+        customWindows.push({ label: "Coding Plan weekly", percent, ...(resetAt ? { resetAt } : {}) });
+      }
+    }
+  }
+  if (customWindows.length === 0) return null;
   return report(provider, "minimax:token-plan-remains", {
-    customWindows: [{ label, percent }],
+    customWindows,
     updatedAt: Date.now(),
   });
 }

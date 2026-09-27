@@ -25,6 +25,8 @@ mod popup;
 #[cfg(target_os = "macos")]
 #[path = "native_tray.rs"]
 mod popup;
+#[cfg(target_os = "macos")]
+mod provider_icons;
 // The macOS build selects native_tray.rs as the popup module; compile the portable popup
 // module's tests on macOS too so its navigation rules run on the maintainers' platform.
 #[cfg(all(test, target_os = "macos"))]
@@ -36,6 +38,7 @@ mod resolve;
 mod runtime_stop;
 mod sidecar;
 mod startup;
+mod supervisor;
 mod tray;
 mod tray_availability;
 mod updater;
@@ -57,6 +60,9 @@ pub struct AppState {
     child: Mutex<Option<CommandChild>>,
     /// The pid of the child this app started, if it started one.
     child_pid: Mutex<Option<u32>>,
+    /// When that child was spawned, so a later run can tell a child still starting from one that
+    /// will never answer (`startup::waits_on_child`).
+    child_spawned: Mutex<Option<std::time::Instant>>,
     /// Whether the process answering the endpoint has been confirmed to be that child.
     ///
     /// Durable consent and current process ownership are different facts. Consent is a recorded
@@ -75,6 +81,7 @@ impl AppState {
             proxy: Mutex::new(None),
             child: Mutex::new(None),
             child_pid: Mutex::new(None),
+            child_spawned: Mutex::new(None),
             confirmed: AtomicBool::new(false),
             watch: sidecar::SidecarWatch::default(),
         }
@@ -102,6 +109,12 @@ impl AppState {
         *Self::slot(&self.child_pid)
     }
 
+    /// How long ago the child this app tracks was spawned; nothing when it tracks none.
+    pub fn child_age(&self) -> Option<std::time::Duration> {
+        self.child_pid()?;
+        Self::slot(&self.child_spawned).map(|spawned| spawned.elapsed())
+    }
+
     /// Confirm that the instance answering is the child this app started.
     ///
     /// This is the only thing that grants ownership. A spawn records a pid; it does not record that
@@ -115,6 +128,7 @@ impl AppState {
 
     pub fn adopt(&self, child: CommandChild) {
         *Self::slot(&self.child_pid) = Some(child.pid());
+        *Self::slot(&self.child_spawned) = Some(std::time::Instant::now());
         *Self::slot(&self.child) = Some(child);
         // Spawned, not yet confirmed: the health probe is what establishes that this pid is the
         // one answering.
@@ -128,6 +142,7 @@ impl AppState {
     pub fn release(&self) {
         self.confirmed.store(false, Ordering::Release);
         let _ = Self::slot(&self.child_pid).take();
+        let _ = Self::slot(&self.child_spawned).take();
         let _ = Self::slot(&self.child).take();
     }
 }
@@ -176,8 +191,11 @@ fn startup_phases() -> Vec<startup::PhaseInfo> {
 }
 
 /// Run the startup sequence again. A run already in flight is left alone.
+///
+/// A person asking for a runtime again also resumes supervision, even after the tray's Stop.
 #[tauri::command]
 fn retry_startup(app: tauri::AppHandle) {
+    supervisor::resume(&app);
     startup::begin(&app);
 }
 
@@ -280,12 +298,14 @@ pub fn run() {
             app.manage(tray::TrayState::default());
             app.manage(exit::ExitCoordinator::new());
             app.manage(startup::Startup::new());
+            // Registers the exit hook and an idle watchdog; it starts no runtime of its own.
+            supervisor::watch_runtime(app.handle());
 
             // D7: the window is created and shown before anything is registered, resolved, probed
             // or started, so every state below has somewhere to be reported. A login launch stays
             // hidden until the tray verdict, because R1 shows it after all when there turns out to
             // be nowhere to hide.
-            let window =
+            let builder =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("OpenCodex")
                     .inner_size(1100.0, 720.0)
@@ -308,8 +328,23 @@ pub fn run() {
                                 window.is_visible().unwrap_or(false),
                             );
                         }
-                    })
-                    .build()?;
+                    });
+            // The integrated title bar: macOS keeps its traffic lights but draws them over the
+            // webview, so the dashboard's sidebar top strip reserves the space they land in
+            // (`app-titlebar.css` keeps it aligned with this position) and the strips move or
+            // zoom the window through `plugin:window` commands granted by
+            // `capabilities/dashboard-titlebar.json`. Windows and Linux keep the native title
+            // bar — the shell ships no min/max/close widgets of its own — while the sidebar-top
+            // layout applies unchanged.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .min_inner_size(360.0, 320.0)
+                .traffic_light_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                    18.0, 22.0,
+                )));
+            let window = builder.build()?;
             window::configure(&window);
             if startup::LaunchOrigin::detect() == startup::LaunchOrigin::User {
                 window::show(&window);

@@ -9,6 +9,7 @@ private final class NativeTrayPopover: NSObject {
     let panel = NativeTrayPanel()
     let store = NativeTrayStore()
     var callback: (@convention(c) (Int32) -> Void)?
+    var switchCallback: (@convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>) -> Void)?
 
     override init() {
         super.init()
@@ -18,6 +19,13 @@ private final class NativeTrayPopover: NSObject {
             guard let self else { return }
             if event == 2 || event == 3 || event == 4 { self.panel.dismiss() }
             if event != 2 { self.callback?(event) }
+        }
+        // Only names cross the ABI: the host picks the route and body from its own config.
+        store.switchAccount = { [weak self] provider, accountId in
+            guard let callback = self?.switchCallback else { return }
+            provider.withCString { provider in
+                accountId.withCString { accountId in callback(provider, accountId) }
+            }
         }
     }
 
@@ -134,7 +142,18 @@ public func nativeTrayUpdate(_ bytes: UnsafePointer<UInt8>?, _ count: Int) {
     do {
         store.snapshot = try NativeTraySnapshot.decode(Data(bytes: bytes, count: count))
         store.decodeFailed = false
+        store.settlePendingSwitch()
     } catch {
         store.decodeFailed = true
     }
+}
+
+/// Registers the host's handler for the panel's "Use" action on an account row.
+@_cdecl("ocx_native_tray_set_switch_handler")
+@MainActor
+public func nativeTraySetSwitchHandler(
+    _ callback: @escaping @convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>) -> Void
+) {
+    guard Thread.isMainThread else { return }
+    NativeTrayPopover.shared.switchCallback = callback
 }

@@ -91,6 +91,8 @@ export interface ClaudeInterceptListenerOptions<T = undefined> {
   leaf: PemKeyPair;
   /** Router request handler; receives the loopback-rewritten request and the intercept server. */
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
+  /** Per-request decision for every path; absent preserves the existing path split. */
+  route?: (req: Request) => "router" | "relay-native";
   upstreamBase?: string;
   maxRequestBodySize?: number;
   idleTimeout?: number;
@@ -111,6 +113,9 @@ export function startClaudeInterceptListener<T = undefined>(options: ClaudeInter
     ...(options.maxRequestBodySize !== undefined ? { maxRequestBodySize: options.maxRequestBodySize } : {}),
     async fetch(req, requestServer) {
       const url = new URL(req.url);
+      if (options.route?.(req) === "relay-native") {
+        return relayToUpstream(req, CLAUDE_INTERCEPT_UPSTREAM, options.fetchImpl);
+      }
       if (isClaudeInterceptedPath(url.pathname, req.method)) {
         return options.dispatch(rewriteInterceptedRequest(req, loopbackOrigin), requestServer);
       }

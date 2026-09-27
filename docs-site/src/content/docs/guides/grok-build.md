@@ -174,3 +174,17 @@ the id `grok-4.5`. Generated aliases avoid dots entirely for this reason.
   document on every reload.
 - **Catalog updates:** the fenced block reflects the catalog at injection time. After
   adding providers or models, run `ocx ensure` (or restart the proxy) to refresh it.
+
+## Devin rate limits
+
+If Devin rejects a direct request with a rate limit before producing output or performing
+an action, OpenCodex returns HTTP 429 with a JSON error. Grok can then recognize the limit
+instead of displaying a generic 500 error from a failed HTTP 200 stream. If the response
+includes `Retry-After`, follow that delay before retrying. Exhausted quotas without a reset
+hint do not receive a default delay. Existing OAuth account failover still applies. This
+HTTP 429 handling also applies to non-streaming Responses requests.
+
+For streaming requests, OpenCodex waits up to the configured stall timeout for this early
+refusal. If that wait
+expires, it opens the SSE response and lets the existing stream watchdog handle stalls.
+After HTTP headers are sent, a later failure stays in the stream as `response.failed`.

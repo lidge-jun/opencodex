@@ -1096,6 +1096,38 @@ export async function collectCodexAppServerCatalogStateForRequest(
 }
 
 /**
+ * Dashboard read of the request-path catalog state, bounded by `deadlineMs`.
+ *
+ * The request collector keeps the event loop free, but a cold Windows probe still
+ * takes 4-7s (CIM walk plus GetOwner per candidate), and the Models and Subagents
+ * pages cannot render their rosters until these routes answer. The reading only
+ * drives an advisory banner, so a slow probe answers `unknown` (which renders no
+ * banner) and keeps running; its result is cached for the next poll.
+ *
+ * The deadline bounds the Windows path, where the request collector is asynchronous. On
+ * other platforms the request collector keeps its existing synchronous read (a /proc walk on
+ * Linux, `ps` on macOS, typically tens of milliseconds), which completes before the deadline
+ * timer can fire; making those reads asynchronous is outside this change.
+ */
+export async function collectCodexAppServerCatalogStateWithin(
+  deadlineMs: number,
+  io: CodexAppServerProcessIo = {},
+): Promise<CodexAppServerCatalogStatus> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<CodexAppServerCatalogStatus>(resolve => {
+    timer = setTimeout(() => resolve({ state: "unknown", processes: [], catalogMtimeMs: null }), deadlineMs);
+  });
+  try {
+    return await Promise.race([collectCodexAppServerCatalogStateForRequest(io), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Deadline for dashboard catalog-state reads; a cached reading answers well within it. */
+export const DASHBOARD_CATALOG_STATE_DEADLINE_MS = 250;
+
+/**
  * Drop memoized catalog state after a relevant catalog/cache write and before
  * the post-write state read. Advancing the generation prevents an older
  * in-flight Windows CIM refresh from publishing its pre-write result after the

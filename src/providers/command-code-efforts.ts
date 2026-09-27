@@ -22,7 +22,8 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
  * `ultra` returned 400. A correction therefore adds the rungs a profile newly lists and keeps the
  * rungs the upstream measurably accepts; dropping them would strip an effort that works today,
  * including Codex's default `high`. The refresh path decodes the same payload, so it narrows a row
- * only after the upstream actually rejects a rung.
+ * only after the upstream actually rejects a rung. Issue #5096 supplies additional live API
+ * measurements that widen the DeepSeek Flash, GLM-5.3, Gemini-3.7-Flash and HY4 rows.
  */
 const COMMAND_CODE_MODEL_EFFORTS = {
   // Captured profile payload 2026-09-23: claude-fable-5-1.html.
@@ -36,11 +37,11 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     profileUrl: "https://commandcode.ai/models/claude-opus-5-5",
   },
   "deepseek/deepseek-v4-flash": {
-    efforts: ["high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash",
   },
   "deepseek/deepseek-v4-flash-vision-exp": {
-    efforts: ["high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-flash-vision-exp",
   },
   // Captured profile payload 2026-09-23: deepseek-v4-flash-fast.html.
@@ -50,7 +51,7 @@ const COMMAND_CODE_MODEL_EFFORTS = {
   },
   // Captured profile payload 2026-09-23: deepseek-v4-1-flash.html.
   "deepseek/deepseek-v4.1-flash": {
-    efforts: ["low", "high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-1-flash",
   },
   "gpt-5.6-luna": {
@@ -58,7 +59,7 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     profileUrl: "https://commandcode.ai/models/gpt-5-6-luna",
   },
   "google/gemini-3.7-flash": {
-    efforts: ["low", "medium", "high"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/gemini-3-7-flash",
   },
   // Captured profile payload 2026-09-23: gemini-3-8-flash.html.
@@ -83,11 +84,11 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     profileUrl: "https://commandcode.ai/models/glm-5-2-fast",
   },
   "zai-org/GLM-5.3": {
-    efforts: ["low", "high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-3",
   },
   "z-ai/glm-5.3-flash": {
-    efforts: ["low", "high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-3-flash",
   },
   // Captured profile payload 2026-09-23: glm-5-3-flashx.html.
@@ -143,7 +144,7 @@ const COMMAND_CODE_MODEL_EFFORTS = {
   },
   // Captured profile payload 2026-09-23: hy4-preview.html.
   "tencent/hy4-preview": {
-    efforts: ["low", "medium", "high"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/hy4-preview",
   },
   // Captured profile payload 2026-09-23: grok-4-7.html.
@@ -151,10 +152,31 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["low", "medium", "high", "xhigh"],
     profileUrl: "https://commandcode.ai/models/grok-4-7",
   },
+  // Live API measurements supplied in #5096; no verified public profile URL.
+  "moonshotai/Kimi-K3": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "MiniMaxAI/MiniMax-M3": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "xiaomi/mimo-v2.5": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "xai/grok-4.5": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "xai/grok-4.6": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "tencent/hy3-paid": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "stepfun/Step-3.7-Flash": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "Qwen/Qwen3.8-Max": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "Qwen/Qwen3.8-27B": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "nvidia/nemotron-3-ultra-550b-a55b": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "meituan/LongCat-2.0:free": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "inclusionai/ling-3.0-flash-sante:free": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "thinkingmachines/inkling-small": { efforts: ["low", "medium", "high", "xhigh", "max"] },
+  "moonshotai/Kimi-K2.7-Code": { efforts: ["low", "medium", "high", "xhigh"] },
+  "moonshotai/Kimi-K2.7-Code-Highspeed": { efforts: ["low", "high", "xhigh", "max"] },
+  "xiaomi/mimo-v2.5-pro": { efforts: ["low", "medium", "high"] },
+  "Qwen/Qwen3.7-32B": { efforts: ["low", "medium", "high", "xhigh"] },
+  "Qwen/Qwen3.7-72B": { efforts: ["low", "medium", "high", "xhigh"] },
+  "Qwen/Qwen3.6-35B-A22B": { efforts: ["low", "medium", "high", "xhigh"] },
+  "poolside/laguna-s-2.1-free": { efforts: ["medium"] },
 } as const;
 
 /**
- * Official Command Code model-profile facts, not a model catalog. Models remain
+ * Command Code profile facts and live API measurements (#5096), not a model catalog. Models remain
  * account-scoped and come exclusively from the authenticated /provider/v1/models endpoint.
  */
 export const COMMAND_CODE_MODEL_REASONING_EFFORTS: Record<string, string[]> = Object.fromEntries(
@@ -273,7 +295,7 @@ export async function refreshCommandCodeReasoningEfforts(
   destination = DEFAULT_EFFORT_DESTINATION,
 ): Promise<readonly string[] | undefined> {
   const key = cacheKey(modelId, destination);
-  let profile: { efforts: readonly string[]; profileUrl: string } | undefined;
+  let profile: { efforts: readonly string[]; profileUrl?: string } | undefined;
   for (const [id, row] of Object.entries(COMMAND_CODE_MODEL_EFFORTS)) {
     if (keyFor(id) === keyFor(modelId)) {
       profile = row;
@@ -286,6 +308,7 @@ export async function refreshCommandCodeReasoningEfforts(
     rejected.add(rejectedEffort);
     rejectedEfforts.set(key, rejected);
   }
+  if (!profile.profileUrl) return commandCodeReasoningEfforts(modelId, destination);
   try {
     const response = await fetchFn(profile.profileUrl, {
       headers: { Accept: "text/html" },

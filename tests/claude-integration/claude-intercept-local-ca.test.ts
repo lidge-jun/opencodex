@@ -9,6 +9,7 @@ import {
   claudeInterceptCaCertPath,
   claudeInterceptStateDir,
   createLocalInterceptCa,
+  createCertificateAuthority,
   ensureLocalInterceptCa,
   ensureLocalInterceptCaForStartup,
   issueLocalInterceptLeaf,
@@ -28,6 +29,18 @@ test("CA certificate is a self-signed X.509 v3 authority", () => {
   expect(cert.checkIssued(cert)).toBe(true);
   expect(new Date(cert.validFrom).getTime()).toBeLessThan(Date.now());
   expect(new Date(cert.validTo).getTime()).toBeGreaterThan(Date.now() + 365 * 24 * 3600 * 1000);
+});
+
+test("temporary authorities can shorten validity without changing the default", () => {
+  const short = createCertificateAuthority({ commonName: "temporary fixture", validityDays: 1, permittedDnsNames: ["example.test"] });
+  const cert = new X509Certificate(short.certPem);
+  expect(Date.parse(cert.validTo) - Date.parse(cert.validFrom)).toBe(86_400_000);
+  expect(cert.verify(short.publicKey)).toBe(true);
+  const normal = new X509Certificate(createLocalInterceptCa().certPem);
+  expect(Date.parse(normal.validTo) - Date.parse(normal.validFrom)).toBe(3650 * 86_400_000);
+  for (const validityDays of [0, -1, 0.5, NaN, Infinity, 3651]) {
+    expect(() => createCertificateAuthority({ commonName: "invalid fixture", validityDays })).toThrow("validityDays");
+  }
 });
 
 test("leaf is issued by the CA and names every requested host in SAN", () => {

@@ -1,20 +1,35 @@
 import { describe, expect, test, spyOn } from "bun:test";
-import { ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { chooseJoinTunnelPort, ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
 import { spawnClientLinkTunnel } from "../../src/client/link-tunnel";
+import type { ListenPidScan } from "../../src/server/port-reclaim";
+import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../../src/link/ports";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { SshRunner } from "../../src/link/ssh-runner";
+import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 
 const LINK_ID = "lnk_0123456789abcdef";
+const REVOKE_COMMAND = quoteRemote(remoteOcxArgv(["link", "revoke", "--link-id", LINK_ID]));
+
+/** The issue command up to its variable arguments, wrapped in the remote PATH prelude. */
+function isWrappedIssue(argv: readonly string[]): boolean {
+  return (argv.at(-1) ?? "").startsWith(`${quoteRemote(remoteOcxArgv(["link", "issue", "--alias"]))} `);
+}
+
+/** Select only the wrapped revoke command, not other SSH traffic. */
+function revokeCalls(calls: readonly string[][]): string[][] {
+  return calls.filter(argv => argv.at(-1) === REVOKE_COMMAND);
+}
 const API_KEY_ID = "link-key-1";
 const KEY = `ocx_data_${"a".repeat(40)}`;
 const FINGERPRINT = `SHA256:${"a".repeat(32)}`;
 
+/** Record issue and compensation calls without starting an SSH process. */
 function runnerFor(calls: string[][], issueResult = true): SshRunner {
   return {
     run: async argv => {
       calls.push([...argv]);
-      if (argv.some(value => value.includes("issue"))) {
+      if (isWrappedIssue(argv)) {
         return issueResult
           ? { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" }
           : { code: 1, stdout: "", stderr: "failed" };
@@ -30,6 +45,7 @@ function runnerFor(calls: string[][], issueResult = true): SshRunner {
   };
 }
 
+/** Keep the fake tunnel alive until its owner stops it. */
 function tunnelFor(order: string[]) {
   return {
     pid: 123,
@@ -38,8 +54,7 @@ function tunnelFor(order: string[]) {
   };
 }
 
-// The link listener answers an unauthenticated /readyz with the 401 challenge; the keyed
-// request earns 200. A foreign listener (any other status on the probe) must never see the key.
+/** Return the link-auth challenge before accepting the issued key. */
 function challengedFetch(order?: string[]) {
   return async (_input: RequestInfo | URL, init?: RequestInit) => {
     const authed = new Headers(init?.headers).get("x-opencodex-api-key") === KEY;
@@ -48,10 +63,9 @@ function challengedFetch(order?: string[]) {
   };
 }
 
+/** Supply isolated join dependencies and attribute the listener to the fake tunnel. */
 function joinDeps(overrides: Partial<ClientLinkJoinDeps> = {}): ClientLinkJoinDeps {
-  const calls = overrides.runner ? [] : [];
-  // The readiness gate only trusts the port when the LISTEN pid is the spawned tunnel's;
-  // wrap whichever spawnTunnel is under test so the default scan reports that pid.
+  const calls: string[][] = [];
   let tunnelPid = 0;
   const spawn = overrides.spawnTunnel ?? spawnClientLinkTunnel;
   return {
@@ -64,6 +78,7 @@ function joinDeps(overrides: Partial<ClientLinkJoinDeps> = {}): ClientLinkJoinDe
     hostname: () => "client-host",
     readSidecar: () => null,
     readConnectionState: () => ({ kind: "disconnected" }),
+    scheduleRestart: () => {},
     ...overrides,
     spawnTunnel: (spec, spawnDeps) => {
       const handle = spawn(spec, spawnDeps);
@@ -85,11 +100,16 @@ function routeState(confirmed = true): LinkRouteState {
   };
 }
 
+const CONFIG_PORT = 10100;
+
 function context(options: {
   role?: "standalone" | "hub" | "client";
   principal?: ManagementContext["principal"];
   paired?: boolean;
+  current?: boolean;
   issuance?: ManagementContext["guiSessionIssuance"];
+  trustedLoopback?: boolean;
+  livePort?: number;
   body?: unknown;
   deps?: Record<string, unknown>;
 } = {}): ManagementContext {
@@ -102,12 +122,12 @@ function context(options: {
   return {
     req,
     url: new URL(req.url),
-    config: { runtimeRole: options.role ?? "standalone" } as ManagementContext["config"],
-    deps: options.deps ?? {},
+    config: { runtimeRole: options.role ?? "standalone", port: CONFIG_PORT } as ManagementContext["config"],
+    deps: { liveListenPort: () => options.livePort ?? CONFIG_PORT, ...options.deps },
     version: "test",
     principal: options.principal,
-    sessionControl: { isPaired: () => options.paired === true },
-    trustedLoopbackIngress: true,
+    sessionControl: { isPaired: () => options.paired === true, isCurrent: () => options.current ?? true, revokeCurrent: () => true },
+    trustedLoopbackIngress: options.trustedLoopback ?? true,
     guiSessionIssuance: options.issuance ?? null,
     convergeCodexCatalog: async () => ({ status: "unchanged" } as never),
     syncClaudeAgentDefsBestEffort: async () => {},
@@ -129,6 +149,89 @@ describe("client initiated link join", () => {
       expect(response?.status).toBe(409);
       expect(await response?.json()).toMatchObject({ error: { code: "standalone_required" } });
     }
+  });
+
+  test("admits the current loopback dashboard session of a standalone on trusted loopback ingress", async () => {
+    // Turning a Child on from its own dashboard: the local session joins, while stale sessions,
+    // untrusted ingress and other runtime roles are refused before a join starts.
+    let joins = 0;
+    const deps = { joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; } };
+    const loopback = { principal: "gui-session" as const, issuance: "loopback" as const, deps };
+    const joined = await handleLinkRoutes(context({ ...loopback, trustedLoopback: true }), routeState());
+    expect(joined?.status).toBe(202);
+    expect(await joined?.json()).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
+    expect(joins).toBe(1);
+
+    for (const options of [
+      { role: "standalone" as const, trustedLoopback: true, current: false },
+      { role: "standalone" as const, trustedLoopback: false },
+      { role: "hub" as const, trustedLoopback: true },
+      { role: "client" as const, trustedLoopback: true },
+    ]) {
+      const response = await handleLinkRoutes(context({ ...loopback, ...options }), routeState());
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toMatchObject({ error: { code: "forbidden" } });
+    }
+    const tailscale = await handleLinkRoutes(context({ ...loopback, issuance: "tailscale-identity" }), routeState());
+    expect(tailscale?.status).toBe(403);
+    expect(await tailscale?.json()).toMatchObject({ error: { code: "tailscale_session_refused" } });
+    expect(joins).toBe(1);
+
+    const paired = await handleLinkRoutes(context({ principal: "gui-session", issuance: "pairing", paired: true, deps }), routeState());
+    expect(paired?.status).toBe(202);
+    expect(joins).toBe(2);
+  });
+
+  test("refuses a join whose restart could not bind the configured port, before any SSH", async () => {
+    const calls: string[][] = [];
+    let joins = 0;
+    const deps = {
+      sshRunner: runnerFor(calls),
+      joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; },
+    };
+    for (const livePort of [CONFIG_PORT + 1, undefined]) {
+      const response = await handleLinkRoutes({
+        ...context({ principal: "gui-session", issuance: "loopback", deps }),
+        deps: { ...deps, liveListenPort: () => livePort },
+      }, routeState());
+      expect(response?.status).toBe(409);
+      expect(await response?.json()).toMatchObject({ error: { code: "join_port_mismatch" } });
+    }
+    expect(joins).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  test("maps a missing ocx on Home to remote_ocx_missing with a redacted stderr hint", async () => {
+    const calls: string[][] = [];
+    const runner: SshRunner = {
+      run: async argv => {
+        calls.push([...argv]);
+        return isWrappedIssue(argv)
+          ? { code: 127, stdout: "", stderr: `sh: 1: exec: ocx: not found ${KEY}\n` }
+          : { code: 0, stdout: "", stderr: "" };
+      },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill: () => {} }),
+    };
+    const response = await handleLinkRoutes(context({
+      principal: "gui-session",
+      paired: true,
+      deps: {
+        sshRunner: runner,
+        linkKnownHostsPath: () => "/tmp/ocx-known-hosts",
+        joinHome: (async (deps, input) => joinHome({
+          ...deps,
+          choosePort: async () => 23456,
+          now: () => 1,
+          readSidecar: () => null,
+          readConnectionState: () => ({ kind: "disconnected" }),
+        }, input)) as typeof import("../../src/client/link-join").joinHome,
+      },
+    }), routeState());
+    expect(response?.status).toBe(502);
+    expect(await response?.json()).toEqual({
+      error: { code: "remote_ocx_missing", message: "ocx was not found on the home.", hint: "sh: 1: exec: ocx: not found ocx_data_[redacted]" },
+    });
+    expect(calls.filter(isWrappedIssue)).toHaveLength(1);
   });
 
   test("requires the exact body and a confirmed host", async () => {
@@ -191,8 +294,8 @@ describe("client initiated link join", () => {
     expect(responseBody).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
     expect(sidecar).toMatchObject({ linkId: LINK_ID, tunnelPort: 23456, peerListenerPort: 45678 });
     expect(order).toEqual(["write-state", "spawn-tunnel", "readyz:probe", "readyz:key", "connect", "stop-tunnel", "restart"]);
-    expect(calls[0]?.some(value => value.includes("issue"))).toBe(true);
-    expect(calls[0]?.some(value => value.includes("--json"))).toBe(true);
+    expect(isWrappedIssue(calls[0] ?? [])).toBe(true);
+    expect(calls[0]?.at(-1)?.endsWith(" '--json'")).toBe(true);
   });
 
   test("rolls back sidecar and remote issue when sidecar write fails", async () => {
@@ -204,8 +307,37 @@ describe("client initiated link join", () => {
       clearState: () => { cleared = true; },
       spawnTunnel: () => { throw new Error("must not start"); },
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
     expect(cleared).toBe(true);
+  });
+
+  test("picks the join tunnel port from 20000-29999, outside the OS ephemeral ranges", async () => {
+    const calls: string[][] = [];
+    let sidecarPort = 0;
+    await joinHome(joinDeps({
+      runner: runnerFor(calls),
+      choosePort: undefined,
+      writeState: state => { sidecarPort = state.tunnelPort; },
+      spawnTunnel: () => tunnelFor([]),
+      fetchImpl: challengedFetch(),
+      connect: (async () => {}) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => {},
+    }), { alias: "home" });
+    const issue = calls.find(isWrappedIssue)?.at(-1) ?? "";
+    const port = Number(/'--tunnel-port' '(\d+)'/.exec(issue)?.[1]);
+    expect(port).toBe(sidecarPort);
+    expect(port).toBeGreaterThanOrEqual(JOIN_TUNNEL_PORT_MIN);
+    expect(port).toBeLessThanOrEqual(JOIN_TUNNEL_PORT_MAX);
+    expect(isLinkPort(port)).toBe(true);
+
+    const tried: number[] = [];
+    const picked = await chooseJoinTunnelPort({
+      isAvailable: async candidate => { tried.push(candidate); return tried.length === 3; },
+      random: () => 0.999_999_9,
+    });
+    expect(picked).toBe(JOIN_TUNNEL_PORT_MAX);
+    expect(tried).toHaveLength(3);
+    await expect(chooseJoinTunnelPort({ isAvailable: async () => false })).rejects.toThrow("join tunnel range");
   });
 
   test("rolls back on readiness timeout and admission rejection", async () => {
@@ -226,7 +358,7 @@ describe("client initiated link join", () => {
       await expect(joinHome(deps, { alias: "home" })).rejects.toMatchObject({
         code: readiness === "timeout" ? "join_tunnel_failed" : "admission_failed",
       });
-      expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
       expect(stopped).toBe(1);
       expect(cleared).toBe(1);
     }
@@ -250,7 +382,7 @@ describe("client initiated link join", () => {
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
     expect(keyedFetches).toBe(0);
     expect(stopped).toBe(1);
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
   });
 
   test("a squatter answering the 401 challenge never receives the issued key", async () => {
@@ -264,7 +396,7 @@ describe("client initiated link join", () => {
       writeState: () => {},
       clearState: () => {},
       spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => { stopped += 1; } }),
-      // A foreign process holds the port: a live ssh does not prove it owns the socket.
+      // A live SSH process alone does not prove ownership of the listener.
       scanListenPids: () => ({ ok: true, pids: [999] }),
       fetchImpl: async (_input, init) => {
         if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
@@ -273,7 +405,7 @@ describe("client initiated link join", () => {
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
     expect(keyedFetches).toBe(0);
     expect(stopped).toBe(1);
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
   });
 
   test("the readiness scan is scoped to the tunnel's loopback address", async () => {
@@ -284,8 +416,6 @@ describe("client initiated link join", () => {
       writeState: () => {},
       clearState: () => {},
       spawnTunnel: () => tunnelFor(order),
-      // Only sockets serving 127.0.0.1 count: the real scanner reports listeners on
-      // other loopback/interface addresses too, and the dep must scope them out.
       scanListenPids: (_port, address) => {
         seenAddresses.push(address);
         return { ok: true, pids: [123] };
@@ -309,7 +439,6 @@ describe("client initiated link join", () => {
       writeState: () => {},
       clearState: () => {},
       spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => {} }),
-      // First scan names the tunnel; by the time the 401 arrives a squatter holds the port.
       scanListenPids: () => ({ ok: true, pids: scans++ === 0 ? [123] : [999] }),
       fetchImpl: async (_input, init) => {
         if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
@@ -317,11 +446,12 @@ describe("client initiated link join", () => {
       },
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
     expect(keyedFetches).toBe(0);
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
   });
 
   test("a redirect on the readiness probe is never followed with the issued key", async () => {
     const calls: string[][] = [];
+    const redirects: Array<RequestRedirect | undefined> = [];
     let keyedFetches = 0;
     let ticks = 0;
     await expect(joinHome(joinDeps({
@@ -331,13 +461,14 @@ describe("client initiated link join", () => {
       clearState: () => {},
       spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => {} }),
       fetchImpl: async (_input, init) => {
+        redirects.push(init?.redirect);
         if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
-        // A port occupant redirecting the probe used to let the challenge pass at a foreign URL.
         return new Response(null, { status: 302, headers: { location: "http://169.254.1.1/fake-readyz" } });
       },
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(redirects).toEqual(["manual"]);
     expect(keyedFetches).toBe(0);
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
   });
 
   test("a tunnel that exits during connect cannot commit the connection", async () => {
@@ -356,7 +487,7 @@ describe("client initiated link join", () => {
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
     expect(connectCommitted).toBe(false);
     expect(stopped).toBe(1);
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
   });
 
   test("does not disclose the issued key when the tunnel exits during its spawn grace", async () => {
@@ -373,7 +504,79 @@ describe("client initiated link join", () => {
       },
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
     expect(fetches).toBe(0);
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  for (const { name, recheck } of [
+    { name: "unavailable", recheck: { ok: false, error: "scanner unavailable" } },
+    { name: "empty", recheck: { ok: true, pids: [] } },
+    { name: "foreign", recheck: { ok: true, pids: [999] } },
+    { name: "ambiguous", recheck: { ok: true, pids: [123, 999] } },
+  ] satisfies Array<{ name: string; recheck: ListenPidScan }>) {
+    test(`repeated ${name} rechecks reach the readiness deadline and revoke the key`, async () => {
+      const calls: string[][] = [];
+      const sleeps: number[] = [];
+      let clock = 1;
+      let scans = 0;
+      let keyedFetches = 0;
+      let stopped = 0;
+      let cleared = 0;
+      let connected = 0;
+      let restarted = 0;
+      await expect(joinHome(joinDeps({
+        runner: runnerFor(calls),
+        now: () => clock,
+        sleep: async ms => { sleeps.push(ms); clock += ms; },
+        writeState: () => {},
+        clearState: () => { cleared += 1; },
+        spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => { stopped += 1; } }),
+        scanListenPids: () => {
+          // Terminate the broken implementation without hanging the test runner.
+          // Its bypassed deadline produces the wrong error, so this is not a pass.
+          if (++scans > 400) throw new ClientLinkJoinError("admission_failed");
+          return scans % 2 === 1 ? { ok: true, pids: [123] } : recheck;
+        },
+        fetchImpl: async (_input, init) => {
+          if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
+          return new Response(null, { status: 401 });
+        },
+        connect: (async () => { connected += 1; }) as typeof import("../../src/client/connect").connectClient,
+        scheduleRestart: () => { restarted += 1; },
+      }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+      expect(clock).toBe(15_001);
+      expect(sleeps).toHaveLength(150);
+      expect(sleeps.every(ms => ms === 100)).toBe(true);
+      expect(scans).toBe(302);
+      expect(keyedFetches).toBe(0);
+      expect(connected).toBe(0);
+      expect(restarted).toBe(0);
+      expect(stopped).toBe(1);
+      expect(cleared).toBe(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
+    });
+  }
+
+  test("a transient failed recheck polls before retrying and can still join", async () => {
+    const calls: string[][] = [];
+    const order: string[] = [];
+    let clock = 1;
+    let scans = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => clock,
+      sleep: async ms => { clock += ms; order.push(`sleep:${ms}`); },
+      writeState: () => {},
+      spawnTunnel: () => tunnelFor(order),
+      scanListenPids: () => ++scans === 2
+        ? { ok: false, error: "transient" }
+        : { ok: true, pids: [123] },
+      fetchImpl: challengedFetch(order),
+      connect: (async () => { order.push("connect"); }) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => { order.push("restart"); },
+    }), { alias: "home" })).resolves.toEqual({ linkId: LINK_ID, apiKeyId: API_KEY_ID });
+    expect(scans).toBe(4);
+    expect(order).toEqual(["readyz:probe", "sleep:100", "readyz:probe", "readyz:key", "connect", "stop-tunnel", "restart"]);
+    expect(revokeCalls(calls)).toHaveLength(0);
   });
 
   test("rolls back on connect failure and never exposes the issued key", async () => {
@@ -391,7 +594,7 @@ describe("client initiated link join", () => {
     } finally {
       logs.mockRestore();
     }
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
   });
 
@@ -408,11 +611,11 @@ describe("client initiated link join", () => {
     const order: string[] = [];
     const runner: SshRunner = {
       run: async argv => {
-        if (argv.some(value => value.includes("issue"))) {
+        if (isWrappedIssue(argv)) {
           order.push("issue");
           return { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" };
         }
-        if (argv.some(value => value.includes("revoke"))) {
+        if (argv.at(-1) === REVOKE_COMMAND) {
           revokeCount += 1;
           order.push(`revoke-${revokeCount}`);
           return { code: revokeCount === 1 ? 1 : 0, stdout: "", stderr: "failed" };

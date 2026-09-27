@@ -6,7 +6,9 @@
  * `killAllOcxOnPort`, and successful ocx verification. A historical PID allowlist
  * never overrides a rejected verifier result; rejected live holders stay protected.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { readFile, readdir, readlink } from "node:fs/promises";
+import { promisify } from "node:util";
 import { verifyPidIdentity } from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { isPortAvailable, type WaitForPortOptions } from "./ports";
@@ -107,10 +109,10 @@ export function listenAddressServes(listenerAddress: string, bound: string): boo
 
 /**
  * Parse `netstat -ano` (Windows) / `netstat -anlp` listen lines for a port, keeping
- * each listener's bound local address. Exported for unit tests.
+ * each distinct PID/address pair. Exported for unit tests.
  */
 export function parseListenEntriesFromNetstat(output: string, port: number): ListenEntry[] {
-  const entries = new Map<number, ListenEntry>();
+  const entries = new Map<string, ListenEntry>();
   const portSuffix = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -134,27 +136,25 @@ export function parseListenEntriesFromNetstat(output: string, port: number): Lis
         ? Number(unixPid[1])
         : NaN;
     if (Number.isSafeInteger(pid) && pid > 0) {
-      entries.set(pid, { pid, address: normalizeListenAddress(parts[localIdx]) });
+      const address = normalizeListenAddress(parts[localIdx]);
+      entries.set(`${pid}|${address}`, { pid, address });
     }
   }
   return [...entries.values()];
 }
 
-/**
- * Parse `netstat -ano` (Windows) / `netstat -anlp` listen lines for a port.
- * Exported for unit tests.
- */
+/** Parse netstat LISTEN owners, deduplicating PIDs after preserving their addresses. */
 export function parseListenPidsFromNetstat(output: string, port: number): number[] {
-  return parseListenEntriesFromNetstat(output, port).map(entry => entry.pid);
+  return [...new Set(parseListenEntriesFromNetstat(output, port).map(entry => entry.pid))];
 }
 
 /**
- * Parse `ss -Hltnp` rows for a port, keeping the bound local address. A row without
- * a `pid=` attribution (another user's socket) is dropped rather than reported
- * unverifiable. Exported for unit tests.
+ * Parse `ss -Hltnp` rows for a port, keeping each distinct PID/address pair. A row
+ * without a `pid=` attribution (another user's socket) is dropped rather than
+ * reported unverifiable. Exported for unit tests.
  */
 export function parseListenEntriesFromSs(output: string, port: number): ListenEntry[] {
-  const entries = new Map<number, ListenEntry>();
+  const entries = new Map<string, ListenEntry>();
   const portSuffix = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -166,19 +166,20 @@ export function parseListenEntriesFromSs(output: string, port: number): ListenEn
     const pidMatch = /pid=(\d+)/.exec(line);
     const pid = pidMatch ? Number(pidMatch[1]) : NaN;
     if (Number.isSafeInteger(pid) && pid > 0) {
-      entries.set(pid, { pid, address: normalizeListenAddress(parts[localIdx]) });
+      const address = normalizeListenAddress(parts[localIdx]);
+      entries.set(`${pid}|${address}`, { pid, address });
     }
   }
   return [...entries.values()];
 }
 
 /**
- * Parse `lsof -nP -iTCP:<port> -sTCP:LISTEN` output (without -t). The NAME column is
- * the last address token, optionally followed by the `(LISTEN)` state; skip the
- * header and any line whose pid is not numeric. Exported for unit tests.
+ * Parse `lsof -nP -iTCP:<port> -sTCP:LISTEN` output (without -t), keeping each
+ * distinct PID/address pair. The NAME column is the last address token, optionally
+ * followed by `(LISTEN)`; skip the header and nonnumeric PIDs. Exported for tests.
  */
 export function parseListenEntriesFromLsof(output: string, port: number): ListenEntry[] {
-  const entries = new Map<number, ListenEntry>();
+  const entries = new Map<string, ListenEntry>();
   const portSuffix = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -190,7 +191,8 @@ export function parseListenEntriesFromLsof(output: string, port: number): Listen
     if (/^\(.*\)$/.test(parts[addressIdx] ?? "")) addressIdx -= 1;
     const address = parts[addressIdx] ?? "";
     if (!address.endsWith(portSuffix) && !address.endsWith(`]:${port}`)) continue;
-    entries.set(pid, { pid, address: normalizeListenAddress(address) });
+    const normalized = normalizeListenAddress(address);
+    entries.set(`${pid}|${normalized}`, { pid, address: normalized });
   }
   return [...entries.values()];
 }
@@ -291,7 +293,7 @@ export function scanListenPids(port: number): ListenPidScan {
  * interface address (e.g. 127.0.0.2 while the tunnel binds 127.0.0.1) never receives
  * the connection and must not block or qualify a readiness check.
  */
-export function scanListenPidsForAddress(port: number, address: string): ListenPidScan {
+export function scanListenPidsForAddress(port: number, address = "127.0.0.1"): ListenPidScan {
   const scan = scanListenEntries(port);
   if (!scan.ok) return { ok: false, error: scan.error };
   const pids = new Set<number>();
@@ -305,6 +307,114 @@ export function scanListenPidsForAddress(port: number, address: string): ListenP
 export function listListenPids(port: number): number[] {
   const scan = scanListenPids(port);
   return scan.ok ? scan.pids : [];
+}
+
+const execFileAsync = promisify(execFile);
+const OWNER_LOOKUP_TIMEOUT_MS = 2_000;
+const MAX_PROC_NET_BYTES = 4 * 1024 * 1024;
+const MAX_PROCESS_FDS = 4_096;
+
+/** The exact IPv4 listener the Child relay contacts; ::1 and wildcard binds are not proof. */
+export function parseProcLoopbackListenInodes(tcp: string, tcp6: string, port: number): string[] {
+  const wantedPort = port.toString(16).toUpperCase().padStart(4, "0");
+  const inodes = new Set<string>();
+  for (const [content, wantedAddress] of [
+    [tcp, "0100007F"],
+    [tcp6, "0000000000000000FFFF00000100007F"], // ::ffff:127.0.0.1 in proc word order
+  ] as const) {
+    for (const line of content.split(/\r?\n/).slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      const [address, hexPort] = (fields[1] ?? "").toUpperCase().split(":");
+      if (address !== wantedAddress || hexPort !== wantedPort || fields[3] !== "0A") continue;
+      const inode = fields[9];
+      if (inode && /^[1-9]\d*$/.test(inode)) inodes.add(inode);
+    }
+  }
+  return [...inodes];
+}
+
+/** Parse only 127.0.0.1:port LISTEN owners; an unrelated [::1]:port must not veto it. */
+export function parseIpv4LoopbackListenPidsFromNetstat(output: string, port: number): number[] {
+  const pids = new Set<number>();
+  for (const raw of output.split(/\r?\n/)) {
+    const fields = raw.trim().split(/\s+/);
+    if (fields[0]?.toUpperCase() !== "TCP" || fields[1] !== `127.0.0.1:${port}`) continue;
+    const state = fields[3] ?? "";
+    const foreign = fields[2] ?? "";
+    if (!/^LISTEN/i.test(state) && !["0.0.0.0:0", "[::]:0", "*:*"].includes(foreign)) continue;
+    const pid = Number(fields.at(-1));
+    if (Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+
+async function runOwnerLookup(file: string, args: string[], timeoutMs: number): Promise<string> {
+  const { stdout } = await execFileAsync(file, args, {
+    encoding: "utf8", timeout: timeoutMs, maxBuffer: MAX_PROC_NET_BYTES, windowsHide: true,
+  });
+  return stdout;
+}
+
+export interface LoopbackOwnerLookupIo {
+  platform?: NodeJS.Platform;
+  readProc?: (path: string) => Promise<string>;
+  listFds?: (path: string) => Promise<string[]>;
+  readFdLink?: (path: string) => Promise<string>;
+  run?: (file: string, args: string[], timeoutMs: number) => Promise<string>;
+}
+
+/** Async, bounded proof that this PID owns the IPv4 loopback LISTEN socket used by the relay. */
+export async function ownsIpv4LoopbackListener(
+  port: number,
+  expectedPid: number,
+  io: LoopbackOwnerLookupIo = {},
+): Promise<boolean> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535
+    || !Number.isSafeInteger(expectedPid) || expectedPid < 1) return false;
+  const platform = io.platform ?? process.platform;
+  const lookup = async (): Promise<boolean> => {
+    if (platform === "linux") {
+      const readProc = io.readProc ?? (path => readFile(path, "utf8"));
+      const tcp = await readProc("/proc/net/tcp");
+      const tcp6 = await readProc("/proc/net/tcp6").catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+        throw error;
+      });
+      if (tcp.length > MAX_PROC_NET_BYTES || tcp6.length > MAX_PROC_NET_BYTES) return false;
+      const inodes = parseProcLoopbackListenInodes(tcp, tcp6, port);
+      if (inodes.length !== 1) return false;
+      const fdDir = `/proc/${expectedPid}/fd`;
+      const fds = await (io.listFds ?? readdir)(fdDir);
+      if (fds.length > MAX_PROCESS_FDS) return false;
+      const wanted = `socket:[${inodes[0]}]`;
+      const readFdLink = io.readFdLink ?? readlink;
+      for (const fd of fds) {
+        try { if (await readFdLink(`${fdDir}/${fd}`) === wanted) return true; }
+        catch { /* an fd may close while it is enumerated */ }
+      }
+      return false;
+    }
+    const run = io.run ?? runOwnerLookup;
+    if (platform === "darwin") {
+      const stdout = await run("/usr/sbin/lsof", ["-nP", "-a", `-iTCP@127.0.0.1:${port}`, "-sTCP:LISTEN", "-t"], OWNER_LOOKUP_TIMEOUT_MS);
+      const pids = new Set(stdout.split(/\r?\n/).map(line => Number(line.trim())).filter(pid => Number.isSafeInteger(pid) && pid > 0));
+      return pids.size === 1 && pids.has(expectedPid);
+    }
+    if (platform === "win32") {
+      const netstat = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\netstat.exe`;
+      const stdout = await run(netstat, ["-ano", "-p", "tcp"], OWNER_LOOKUP_TIMEOUT_MS);
+      const pids = parseIpv4LoopbackListenPidsFromNetstat(stdout, port);
+      return pids.length === 1 && pids[0] === expectedPid;
+    }
+    return false;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), OWNER_LOOKUP_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try { return await Promise.race([lookup().catch(() => false), deadline]); }
+  finally { if (timer) clearTimeout(timer); }
 }
 
 /**

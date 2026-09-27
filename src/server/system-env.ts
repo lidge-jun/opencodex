@@ -11,6 +11,7 @@ import { localAdmissionToken, localInferenceDestination } from "../lib/local-des
 import { probeHostname } from "./proxy-liveness";
 import { providerContextCap } from "../providers/context-cap";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { siblingOfLivePort } from "../codex/sibling-start";
 export { getShellEnvFilePath, installShellHook, uninstallShellHook, claudeCodeCliInstalled, reconcileShellHook } from "./system-env-shell";
 export type { SystemEnvDeps } from "./system-env-shell";
 import { systemEnvMarkerMode, writeShellEnvFile, removeShellEnvFile } from "./system-env-shell";
@@ -196,6 +197,8 @@ export async function injectSystemEnv(
   config: OcxConfig,
   deps: SystemEnvDeps = {},
 ): Promise<SystemEnvResult> {
+  // The launchd domain is machine-wide; a sibling instance leaves it to the live owner.
+  if (siblingOfLivePort() !== null) return { injected: false, reason: "sibling instance" };
   if (process.platform !== "darwin") return { injected: false, reason: "not macOS" };
   if (config.claudeCode?.enabled === false) return { injected: false, reason: "claude disabled" };
 

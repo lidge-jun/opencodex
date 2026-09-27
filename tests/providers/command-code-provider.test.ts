@@ -110,7 +110,7 @@ describe("Command Code provider", () => {
     });
     expect(registry?.models).toBeUndefined();
     expect(registry?.modelReasoningEfforts).toMatchObject({
-      "deepseek/deepseek-v4-flash": ["high", "max"],
+      "deepseek/deepseek-v4-flash": ["low", "medium", "high", "xhigh", "max"],
       "zai-org/GLM-5.2": ["high", "max"],
     });
     expect(OAUTH_PROVIDERS["command-code"]?.providerConfig).toMatchObject({
@@ -138,7 +138,7 @@ describe("Command Code provider", () => {
       "zai-org/GLM-5": ["high", "max"],
       "zai-org/GLM-5.1": ["high", "max"],
       "zai-org/GLM-5.2-Fast": ["high", "max"],
-      "zai-org/GLM-5.3": ["low", "high", "max"],
+      "zai-org/GLM-5.3": ["low", "medium", "high", "xhigh", "max"],
     });
   });
 
@@ -154,14 +154,14 @@ describe("Command Code provider", () => {
     const apiKey = PROVIDER_REGISTRY.find(row => row.id === "commandcode");
     for (const [label, entry] of [["oauth", oauth], ["api-key", apiKey]] as const) {
       expect(entry?.modelReasoningEfforts?.["z-ai/glm-5.3-flash"], `${label} preset ladder`)
-        .toEqual(["low", "high", "max"]);
+        .toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
     // Distinct rows for distinct upstream models: GLM-5.3 and GLM-5.3-Flash happen to
     // share a ladder today, but neither may be derived from the other.
-    expect(commandCodeReasoningEfforts("z-ai/glm-5.3-flash")).toEqual(["low", "high", "max"]);
-    expect(commandCodeReasoningEfforts("zai-org/GLM-5.3")).toEqual(["low", "high", "max"]);
+    expect(commandCodeReasoningEfforts("z-ai/glm-5.3-flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(commandCodeReasoningEfforts("zai-org/GLM-5.3")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     // The reported id arrives lowercase from live discovery; a caller may still fold case.
-    expect(commandCodeReasoningEfforts("Z-AI/GLM-5.3-Flash")).toEqual(["low", "high", "max"]);
+    expect(commandCodeReasoningEfforts("Z-AI/GLM-5.3-Flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     // Nothing widened into a substring match: a sibling that upstream does not list
     // must stay unknown rather than inheriting the Flash ladder.
     expect(commandCodeReasoningEfforts("z-ai/glm-5.3-flash-vision")).toBeUndefined();
@@ -179,11 +179,11 @@ describe("Command Code provider", () => {
     const apiKey = PROVIDER_REGISTRY.find(row => row.id === "commandcode");
     for (const [label, entry] of [["oauth", oauth], ["api-key", apiKey]] as const) {
       expect(entry?.modelReasoningEfforts?.["deepseek/deepseek-v4.1-flash"], `${label} preset ladder`)
-        .toEqual(["low", "high", "max"]);
+        .toEqual(["low", "medium", "high", "xhigh", "max"]);
       expect(entry?.modelReasoningEfforts?.["Qwen/Qwen3.8-Flash"], `${label} preset ladder`)
         .toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
-    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["low", "high", "max"]);
+    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(commandCodeReasoningEfforts("Qwen/Qwen3.8-Flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     // The live-discovered id may arrive in any case; the lookup folds it.
     expect(commandCodeReasoningEfforts("qwen/qwen3.8-flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -693,7 +693,7 @@ describe("Command Code provider", () => {
   });
 
   test("does not advertise an unverified effort for models absent from the official table", async () => {
-    const built = await builtRequest(parsed("moonshotai/Kimi-K3"));
+    const built = await builtRequest(parsed("unknown/unmeasured-model"));
     expect(JSON.parse(built.body).params).not.toHaveProperty("reasoning_effort");
   });
 
@@ -743,7 +743,7 @@ describe("Command Code provider", () => {
       options: { reasoning: "ultra", maxOutputTokens: 100 },
     });
     expect(JSON.parse(ultra.body).params).not.toHaveProperty("reasoning_effort");
-    // Deepseek/glm still alias xhigh/ultra→max per their official profiles.
+    // DeepSeek retains the ultra alias but forwards its accepted xhigh rung unchanged.
     const deepseekUltra = await builtRequest({
       ...parsed("deepseek/deepseek-v4-flash"),
       options: { reasoning: "ultra", maxOutputTokens: 100 },
@@ -753,14 +753,14 @@ describe("Command Code provider", () => {
       ...parsed("deepseek/deepseek-v4-flash"),
       options: { reasoning: "xhigh", maxOutputTokens: 100 },
     });
-    expect(JSON.parse(deepseekXhigh.body).params.reasoning_effort).toBe("max");
+    expect(JSON.parse(deepseekXhigh.body).params.reasoning_effort).toBe("xhigh");
   });
 
-  test("maps ultra and xhigh to the max wire effort and honors legacy alias ids", async () => {
+  test("maps ultra to max, preserves xhigh, and honors legacy alias ids", async () => {
     const ultra = await builtRequest({ ...parsed(), options: { reasoning: "ultra", maxOutputTokens: 100 } });
     expect(JSON.parse(ultra.body).params.reasoning_effort).toBe("max");
     const xhigh = await builtRequest({ ...parsed(), options: { reasoning: "xhigh", maxOutputTokens: 100 } });
-    expect(JSON.parse(xhigh.body).params.reasoning_effort).toBe("max");
+    expect(JSON.parse(xhigh.body).params.reasoning_effort).toBe("xhigh");
     // Legacy compatibility id resolves to the canonical effort table before the lookup.
     const legacy = await builtRequest({ ...parsed(), modelId: "deepseek-v4-flash" });
     expect(JSON.parse(legacy.body).params.reasoning_effort).toBe("high");
@@ -843,7 +843,7 @@ describe("Command Code provider", () => {
       if (mode === "prepaid") expect(await response.text()).toContain("unsupported reasoning_effort");
       else expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");
     } finally { dispose(); }
-    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
+    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   /*
@@ -862,10 +862,10 @@ describe("Command Code provider", () => {
    * `modelReasoningEffortsAuthoritative` is never written by seeding, so its presence does.
    */
   test("an authoritative operator ladder reaches the wire", async () => {
-    // Shipped: deepseek/deepseek-v4.1-flash is ["low", "high", "max"], so xhigh aliases to max.
-    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["low", "high", "max"]);
+    // Shipped: deepseek/deepseek-v4-flash-fast is ["low", "high", "max"], so xhigh aliases to max.
+    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash-fast")).toEqual(["low", "high", "max"]);
     const shipped = await builtRequest({
-      ...parsed("deepseek/deepseek-v4.1-flash"),
+      ...parsed("deepseek/deepseek-v4-flash-fast"),
       options: { reasoning: "xhigh", maxOutputTokens: 100 },
     });
     expect(JSON.parse(shipped.body).params.reasoning_effort).toBe("max");
@@ -873,10 +873,10 @@ describe("Command Code provider", () => {
     const widened = createCommandCodeAdapter({
       ...provider,
       modelReasoningEffortsAuthoritative: true,
-      modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["low", "medium", "high", "xhigh", "max"] },
+      modelReasoningEfforts: { "deepseek/deepseek-v4-flash-fast": ["low", "medium", "high", "xhigh", "max"] },
     } as OcxProviderConfig);
     const built = await widened.buildRequest({
-      ...parsed("deepseek/deepseek-v4.1-flash"),
+      ...parsed("deepseek/deepseek-v4-flash-fast"),
       options: { reasoning: "xhigh", maxOutputTokens: 100 },
     });
     expect(JSON.parse(built.body).params.reasoning_effort).toBe("xhigh");
@@ -885,10 +885,10 @@ describe("Command Code provider", () => {
     const narrowed = createCommandCodeAdapter({
       ...provider,
       modelReasoningEffortsAuthoritative: true,
-      modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["high"] },
+      modelReasoningEfforts: { "deepseek/deepseek-v4-flash-fast": ["high"] },
     } as OcxProviderConfig);
     const stripped = await narrowed.buildRequest({
-      ...parsed("deepseek/deepseek-v4.1-flash"),
+      ...parsed("deepseek/deepseek-v4-flash-fast"),
       options: { reasoning: "max", maxOutputTokens: 100 },
     });
     expect(JSON.parse(stripped.body).params).not.toHaveProperty("reasoning_effort");
@@ -1054,18 +1054,18 @@ describe("Command Code provider", () => {
     const modelId = "deepseek/deepseek-v4-flash";
     const alternate = "https://alternate.example/command-code";
     const fetch = (async () => new Response("Reasoning efforts high, max are supported; no mapping.")) as typeof globalThis.fetch;
-    expect(await refreshCommandCodeReasoningEfforts(modelId, fetch, "max", provider.baseUrl)).toEqual(["high"]);
-    expect(commandCodeReasoningEfforts(modelId, alternate)).toEqual(["high", "max"]);
+    expect(await refreshCommandCodeReasoningEfforts(modelId, fetch, "max", provider.baseUrl)).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(commandCodeReasoningEfforts(modelId, alternate)).toEqual(["low", "medium", "high", "xhigh", "max"]);
     const options = { reasoning: "max", maxOutputTokens: 100 };
     const officialRequest = await createCommandCodeAdapter(provider).buildRequest({ ...parsed(modelId), options });
     const alternateRequest = await createCommandCodeAdapter({ ...provider, baseUrl: alternate }).buildRequest({ ...parsed(modelId), options });
     expect(JSON.parse(officialRequest.body).params).not.toHaveProperty("reasoning_effort");
     expect(JSON.parse(alternateRequest.body).params.reasoning_effort).toBe("max");
-    expect(await refreshCommandCodeReasoningEfforts(modelId, fetch, "high", alternate)).toEqual(["max"]);
-    expect(commandCodeReasoningEfforts(modelId, provider.baseUrl)).toEqual(["high"]);
+    expect(await refreshCommandCodeReasoningEfforts(modelId, fetch, "high", alternate)).toEqual(["low", "medium", "xhigh", "max"]);
+    expect(commandCodeReasoningEfforts(modelId, provider.baseUrl)).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
-  test("uses the 2026-09-23 profile ladders for newly cataloged models", async () => {
+  test("uses profile ladders plus measured corrections for newly cataloged models", async () => {
     const cases: Array<[string, string[]]> = [
       ["claude-fable-5-1", ["low", "medium", "high", "xhigh", "max"]],
       ["claude-opus-5-5", ["low", "medium", "high", "xhigh", "max"]],
@@ -1074,7 +1074,7 @@ describe("Command Code provider", () => {
       ["Qwen/Qwen3.8-Omni-Flash", ["low", "medium", "xhigh"]],
       ["Qwen/Qwen3.8-Max-0902", ["low", "medium", "xhigh"]],
       ["stepfun/Step-5-Preview", ["low", "medium", "high"]],
-      ["tencent/hy4-preview", ["low", "medium", "high"]],
+      ["tencent/hy4-preview", ["low", "medium", "high", "xhigh", "max"]],
       ["google/gemini-3.8-flash", ["low", "medium", "high"]],
       ["xai/grok-4.7", ["low", "medium", "high", "xhigh"]],
     ];

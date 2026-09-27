@@ -229,7 +229,10 @@ export async function prepareResponsesRequest(
   // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
   // LOOKUP so the check can never observe a one-candidate collapse.
   let shadowCallIntercepted = false;
-  if (!options.comboAttempt && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
+  // A spawned sub-agent turn names its model on purpose; gpt-6-luna is both the helper
+  // slug and a default sub-agent model, so neither intercept site may rewrite that turn.
+  const threadSpawn = isThreadSpawnRequest(req.headers);
+  if (!options.comboAttempt && !options.compactionRoutingOverride && !threadSpawn && body && typeof body === "object" && !Array.isArray(body)) {
     const shadowIntercept = config.shadowCallIntercept;
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
@@ -483,7 +486,7 @@ export async function prepareResponsesRequest(
         : routeModel(config, modelId, evidenceFromBody(parsed._rawBody)));
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (!options.compactionRoutingOverride && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!options.compactionRoutingOverride && !threadSpawn && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {
@@ -549,7 +552,6 @@ export async function prepareResponsesRequest(
   // Exact account selectors are isolated from Pool-wide quota work. A canonical replay miss must
   // also fail closed without polling quota upstream. Cached fallback state can still select a
   // provider with native continuation support below.
-  const threadSpawn = isThreadSpawnRequest(req.headers);
   const initialSubagentFallbackChain = threadSpawn && !options.comboAttempt
     ? resolveSubagentFallbackChain(parsed, config)
     : null;

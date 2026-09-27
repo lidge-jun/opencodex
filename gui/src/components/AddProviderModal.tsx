@@ -1,4 +1,4 @@
-import { usageSummary30dResourceKey, type UsageReadMetadata } from "../usage-summary-resource";
+import { readUsageResponseJson, usageSummary30dResourceKey, type UsageReadMetadata } from "../usage-summary-resource";
 import { UsageIncompleteNotice } from "./usage-incomplete-notice";
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { IconX } from "../icons";
@@ -97,8 +97,7 @@ export default function AddProviderModal({
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
-      if (!res.ok) throw new Error(String(res.status));
-      return await res.json() as UsageReadMetadata & { providers?: Array<{ provider: string; requests: number }> };
+      return await readUsageResponseJson<UsageReadMetadata & { providers?: Array<{ provider: string; requests: number }> }>(res);
     },
     { deadlineMs: 60_000 }, // shared usage-summary key: all four subscribers raise the deadline together
   );

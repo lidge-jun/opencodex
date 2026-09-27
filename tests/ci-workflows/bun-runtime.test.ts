@@ -239,7 +239,8 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
       "src/cli/index.ts",
       "src/cli/claude.ts",
       "src/cli/opencode.ts",
-      "src/server/management/system-restart.ts",
+      // The drain-and-restart and the client recycle both spawn their replacement here.
+      "src/server/restart-replacement.ts",
       "src/update/index.ts",
     ];
     for (const relative of launchers) {

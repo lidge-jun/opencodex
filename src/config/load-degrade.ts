@@ -1,5 +1,6 @@
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
@@ -118,6 +119,7 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
 }
@@ -544,6 +546,10 @@ export function normalizePersistedClaudeCode(claudeCode: unknown): OcxConfig["cl
     return claudeCode as OcxConfig["claudeCode"];
   }
   const normalized = { ...claudeCode } as Record<string, unknown>;
+  // A malformed hand edit must not arm CLI interception or discard the whole config.
+  if (Object.hasOwn(normalized, "cliFirstParty") && typeof normalized.cliFirstParty !== "boolean") {
+    delete normalized.cliFirstParty;
+  }
   if (Object.hasOwn(normalized, "subagentEffort") && !isClaudeSubagentEffort(normalized.subagentEffort)) {
     delete normalized.subagentEffort;
   }

@@ -19,6 +19,13 @@ test("Dashboard sub-hashes are registered routes, not invalid suffixes", () => {
   }
 });
 
+test("Usage companion deep link stays on its own view", () => {
+  expect(readPageFromHash("usage/companion")).toBe("usage");
+  expect(hashBelongsToPage("usage/companion", "usage")).toBe(true);
+  expect(resolveAppHashChange("usage/companion")).toEqual({ page: "usage", replaceTo: null });
+  expect(resolveAppHashChange("usage/unknown").replaceTo).toBe("usage");
+});
+
 test("bare #dashboard stays the Overview route", () => {
   expect(readPageFromHash("dashboard")).toBe("dashboard");
   expect(hashBelongsToPage("dashboard", "dashboard")).toBe(true);

@@ -14,7 +14,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `hostname?` | `string` | `"127.0.0.1"` | Adresse de liaison. Les liaisons hors bouclage nécessitent `OPENCODEX_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | URL du proxy HTTP(S) ou SOCKS5 sortant (`socks5://host:port`) ou `${ENV_VAR}`. Les URL HTTP s’appliquent à `HTTP_PROXY` / `HTTPS_PROXY` si elles sont vides. Les URL SOCKS5 utilisent le tunnel SOCKS5 intégré et sont aussi exposées via `ALL_PROXY` (`ocx start --socks5`); `HTTP(S)_PROXY` héritées sont effacées dans ce processus. Le bouclage reste dans `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Active une nouvelle tentative Responses identique lorsqu’une réponse ne contient ni texte ni appel d’outil. Cette tentative peut être facturée. `OCX_EMPTY_COMPLETION_RETRY=0` la désactive sans modifier la configuration ; les combinaisons et les tours de compactage routés restent exclus. |
-| `stallTimeoutSec?` | `number` | `300` | Secondes sans progression utile en amont, pour Responses et le Chat natif. Minimum : 1. |
+| `stallTimeoutSec?` | `number` | `300` (public) / désactivé (local) | Secondes sans progression utile en amont (Responses et Chat natif) avant la coupure du flux. Sans réglage, un amont **local** (loopback, privé ou nom `.local`/`.lan`) est désactivé par défaut et un amont public vaut 300 s ; une valeur positive s'applique aux deux (minimum 1 s) ; `0` désactive le watchdog partout. Les lectures de corps en attente de `/v1/responses/compact` partagent ce budget mais valent 300 s par défaut même pour un amont local ; une valeur explicite, y compris `0`, prime. |
 | `connectTimeoutMs?` | `number` | `200000` | Délai maximal par tentative pour DNS/TCP/TLS et les en-têtes finaux ; il prend fin avant la génération du corps. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Délai de vidange gracieux avant l’annulation des tours actifs. |
 | `websockets?` | `boolean` | `false` | Annonce et autorise la route WebSocket Responses destinée aux clients. La valeur false maintient les clients sur HTTP/SSE ; elle ne désactive pas une optimisation WebSocket canonique admissible vers ChatGPT en amont. |
@@ -26,7 +26,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | `codexAutoStart?` | `boolean` | `true` | Autorise le lanceur intermédiaire Codex à exécuter `ocx ensure` avant de démarrer Codex. Avec la valeur false, cette vérification ne fait rien. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restaure le lanceur intermédiaire installé après son remplacement par une mise à jour externe de Codex terminée. Désactivation par variable d'environnement : `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Compatibilité historique Codex App réversible. Les métadonnées originales sont sauvegardées et restaurées par `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | désactivé | Redirigez les appels Codex helper/shadow reconnus vers un modèle choisi tout en conservant l'effort de raisonnement configuré pour la requête. Le préfixe source par défaut est `gpt-5.6-luna` ; les clients plus anciens via 0.144.x utilisaient `gpt-5.4-mini`, que `sourceModels` peut restaurer. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | désactivé | Redirigez les appels Codex helper/shadow reconnus vers un modèle choisi tout en conservant l'effort de raisonnement configuré pour la requête. Le préfixe source par défaut est `gpt-6-luna`, `gpt-5.6-luna` ; les clients plus anciens via 0.144.x utilisaient `gpt-5.4-mini`, que `sourceModels` peut restaurer. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de recherche Web. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | activé lorsqu'il est utilisable | Options du service auxiliaire de description d'images. |
 | `images?` | `OcxImagesConfig` | sélection automatique OpenAI | Options de relais d'images autonomes pour Codex `image_gen`. |
@@ -185,15 +185,16 @@ Codex utilise de petits modèles auxiliaires pour des tâches telles que les tit
 `shadowCallIntercept` pour rediriger les préfixes de modèle source reconnus vers un autre modèle configuré. Le
 modèle de remplacement conserve l'effort de raisonnement configuré pour la requête. Définissez `sourceModels` uniquement lorsqu'un client utilise d'autres identifiants de modèles auxiliaires.
 L'interception dépend du modèle : toute requête dont l'identifiant de modèle nu correspond à `sourceModels`
-peut être redirigée, y compris une requête normale portant `request_kind: "turn"`.
-`x-codex-turn-metadata` n'exempte pas une requête correspondante.
+peut être redirigée, y compris une requête normale portant `request_kind: "turn"`. Les requêtes marquées
+comme enfants générés par `x-openai-subagent: collab_spawn` ou par `subagent_kind: "thread_spawn"` dans
+l'en-tête JSON `x-codex-turn-metadata` sont exemptées, afin qu'un sous-agent explicitement généré conserve son modèle.
 
 ```json
 {
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.6-luna"]
+    "sourceModels": ["gpt-6-luna", "gpt-5.6-luna"]
   }
 }
 ```
