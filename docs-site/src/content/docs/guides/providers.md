@@ -201,7 +201,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
@@ -414,7 +414,8 @@ report credit usage; an explicit zero means it reported no spend.
 
 ### Kiro credential import
 
-Kiro login expects the Kiro CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
+The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
+The Kiro CLI choice and `ocx login kiro` import path use the CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
 on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then sign in with `kiro-cli login`.
 Without a `kiro-cli` session, `ocx login kiro` falls
 back to a pasted access token or the `KIRO_ACCESS_TOKEN` environment variable.
@@ -439,17 +440,19 @@ After a successful import, opencodex persists the imported credential to
 Keep these variables and the selected database private. Do not attach database files or raw login
 diagnostics to bug reports.
 
-**Add account** is a separate write workflow: it snapshots the current session, logs `kiro-cli` out,
+For the **Kiro CLI** choice, **Add account** is a separate write workflow: it snapshots the current session, logs `kiro-cli` out,
 and imports the fresh browser login. If the login is cancelled or fails, including while OpenCodex
 persists the credential, rollback replaces the Kiro CLI database and removes its current WAL, SHM,
 and journal sidecars before publishing the previous session snapshot.
 
-Because that rollback is only possible from a snapshot, **Add account** refuses to sign `kiro-cli`
+Because that rollback is only possible from a snapshot, the Kiro CLI **Add account** choice refuses to sign `kiro-cli`
 out when a session store is present but cannot be captured (unreadable file, mismatched schema, or
 an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redirect import reads away
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review.
+The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ## 3. API-key catalog
 

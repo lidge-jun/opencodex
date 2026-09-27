@@ -391,7 +391,7 @@ With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota,
 confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
 that login until reset or evidence expiry; completed service clears an older verdict.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
-`ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool.
+`ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool. In the dashboard, Login and Add account also offer Builder ID, Google, and GitHub device login alongside the Kiro CLI choice; native device login adds an account without signing the CLI out.
 To add an account without the Kiro CLI, use `ocx account login kiro --method builder-id`,
 `--method google`, or `--method github`. Open the printed verification URL, enter the user
 code, and wait for approval. `--no-wait` prints the flow ID; cancel it with

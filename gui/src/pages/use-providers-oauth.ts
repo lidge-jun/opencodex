@@ -57,6 +57,32 @@ export function useProvidersOAuth({
   const cancelServerLogin = useCallback((provider: string) =>
     cancelOAuthLogin(apiBase, provider), [apiBase]);
 
+  const reloadAccountsAfterLogin = useCallback(async (provider: string) => {
+    const knownProviders = Object.keys(accountSets);
+    const knownSet = new Set(knownProviders);
+    await fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
+  }, [accountSets, fetchAccountSets]);
+
+  const refreshDerivedAfterLogin = useCallback(() => {
+    void fetchConfig();
+    void fetchProviderQuotas(true);
+    bumpModelsRefresh();
+  }, [fetchConfig, fetchProviderQuotas, bumpModelsRefresh]);
+
+  const onNativeLoginSettled = useCallback(async (provider: string, outcome: "added" | "ended" | "failed") => {
+    if (!aliveRef.current) return;
+    if (outcome === "added") onLoginSettled?.(provider);
+    try { await reloadAccountsAfterLogin(provider); } catch {
+      // A failed roster read must not hide a confirmed device outcome. The
+      // account loader owns its own error state; derived reads can still heal it.
+    }
+    if (!aliveRef.current) return;
+    if (outcome === "added") notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+    else if (outcome === "ended") notify(t("kiroLogin.ended"), false);
+    else notify(t("prov.loginError", { provider: oauthLabel(provider), error: t("kiroLogin.failed") }), false);
+    refreshDerivedAfterLogin();
+  }, [aliveRef, onLoginSettled, reloadAccountsAfterLogin, notify, t, refreshDerivedAfterLogin]);
+
   useEffect(() => {
     const cancelActiveLogins = (clearUi: boolean) => {
       const active = [...activeLoginGenerationsRef.current];
@@ -183,9 +209,7 @@ export function useProvidersOAuth({
           }
           setLoginInfo(null);
           onLoginSettled?.(provider);
-          const knownProviders = Object.keys(accountSets);
-          const knownSet = new Set(knownProviders);
-          await fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
+          await reloadAccountsAfterLogin(provider);
           if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
           const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
           if (sameIdentityAdd) {
@@ -193,9 +217,7 @@ export function useProvidersOAuth({
           } else {
             notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
           }
-          void fetchConfig();
-          void fetchProviderQuotas(true);
-          bumpModelsRefresh();
+          refreshDerivedAfterLogin();
           finished = true;
           break;
         }
@@ -247,5 +269,5 @@ export function useProvidersOAuth({
     }
   };
 
-  return { cancelLoginOAuth, loginOAuth, logoutOAuth };
+  return { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled };
 }
