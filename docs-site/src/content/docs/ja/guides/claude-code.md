@@ -140,8 +140,9 @@ Picker モードは 1P モードの一部です。macOS で 1P を選ぶとデ�
 `claudeCode.intercept.picker: false` を設定した場合は無効です。1P の Desktop の Code タブにある
 モデルピッカーを書き換え、利用できる opencodex モデルを名前付きで表示します。初回の有効化時は、
 macOS がログインキーチェーン内のローカル証明書認証局を信頼するよう求めることがあります。この認証局の
-制約は `claude.ai` とそのサブドメインに限られ、このダイアログはこのローカル CA に対する一度だけの
-信頼操作です。
+制約は `claude.ai` とそのサブドメインに限られます。署名鍵は実行中の OpenCodex プロセス内にだけ存在する
+ため、OpenCodex を再起動するたびに新しい認証局が発行され、macOS が再び信頼を求めます。再起動のたびに
+プロンプトを承認するか、あとから `ocx claude desktop picker trust` を実行してください。
 
 Picker モードが有効な間、Claude Desktop のネットワークは OpenCodex を経由します。OpenCodex が停止
 すると、Picker モードをオフにするか Desktop を完全に再起動するまで Desktop はオフラインになります。

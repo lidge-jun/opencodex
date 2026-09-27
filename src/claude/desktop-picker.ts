@@ -8,7 +8,7 @@ import type { OcxConfig } from "../types";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import { getConfigDir } from "../config/paths";
 import { readFileSync, existsSync } from "node:fs";
-import { pickerCaCertPath, pickerCaFingerprints, ensurePickerCa, issuePickerLeaf, pickerLeafCertPath } from "./intercept/picker-ca";
+import { pickerCaCertPath, pickerCaFingerprints, ensurePickerCa, issuePickerLeaf, pickerLeafCertPath, publishedPickerCaSha256 } from "./intercept/picker-ca";
 import { inspectPickerTrust, trustPickerCa, untrustPickerCa } from "./intercept/picker-trust";
 import type { PickerRuntime } from "./intercept/picker-runtime";
 import type { PickerTrustState, SecurityRunner } from "./intercept/picker-trust";
@@ -36,6 +36,8 @@ export interface DesktopPickerStatus {
   supported: boolean;
   trust: PickerTrustState;
   profile: DesktopPickerProfileInspection["kind"];
+  /** SHA-256 of this process's picker authority, so a CLI can verify the file it is about to trust; null when no authority exists yet. */
+  caSha256: string | null;
   listenerReady: boolean;
   effective: boolean;
   reason: DesktopPickerReason;
@@ -107,6 +109,7 @@ function emptyStatus(config: OcxConfig, platform: NodeJS.Platform, reason: Deskt
     models: 0,
     snapshotAt: null,
     lastBootstrapAt: null,
+    caSha256: null,
   };
 }
 
@@ -154,6 +157,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
       models: runtime.models,
       snapshotAt: runtime.snapshotAt,
       lastBootstrapAt: runtime.lastBootstrapAt,
+      caSha256: publishedPickerCaSha256(deps.configDir),
     };
   }
 
@@ -231,7 +235,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
       let trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);
       observedTrust = trust;
       if (trust !== "trusted" && options.context === "server") {
-        const added = await trustPickerCa(caPath, deps.security, platform);
+        const added = await trustPickerCa(caPath, deps.security, platform, { pem: ca.certPem });
         trustedByAttempt = added.ok;
         trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);
         observedTrust = trust;

@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { connect, createServer } from "node:tls";
 import { createCertificateAuthority, createLocalInterceptCa, issueServerLeaf } from "../../src/claude/intercept/local-ca";
 import {
   ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
-  pickerLeafCertPath, pickerStateDir, PICKER_CA_COMMON_NAME, PICKER_HOST,
+  pickerCaOwnerPath, pickerLeafCertPath, pickerStateDir, PICKER_CA_COMMON_NAME, PICKER_HOST,
 } from "../../src/claude/intercept/picker-ca";
 
 function tempDir(): string { return mkdtempSync(join(tmpdir(), "ocx-picker-ca-")); }
@@ -127,53 +128,92 @@ test("TLS rejects an IP-address leaf issued by the picker root", async () => {
   expect(await ipHandshake(ca.certPem, ipLeaf(ca))).toBe(false);
 });
 
-test("picker authority persists private key at 0600 and regenerates a corrupt key", () => {
+test("picker authority keeps its private key in process memory and removes a legacy key", () => {
   const dir = tempDir();
+  const stateDir = pickerStateDir(dir);
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "ca.key"), "legacy-exportable-key\n");
   const first = ensurePickerCa(dir);
   expect(ensurePickerCa(dir).fingerprint).toBe(first.fingerprint);
-  if (process.platform !== "win32") expect(statSync(join(pickerStateDir(dir), "ca.key")).mode & 0o777).toBe(0o600);
-  writeFileSync(join(pickerStateDir(dir), "ca.key"), "corrupt\n");
-  const repaired = ensurePickerCa(dir);
-  expect(repaired.fingerprint).not.toBe(first.fingerprint);
+  expect(existsSync(join(stateDir, "ca.key"))).toBe(false);
   expect(constraints(readFileSync(pickerCaCertPath(dir), "utf8"))?.dnsNames).toEqual([PICKER_HOST]);
 });
 
-test("a valid key-matching but unconstrained persisted CA is rotated", () => {
+test("a cached authority still removes a restored legacy key and republishes a stale certificate", () => {
   const dir = tempDir();
-  const first = ensurePickerCa(dir);
-  const unconstrained = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME });
-  writeFileSync(pickerCaCertPath(dir), unconstrained.certPem);
-  writeFileSync(join(pickerStateDir(dir), "ca.key"), unconstrained.keyPem);
-  const repaired = ensurePickerCa(dir);
-  expect(repaired.fingerprint).not.toBe(first.fingerprint);
-  expect(repaired.fingerprint).not.toBe(pickerCaFingerprints(unconstrained.certPem).sha256);
-  expect(constraints(repaired.certPem)?.dnsNames).toEqual([PICKER_HOST]);
+  const stateDir = pickerStateDir(dir);
+  const ca = ensurePickerCa(dir);
+  // Another process published a different certificate while a legacy key reappeared on disk.
+  writeFileSync(join(stateDir, "ca.key"), "legacy-exportable-key\n");
+  writeFileSync(pickerCaCertPath(dir), createCertificateAuthority({
+    commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST],
+  }).certPem);
+  expect(ensurePickerCa(dir).fingerprint).toBe(ca.fingerprint);
+  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ca.certPem);
+  expect(existsSync(join(stateDir, "ca.key"))).toBe(false);
+  // A certificate that went missing entirely is republished the same way.
+  rmSync(pickerCaCertPath(dir));
+  expect(ensurePickerCa(dir).fingerprint).toBe(ca.fingerprint);
+  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ca.certPem);
 });
 
-test("a claude.ai-constrained CA without the IP exclusion (the first format) is rotated", () => {
+const PICKER_CA_MODULE_URL = pathToFileURL(join(import.meta.dir, "../../src/claude/intercept/picker-ca.ts")).href;
+
+// The restart contract is process-scoped: a new process must mint its own authority, not reuse
+// the previous one's certificate. This needs a real second process — the in-process authority
+// cache would otherwise hand the same keypair back.
+test("a second process mints a fresh authority and republishes it", () => {
   const dir = tempDir();
-  ensurePickerCa(dir);
-  const legacy = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST], excludeAllIpAddresses: false });
-  expect(constraints(legacy.certPem)?.excludedIps).toEqual([]);
-  writeFileSync(pickerCaCertPath(dir), legacy.certPem);
-  writeFileSync(join(pickerStateDir(dir), "ca.key"), legacy.keyPem);
-  const repaired = ensurePickerCa(dir);
-  expect(repaired.fingerprint).not.toBe(pickerCaFingerprints(legacy.certPem).sha256);
-  expect(constraints(repaired.certPem)?.excludedIps).toEqual(ALL_IPS);
+  const ours = ensurePickerCa(dir);
+  const child = Bun.spawnSync({
+    cmd: [process.execPath, "-e",
+      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `process.stdout.write(ensurePickerCa(${JSON.stringify(dir)}).fingerprint);`],
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(child.exitCode).toBe(0);
+  const childFingerprint = child.stdout.toString().trim();
+  expect(childFingerprint).not.toBe(ours.fingerprint);
+  // The newer process's authority is the published one.
+  expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(childFingerprint);
 });
 
-test("a valid constrained CA with the wrong name or DNS scope is rotated", () => {
-  for (const options of [
-    { commonName: "other local CA", permittedDnsNames: [PICKER_HOST] },
-    { commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: ["example.com"] },
-  ]) {
-    const dir = tempDir();
+test("a live foreign owner is never clobbered; a dead one is reclaimed", async () => {
+  const dir = tempDir();
+  const ours = ensurePickerCa(dir);
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e",
+      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `ensurePickerCa(${JSON.stringify(dir)}); setInterval(() => {}, 60000);`],
+    cwd: dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    // Wait until the child's authority is published with its owner record.
+    const ownerPath = pickerCaOwnerPath(dir);
+    let childFingerprint = "";
+    for (let i = 0; i < 400; i += 1) {
+      try {
+        const owner = JSON.parse(readFileSync(ownerPath, "utf8")) as { pid?: number; sha256?: string };
+        if (owner.pid === child.pid && typeof owner.sha256 === "string") { childFingerprint = owner.sha256; break; }
+      } catch { /* owner file not written yet */ }
+      await Bun.sleep(10);
+    }
+    expect(childFingerprint).not.toBe("");
+    expect(childFingerprint).not.toBe(ours.fingerprint);
+    // A live foreign process owns the published certificate: this process must not republish its
+    // previously trusted authority over it.
     ensurePickerCa(dir);
-    const other = createCertificateAuthority(options);
-    writeFileSync(pickerCaCertPath(dir), other.certPem);
-    writeFileSync(join(pickerStateDir(dir), "ca.key"), other.keyPem);
-    const repaired = ensurePickerCa(dir);
-    expect(repaired.fingerprint).not.toBe(pickerCaFingerprints(other.certPem).sha256);
-    expect(constraints(repaired.certPem)?.dnsNames).toEqual([PICKER_HOST]);
+    expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(childFingerprint);
+    child.kill();
+    await child.exited;
+    // Once the owner is gone the file is stale again and this process reclaims it.
+    ensurePickerCa(dir);
+    expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ours.certPem);
+  } finally {
+    child.kill();
   }
 });

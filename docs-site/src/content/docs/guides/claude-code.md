@@ -211,7 +211,9 @@ Picker mode is part of first-party mode. On macOS it is on by default when first
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
 trust a local certificate authority in the login keychain. That authority is constrained to `claude.ai`
-and its subdomains; the prompt is a one-time trust step for this local CA.
+and its subdomains. Its signing key exists only inside the running OpenCodex process, so every
+OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
+prompt, or later run `ocx claude desktop picker trust`, after each restart.
 
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with

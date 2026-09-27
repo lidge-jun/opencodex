@@ -1,9 +1,9 @@
 import { createHash, X509Certificate } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { withClientLifecycleSync } from "../../client/lifecycle-lock";
 import {
-  ALL_IP_ADDRESS_BASES,
-  ensurePersistedAuthority,
+  createCertificateAuthority,
   issueServerLeaf,
   type LocalInterceptCa,
   type PemKeyPair,
@@ -16,9 +16,13 @@ export const PICKER_STATE_DIR = "claude-picker";
 
 export interface PickerCa extends LocalInterceptCa { fingerprint: string }
 
+const processAuthorities = new Map<string, PickerCa>();
+
 export function pickerStateDir(configDir: string): string { return join(configDir, PICKER_STATE_DIR); }
 export function pickerCaCertPath(configDir: string): string { return join(pickerStateDir(configDir), "ca.pem"); }
 export function pickerLeafCertPath(configDir: string): string { return join(pickerStateDir(configDir), "leaf.pem"); }
+export function pickerCaOwnerPath(configDir: string): string { return join(pickerStateDir(configDir), "ca-owner.json"); }
+function pickerCaLockPath(configDir: string): string { return join(pickerStateDir(configDir), "ca.lock.sqlite"); }
 
 export function pickerCaFingerprints(certPem: string): { sha1: string; sha256: string } {
   const der = new X509Certificate(certPem).raw;
@@ -28,99 +32,121 @@ export function pickerCaFingerprints(certPem: string): { sha1: string; sha256: s
   };
 }
 
-interface DerItem { tag: number; body: Buffer; next: number }
+/** Atomically publish a public certificate; these files carry no key material. */
+function publishPem(path: string, pem: string): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, pem, { mode: 0o644 });
+  try { chmodSync(tmp, 0o644); } catch { /* best-effort on platforms without POSIX modes */ }
+  renameSync(tmp, path);
+}
 
-function readDer(bytes: Buffer, at: number): DerItem | null {
-  if (at + 2 > bytes.length) return null;
-  const tag = bytes[at]!;
-  let length = bytes[at + 1]!;
-  let cursor = at + 2;
-  if (length & 0x80) {
-    const width = length & 0x7f;
-    if (width === 0 || width > 4 || cursor + width > bytes.length) return null;
-    length = 0;
-    for (let i = 0; i < width; i++) length = length * 256 + bytes[cursor++]!;
+/**
+ * Publish this process's authority and record which pid owns it, so another process that shares
+ * the config directory can distinguish "the file went missing or stale" from "a live peer rotated
+ * the authority" — only the former may be overwritten.
+ */
+function publishAuthority(configDir: string, ca: PickerCa): void {
+  publishPem(pickerCaCertPath(configDir), ca.certPem);
+  publishPem(pickerCaOwnerPath(configDir), JSON.stringify({ pid: process.pid, sha256: ca.fingerprint }) + "\n");
+}
+
+function foreignProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but is not signallable by us; ESRCH means it is gone.
+    return error !== null && typeof error === "object" && (error as { code?: unknown }).code === "EPERM";
   }
-  if (cursor + length > bytes.length) return null;
-  return { tag, body: bytes.subarray(cursor, cursor + length), next: cursor + length };
 }
 
-function children(bytes: Buffer): DerItem[] | null {
-  const out: DerItem[] = [];
-  for (let cursor = 0; cursor < bytes.length;) {
-    const item = readDer(bytes, cursor);
-    if (!item) return null;
-    out.push(item);
-    cursor = item.next;
+/**
+ * True when the published certificate belongs to a different live process's authority. The owner
+ * record is only trusted while it describes the certificate actually on disk: a stale or
+ * third-party `ca-owner.json` cannot shield a file that was tampered with after the owner wrote it.
+ */
+function foreignLiveOwner(configDir: string, published: string): boolean {
+  try {
+    const owner = JSON.parse(readFileSync(pickerCaOwnerPath(configDir), "utf8")) as unknown;
+    if (owner === null || typeof owner !== "object") return false;
+    const { pid, sha256 } = owner as { pid?: unknown; sha256?: unknown };
+    if (typeof pid !== "number" || typeof sha256 !== "string") return false;
+    if (sha256 !== pickerCaFingerprints(published).sha256) return false;
+    return foreignProcessAlive(pid);
+  } catch {
+    return false;
   }
-  return out;
 }
 
-function constrainedToPickerHost(value: Buffer): boolean {
-  const root = readDer(value, 0);
-  if (!root || root.tag !== 0x30 || root.next !== value.length) return false;
-  const fields = children(root.body);
-  // permittedSubtrees [0] with exactly claude.ai, excludedSubtrees [1] with every IPv4 and IPv6 address.
-  if (!fields || fields.length !== 2 || fields[0]!.tag !== 0xa0 || fields[1]!.tag !== 0xa1) return false;
-  const excluded = children(fields[1]!.body);
-  if (!excluded || excluded.length !== ALL_IP_ADDRESS_BASES.length) return false;
-  const excludesAllIps = excluded.every((subtree, index) => {
-    if (subtree.tag !== 0x30) return false;
-    const base = children(subtree.body);
-    return !!base && base.length === 1 && base[0]!.tag === 0x87
-      && base[0]!.body.equals(Buffer.from(ALL_IP_ADDRESS_BASES[index]!));
-  });
-  if (!excludesAllIps) return false;
-  const subtrees = children(fields[0]!.body);
-  if (!subtrees || subtrees.length !== 1 || subtrees[0]!.tag !== 0x30) return false;
-  const subtree = children(subtrees[0]!.body);
-  return !!subtree && subtree.length === 1 && subtree[0]!.tag === 0x82
-    && subtree[0]!.body.equals(Buffer.from(PICKER_HOST, "ascii"));
+/**
+ * `check` runs under a cross-process lock keyed to the picker state dir so the read-decide-publish
+ * sequence cannot interleave with a peer's. A refused lock fails closed: `fallback` may republish
+ * only when no live foreign owner exists, and a genuinely foreign certificate is never clobbered.
+ */
+function underPickerCaLock<T>(configDir: string, check: () => T): T | undefined {
+  try {
+    return withClientLifecycleSync(check, { lockPath: pickerCaLockPath(configDir) });
+  } catch {
+    return undefined;
+  }
 }
 
-/** Inspect the extension itself; X509Certificate does not expose nameConstraints. */
-function acceptsPickerAuthority(cert: X509Certificate): boolean {
-  if (!cert.subject.split("\n").includes(`CN=${PICKER_CA_COMMON_NAME}`)) return false;
-  const root = readDer(cert.raw, 0);
-  if (!root || root.tag !== 0x30 || root.next !== cert.raw.length) return false;
-  const certificate = children(root.body);
-  if (!certificate || certificate[0]?.tag !== 0x30) return false;
-  const tbs = children(certificate[0].body);
-  const extensionField = tbs?.find(item => item.tag === 0xa3);
-  const wrapped = extensionField && readDer(extensionField.body, 0);
-  if (!wrapped || wrapped.tag !== 0x30 || wrapped.next !== extensionField!.body.length) return false;
-  const extensions = children(wrapped.body);
-  if (!extensions) return false;
-  const matches = extensions.filter(item => {
-    if (item.tag !== 0x30) return false;
-    const fields = children(item.body);
-    return fields?.[0]?.tag === 0x06 && fields[0].body.equals(Buffer.from([0x55, 0x1d, 0x1e]));
-  });
-  if (matches.length !== 1) return false;
-  const fields = children(matches[0]!.body);
-  return !!fields && fields.length === 3
-    && fields[1]!.tag === 0x01 && fields[1]!.body.equals(Buffer.from([0xff]))
-    && fields[2]!.tag === 0x04 && constrainedToPickerHost(fields[2]!.body);
+/**
+ * Drop the legacy exportable signing key, if one exists in the picker state dir. Releases before
+ * the process-scoped authority persisted `ca.key` next to `ca.pem`; the removal is deliberately
+ * unconditional so a later failed rotation can never leave that key behind.
+ */
+export function discardPickerCaKey(configDir: string): void {
+  rmSync(join(pickerStateDir(configDir), "ca.key"), { force: true });
 }
 
 export function ensurePickerCa(configDir: string): PickerCa {
-  const ca = ensurePersistedAuthority(
-    pickerStateDir(configDir),
-    { commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] },
-    "ca-publication.sqlite",
-    acceptsPickerAuthority,
-  );
-  return { ...ca, fingerprint: pickerCaFingerprints(ca.certPem).sha256 };
+  const dir = pickerStateDir(configDir);
+  // The signing key must never survive this process: another process under the same user could
+  // otherwise steal it and later take over the predictable loopback proxy. Drop a key left (or
+  // restored) by an older release on every call, including cache hits.
+  discardPickerCaKey(configDir);
+  const path = pickerCaCertPath(configDir);
+  const cached = processAuthorities.get(dir);
+  if (cached) {
+    // The published certificate is this authority's public face. If it went missing, republish;
+    // if a *live* peer rotated it, defer to the owner record — republishing a certificate another
+    // process still serves would re-point trust inspection at an authority that process controls.
+    const republishUnlessForeignOwned = (): void => {
+      let published: string | null = null;
+      try { published = readFileSync(path, "utf8"); } catch { /* missing or unreadable: republish */ }
+      if (published === cached.certPem) return;
+      if (published !== null && foreignLiveOwner(configDir, published)) return;
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      publishAuthority(configDir, cached);
+    };
+    if (underPickerCaLock(configDir, republishUnlessForeignOwned) === undefined) {
+      republishUnlessForeignOwned();
+    }
+    return cached;
+  }
+  const ca = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  const pickerCa = { ...ca, fingerprint: pickerCaFingerprints(ca.certPem).sha256 };
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // This process is a fresh authority: publish unconditionally. A peer whose cert we just
+  // replaced will observe the divergence against our live owner record and stop republishing.
+  const publish = (): void => { publishAuthority(configDir, pickerCa); };
+  if (underPickerCaLock(configDir, publish) === undefined) publish();
+  processAuthorities.set(dir, pickerCa);
+  return pickerCa;
+}
+
+/** Fingerprint of this process's authority only — null until ensurePickerCa has run. */
+export function publishedPickerCaSha256(configDir: string): string | null {
+  const cached = processAuthorities.get(pickerStateDir(configDir));
+  return cached ? pickerCaFingerprints(cached.certPem).sha256 : null;
 }
 
 /** Persist only the public leaf, so trust inspection verifies this exact local issuer. */
 export function issuePickerLeaf(ca: PickerCa, configDir: string): PemKeyPair {
   const leaf = issueServerLeaf(ca, PICKER_CA_COMMON_NAME, [PICKER_HOST]);
-  const path = pickerLeafCertPath(configDir);
   mkdirSync(pickerStateDir(configDir), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, leaf.certPem, { mode: 0o644 });
-  try { chmodSync(tmp, 0o644); } catch { /* best-effort on platforms without POSIX modes */ }
-  renameSync(tmp, path);
+  publishPem(pickerLeafCertPath(configDir), leaf.certPem);
   return leaf;
 }

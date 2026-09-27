@@ -132,7 +132,9 @@ unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外�
 Picker 模式是第一方模式的一部分。在 macOS 上选择第一方时默认开启；设置
 `claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
 按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中信任本地证书颁发机构。
-该颁发机构限制为 `claude.ai` 及其子域名；这个提示是对该本地 CA 的一次性信任步骤。
+该颁发机构限制为 `claude.ai` 及其子域名。其签名密钥只存在于运行中的 OpenCodex 进程内，因此每次重启
+OpenCodex 都会发布新的颁发机构，macOS 也会再次请求信任——请在每次重启后批准该提示，或稍后运行
+`ocx claude desktop picker trust`。
 
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
