@@ -5,10 +5,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decideLease, isHolder, LEASE_STALE_MS, LeaseState, type LeaseStorage } from "../../deploy/cloudflare/src/lease";
-import { handleStateRequest, sweepOrphans, type StateBucket } from "../../deploy/cloudflare/src/state-routes";
-import { containerEnv, edgeDecision, envFingerprint } from "../../deploy/cloudflare/src/container-env";
+import { handleStateRequest, snapshotPrefix, sweepOrphans, type StateBucket } from "../../deploy/cloudflare/src/state-routes";
+import { containerEnv, edgeDecision, envFingerprint, forwardableRequest } from "../../deploy/cloudflare/src/container-env";
 import { applySnapshot, classifyFile, copySqlite, seedBootstrapConfig, stageSnapshot, Supervisor, type StateRoot } from "../../docker/cloudflare-supervisor";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const SQLITE = "SQLite format 3\0";
 const created: string[] = [];
@@ -158,6 +159,9 @@ function memoryBucket(onPut?: () => Promise<void>): StateBucket & { objects: Map
   };
 }
 
+// A Durable Object id: 64 hex characters, never the 32 of a boot id.
+const NS = "9".repeat(64);
+
 function stateRequest(method: string, path: string, bootId: string, body?: string): Request {
   const headers: Record<string, string> = { "x-ocx-boot-id": bootId };
   if (body !== undefined) headers["content-length"] = String(body.length);
@@ -171,14 +175,14 @@ describe("cloudflare state routes", () => {
   test("a holder's upload replaces its previous snapshot and is what the next boot restores", async () => {
     const hub = new LeaseState(memoryStorage(), () => 0);
     const bucket = memoryBucket();
-    expect((await handleStateRequest(stateRequest("POST", "/lease", oldBoot), hub, bucket)).status).toBe(204);
-    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "one"), hub, bucket)).status).toBe(204);
-    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "two"), hub, bucket)).status).toBe(204);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", oldBoot), hub, bucket, NS)).status).toBe(204);
+    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "one"), hub, bucket, NS)).status).toBe(204);
+    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "two"), hub, bucket, NS)).status).toBe(204);
     expect([...bucket.objects.values()]).toEqual(["two"]);
-    await handleStateRequest(stateRequest("DELETE", "/lease", oldBoot), hub, bucket);
+    await handleStateRequest(stateRequest("DELETE", "/lease", oldBoot), hub, bucket, NS);
 
-    expect((await handleStateRequest(stateRequest("POST", "/lease", newBoot), hub, bucket)).status).toBe(204);
-    expect(await (await handleStateRequest(stateRequest("GET", "/snapshot", newBoot), hub, bucket)).text()).toBe("two");
+    expect((await handleStateRequest(stateRequest("POST", "/lease", newBoot), hub, bucket, NS)).status).toBe(204);
+    expect(await (await handleStateRequest(stateRequest("GET", "/snapshot", newBoot), hub, bucket, NS)).text()).toBe("two");
   });
 
   test("a fenced container's late upload cannot overwrite or delete the snapshot the new holder restored", async () => {
@@ -191,25 +195,25 @@ describe("cloudflare state routes", () => {
       now += LEASE_STALE_MS;
       expect((await hub.acquireLease(newBoot)).granted).toBe(true);
     });
-    await handleStateRequest(stateRequest("POST", "/lease", oldBoot), hub, bucket);
-    await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "committed"), hub, bucket);
+    await handleStateRequest(stateRequest("POST", "/lease", oldBoot), hub, bucket, NS);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "committed"), hub, bucket, NS);
 
     takeOverDuringUpload = true;
-    const late = await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "stale"), hub, bucket);
+    const late = await handleStateRequest(stateRequest("PUT", "/snapshot", oldBoot, "stale"), hub, bucket, NS);
     expect(late.status).toBe(409);
     expect([...bucket.objects.values()]).toEqual(["committed"]);
-    expect(await (await handleStateRequest(stateRequest("GET", "/snapshot", newBoot), hub, bucket)).text()).toBe("committed");
+    expect(await (await handleStateRequest(stateRequest("GET", "/snapshot", newBoot), hub, bucket, NS)).text()).toBe("committed");
   });
 
   test("rejects a missing boot id, a missing length, and a non-holder upload", async () => {
     const hub = new LeaseState(memoryStorage(), () => 0);
     const bucket = memoryBucket();
-    expect((await handleStateRequest(stateRequest("POST", "/lease", "../x"), hub, bucket)).status).toBe(400);
-    await handleStateRequest(stateRequest("POST", "/lease", oldBoot), hub, bucket);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", "../x"), hub, bucket, NS)).status).toBe(400);
+    await handleStateRequest(stateRequest("POST", "/lease", oldBoot), hub, bucket, NS);
     const noLength = new Request("http://state.ocx.internal/snapshot", { method: "PUT", headers: { "x-ocx-boot-id": oldBoot } });
-    expect((await handleStateRequest(noLength, hub, bucket)).status).toBe(411);
-    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", newBoot, "x"), hub, bucket)).status).toBe(409);
-    expect((await handleStateRequest(stateRequest("GET", "/snapshot", oldBoot), hub, bucket)).status).toBe(404);
+    expect((await handleStateRequest(noLength, hub, bucket, NS)).status).toBe(411);
+    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", newBoot, "x"), hub, bucket, NS)).status).toBe(409);
+    expect((await handleStateRequest(stateRequest("GET", "/snapshot", oldBoot), hub, bucket, NS)).status).toBe(404);
   });
 });
 
@@ -220,18 +224,18 @@ describe("cloudflare state route guards", () => {
   test("only the lease holder can download the snapshot", async () => {
     const hub = new LeaseState(memoryStorage(), () => 0);
     const bucket = memoryBucket();
-    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket);
-    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "secret-state"), hub, bucket);
-    expect((await handleStateRequest(stateRequest("GET", "/snapshot", other), hub, bucket)).status).toBe(409);
+    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket, NS);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "secret-state"), hub, bucket, NS);
+    expect((await handleStateRequest(stateRequest("GET", "/snapshot", other), hub, bucket, NS)).status).toBe(409);
   });
 
   test("a committed pointer to a missing object is an error, not a first boot", async () => {
     const hub = new LeaseState(memoryStorage(), () => 0);
     const bucket = memoryBucket();
-    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket);
-    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "state"), hub, bucket);
+    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket, NS);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "state"), hub, bucket, NS);
     bucket.objects.clear();
-    expect((await handleStateRequest(stateRequest("GET", "/snapshot", holder), hub, bucket)).status).toBe(500);
+    expect((await handleStateRequest(stateRequest("GET", "/snapshot", holder), hub, bucket, NS)).status).toBe(500);
   });
 });
 
@@ -250,6 +254,26 @@ describe("cloudflare worker edge", () => {
     expect(containerEnv(env)).toEqual({ ANTHROPIC_API_KEY: "anthropic", OPENCODEX_API_AUTH_TOKEN: "data" });
   });
 
+  test("refuses passthrough names that steer the process, naming them but never their values", () => {
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (message: string) => { warnings.push(message); };
+    try {
+      const refused = ["HOME", "OPENCODEX_HOME", "CODEX_HOME", "PATH", "NODE_OPTIONS", "BUN_OPTIONS", "LD_PRELOAD", "LD_LIBRARY_PATH", "HTTPS_PROXY", "NO_PROXY", "TMPDIR"];
+      const env: Record<string, string> = { ...token, OCX_PASSTHROUGH_SECRETS: [...refused, "OPENROUTER_API_KEY"].join(",") , OPENROUTER_API_KEY: "router" };
+      for (const name of refused) env[name] = `zz-value-of-${name}`;
+      expect(containerEnv(env)).toEqual({ OPENROUTER_API_KEY: "router", OPENCODEX_API_AUTH_TOKEN: "data" });
+      expect(warnings.some(line => line.includes("LD_PRELOAD"))).toBe(true);
+      expect(warnings.join("\n")).not.toContain("zz-value-of-");
+      // Rebuilt on every request, so the warning is not repeated each time.
+      const count = warnings.length;
+      containerEnv(env);
+      expect(warnings.length).toBe(count);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
   test("the fingerprint changes when a secret rotates and ignores key order", async () => {
     const before = await envFingerprint({ A: "1", B: "2" });
     expect(await envFingerprint({ B: "2", A: "1" })).toBe(before);
@@ -259,25 +283,61 @@ describe("cloudflare worker edge", () => {
     expect(withSecret).not.toContain("zz-secret-value");
   });
 
-  test("fails closed without a data token and turns away credential-less requests", () => {
-    expect(edgeDecision(request("/v1/models", { authorization: "Bearer x" }), {})).toMatchObject({ forward: false, status: 503 });
-    expect(edgeDecision(request("/v1/models"), token)).toMatchObject({ forward: false, status: 401 });
-    expect(edgeDecision(request("/healthz", { "x-opencodex-api-key": "k" }), token)).toEqual({ forward: true });
-    expect(edgeDecision(request("/v1/messages", { "x-api-key": "k" }), token)).toEqual({ forward: true });
-    expect(edgeDecision(request("/v1/audio/transcriptions/stream", {
-      "sec-websocket-protocol": "opencodex-audio.v1, opencodex-key.aw", upgrade: "websocket",
-    }), token)).toEqual({ forward: true });
+  test("fails closed without a data token and turns away credential-less requests", async () => {
+    expect(await edgeDecision(request("/v1/models", { authorization: "Bearer x" }), {})).toMatchObject({ forward: false, status: 503 });
+    expect(await edgeDecision(request("/v1/models"), token)).toMatchObject({ forward: false, status: 401 });
     // Preflights never reach the container, and the Worker grants no CORS.
-    const preflight = new Request("https://hub.example/v1/responses", { method: "OPTIONS", headers: { "access-control-request-method": "POST", authorization: "Bearer x" } });
-    expect(edgeDecision(preflight, token)).toEqual({ forward: false, status: 204, message: "" });
+    const preflight = new Request("https://hub.example/v1/responses", { method: "OPTIONS", headers: { "access-control-request-method": "POST", authorization: "Bearer data" } });
+    expect(await edgeDecision(preflight, token)).toEqual({ forward: false, status: 204, message: "" });
   });
 
-  test("keeps the management API closed unless the operator opts in with their own admin token", () => {
+  test("forwards the data token in every form ocx accepts", async () => {
+    expect(await edgeDecision(request("/healthz", { "x-opencodex-api-key": " data " }), token)).toEqual({ forward: true });
+    expect(await edgeDecision(request("/v1/responses", { authorization: "Bearer data" }), token)).toEqual({ forward: true });
+    expect(await edgeDecision(request("/v1/messages", { "x-api-key": "data" }), token)).toEqual({ forward: true });
+    // Codex Direct: a ChatGPT bearer rides along with the proxy key in the dedicated header.
+    expect(await edgeDecision(request("/v1/responses", { authorization: "Bearer chatgpt", "x-opencodex-api-key": "data" }), token)).toEqual({ forward: true });
+    expect(await edgeDecision(request("/v1/audio/transcriptions/stream", {
+      "sec-websocket-protocol": `opencodex-audio.v1, opencodex-key.${Buffer.from("data").toString("base64url")}`, upgrade: "websocket",
+    }), token)).toEqual({ forward: true });
+  });
+
+  test("a wrong or empty key never wakes the container unless the operator opted into a presence check", async () => {
+    const wrong = [
+      { authorization: "Bearer wrong" },
+      { "x-api-key": "dat" },
+      { "x-opencodex-api-key": "data-and-more" },
+      { "sec-websocket-protocol": "opencodex-audio.v1, opencodex-key." },
+      { "sec-websocket-protocol": "opencodex-audio.v1, opencodex-key.data" },
+    ];
+    for (const headers of wrong) {
+      expect(await edgeDecision(request("/v1/responses", headers), token)).toEqual({ forward: false, status: 401, message: "opencodex API key required" });
+    }
+    const presence = { ...token, OCX_EDGE_KEY_CHECK: "presence" };
+    expect(await edgeDecision(request("/v1/responses", { authorization: "Bearer issued-client-key" }), presence)).toEqual({ forward: true });
+    expect(await edgeDecision(request("/v1/responses", { "sec-websocket-protocol": "opencodex-key." }), presence)).toMatchObject({ status: 401 });
+    expect(await edgeDecision(request("/v1/responses"), presence)).toMatchObject({ status: 401 });
+  });
+
+  test("keeps the management API closed unless the operator opts in with their own admin token", async () => {
     const withKey = { authorization: "Bearer admin" };
-    expect(edgeDecision(request("/api/config", withKey), token)).toMatchObject({ forward: false, status: 404 });
-    expect(edgeDecision(request("/api/config", withKey), { ...token, OCX_EXPOSE_MANAGEMENT_API: "1" })).toMatchObject({ status: 404 });
-    expect(edgeDecision(request("/api/config", withKey), { ...token, OCX_EXPOSE_MANAGEMENT_API: "1", OPENCODEX_ADMIN_AUTH_TOKEN: "admin" })).toEqual({ forward: true });
-    expect(edgeDecision(request("/apiary", withKey), token)).toEqual({ forward: true });
+    const open = { ...token, OCX_EXPOSE_MANAGEMENT_API: "1", OPENCODEX_ADMIN_AUTH_TOKEN: "admin" };
+    expect(await edgeDecision(request("/api/config", withKey), token)).toMatchObject({ forward: false, status: 404 });
+    expect(await edgeDecision(request("/api/config", withKey), { ...token, OCX_EXPOSE_MANAGEMENT_API: "1" })).toMatchObject({ status: 404 });
+    expect(await edgeDecision(request("/api/config", withKey), open)).toEqual({ forward: true });
+    // The admin token opens only the management API.
+    expect(await edgeDecision(request("/v1/models", withKey), open)).toMatchObject({ status: 401 });
+    expect(await edgeDecision(request("/apiary", withKey), open)).toMatchObject({ status: 401 });
+  });
+
+  test("the client cannot pick the container port", () => {
+    const forwarded = forwardableRequest(request("/v1/models", { "cf-container-target-port": "10200", "x-opencodex-api-key": "data" }));
+    expect(forwarded.headers.has("cf-container-target-port")).toBe(false);
+    expect(forwarded.headers.get("x-opencodex-api-key")).toBe("data");
+    // Stripping at the edge is one layer; the Durable Object also never lets a header choose the port.
+    const source = readFileSync(repoPath("deploy/cloudflare/src/index.ts"), "utf8");
+    expect(source).not.toMatch(/super\.fetch\(/);
+    expect(source).toContain("this.containerFetch(req, this.defaultPort)");
   });
 });
 
@@ -289,17 +349,17 @@ describe("cloudflare lease renewal", () => {
     let now = 0;
     const hub = new LeaseState(memoryStorage(), () => now);
     const bucket = memoryBucket();
-    await handleStateRequest(stateRequest("POST", "/lease", a), hub, bucket);
-    expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket)).status).toBe(204);
-    await handleStateRequest(stateRequest("DELETE", "/lease", a), hub, bucket);
-    expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket)).status).toBe(409);
+    await handleStateRequest(stateRequest("POST", "/lease", a), hub, bucket, NS);
+    expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket, NS)).status).toBe(204);
+    await handleStateRequest(stateRequest("DELETE", "/lease", a), hub, bucket, NS);
+    expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket, NS)).status).toBe(409);
 
     // Stale, taken over by b, released by b: a's late renewal must still fail.
-    await handleStateRequest(stateRequest("POST", "/lease", a), hub, bucket);
+    await handleStateRequest(stateRequest("POST", "/lease", a), hub, bucket, NS);
     now += LEASE_STALE_MS;
-    await handleStateRequest(stateRequest("POST", "/lease", b), hub, bucket);
-    await handleStateRequest(stateRequest("DELETE", "/lease", b), hub, bucket);
-    expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket)).status).toBe(409);
+    await handleStateRequest(stateRequest("POST", "/lease", b), hub, bucket, NS);
+    await handleStateRequest(stateRequest("DELETE", "/lease", b), hub, bucket, NS);
+    expect((await handleStateRequest(stateRequest("PUT", "/lease", a), hub, bucket, NS)).status).toBe(409);
   });
 });
 
@@ -309,26 +369,51 @@ describe("cloudflare state reset and cleanup", () => {
   test("a boot that takes the lease sweeps orphaned snapshot objects but keeps the committed one", async () => {
     const hub = new LeaseState(memoryStorage(), () => 0);
     const bucket = memoryBucket();
-    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket);
-    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "kept"), hub, bucket);
-    bucket.objects.set("snapshots/dead/orphan.tar.gz", "orphan");
-    await handleStateRequest(stateRequest("DELETE", "/lease", holder), hub, bucket);
-    expect((await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket)).status).toBe(204);
+    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket, NS);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "kept"), hub, bucket, NS);
+    bucket.objects.set(`${snapshotPrefix(NS)}dead/orphan.tar.gz`, "orphan");
+    await handleStateRequest(stateRequest("DELETE", "/lease", holder), hub, bucket, NS);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket, NS)).status).toBe(204);
     expect([...bucket.objects.values()]).toEqual(["kept"]);
-    expect(await sweepOrphans(hub, bucket)).toBe(0);
+    expect(await sweepOrphans(hub, bucket, NS)).toBe(0);
+  });
+
+  test("the sweep stays inside this hub's namespace and never deletes an old-layout committed key", async () => {
+    const storage = memoryStorage();
+    const hub = new LeaseState(storage, () => 0);
+    const bucket = memoryBucket();
+    // Committed before snapshot keys were namespaced.
+    const legacy = `snapshots/${holder}/legacy.tar.gz`;
+    await hub.acquireLease(holder);
+    await hub.commitSnapshot(holder, legacy);
+    bucket.objects.set(legacy, "legacy");
+    const neighbour = `snapshots/${"8".repeat(64)}/${holder}/live.tar.gz`;
+    bucket.objects.set(neighbour, "another deployment");
+    bucket.objects.set(`${snapshotPrefix(NS)}${holder}/orphan.tar.gz`, "orphan");
+    await handleStateRequest(stateRequest("DELETE", "/lease", holder), hub, bucket, NS);
+
+    const next = "3".repeat(32);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", next), hub, bucket, NS)).status).toBe(204);
+    expect([...bucket.objects.keys()].sort()).toEqual([legacy, neighbour].sort());
+    expect(await (await handleStateRequest(stateRequest("GET", "/snapshot", next), hub, bucket, NS)).text()).toBe("legacy");
+    // The first upload afterwards moves the hub into its namespace and retires the old-layout object.
+    expect((await handleStateRequest(stateRequest("PUT", "/snapshot", next, "new"), hub, bucket, NS)).status).toBe(204);
+    expect(bucket.objects.has(legacy)).toBe(false);
+    expect(bucket.objects.get(neighbour)).toBe("another deployment");
+    expect(await hub.currentSnapshot()).toStartWith(`${snapshotPrefix(NS)}${next}/`);
   });
 
   test("discarding the saved state makes the next boot a first boot", async () => {
     const hub = new LeaseState(memoryStorage(), () => 0);
     const bucket = memoryBucket();
-    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket);
-    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "unbootable"), hub, bucket);
+    await handleStateRequest(stateRequest("POST", "/lease", holder), hub, bucket, NS);
+    await handleStateRequest(stateRequest("PUT", "/snapshot", holder, "unbootable"), hub, bucket, NS);
     const discarded = await hub.discardSnapshot();
-    expect(discarded).toStartWith("snapshots/");
+    expect(discarded).toStartWith(snapshotPrefix(NS));
     expect(await hub.holdsLease(holder)).toBe(false);
     const next = "2".repeat(32);
-    expect((await handleStateRequest(stateRequest("POST", "/lease", next), hub, bucket)).status).toBe(204);
-    expect((await handleStateRequest(stateRequest("GET", "/snapshot", next), hub, bucket)).status).toBe(404);
+    expect((await handleStateRequest(stateRequest("POST", "/lease", next), hub, bucket, NS)).status).toBe(204);
+    expect((await handleStateRequest(stateRequest("GET", "/snapshot", next), hub, bucket, NS)).status).toBe(404);
   });
 });
 

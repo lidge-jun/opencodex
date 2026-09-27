@@ -1,15 +1,14 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
-import { containerEnv, edgeDecision, envFingerprint, type SecretSource } from "./container-env";
+import { containerEnv, edgeDecision, envFingerprint, forwardableRequest, type EdgeEnv } from "./container-env";
 import { LeaseState } from "./lease";
 import { handleStateRequest } from "./state-routes";
 
 export { ContainerProxy };
 
-export interface Env extends SecretSource {
+export interface Env extends EdgeEnv {
   HUB: DurableObjectNamespace<OpencodexHub>;
   STATE: R2Bucket;
   OCX_SLEEP_AFTER?: string;
-  OCX_EXPOSE_MANAGEMENT_API?: string;
   /** Any new value discards the saved state once; see `applyPendingReset`. */
   OCX_DISCARD_SAVED_STATE?: string;
 }
@@ -58,12 +57,12 @@ export class OpencodexHub extends Container<Env> {
     // container may be stopped and restarted by this very request, so that counts as a new start.
     const windowStart = (await this.getState()).status !== "healthy" || this.startedAt === 0 ? Date.now() : this.startedAt;
     const inWindow = () => Date.now() - Math.max(windowStart, this.startedAt) <= HANDOFF_WINDOW_MS;
-    if (!inWindow()) return super.fetch(req);
+    if (!inWindow()) return this.proxy(req);
     // Only inside the handoff window is the request cloned, so a refused connection can be replayed.
     // A refused connection never reached ocx, so any request replays. A dropped one may have run,
     // so only reads replay. Every other failure returns at once.
     for (let attempt = 0; ; attempt++) {
-      const response = await super.fetch(req.clone());
+      const response = await this.proxy(req.clone());
       if (response.status !== 500 || attempt >= 10 || !inWindow()) return response;
       const text = await response.text();
       const refused = text.startsWith(PROXY_FAILURE) && NOT_LISTENING.test(text);
@@ -71,6 +70,11 @@ export class OpencodexHub extends Container<Env> {
       if (!refused && !droppedRead) return new Response(text, response);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
+  }
+
+  // Never super.fetch: it lets a `cf-container-target-port` header pick any port in the container.
+  private proxy(req: Request): Promise<Response> {
+    return this.containerFetch(req, this.defaultPort);
   }
 
   // The only way out of a saved state that cannot start (a config that binds loopback, a committed
@@ -131,6 +135,8 @@ export class OpencodexHub extends Container<Env> {
 }
 
 async function handleState(req: Request, env: Env): Promise<Response> {
+  // Snapshot keys live under this object's id, so a bucket shared with another deployment is safe.
+  const namespace = env.HUB.idFromName(HUB_NAME).toString();
   return handleStateRequest(req, getContainer(env.HUB, HUB_NAME), {
     get: async key => (await env.STATE.get(key))?.body ?? null,
     put: async (key, body, length) => { await env.STATE.put(key, body.pipeThrough(new FixedLengthStream(length))); },
@@ -145,18 +151,18 @@ async function handleState(req: Request, env: Env): Promise<Response> {
       } while (cursor && keys.length < limit);
       return keys;
     },
-  });
+  }, namespace);
 }
 
 OpencodexHub.outboundByHost = { [STATE_HOST]: handleState };
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const decision = edgeDecision(req, env);
+    const decision = await edgeDecision(req, env);
     if (!decision.forward) {
       if (decision.status === 204) return new Response(null, { status: 204 });
       return Response.json({ error: { message: decision.message, type: "invalid_request_error" } }, { status: decision.status });
     }
-    return getContainer(env.HUB, HUB_NAME).fetch(req);
+    return getContainer(env.HUB, HUB_NAME).fetch(forwardableRequest(req));
   },
 } satisfies ExportedHandler<Env>;

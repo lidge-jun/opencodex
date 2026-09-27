@@ -57,13 +57,21 @@ curl -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
   https://opencodex.<your-subdomain>.workers.dev/healthz
 ```
 
-The Worker answers `401` to any request that carries no `x-opencodex-api-key`, `Authorization`, or
-`x-api-key` header (or, for the audio WebSocket, a key subprotocol), without starting the container,
-so scanners cannot keep it running. `OPTIONS` requests are answered by the Worker without CORS
-headers, so cross-origin browser requests that need an authentication header fail. The audio
-WebSocket still works from a browser, because it carries its key as a subprotocol. `ocx` still
-checks every key it receives. Because `/healthz` needs a key too, an uptime monitor must be given one; prefer a
-dedicated client key over the data token.
+The Worker answers `401` to any request that does not carry the data token, without starting the
+container, so scanners and wrong keys cannot keep it running. It reads the token from the same places
+`ocx` does: `x-opencodex-api-key`, `Authorization: Bearer`, `x-api-key`, or, for the audio WebSocket,
+the key subprotocol. The comparison takes the same time whatever the key. `ocx` still checks every
+key it receives.
+
+The Worker only knows the data token. If you issue further client keys through `apiKeys` in the
+hub's configuration, the Worker would refuse them, so store `OCX_EDGE_KEY_CHECK=presence` as a secret
+to go back to checking only that some key is present. That costs money: any request with any
+non-empty key then starts the container and keeps it awake, and only `ocx` rejects the wrong ones.
+
+`OPTIONS` requests are answered by the Worker without CORS headers, so cross-origin browser requests
+that need an authentication header fail. The audio WebSocket still works from a browser, because it
+carries its key as a subprotocol. Because `/healthz` needs a key too, an uptime monitor must be given
+the data token, or, with `OCX_EDGE_KEY_CHECK=presence`, a dedicated client key.
 
 The first request starts the container, which takes a few seconds. Requests that arrive while it is
 restoring or saving state get `503` with `Retry-After: 10`.
@@ -183,6 +191,20 @@ leaving it set does not wipe later boots.
   Anyone with that token can then administer the hub from the internet, so leave it closed unless
   you need it.
 - Do not put tokens in `wrangler.jsonc`; `vars` there are stored in plain text.
+- The Worker always sends requests to port `10100`; a client cannot reach any other port in the
+  container.
+- `wrangler.jsonc` keeps Workers Logs on for `console` output but turns invocation logs off, because
+  they record request metadata that can include a client's key header. If you turn them back on, treat
+  the logs as holding credentials.
+- `OCX_PASSTHROUGH_SECRETS` refuses names that control the process rather than carry a secret, such
+  as `HOME`, `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, and the proxy variables. The Worker log names each
+  refused entry.
+- Remote Workspace pairing limits failed attempts per client IP address. Every request reaches `ocx`
+  from the Worker, so on this deployment the limit is shared: one client's failed attempts can lock
+  everyone out of pairing until the window passes.
+- Snapshot objects are stored under the Durable Object's id in the bucket, and the cleanup at boot
+  deletes only inside that prefix, so a bucket shared by mistake does not lose another deployment's
+  state. Give each deployment its own bucket anyway.
 
 ## Operate
 
@@ -196,6 +218,14 @@ A running container keeps the secrets it started with. When any secret it receiv
 next request stops the container, which saves its state, and starts a new one with the new values;
 requests in between get `503` with `Retry-After`. After a rotation, confirm that a request with the
 old token gets `401`.
+
+Rotating `OPENCODEX_API_AUTH_TOKEN` revokes only that token. Client keys stored in `apiKeys`,
+including a key's `pendingRotation` value, are part of the saved state in R2 and keep working until
+you remove them through the management API or discard the saved state.
+
+For local testing with `npx wrangler dev`, stopping it with Ctrl-C kills the local container without
+a final snapshot. The next start waits up to two minutes for the old lease to expire, then restores
+the last periodic snapshot. Deployed containers are not affected: Cloudflare sends `SIGTERM` first.
 
 ## Limits
 

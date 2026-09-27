@@ -10,3 +10,5 @@ OCX_PASSTHROUGH_SECRETS=
 OCX_EXPOSE_MANAGEMENT_API=
 # Any new value discards the saved state once, so the next boot starts from OCX_BOOTSTRAP_CONFIG_JSON. Optional.
 OCX_DISCARD_SAVED_STATE=
+# Set to "presence" if clients use keys from config.apiKeys, which the Worker cannot check. Any non-empty key then wakes the container. Optional.
+OCX_EDGE_KEY_CHECK=

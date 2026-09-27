@@ -6,7 +6,8 @@
   // A second deployment in the same account needs its own "name" and "bucket_name" below.
   "workers_dev": true,
   "preview_urls": false,
-  "observability": { "enabled": true },
+  // Invocation logs record request metadata, which can include the client's key headers.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   "containers": [
     {
       "class_name": "OpencodexHub",
