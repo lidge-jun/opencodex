@@ -55,4 +55,3 @@ Proposal D1-D14 received 2026-09-27. Main dispositions:
 Limitations carried forward: raw-body passthrough routes are not normalized; replies already stored as bare `visualize{...}` are not repaired; a future template variant needs its own fixture; the live render of the ASCII form is confirmed only in wp3.
 
 Reflection: recorded in [010](010_wp2_visualization_directive_normalization.md#architect-reflection).
-

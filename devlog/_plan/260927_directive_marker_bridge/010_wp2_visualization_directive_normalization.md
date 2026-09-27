@@ -15,10 +15,13 @@ OUT: adapters, raw-body passthrough, response-side repair, persistence, citation
 Exports:
 
 - `normalizeVisualizationText(text: string): string` — returns `text` unchanged (same reference)
-  unless it contains the exact prefix `"\uE200visualize\uE202"` (no spaces). It replaces matches of
-  the app's own regex `/\uE200visualize\uE202([^\uE201]+)\uE201/g` (one left-to-right pass) with
-  `toAsciiDirective(payload)`, or keeps the match when rejected. Spans with any other keyword never
-  match that regex and are copied through unchanged, as are unterminated spans.
+  unless it contains the exact prefix `"\uE200visualize\uE202"` (no spaces). It produces the same
+  matches as the app's regex `/\uE200visualize\uE202([^\uE201]+)\uE201/g`, but with a linear scanner:
+  find the next prefix with `indexOf`; the payload runs to the next END (`indexOf` from the prefix end);
+  an empty payload resumes the prefix search one character later; no END after a prefix means no later
+  match exists, so scanning stops. Each match becomes `toAsciiDirective(payload)` or stays as is.
+  Unterminated spans are copied through. App-regex parity supersedes D4's opaque-payload rule: a
+  `visualize` span inside another keyword's payload is converted, as the app would convert it.
 
   Intentional differences from `f2`: code tokens are normalized too (the skill's example is fenced),
   and the template exception below. Using the same regex means a `visualize` span that appears after
@@ -50,7 +53,9 @@ basename (`file=`); both skill templates; spans inside a fenced block; rejected 
 JSON, relative JSON path, `..`, quote, bad basename, missing path); other keywords and unterminated
 spans untouched; Windows drive and UNC paths; live null path with a title; malformed optional fields
 (`title` number, `type` other, `mode` other, `wide` string); a decoded compaction summary carrying the
-reference; a large context with many malformed markers (linear time); idempotence; every
+reference; 20,000 repeated unterminated prefixes normalized in under 200 ms; exact output for a
+`visualize` span nested in a `cite` payload and for a malformed `visualize` prefix followed by a valid
+one; idempotence; every
 role and content shape through `parseRequest`, with image parts, tool-call arguments and reasoning
 parts deep-equal to an unnormalized parse; a frozen input body (deep `Object.freeze`) parses without
 throwing and `_rawBody` is the same object; an expanded continuation body (prior assistant output
@@ -87,7 +92,9 @@ a live null path (C sees `::codex-live-vis{}`).
 
 Fermat returned MISALIGNED on the first plan revision with five gaps. Dispositions:
 
-1. Unknown spans opaque, nested marker fixture, exact prefix — folded above.
+1. Exact prefix — folded. Opaque unknown spans — superseded in the second reflection by app-regex
+   parity (the app converts a nested span, so the model should see the same thing); nested and
+   malformed-prefix fixtures pin the exact output.
 2. Live selection, ignored `wide`, template exception scope — folded above.
 3. Opaque-field, frozen-input and replay assertions — folded above. Cursor checkpoint rejection test —
    rebutted: the Cursor builder compares a digest of the context it is given, and this change only
@@ -96,3 +103,7 @@ Fermat returned MISALIGNED on the first plan revision with five gaps. Dispositio
 4. Existing suites and source-reading guards named explicitly — folded above.
 5. Universal claims removed; alternatives' reasons and limitations recorded in 000 and 001 — folded.
 
+
+Second reflection (wp2 P): MISALIGNED on regex cost (quadratic on repeated unterminated prefixes,
+measured 16/63/251 ms for 2k/4k/8k) and on the opaque-span claim. Both folded above: linear scanner with
+the regex's semantics, parity recorded explicitly, adversarial and nested fixtures added.

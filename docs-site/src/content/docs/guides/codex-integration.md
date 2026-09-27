@@ -677,6 +677,19 @@ mode unchanged.
 After `ocx sync` changes this metadata, restart Codex App and open a fresh task. Existing app-server
 processes and tasks may retain the catalog and tool plan they loaded at startup.
 
+### Inline visualizations with routed models
+
+The Codex App's Visualize plugin asks the model to reply with a reference wrapped in private-use
+characters (U+E200 … U+E201). Some providers remove those characters before the model sees them —
+every Claude route we checked does — so the model used to answer with a bare
+`visualize{"path":…}` line that Codex App printed as text.
+
+opencodex rewrites those references into the directive the app itself renders,
+`::codex-inline-vis{path="/absolute/path/chart.html"}`, in the conversation text sent to routed
+models. Any model can read and repeat that form, so the visualization renders inline. Native OpenAI
+passthrough requests are forwarded unchanged. Replies that were already saved in the bare
+`visualize{…}` form stay as they are; ask for the visualization again in a new reply.
+
 ### Custom model display names
 
 A custom model can carry a human-readable **display name** that overrides the label Codex shows in
