@@ -83,27 +83,78 @@ function constrainedToPickerHost(value: Buffer): boolean {
     && subtree[0]!.body.equals(Buffer.from(PICKER_HOST, "ascii"));
 }
 
-// CA-extension OIDs (2.5.29.*) the picker root is allowed to carry. Anything else — a
-// subjectAltName or a serverAuth EKU, say — would let the trust anchor itself terminate an
-// off-host TLS handshake, bypassing the name constraints that only bind subordinate
-// certificates.
-const PICKER_EXT = {
-  basicConstraints: Buffer.from([0x55, 0x1d, 0x13]),
-  keyUsage: Buffer.from([0x55, 0x1d, 0x0f]),
-  subjectKeyIdentifier: Buffer.from([0x55, 0x1d, 0x0e]),
-  authorityKeyIdentifier: Buffer.from([0x55, 0x1d, 0x23]),
-  nameConstraints: Buffer.from([0x55, 0x1d, 0x1e]),
-} as const;
-// The exact extnValues createCertificateAuthority emits: CA:true pathLen:0, and a BIT STRING
-// with only keyCertSign|cRLSign — no digitalSignature, so the anchor cannot sign a handshake.
-const CA_BASIC_CONSTRAINTS = Buffer.from([0x30, 0x06, 0x01, 0x01, 0xff, 0x02, 0x01, 0x00]);
-const CA_KEY_USAGE = Buffer.from([0x03, 0x02, 0x01, 0x06]);
+interface ParsedExtension { oid: Buffer; critical: boolean; value: Buffer }
+
+/** One Extension SEQUENCE → oid, criticality, and extnValue bytes; malformed shapes return null. */
+function parseExtension(item: DerItem): ParsedExtension | null {
+  if (item.tag !== 0x30) return null;
+  const fields = children(item.body);
+  if (!fields || fields.length < 2 || fields.length > 3 || fields[0]!.tag !== 0x06) return null;
+  const value = fields[fields.length - 1]!;
+  if (value.tag !== 0x04) return null;
+  if (fields.length === 2) return { oid: fields[0]!.body, critical: false, value: value.body };
+  // DER encodes the critical flag only as BOOLEAN TRUE; anything else is not a real extension.
+  if (fields[1]!.tag !== 0x01 || !fields[1]!.body.equals(Buffer.from([0xff]))) return null;
+  return { oid: fields[0]!.body, critical: true, value: value.body };
+}
+
+// DER OID bodies for the only four extensions a picker authority carries. A SAN, an EKU, or any
+// other extension means the certificate is not a picker authority, whatever its subject claims.
+const EXT_BASIC_CONSTRAINTS = "551d13";
+const EXT_KEY_USAGE = "551d0f";
+const EXT_SUBJECT_KEY_IDENTIFIER = "551d0e";
+const EXT_NAME_CONSTRAINTS = "551d1e";
+const PICKER_CA_EXTENSION_OIDS = new Set([
+  EXT_BASIC_CONSTRAINTS, EXT_KEY_USAGE, EXT_SUBJECT_KEY_IDENTIFIER, EXT_NAME_CONSTRAINTS,
+]);
+
+/** basicConstraints CA:TRUE with pathLenConstraint 0 — the anchor signs leaves, not other CAs. */
+const PICKER_CA_BASIC_CONSTRAINTS = Buffer.from([0x30, 0x06, 0x01, 0x01, 0xff, 0x02, 0x01, 0x00]);
+/** keyUsage keyCertSign | cRLSign only — the anchor can never sign a TLS handshake itself. */
+const PICKER_CA_KEY_USAGE = Buffer.from([0x03, 0x02, 0x01, 0x06]);
+
+/**
+ * The trust decision accepts exactly the extension profile createCertificateAuthority emits, not
+ * merely a certificate that happens to contain the right name constraint. A root that also carries
+ * leaf privileges (SAN, serverAuth EKU, digitalSignature) could be presented directly as an
+ * off-host server certificate, where name constraints on subordinates no longer apply.
+ */
+function acceptsExtensionProfile(extensions: DerItem[]): boolean {
+  const seen = new Set<string>();
+  for (const item of extensions) {
+    const extension = parseExtension(item);
+    if (extension === null) return false;
+    const key = extension.oid.toString("hex");
+    if (!PICKER_CA_EXTENSION_OIDS.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    switch (key) {
+      case EXT_BASIC_CONSTRAINTS:
+        if (!extension.critical || !extension.value.equals(PICKER_CA_BASIC_CONSTRAINTS)) return false;
+        break;
+      case EXT_KEY_USAGE:
+        if (!extension.critical || !extension.value.equals(PICKER_CA_KEY_USAGE)) return false;
+        break;
+      case EXT_SUBJECT_KEY_IDENTIFIER: {
+        const id = readDer(extension.value, 0);
+        if (extension.critical || id === null || id.tag !== 0x04 || id.next !== extension.value.length) return false;
+        break;
+      }
+      default:
+        if (!extension.critical || !constrainedToPickerHost(extension.value)) return false;
+    }
+  }
+  return seen.size === PICKER_CA_EXTENSION_OIDS.size;
+}
 
 /** Independently authorize a root before installing it as system trust. */
 export function acceptsPickerAuthority(certPem: string): boolean {
   try {
     const cert = new X509Certificate(certPem);
-    if (!cert.subject.split("\n").includes(`CN=${PICKER_CA_COMMON_NAME}`)) return false;
+    const names = cert.subject.split("\n");
+    if (!names.includes(`CN=${PICKER_CA_COMMON_NAME}`)) return false;
+    if (names.filter(line => line.startsWith("CN=")).length !== 1) return false;
+    // A picker authority is self-issued and self-signed; a foreign issuer is not one of ours.
+    if (cert.issuer !== cert.subject || !cert.verify(cert.publicKey)) return false;
     const root = readDer(cert.raw, 0);
     const certificate = root?.tag === 0x30 && root.next === cert.raw.length ? children(root.body) : null;
     const tbs = certificate?.[0]?.tag === 0x30 ? children(certificate[0].body) : null;
@@ -111,41 +162,7 @@ export function acceptsPickerAuthority(certPem: string): boolean {
     const wrapped = extensionField && readDer(extensionField.body, 0);
     const extensions = wrapped?.tag === 0x30 && wrapped.next === extensionField!.body.length
       ? children(wrapped.body) : null;
-    if (!extensions || extensions.length === 0) return false;
-    const seen = new Set<string>();
-    let caConstrained = false;
-    let isCa = false;
-    let signingOnly = false;
-    for (const item of extensions) {
-      const fields = item.tag === 0x30 ? children(item.body) : null;
-      if (!fields || fields.length < 2 || fields.length > 3) return false;
-      const [oidField, ...rest] = fields;
-      const valueField = rest.at(-1)!;
-      if (oidField!.tag !== 0x06 || valueField.tag !== 0x04) return false;
-      const critical = rest.length === 2;
-      if (critical && (rest[0]!.tag !== 0x01 || !rest[0]!.body.equals(Buffer.from([0xff])))) return false;
-      const oid = oidField!.body;
-      if (seen.has(oid.toString("hex"))) return false; // a duplicated extension is malformed
-      seen.add(oid.toString("hex"));
-      if (oid.equals(PICKER_EXT.basicConstraints)) {
-        if (!critical || !valueField.body.equals(CA_BASIC_CONSTRAINTS)) return false;
-        isCa = true;
-      } else if (oid.equals(PICKER_EXT.keyUsage)) {
-        if (!critical || !valueField.body.equals(CA_KEY_USAGE)) return false;
-        signingOnly = true;
-      } else if (oid.equals(PICKER_EXT.nameConstraints)) {
-        if (!critical || !constrainedToPickerHost(valueField.body)) return false;
-        caConstrained = true;
-      } else if (!oid.equals(PICKER_EXT.subjectKeyIdentifier)
-          && !oid.equals(PICKER_EXT.authorityKeyIdentifier)) {
-        return false;
-      } else if (critical) {
-        // Key-identifier extensions carry no semantics; nothing this process emits marks
-        // them critical, so a critical one came from a different profile.
-        return false;
-      }
-    }
-    return isCa && signingOnly && caConstrained;
+    return extensions !== null && acceptsExtensionProfile(extensions);
   } catch {
     return false;
   }

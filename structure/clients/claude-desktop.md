@@ -238,8 +238,11 @@ only `egressProxyUrl`. The previous Desktop selection is stored in
 The local controls are `ocx claude desktop picker on|off|status|trust`. With a live server, `on`,
 `off`, and transition cleanup use the controller; `trust` performs the operator's local keychain
 step and then reports the result to the server. Before installing the root, the CLI independently
-requires the picker common name and the exact critical `claude.ai`-only DNS and all-IP exclusion
-constraints; matching the live server's reported fingerprint is an additional check, not a
+requires the picker common name on a self-signed CA and the exact critical `claude.ai`-only DNS
+and all-IP exclusion constraints, plus the full minted extension profile — critical `CA:TRUE`
+basicConstraints, a `keyCertSign|cRLSign`-only keyUsage, a non-critical subjectKeyIdentifier, and
+nothing else — so a forged root carrying leaf privileges (SAN, serverAuth EKU, digitalSignature)
+is refused. Matching the live server's reported fingerprint is an additional check, not a
 replacement for certificate-scope validation. Without a server, `on` is refused and `off` removes
 owned artifacts locally. The management surface accepts `GET /api/claude-desktop/picker` and
 `PUT /api/claude-desktop/picker` with `{ enabled, persist, trustedLocally?, callerAddedTrust? }`;
