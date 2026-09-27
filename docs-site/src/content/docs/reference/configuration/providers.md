@@ -950,8 +950,9 @@ for example — cannot end up sending one account's token with another account's
 
 For primary Antigravity inference through the Google adapter's main dispatch, a 401 first refreshes
 and replays the same account. If that replay is still 401, or refresh fails with a terminal credential
-rejection that requires reauthentication, an eligible live sibling may receive at most one attempt
-within the existing budget. A transient refresh failure keeps the sanitized authentication error.
+rejection that requires reauthentication, the request may switch once to an eligible live sibling.
+That sibling request keeps the adapter's ordinary transient retries, and every physical send counts
+against the request's existing send budget. A transient refresh failure keeps the sanitized authentication error.
 Paused, reauthentication-required and cooling accounts are skipped;
 the failed credential gets a 60-second in-process cooldown only while its generation is current.
 Continuations, native Responses passthrough, image and web-search sidecars, and output already sent

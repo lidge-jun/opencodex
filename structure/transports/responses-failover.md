@@ -567,8 +567,10 @@ rebuilds the request.
 
 On primary Antigravity inference through the Google adapter's main dispatch, a pre-output 401 first
 refreshes and replays the same account. A second 401, or a terminal credential-refresh failure that
-marks the failed account for reauthentication, may send at most once on an eligible live sibling
-under the existing request rotation and credential-hop budgets. Transient refresh failures keep
+marks the failed account for reauthentication, may switch once to an eligible live sibling
+under the existing request rotation and credential-hop budgets. The sibling request keeps the Google
+adapter's ordinary transient retry policy, and every physical send is charged to the request's shared
+send budget. Transient refresh failures keep
 their sanitized authentication error. The initial pool activation
 is captured before the refused send, so marking the failed account for reauthentication does not
 remove an already eligible sibling. The failed credential generation gets a 60-second process-local
