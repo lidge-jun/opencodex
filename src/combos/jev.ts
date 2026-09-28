@@ -571,8 +571,13 @@ function canonicalJevProvider(config: OcxConfig, destination: JevDecisionDestina
  * it verbatim — OpenCode's zen gateway serves `jev-1.13` on `POST /zen/v1/systemone` with the
  * same `{model, answers, usage}` shape (verified against the live gateway 2026-09-28). Any ENABLED
  * provider carrying the `jev-decision` adapter is therefore a candidate; the row named `jev` is
- * tried first so an install that configures it routes exactly as before. A candidate is only
- * usable once an API key resolves from its own config or from `TYPESAFE_API_KEY` / `JEV_API_KEY`.
+ * tried first so an install that configures it routes exactly as before.
+ *
+ * Credentials are destination-bound: a candidate is usable with its own `apiKey`, while
+ * `TYPESAFE_API_KEY` / `JEV_API_KEY` are TypeSafe credentials and only count for a destination at
+ * the official `JEV_API_URL`. With no `jev` row configured at all, an environment credential alone
+ * still drives that official destination (the pre-existing shape); a row that exists but is
+ * disabled keeps its meaning and is never resurrected through the environment.
  */
 export interface JevDecisionDestination {
   providerId: string;
@@ -596,21 +601,29 @@ export function resolveJevDecisionDestination(config: OcxConfig): JevDecisionDes
   const environmentKey = process.env.TYPESAFE_API_KEY?.trim()
     || process.env.JEV_API_KEY?.trim();
   for (const [providerId, provider] of ordered) {
-    const apiKey = resolveProviderApiKey(provider.apiKey)?.trim() || environmentKey;
-    if (!apiKey) continue;
     const configuredUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
+    const baseUrl = configuredUrl.length > 0
+      ? configuredUrl
+      : getProviderRegistryEntry(providerId)?.baseUrl ?? JEV_API_URL;
+    const rowKey = resolveProviderApiKey(provider.apiKey)?.trim();
+    // An environment credential is a TypeSafe credential. It may only travel to the official
+    // TypeSafe destination: a row pointing anywhere else must bring its own key, or the secret
+    // would be handed to a host the operator never authenticated against.
+    const apiKey = rowKey ?? (baseUrl === JEV_API_URL ? environmentKey : undefined);
+    if (!apiKey) continue;
     return {
       providerId,
-      baseUrl: configuredUrl.length > 0
-        ? configuredUrl
-        : getProviderRegistryEntry(providerId)?.baseUrl ?? JEV_API_URL,
+      baseUrl,
       model: jevDecisionModel(providerId),
       apiKey,
     };
   }
-  // Legacy shape: no decision provider row at all. The environment credential alone still drives
-  // the TypeSafe destination the `jev-latest` alias belongs to, exactly as before.
-  if (!environmentKey) return null;
+  // Legacy shape: no `jev` row exists at all. A lone environment credential still drives the
+  // TypeSafe destination the `jev-latest` alias belongs to, exactly as before. A row that exists
+  // but is disabled is the operator saying no — honour that instead of resurrecting the service
+  // through the environment (and never fall back when a row exists but has no usable credential).
+  const jevRow = providers[JEV_PROVIDER_ID];
+  if (jevRow || !environmentKey) return null;
   return {
     providerId: JEV_PROVIDER_ID,
     baseUrl: JEV_API_URL,
