@@ -132,4 +132,3 @@ export function projectClaudeProviderRename(config: OcxConfig): ClaudeProviderRe
   if (!changed) return { config, changed: false, warnings };
   return { config: projected, changed: true, warnings };
 }
-

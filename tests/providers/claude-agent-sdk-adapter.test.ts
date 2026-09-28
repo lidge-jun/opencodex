@@ -539,6 +539,29 @@ describe("claude-agent-sdk runTurn streams a subscription turn", () => {
     expect(String((events.at(-1) as { message: string }).message)).toContain("harness exploded before any frame");
   });
 
+  test("one huge stderr chunk is cut at ingestion, in bytes rather than code units", async () => {
+    // 8 KiB of "…" is 24 KiB of UTF-8. Cutting code units only after the join retains the chunk
+    // in full and lets the message carry three times the advertised bound, so both the ingestion and the
+    // final cut have to be byte-exact.
+    const huge = "…".repeat(8 * 1024);
+    const module: ClaudeAgentSdkModule = {
+      query: params => {
+        (params.options.stderr as (chunk: string) => void)(huge);
+        const generator = (async function* () { yield initFrame() as Record<string, never>; })();
+        return {
+          [Symbol.asyncIterator]: () => generator,
+          return: async (value?: unknown) => await generator.return(value),
+        } as ClaudeAgentSdkQuery;
+      },
+    };
+    const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => module });
+    const events = await run(adapter, parsed());
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "protocol_error", retryable: false });
+    const message = String((events.at(-1) as { message: string }).message);
+    expect(message).toContain("[truncated by opencodex]");
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(8 * 1024 + 128);
+  });
+
   test("a turn that never produces a frame is bounded by the wall-clock ceiling", async () => {
     const sdk = fakeSdk([], { park: true });
     const adapter = createClaudeAgentSdkAdapter(provider(), {

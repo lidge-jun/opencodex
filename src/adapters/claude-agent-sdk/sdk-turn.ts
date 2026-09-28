@@ -15,6 +15,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { retainedUtf8Bytes, truncateRetainedUtf8 } from "../../lib/admission";
 import { isStandaloneBinary } from "../../lib/standalone";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -136,15 +137,12 @@ async function* projectedPrompt(frames: readonly string[]): AsyncGenerator<Strea
   }
 }
 
-function boundedStderr(chunks: string[]): string {
-  let total = 0;
-  const kept: string[] = [];
-  for (const chunk of chunks) {
-    if (total >= MAX_STDERR_BYTES) break;
-    kept.push(chunk);
-    total += chunk.length;
-  }
-  return kept.join("").slice(0, MAX_STDERR_BYTES).trim();
+function boundedStderr(chunks: readonly string[]): string {
+  const joined = chunks.join("");
+  // Every chunk is already bounded at ingestion; this is the byte-exact bound on the joined result.
+  return (retainedUtf8Bytes(joined) > MAX_STDERR_BYTES
+    ? truncateRetainedUtf8(joined, MAX_STDERR_BYTES)
+    : joined).trim();
 }
 
 export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Promise<void> {
@@ -218,11 +216,17 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
   incoming.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
   const stderrChunks: string[] = [];
-  let stderrLength = 0;
+  let stderrBytes = 0;
   const onStderr = (chunk: string): void => {
-    if (stderrLength >= MAX_STDERR_BYTES) return;
-    stderrChunks.push(chunk);
-    stderrLength += chunk.length;
+    // Bound at ingestion and in UTF-8 bytes. The running total says nothing about the size of this
+    // chunk, so a single oversized callback would otherwise be retained whole and only cut after the
+    // join; a code-unit cut would also let multi-byte text carry several times the advertised bound.
+    const remaining = MAX_STDERR_BYTES - stderrBytes;
+    if (remaining <= 0) return;
+    const kept = retainedUtf8Bytes(chunk) <= remaining ? chunk : truncateRetainedUtf8(chunk, remaining);
+    if (kept.length === 0) return;
+    stderrChunks.push(kept);
+    stderrBytes += retainedUtf8Bytes(kept);
   };
 
   let scratchDir: string;
