@@ -37,6 +37,10 @@ function fixture() {
   Object.assign(process.env, {
     HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocx, CODEX_HOME: codex,
     GROK_HOME: grok, CLAUDE_CONFIG_DIR: claude,
+    // os.homedir() reads the passwd database, not $HOME, so the owner registry's
+    // default-home anchor cannot be moved by the HOME rewrite above; point its
+    // documented seam at this fixture's stand-in for the default ~/.opencodex.
+    OCX_OWNER_REGISTRY_DIR: join(home, ".opencodex", "ocx-homes"),
   });
   return { root, home, ocx, codex, grok, claude };
 }

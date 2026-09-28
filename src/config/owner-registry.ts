@@ -26,12 +26,20 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 
 const REGISTRY_DIR_NAME = "ocx-homes";
+/**
+ * Test seam, not a user knob: os.homedir() resolves the passwd database on POSIX,
+ * so rewriting HOME inside a test process cannot move the anchor and the armed
+ * test-home guard would rightly refuse the write. Suites point this at their own
+ * fixture home; production always leaves it unset so the default home stays the
+ * one locator every sibling can find.
+ */
+const REGISTRY_DIR_ENV = "OCX_OWNER_REGISTRY_DIR";
 const REGISTRY_ENTRY_SUFFIX = ".json";
 const MAX_REGISTRY_ENTRIES = 64;
 // Directory listing itself is bounded so a cluttered folder cannot stall startup;
@@ -50,6 +58,8 @@ function registryBaseDir(): string {
 
 /** The shared directory the registry lives under. */
 export function ownerRegistryDir(): string {
+  const override = process.env[REGISTRY_DIR_ENV]?.trim();
+  if (override) return resolve(override);
   return join(registryBaseDir(), REGISTRY_DIR_NAME);
 }
 
@@ -64,8 +74,15 @@ function registryEntryPath(dir: string, home: string): string {
  */
 export function registerOwnerRegistryHome(home: string): void {
   try {
-    assertNotRealHomeUnderTest(registryBaseDir());
     const dir = ownerRegistryDir();
+    // Guard every ancestor of the write target: an override that still resolves
+    // under the protected ~/.opencodex must not slip past the test home guard.
+    for (let ancestor = dir; ;) {
+      assertNotRealHomeUnderTest(ancestor);
+      const parent = dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
     mkdirSync(dir, { recursive: true });
     atomicWriteFile(
       registryEntryPath(dir, home),
