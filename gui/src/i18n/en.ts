@@ -3038,6 +3038,8 @@ export const en = {
   "cws.capability.imageInputUnavailable": "Pick every target from the catalog first — unknown models can't be covered by the Vision Sidecar.",
   "cws.capability.imageInputHint": "On by default when every target supports images. Turn off to accept text only.",
   "cws.capability.imageInputSidecarHint": "On by default. {models} will be declared text-only on save and use the Vision Sidecar for images.",
+  "cws.capability.imageInputSidecarDisabled": "The Vision Sidecar is turned off — {models} will reject images until it is enabled in dashboard settings.",
+  "cws.capability.imageInputBlockedHint": "{models} cannot be covered by the Vision Sidecar: its input modalities are unknown or have no text.",
   "cws.capability.imageInput": "Image / multimodal",
   "cws.capability.adaptiveEffort": "Adaptive reasoning ladder",
   "cws.capability.adaptiveEffortHint": "Off: a target with no reasoning control hides the effort picker for the whole combo. On: those targets stay usable and the picker keeps the levels the remaining targets share.",

@@ -2932,6 +2932,8 @@ export const de: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Wähle zuerst alle Ziele aus dem Katalog — unbekannte Modelle kann der Vision Sidecar nicht abdecken.",
   "cws.capability.imageInputHint": "Standardmäßig aktiv, wenn jedes Ziel Bilder unterstützt. Ausschalten für nur Text.",
   "cws.capability.imageInputSidecarHint": "Standardmäßig aktiv. {models} wird beim Speichern als text-only deklariert und nutzt den Vision Sidecar für Bilder.",
+  "cws.capability.imageInputSidecarDisabled": "Der Vision Sidecar ist ausgeschaltet — {models} lehnt Bilder ab, bis er in den Dashboard-Einstellungen aktiviert wird.",
+  "cws.capability.imageInputBlockedHint": "{models} kann vom Vision Sidecar nicht abgedeckt werden: Eingabemodalitäten sind unbekannt oder ohne Text.",
   "cws.capability.imageInput": "Bild / multimodal",
   "cws.capability.adaptiveEffort": "Adaptive Denkstufen",
   "cws.capability.adaptiveEffortHint": "Aus: Ziele ohne Denkstufen-Regelung blenden die Auswahl für die gesamte Kombination aus. An: Solche Ziele bleiben nutzbar, und die Auswahl zeigt weiterhin die Stufen der übrigen Ziele.",

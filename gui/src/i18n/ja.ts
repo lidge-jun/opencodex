@@ -3008,6 +3008,8 @@ export const ja: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "まずすべてのターゲットをカタログから選択してください。不明なモデルはVision Sidecarでカバーできません。",
   "cws.capability.imageInputHint": "全ターゲットが画像対応なら既定でオン。オフにするとテキストのみ。",
   "cws.capability.imageInputSidecarHint": "既定でオン。{models} は保存時にテキスト専用として宣言され、画像にはVision Sidecarを使用します。",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecarがオフのため、{models} はダッシュボード設定で有効化されるまで画像を拒否します。",
+  "cws.capability.imageInputBlockedHint": "{models} はVision Sidecarでカバーできません：入力モダリティが不明か、テキストを含みません。",
   "cws.capability.imageInput": "画像 / マルチモーダル",
   "cws.capability.adaptiveEffort": "適応的な推論レベル",
   "cws.capability.adaptiveEffortHint": "オフ: 推論レベルを持たない対象があると、コンボ全体のセレクターが消えます。オン: その対象はそのまま使え、セレクターには残りの対象で共通するレベルが表示されます。",

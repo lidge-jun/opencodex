@@ -53,6 +53,13 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../config/provider-validation";
+import { commitProviderPatch } from "./provider-patch-transaction";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
+import {
+  customRowInputModalities,
+  isVisionSidecarConsumer,
+  modelAcceptsImageInput,
+} from "../../vision/eligibility";
 import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -275,9 +282,29 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const sidecarPatches = new Map<string, Record<string, { inputModalities: string[] }>>();
     if (sidecarParsed.targets?.length) {
       if (normalized.imageInput === "disabled") {
-        return jsonResponse({ error: "visionSidecarTargets requires imageInput auto" }, 400);
+        return jsonResponse({ error: "visionSidecarTargets requires imageInput not disabled" }, 400);
       }
       for (const { provider, model } of sidecarParsed.targets) {
+        const providerRow = config.providers?.[provider];
+        if (!providerRow) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" has no configured provider` }, 400);
+        }
+        // A text-only declaration would HIDE a real capability; never overwrite one.
+        if (modelAcceptsImageInput(config, { provider, id: model }) === true) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" already accepts image input` }, 400);
+        }
+        // Read the declaration the way the runtime does: exact capability axis, then the
+        // operator's custom row. A row without text (audio-only) cannot be widened by the sidecar.
+        const declared = Object.hasOwn(providerRow.modelCapabilities ?? {}, model)
+          ? providerRow.modelCapabilities?.[model]?.inputModalities
+          : customRowInputModalities(config, provider, model);
+        if (declared !== undefined && !declared.includes("text")) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" is declared without text input; the Vision Sidecar cannot cover it` }, 400);
+        }
+        // Already a consumer through any runtime source (exact declaration, custom row,
+        // noVisionModels, legacy record, registry enrichment): the catalog already
+        // advertises image for it. Writing the declaration again would be a no-op write.
+        if (isVisionSidecarConsumer(config, provider, model)) continue;
         const patch = sidecarPatches.get(provider) ?? {};
         patch[model] = { inputModalities: ["text"] };
         sidecarPatches.set(provider, patch);
@@ -349,65 +376,76 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       const targetError = shadowCallTargetError({ ...config, combos: nextCombos }, migratedShadowTarget);
       if (targetError) return jsonResponse({ error: targetError }, 400);
     }
-    config.combos = nextCombos;
-    if (migratedModels.size > 0) {
-      const migrateReference = (model: string): string => migratedModels.get(model) ?? model;
-      const migrateAgentReference = (model: string): string => {
-        const migrated = migrateReference(model);
-        if (migrated !== model) shouldSyncClaudeAgentDefs = true;
-        return migrated;
-      };
-      if (config.subagentModels) {
-        config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
-      }
-      if (config.injectionModel && migratedModels.has(config.injectionModel)) {
-        config.injectionModel = migrateReference(config.injectionModel);
-      }
-      if (config.shadowCallIntercept?.model && migratedModels.has(config.shadowCallIntercept.model)) {
-        config.shadowCallIntercept = {
-          ...config.shadowCallIntercept,
-          model: migrateReference(config.shadowCallIntercept.model),
-        };
-      }
-      if (config.claudeCode) {
-        const claudeCode = { ...config.claudeCode };
-        for (const field of ["model", "smallFastModel"] as const) {
-          if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
-        }
-        if (claudeCode.tierModels) {
-          claudeCode.tierModels = Object.fromEntries(
-            Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
-          );
-        }
-        if (claudeCode.modelMap) {
-          claudeCode.modelMap = Object.fromEntries(
-            Object.entries(claudeCode.modelMap).map(([source, model]) => [source, migrateAgentReference(model)]),
-          );
-        }
-        if (claudeCode.intercept?.modelMap) {
-          claudeCode.intercept = {
-            ...claudeCode.intercept,
-            modelMap: Object.fromEntries(
-              Object.entries(claudeCode.intercept.modelMap).map(([pickerId, route]) => [pickerId, migrateAgentReference(route)]),
-            ),
+    // One atomic transaction: a failed save must restore the combo, the capability
+    // declarations, and every migrated reference together, never partially.
+    let publicationError = false;
+    try {
+      commitProviderPatch(config, () => {
+        config.combos = nextCombos;
+        if (migratedModels.size > 0) {
+          const migrateReference = (model: string): string => migratedModels.get(model) ?? model;
+          const migrateAgentReference = (model: string): string => {
+            const migrated = migrateReference(model);
+            if (migrated !== model) shouldSyncClaudeAgentDefs = true;
+            return migrated;
           };
+          if (config.subagentModels) {
+            config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
+          }
+          if (config.injectionModel && migratedModels.has(config.injectionModel)) {
+            config.injectionModel = migrateReference(config.injectionModel);
+          }
+          if (config.shadowCallIntercept?.model && migratedModels.has(config.shadowCallIntercept.model)) {
+            config.shadowCallIntercept = {
+              ...config.shadowCallIntercept,
+              model: migrateReference(config.shadowCallIntercept.model),
+            };
+          }
+          if (config.claudeCode) {
+            const claudeCode = { ...config.claudeCode };
+            for (const field of ["model", "smallFastModel"] as const) {
+              if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
+            }
+            if (claudeCode.tierModels) {
+              claudeCode.tierModels = Object.fromEntries(
+                Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
+              );
+            }
+            if (claudeCode.modelMap) {
+              claudeCode.modelMap = Object.fromEntries(
+                Object.entries(claudeCode.modelMap).map(([source, model]) => [source, migrateAgentReference(model)]),
+              );
+            }
+            if (claudeCode.intercept?.modelMap) {
+              claudeCode.intercept = {
+                ...claudeCode.intercept,
+                modelMap: Object.fromEntries(
+                  Object.entries(claudeCode.intercept.modelMap).map(([pickerId, route]) => [pickerId, migrateAgentReference(route)]),
+                ),
+              };
+            }
+            config.claudeCode = claudeCode;
+          }
         }
-        config.claudeCode = claudeCode;
+        if (oldDisabledSelectors.size > 0 && config.disabledModels) {
+          config.disabledModels = [...new Set(config.disabledModels.map(model => (
+            oldDisabledSelectors.has(model) ? newDisabledModel : model
+          )))];
+        }
+        for (const [providerName, patch] of sidecarPatches) {
+          const provider = config.providers?.[providerName];
+          if (!provider) continue;
+          const capabilities = mergeModelCapabilities(provider.modelCapabilities, patch);
+          if (capabilities === undefined) delete provider.modelCapabilities;
+          else provider.modelCapabilities = capabilities;
+        }
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+    } catch (error) {
+      if (!(error instanceof ConfigWritePublishedError)) {
+        return jsonResponse({ error: "combo could not be saved" }, 500);
       }
+      publicationError = true;
     }
-    if (oldDisabledSelectors.size > 0 && config.disabledModels) {
-      config.disabledModels = [...new Set(config.disabledModels.map(model => (
-        oldDisabledSelectors.has(model) ? newDisabledModel : model
-      )))];
-    }
-    for (const [providerName, patch] of sidecarPatches) {
-      const provider = config.providers?.[providerName];
-      if (!provider) continue;
-      const capabilities = mergeModelCapabilities(provider.modelCapabilities, patch);
-      if (capabilities === undefined) delete provider.modelCapabilities;
-      else provider.modelCapabilities = capabilities;
-    }
-    saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);
@@ -415,7 +453,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       clearComboSelectionState(renameFrom);
       clearComboTargetCooldowns(renameFrom);
     }
-    const catalogRefresh = await convergeCodexCatalog();
+    const catalogRefresh = publicationError
+      ? { status: "skipped" as const, reason: "not-requested" as const, retryable: true }
+      : await convergeCodexCatalog();
     if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
     // Wire shape matches persistence: omit default imageInput "auto".
     return jsonResponse({ success: true, id, model: newPublicModel, combo: sparseComboConfig(stored), catalogRefresh });

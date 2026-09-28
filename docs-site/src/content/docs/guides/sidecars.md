@@ -143,6 +143,9 @@ model field.
 Saving a multimodal combo from the dashboard enrolls its non-image members automatically: the
 Combos page sends them as `visionSidecarTargets` on `PUT /api/combos`, which writes the exact
 text-only declaration on the member's provider, so no manual config edit and reload is needed.
+Enrollment never overwrites an existing image-capable declaration, and members whose modalities are
+unknown or have no text input are not enrolled — the dashboard names them and keeps the combo's
+image switch unavailable.
 The first-party DeepSeek `deepseek-flash` model is native multimodal (`text` and `image`) and does
 not use this sidecar by default. Explicit `noVisionModels` or text-only declarations remain
 authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash` remain
