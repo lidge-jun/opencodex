@@ -3309,6 +3309,8 @@ export const ru: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Сначала выберите все цели из каталога — неизвестные модели нельзя обработать через Vision Sidecar.",
   "cws.capability.imageInputHint": "Включено по умолчанию, если все цели поддерживают изображения. Выключите, чтобы принимать только текст.",
   "cws.capability.imageInputSidecarHint": "Включено по умолчанию. При сохранении для {models} будет указана только текстовая модальность; изображения будут обрабатываться через Vision Sidecar.",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar выключен — {models} будет отклонять изображения, пока он не включён в настройках панели управления.",
+  "cws.capability.imageInputBlockedHint": "{models} не может быть покрыт Vision Sidecar: его входные модальности неизвестны или не содержат текст.",
   "cws.capability.imageInput": "Изображения / мультимодальность",
   "cws.capability.adaptiveEffort": "Адаптивная шкала рассуждений",
   "cws.capability.adaptiveEffortHint": "Выкл.: цель без настройки рассуждений скрывает выбор уровня для всей комбинации. Вкл.: такие цели остаются доступными, а в выборе сохраняются уровни, общие для остальных целей.",

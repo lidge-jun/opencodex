@@ -39,6 +39,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { syncCatalogModels } from "../../src/codex/catalog";
+import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
 import { injectClaudeAgentDefs } from "../../src/claude/agents-inject";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -546,6 +547,148 @@ describe("combo management API", () => {
       }
       expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
       expect(config.providers?.a?.modelCapabilities).toBeUndefined();
+    });
+  });
+
+  test("PUT rejects already-image-capable and audio-only sidecar targets instead of overwriting", async () => {
+    await withTempHome(async () => {
+      const cases: Array<{ name: string; config: OcxConfig }> = [
+        {
+          name: "capability axis already declares image",
+          config: baseConfig({
+            providers: {
+              ...baseConfig().providers,
+              b: { ...baseConfig().providers.b!, modelCapabilities: { m2: { inputModalities: ["text", "image"] } } },
+            },
+            combos: undefined,
+          }),
+        },
+        {
+          name: "capability axis declares audio only",
+          config: baseConfig({
+            providers: {
+              ...baseConfig().providers,
+              b: { ...baseConfig().providers.b!, modelCapabilities: { m2: { inputModalities: ["audio"] } } },
+            },
+            combos: undefined,
+          }),
+        },
+        {
+          name: "custom row declares audio only",
+          config: baseConfig({
+            customModels: [{ id: "custom-b-m2", provider: "b", modelId: "m2", inputModalities: ["audio"] }],
+            combos: undefined,
+          }),
+        },
+      ];
+      for (const { config } of cases) {
+        saveConfig(config);
+        const before = readFileSync(getConfigPath(), "utf8");
+        const response = await comboApi(config, "PUT", "/api/combos", {
+          id: "mixed",
+          visionSidecarTargets: [{ provider: "b", model: "m2" }],
+          combo: {
+            targets: [
+              { provider: "a", model: "m1" },
+              { provider: "b", model: "m2" },
+            ],
+          },
+        });
+        expect(response?.status).toBe(400);
+        expect(config.combos).toBeUndefined();
+        expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      }
+    });
+  });
+
+  test("PUT treats an already-covered member as a no-op write", async () => {
+    await withTempHome(async () => {
+      const exactTextOnly = baseConfig({
+        providers: {
+          ...baseConfig().providers,
+          b: { ...baseConfig().providers.b!, modelCapabilities: { m2: { inputModalities: ["text"] } } },
+        },
+        combos: undefined,
+      });
+      saveConfig(exactTextOnly);
+      const viaCapability = await comboApi(exactTextOnly, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "b", model: "m2" }] },
+      });
+      expect(viaCapability?.status).toBe(200);
+      // The operator's declaration is preserved verbatim, never rewritten.
+      expect(exactTextOnly.providers?.b?.modelCapabilities).toEqual({ m2: { inputModalities: ["text"] } });
+      expect(isModelVisionSidecarConsumer(exactTextOnly.providers!.b!, "m2")).toBe(true);
+
+      const viaNoVision = baseConfig({
+        providers: {
+          ...baseConfig().providers,
+          b: { ...baseConfig().providers.b!, noVisionModels: ["m2"] },
+        },
+        combos: undefined,
+      });
+      saveConfig(viaNoVision);
+      const response = await comboApi(viaNoVision, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "b", model: "m2" }] },
+      });
+      expect(response?.status).toBe(200);
+      expect(viaNoVision.providers?.b?.modelCapabilities).toBeUndefined();
+      expect(isModelVisionSidecarConsumer(viaNoVision.providers!.b!, "m2")).toBe(true);
+    });
+  });
+
+  test("PUT enrolls the member so the runtime treats it as a sidecar consumer", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [{ provider: "b", model: "m2" }],
+        combo: { targets: [{ provider: "b", model: "m2" }] },
+      });
+      expect(response?.status).toBe(200);
+      // The exact declaration the catalog's consumer check reads: text without image.
+      expect(isModelVisionSidecarConsumer(config.providers!.b!, "m2")).toBe(true);
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.providers?.b?.modelCapabilities?.m2?.inputModalities).toEqual(["text"]);
+    });
+  });
+
+  test("PUT rolls back combo, declarations, and migrated references when the save fails", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        combos: {
+          old: { strategy: "failover", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+        },
+        subagentModels: ["combo/old"],
+      });
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+      const req = new Request("http://localhost/api/combos", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: "new",
+          renameFrom: "old",
+          visionSidecarTargets: [{ provider: "b", model: "m2" }],
+          combo: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+        }),
+      });
+      const response = await handleManagementAPI(req, new URL(req.url), config, {
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+        saveConfigPreservingClaudeCode: () => { throw new Error("disk full"); },
+      });
+      expect(response?.status).toBe(500);
+      expect(await responseJson(response)).toEqual({ error: "combo could not be saved" });
+      // Nothing moved: the combo keeps its old key, references stay unmigrated,
+      // and the sidecar declaration was never applied.
+      expect(Object.keys(config.combos!)).toEqual(["old"]);
+      expect(config.subagentModels).toEqual(["combo/old"]);
+      expect(config.providers?.b?.modelCapabilities).toBeUndefined();
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
     });
   });
 

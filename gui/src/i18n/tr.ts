@@ -3170,6 +3170,8 @@ export const tr: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Önce tüm hedefleri katalogdan seçin — bilinmeyen modeller Vision Sidecar ile kapsanamaz.",
   "cws.capability.imageInputHint": "Tüm hedefler görselleri desteklediğinde varsayılan olarak açıktır. Yalnızca metin kabul etmek için kapatın.",
   "cws.capability.imageInputSidecarHint": "Varsayılan olarak açık. {models} kaydedildiğinde yalnızca metin olarak bildirilir ve görseller için Vision Sidecar kullanır.",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar kapalı — {models}, gösterge paneli ayarlarından etkinleştirilene kadar görselleri reddeder.",
+  "cws.capability.imageInputBlockedHint": "{models} Vision Sidecar tarafından kapsanamaz: giriş modları bilinmiyor veya metin içermiyor.",
   "cws.capability.imageInput": "Görsel / çok modlu",
   "cws.capability.adaptiveEffort": "Uyarlanabilir akıl yürütme düzeyi",
   "cws.capability.adaptiveEffortHint": "Kapalı: akıl yürütme denetimi olmayan bir hedef, tüm kombinasyonun seçicisini gizler. Açık: bu hedefler kullanılabilir kalır ve seçici, kalan hedeflerin ortak düzeylerini gösterir.",

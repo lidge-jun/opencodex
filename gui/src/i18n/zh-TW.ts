@@ -2365,6 +2365,8 @@ export const zhTW: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "請先從目錄選擇所有目標——未知模型無法由 Vision Sidecar 處理。",
   "cws.capability.imageInputHint": "所有目標都支援圖片時預設開啟；關閉後僅接受文字。",
   "cws.capability.imageInputSidecarHint": "預設開啟。{models} 將在儲存時宣告為純文字，並使用 Vision Sidecar 處理圖片。",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar 已關閉——{models} 在儀表板設定中啟用它之前將拒絕圖片。",
+  "cws.capability.imageInputBlockedHint": "{models} 無法由 Vision Sidecar 覆蓋：其輸入模態未知或不含文字。",
   "cws.capability.imageInput": "圖片 / 多模態",
   "cws.capability.adaptiveEffort": "自適應推理層級",
   "cws.capability.adaptiveEffortHint": "關閉：只要有一個目標不支援推理層級，整個組合的選擇器都會消失。開啟：這些目標仍可使用，選擇器保留其餘目標共有的層級。",
