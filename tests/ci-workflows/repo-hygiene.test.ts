@@ -16,9 +16,17 @@ const repoRoot = resolveRepoRoot();
  * This test closes that gap by asserting against the real index instead of the
  * ignore file, so a forced add fails CI on the commit that introduces it.
  */
-const FORBIDDEN_TRACKED_DIRS = [".codexclaw", ".omo", ".claude", "node_modules", ".tmp"];
+const FORBIDDEN_TRACKED_DIRS = [".codexclaw", ".omo", ".claude", ".agents", "node_modules", ".tmp"];
 
 const FORBIDDEN_TRACKED_FILENAMES = [".DS_Store", "Thumbs.db"];
+
+/**
+ * Working notes an agent writes for itself or for the next agent. A scoped
+ * `design-debt.md` audit reached the repository root through a bug-train squash,
+ * and the release train 4 lanes committed `_handoff.md` files when they were
+ * stopped and resumed. Durable planning belongs in numbered `devlog/` docs.
+ */
+const AGENT_SCRATCH_FILENAMES = ["design-debt.md", "_handoff.md"];
 
 /**
  * The retired Go native-runtime experiment. Nothing in `src/`, the build, the
@@ -93,6 +101,14 @@ describe("repository hygiene", () => {
   test("no OS metadata files are tracked", () => {
     const offenders = trackedFiles().filter((path) =>
       FORBIDDEN_TRACKED_FILENAMES.includes(path.split("/").pop() ?? ""),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
+  test("no agent scratch notes are tracked", () => {
+    const offenders = trackedFiles().filter((path) =>
+      AGENT_SCRATCH_FILENAMES.includes(path.split("/").pop() ?? ""),
     );
 
     expect(offenders).toEqual([]);

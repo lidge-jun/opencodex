@@ -1,4 +1,5 @@
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxUsage } from "../../types";
+import type { TranslatorBudget } from "../../lib/translator-budget";
 
 /**
  * Shared stream-json protocol for official coding-agent CLIs (CodeBuddy Code and Qoder CLI).
@@ -19,6 +20,8 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxUsage } from "../..
 export const MAX_STREAM_LINE_BYTES = 8 * 1024 * 1024;
 /** Hard ceiling on the total stdout bytes consumed for one turn. */
 export const MAX_STREAM_TOTAL_BYTES = 64 * 1024 * 1024;
+/** Shared ceiling for upstream tool starts, including turns without a capture bridge. */
+export const MAX_TOOL_BLOCK_STARTS = 16;
 /** Hard ceiling on projected conversation history text (characters) to prevent runaway memory. */
 export const MAX_PROJECTED_HISTORY_CHARS = 200_000;
 /**
@@ -235,14 +238,24 @@ export interface StreamParseState {
    * when its own stop arrives, or when a new tool_use start reuses its index.
    */
   openToolBlocks?: Map<number, OpenToolBlock>;
+  /** Shared request budget for tool identity and buffered argument fragments. */
+  translatorBudget?: TranslatorBudget;
+  /** A capture bridge may impose a tighter ceiling than the shared parser limit. */
+  maxToolBlockStarts?: number;
+  /** Set before an over-limit block can be allocated or emitted. */
+  toolCallLimitExceeded?: boolean;
   /** Synthetic decreasing keys for tool_use start frames that omit the block index. */
   nextSyntheticToolBlockKey?: number;
   /** Tool_use blocks opened in this stream, whether or not they have closed yet. */
   toolBlockStarts?: number;
   /** Completed tool_use content blocks observed in this stream. */
   completedToolCalls?: number;
+  /** CodeBuddy's capture-only bridge requires complete JSON and matching block indices. */
+  strictToolBlockCapture?: boolean;
   /** Tool IDs already captured through partial events, for complete-assistant deduplication. */
   partialToolCallIds?: Set<string>;
+  /** One budget lease per ID retained by complete-assistant deduplication, released at turn cleanup. */
+  partialToolCallBudgetIds?: string[];
   /** A complete assistant tool block had no matching partial capture. */
   uncapturedToolUse?: boolean;
   /** Highest-seen usage snapshot from `message_delta`/assistant frames before a terminal result. */
@@ -351,7 +364,12 @@ export interface OpenToolBlock {
   id: string;
   name: string;
   argParts: string[];
+  indexed: boolean;
+  /** Unique budget identity even when upstream reuses a public tool-call ID. */
+  budgetCallId?: string;
 }
+
+let nextBudgetCallOrdinal = 0;
 
 /** Key a tool_use start frame by content-block index, falling back to a synthetic key. */
 function toolBlockKey(state: StreamParseState, event: StreamMessage): number {
@@ -366,8 +384,9 @@ function toolBlockKey(state: StreamParseState, event: StreamMessage): number {
  * Resolve a delta/stop frame to an open tool block. An indexed frame only matches a block
  * opened under the same index — CodeBuddy skips stop frames for thinking blocks, and such a
  * stop must not close a tool block that happens to be open. An index-less frame resolves
- * only when exactly one block is open. Ambiguous argument deltas are rejected before
- * resolution; an unmatched stop cannot close a tool block.
+ * only when exactly one block is open. Ambiguous argument deltas with multiple open blocks
+ * fail the turn. On the CodeBuddy capture path, a missing-index delta or stop cannot match
+ * an indexed block; an unmatched stop leaves the block open for terminal accounting.
  */
 function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): number | undefined {
   const index = event.index;
@@ -376,21 +395,49 @@ function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): num
   }
   const blocks = state.openToolBlocks;
   if (!blocks || blocks.size !== 1) return undefined;
-  return blocks.keys().next().value;
+  const [key, block] = blocks.entries().next().value!;
+  return state.strictToolBlockCapture && block.indexed ? undefined : key;
 }
 
 /**
  * Emit a closed block atomically — start, the buffered fragments in arrival order, end —
  * so the strictly sequential downstream bridge never sees two calls open at once.
  */
-function closeToolBlock(state: StreamParseState, key: number, events: AdapterEvent[]): void {
+function closeToolBlock(state: StreamParseState, key: number, events: AdapterEvent[], implicit = false): void {
   const block = state.openToolBlocks?.get(key);
   if (!block || !state.openToolBlocks) return;
+  if (state.strictToolBlockCapture && (implicit || block.argParts.length > 0)) {
+    // A second start on this index is an implicit stop only when the previous call's
+    // arguments are already complete. Otherwise a later delta could be assigned to the
+    // wrong call and still produce a superficially successful tool-use turn. An explicit
+    // stop with no deltas retains the CLI's existing empty-arguments representation.
+    const argumentsJson = block.argParts.join("");
+    let parsedArguments: unknown;
+    try {
+      parsedArguments = JSON.parse(argumentsJson);
+    } catch {
+      throw new CodingAgentProtocolError("Coding-agent CLI ended a tool call with incomplete JSON arguments.");
+    }
+    if (!asRecord(parsedArguments)) {
+      throw new CodingAgentProtocolError("Coding-agent CLI ended a tool call with non-object JSON arguments.");
+    }
+  }
   state.openToolBlocks.delete(key);
+  if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
   events.push({ type: "tool_call_start", id: block.id, name: block.name });
   for (const part of block.argParts) events.push({ type: "tool_call_delta", arguments: part });
   events.push({ type: "tool_call_end" });
   state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
+}
+
+/** Release reservations left by EOF, failed decode, protocol error, or abort. */
+export function releaseOpenToolBlocks(state: StreamParseState): void {
+  for (const block of state.openToolBlocks?.values() ?? []) {
+    if (block.budgetCallId) state.translatorBudget?.closeCall(block.budgetCallId);
+  }
+  state.openToolBlocks?.clear();
+  for (const leaseId of state.partialToolCallBudgetIds ?? []) state.translatorBudget?.closeCall(leaseId);
+  state.partialToolCallBudgetIds = undefined;
 }
 
 /** Map a raw Anthropic SSE event (carried inside a `stream_event` frame) to AdapterEvents. */
@@ -428,7 +475,17 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       if (partial) {
         const key = resolveToolBlockKey(state, event);
         const block = key === undefined ? undefined : state.openToolBlocks?.get(key);
-        if (block) block.argParts.push(partial);
+        if (state.strictToolBlockCapture && !block) {
+          throw new CodingAgentProtocolError(
+            "Coding-agent CLI sent a tool argument delta that cannot be attributed to an open tool block.",
+          );
+        }
+        if (block) {
+          state.translatorBudget?.chargeRetained(Buffer.byteLength(partial), {
+            kind: "tool_args", callId: block.budgetCallId,
+          });
+          block.argParts.push(partial);
+        }
       }
     }
     return events;
@@ -440,19 +497,57 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       const id = asString(block?.id) ?? "";
       const name = asString(block?.name) ?? "tool";
       if (id) {
+        const limit = Math.min(MAX_TOOL_BLOCK_STARTS, state.maxToolBlockStarts ?? MAX_TOOL_BLOCK_STARTS);
+        if ((state.toolBlockStarts ?? 0) >= limit) {
+          state.toolCallLimitExceeded = true;
+          return events;
+        }
         const key = toolBlockKey(state, event);
         if (state.openToolBlocks?.has(key)) {
           // CodeBuddy reuses one content-block index for a parallel batch: every call in the
           // batch starts on the same index, intermediate blocks never receive a stop, and only
           // the final block does (observed 2026-09-26: START 2 alpha, A's complete args, START 2
-          // beta, B's complete args, one STOP 2). Parallel calls stream their arguments
-          // sequentially — never interleaved — so the block already open on this index is
-          // complete, and the new start implicitly closes it.
-          closeToolBlock(state, key, events);
+          // beta, B's complete args, one STOP 2). A new start implicitly closes the previous
+          // block only after the capture path verifies its arguments form a complete object.
+          closeToolBlock(state, key, events, true);
         }
-        (state.openToolBlocks ??= new Map()).set(key, { id, name, argParts: [] });
+        const budget = state.translatorBudget;
+        const budgetCallId = budget ? `coding-agent:${++nextBudgetCallOrdinal}` : undefined;
+        if (budget && budgetCallId) {
+          budget.openCall(budgetCallId);
+          try {
+            // Bridge deduplication keeps the ID on the turn lease after this block closes.
+            budget.chargeRetained(Buffer.byteLength(name) + (state.partialToolCallIds ? 0 : Buffer.byteLength(id)), {
+              kind: "tool_args", callId: budgetCallId,
+            });
+          } catch (error) {
+            budget.closeCall(budgetCallId);
+            throw error;
+          }
+        }
+        (state.openToolBlocks ??= new Map()).set(key, {
+          id,
+          name,
+          argParts: [],
+          indexed: typeof event.index === "number" && Number.isInteger(event.index),
+          budgetCallId,
+        });
         state.toolBlockStarts = (state.toolBlockStarts ?? 0) + 1;
-        state.partialToolCallIds?.add(id);
+        if (state.partialToolCallIds && !state.partialToolCallIds.has(id)) {
+          if (budget) {
+            // A lease per ID: the per-call byte limit must not pool IDs from different calls.
+            const leaseId = `coding-agent-id:${++nextBudgetCallOrdinal}`;
+            budget.openCall(leaseId);
+            try {
+              budget.chargeRetained(Buffer.byteLength(id), { kind: "tool_args", callId: leaseId });
+            } catch (error) {
+              budget.closeCall(leaseId);
+              throw error;
+            }
+            (state.partialToolCallBudgetIds ??= []).push(leaseId);
+          }
+          state.partialToolCallIds.add(id);
+        }
       }
     }
     return events;

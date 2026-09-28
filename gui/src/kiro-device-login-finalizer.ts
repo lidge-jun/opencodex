@@ -1,16 +1,84 @@
 import { parseKiroDeviceView, type KiroDeviceView } from "./kiro-device-login-helpers";
 
 export type KiroFinalOutcome = "added" | "ended" | "failed";
+export type KiroStatusResult =
+  | { kind: "view"; view: KiroDeviceView }
+  | { kind: "missing" }
+  | { kind: "retry" };
+export type KiroStatusRead = { result: Promise<KiroStatusResult>; cancel: () => void };
 type Listener = (outcome: KiroFinalOutcome) => void;
 const active = new Map<string, Promise<KiroFinalOutcome>>();
 const terminal = new Map<string, KiroFinalOutcome>();
 const listeners = new Map<string, Set<Listener>>();
 const keyFor = (apiBase: string, flowId: string) => JSON.stringify([apiBase, flowId]);
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-async function boundedRead(read: Promise<Response | null>, ms: number): Promise<Response | null> {
+const MAX_STATUS_BODY_BYTES = 64 * 1024;
+
+function cancelBody(response: Response): void {
+  try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
+}
+
+/** Own fetch, body EOF and parsing as one cancellable operation; headers alone are not completion. */
+export function readKiroDeviceStatus(apiBase: string, flowId: string, timeoutMs = 45_000): KiroStatusRead {
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let settled = false;
+  let finish!: (result: KiroStatusResult) => void;
+  const result = new Promise<KiroStatusResult>(resolve => { finish = resolve; });
+  const settle = (value: KiroStatusResult) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    finish(value);
+  };
+  const cancel = () => {
+    if (settled) return;
+    controller.abort();
+    try { void reader?.cancel().catch(() => {}); } catch { /* best effort */ }
+    // Transport abort and stream cancellation are cooperative. The caller's deadline is not.
+    settle({ kind: "retry" });
+  };
+  const timer = setTimeout(cancel, Math.max(0, timeoutMs));
+  void (async () => {
+    try {
+      const response = await fetch(
+        `${apiBase}/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(flowId)}`,
+        { signal: controller.signal },
+      );
+      if (settled) { cancelBody(response); return; }
+      if (response.status === 404) { cancelBody(response); settle({ kind: "missing" }); return; }
+      if (!response.ok || !response.body) { cancelBody(response); settle({ kind: "retry" }); return; }
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      let bytes = 0;
+      while (true) {
+        const chunk = await reader.read();
+        if (settled) return;
+        if (chunk.done) break;
+        bytes += chunk.value.byteLength;
+        if (bytes > MAX_STATUS_BODY_BYTES) { cancel(); return; }
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      text += decoder.decode();
+      let decoded: unknown;
+      try { decoded = JSON.parse(text); } catch { settle({ kind: "retry" }); return; }
+      const view = parseKiroDeviceView(decoded);
+      settle(view ? { kind: "view", view } : { kind: "retry" });
+    } catch { settle({ kind: "retry" }); }
+  })();
+  return { result, cancel };
+}
+
+async function awaitStatusRead(read: KiroStatusRead, ms: number): Promise<KiroStatusResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([read, new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ms); })]);
+    return await Promise.race([
+      read.result,
+      new Promise<KiroStatusResult>(resolve => {
+        timer = setTimeout(() => { read.cancel(); resolve({ kind: "retry" }); }, Math.max(0, ms));
+      }),
+    ]);
   } finally { if (timer) clearTimeout(timer); }
 }
 
@@ -45,7 +113,7 @@ export function observeKiroDeviceFinal(apiBase: string, flowId: string, view: Ki
 
 /** Detached reconciliation survives dialog and page unmount. One loop per flowId. */
 export function finalizeKiroDeviceFlow(apiBase: string, flowId: string, expiresAt?: number,
-  inFlight?: Promise<Response | null>): Promise<KiroFinalOutcome> {
+  inFlight?: KiroStatusRead): Promise<KiroFinalOutcome> {
   const key = keyFor(apiBase, flowId);
   const prior = active.get(key);
   if (prior) return prior;
@@ -55,27 +123,23 @@ export function finalizeKiroDeviceFlow(apiBase: string, flowId: string, expiresA
   const run = (async () => {
     let pending = inFlight;
     while (Date.now() < deadline) {
-      let response: Response | null;
-      try {
-        const remaining = deadline - Date.now();
-        const timeout = Math.min(45_000, remaining);
-        response = await boundedRead(pending ?? fetch(
-          `${apiBase}/api/oauth/status?provider=kiro&flowId=${encodeURIComponent(flowId)}`,
-          { signal: AbortSignal.timeout(timeout) },
-        ), timeout);
-      } catch { response = null; }
+      const remaining = deadline - Date.now();
+      const read = pending ?? readKiroDeviceStatus(apiBase, flowId, Math.min(45_000, remaining));
       pending = undefined;
+      const status = await awaitStatusRead(read, remaining);
       if (terminal.has(key)) return terminal.get(key)!;
-      if (response?.status === 404) return finish(apiBase, flowId, "ended");
-      if (response?.ok) {
-        const view = parseKiroDeviceView(await response.json().catch(() => null));
-        if (view) {
-          const result = observeKiroDeviceFinal(apiBase, flowId, view);
-          if (result) return result;
-        }
+      if (status.kind === "missing") return finish(apiBase, flowId, "ended");
+      if (status.kind === "view") {
+        const result = observeKiroDeviceFinal(apiBase, flowId, status.view);
+        if (result) return result;
       }
-      await delay(2_000);
+      const retryRemaining = deadline - Date.now();
+      if (retryRemaining <= 0) break;
+      await delay(Math.min(2_000, retryRemaining));
     }
+    // A close can hand off after expiry. Do not leave that inherited transport alive merely
+    // because there was no remaining loop iteration in which the deadline wrapper could cancel it.
+    pending?.cancel();
     return finish(apiBase, flowId, "ended");
   })().finally(() => { active.delete(key); });
   active.set(key, run);

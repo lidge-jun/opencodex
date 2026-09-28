@@ -237,3 +237,100 @@ describe("Command Code malformed envelope echo", () => {
     expect(calls(events)).toEqual([]);
   });
 });
+
+describe("post-prose marker prefixes", () => {
+  const PROSE = "Running it now.\n";
+  const MARKER = "<tool_call>";
+
+  test.each(Array.from({ length: MARKER.length - 1 }, (_, index) => index + 1))(
+    "holds a marker split after byte %i until its matching native call", split => {
+      const { budget, filter } = execFilter();
+      filter.toolInputStart("call_split", "exec");
+      expect(filter.textDelta("t", PROSE + MARKUP.slice(0, split)))
+        .toEqual([{ type: "text_delta", text: PROSE }]);
+      expect(budget.snapshot().currentBytes).toBe(split);
+      expect(filter.textDelta("t", MARKUP.slice(split))).toEqual([]);
+      const events = [...filter.nativeCall("call_split", "exec", JS), ...filter.finish().events];
+      expect(texts(events)).toBe("");
+      expect(calls(events)).toEqual([{ id: "call_split", name: "exec", args: JS }]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    },
+  );
+
+  test("recognizes a marker delivered one byte at a time after prose", () => {
+    const { budget, filter } = execFilter();
+    const events = filter.textDelta("t", PROSE);
+    for (const char of MARKUP) events.push(...filter.textDelta("t", char));
+    events.push(...filter.nativeCall("native", "exec", JS), ...filter.finish().events);
+    expect(texts(events)).toBe(PROSE);
+    expect(calls(events)).toEqual([{ id: "native", name: "exec", args: JS }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each(["end", "finish", "failure", "boundary"] as const)(
+    "releases an incomplete prefix as text on %s", ending => {
+      const { budget, filter } = execFilter();
+      const events = filter.textDelta("t", PROSE + "<tool_");
+      if (ending === "end") events.push(...filter.textEnd("t"));
+      if (ending === "boundary") events.push(...filter.boundary());
+      events.push(...(ending === "failure" ? filter.releaseAll() : filter.finish().events));
+      expect(texts(events)).toBe(PROSE + "<tool_");
+      expect(calls(events)).toEqual([]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    },
+  );
+
+  test("releases a disproven prefix before a later native call", () => {
+    const { budget, filter } = execFilter();
+    const events = [
+      ...filter.textDelta("t", PROSE + "<tool_"),
+      ...filter.textDelta("t", "example>"),
+      ...filter.nativeCall("native", "exec", JS),
+      ...filter.finish().events,
+    ];
+    expect(texts(events)).toBe(PROSE + "<tool_example>");
+    expect(events.at(-1)?.type).toBe("tool_call_end");
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("a failed prefix does not hide the next complete marker", () => {
+    const { budget, filter } = execFilter();
+    const events = [
+      ...filter.textDelta("t", PROSE + "<tool_"),
+      ...filter.textDelta("t", "example> " + MARKUP),
+      ...filter.nativeCall("native", "exec", JS),
+      ...filter.finish().events,
+    ];
+    expect(texts(events)).toBe(PROSE + "<tool_example> ");
+    expect(calls(events)).toEqual([{ id: "native", name: "exec", args: JS }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each([true, false])("an unmatched split envelope stays inert on clean=%s", clean => {
+    const { budget, filter } = execFilter();
+    const events = [
+      ...filter.textDelta("t", PROSE + "<tool_"),
+      ...filter.textDelta("t", MARKUP.slice(6)),
+      ...(clean ? filter.finish().events : filter.releaseAll()),
+    ];
+    expect(texts(events)).toBe(PROSE + MARKUP);
+    expect(calls(events)).toEqual([]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("reasoning interrupts an unresolved prefix without changing output order", () => {
+    const { budget, filter } = execFilter();
+    const thinking: AdapterEvent = { type: "thinking_delta", thinking: "thinking" };
+    const events = [
+      ...filter.textDelta("t", PROSE + "<tool_"),
+      ...filter.enqueueEvent(thinking, "thinking"),
+      ...filter.textDelta("t", "example>"),
+      ...filter.finish().events,
+    ];
+    expect(texts(events)).toBe(PROSE + "<tool_example>");
+    const index = events.indexOf(thinking);
+    expect(texts(events.slice(0, index))).toBe(PROSE + "<tool_");
+    expect(texts(events.slice(index + 1))).toBe("example>");
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+});

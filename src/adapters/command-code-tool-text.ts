@@ -239,12 +239,6 @@ interface TextBlock {
   interrupted: boolean;
   /** Tool inputs open when the block started; the native call that duplicates it is one of them. */
   candidates: Set<string>;
-  /**
-   * Rolling suffix of prose-committed text (one marker minus one char). A `<tool_call>` can
-   * straddle a delta boundary, so the marker scan sees carry + delta; a marker whose first byte
-   * already streamed cannot be un-emitted and is not scanned again.
-   */
-  tailCarry: string;
 }
 
 interface TextChunk {
@@ -335,7 +329,7 @@ export class CommandCodeToolTextFilter {
     const key = typeof id === "string" ? id : DEFAULT_TEXT_ID;
     const events = this.blocks.has(key) ? this.textEnd(key) : [];
     events.push(...this.breakOpenBlocks(key));
-    const block: TextBlock = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()), tailCarry: "" };
+    const block: TextBlock = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
     this.blocks.set(key, block);
     return events;
   }
@@ -345,7 +339,7 @@ export class CommandCodeToolTextFilter {
     const boundaryEvents = this.breakOpenBlocks(key);
     let block = this.blocks.get(key);
     if (!block) {
-      block = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()), tailCarry: "" };
+      block = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
       this.blocks.set(key, block);
     }
     // Probe before retaining so the state transition precedes the marker scan: a delta that
@@ -359,7 +353,7 @@ export class CommandCodeToolTextFilter {
     // marker inside the delta starts a held tail instead: it never restores a call, but a
     // matching native call still strips the echo and an unmatched one releases as text.
     if (block.state === "streaming" || block.state === "queued") {
-      const markerStart = this.findFreshMarker(block.tailCarry, text);
+      const markerStart = this.findFreshMarker(text);
       if (markerStart !== undefined) {
         return [
           ...boundaryEvents,
@@ -367,28 +361,27 @@ export class CommandCodeToolTextFilter {
           ...this.openHeldTail(key, text.slice(markerStart)),
         ];
       }
-      block.tailCarry = (block.tailCarry + text).slice(-(TOOL_CALL_MARKER.length - 1));
     }
     if (block.state === "streaming" && this.head === this.pending.length) {
       return [...boundaryEvents, { type: "text_delta", text }];
     }
     // Once a duplicate is dropped, later text is a new chunk at its own wire position.
     if (block.state === "dropped" || block.state === "streaming") {
-      block = { id: key, markupParts: [], probe: "", bytes: 0, state: "queued", ended: false, interrupted: true, candidates: new Set(), tailCarry: "" };
+      block = { id: key, markupParts: [], probe: "", bytes: 0, state: "queued", ended: false, interrupted: true, candidates: new Set() };
       this.blocks.set(key, block);
     }
     const events = this.retainChunk(block, text);
     return [...boundaryEvents, ...events, ...this.limitPending()];
   }
 
-  /**
-   * The first `<tool_call>` starting inside `text`, past the carry offset. The carry can only
-   * hold a marker's first bytes once they are already emitted or queued, so a marker beginning
-   * there can never be stripped and is not rescanned.
-   */
-  private findFreshMarker(carry: string, text: string): number | undefined {
-    const index = (carry + text).indexOf(TOOL_CALL_MARKER, carry.length);
-    return index < 0 ? undefined : index - carry.length;
+  /** Find a complete marker or its trailing prefix before either can reach presentation text. */
+  private findFreshMarker(text: string): number | undefined {
+    const index = text.indexOf(TOOL_CALL_MARKER);
+    if (index >= 0) return index;
+    for (let length = Math.min(text.length, TOOL_CALL_MARKER.length - 1); length > 0; length--) {
+      if (text.endsWith(TOOL_CALL_MARKER.slice(0, length))) return text.length - length;
+    }
+    return undefined;
   }
 
   /** Retain a text fragment on a block and append its pending chunk. Never drains. */
@@ -422,14 +415,15 @@ export class CommandCodeToolTextFilter {
   }
 
   /**
-   * Open a held tail for markup that followed prose. The tail shares the native-call matching of
+   * Open a budgeted probing/held tail for markup or a marker prefix that followed prose. The tail shares the native-call matching of
    * an ordinary held block — a same-content call drops it as an echo — but `interrupted` bars
    * restoration forever: prose-prefixed markup can never mint a call, only disappear or be text.
    */
   private openHeldTail(key: string, text: string): AdapterEvent[] {
-    const tail: TextBlock = { id: key, markupParts: [], probe: "", bytes: 0, state: "held", ended: false, interrupted: true, candidates: new Set(this.openInputs.keys()), tailCarry: "" };
+    const tail: TextBlock = { id: key, markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: true, candidates: new Set(this.openInputs.keys()) };
     this.blocks.set(key, tail);
-    this.held.push(tail);
+    this.probeBlockText(tail, text);
+    if (tail.state === "probing") this.activeProbes.set(key, tail);
     return [...this.retainChunk(tail, text), ...this.limitPending()];
   }
 

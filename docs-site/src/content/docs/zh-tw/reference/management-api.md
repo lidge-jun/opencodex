@@ -233,8 +233,10 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `POST /api/oauth/login/cancel` | 取消公開進行中的 OAuth 流程 | 400 未知供應商 |
 | `GET /api/oauth/status` | 輪詢一個供應商的 OAuth 流程 | 400 未知供應商 |
 | `POST /api/oauth/logout` | 移除所選的供應商憑證 | 400 未知供應商；`oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | 列出遮罩帳號或移除一個帳號 Kiro 列包含自動選取狀態 `autoSelectable`，排除時還包含封閉集合的 `skipReason`。唯一的有效帳號仍可傳送請求，配額查詢仍為選用。 | 400 無效供應商/id；404 帳號缺失；`oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | 選擇現用 OAuth 帳號 | 400 無效供應商／帳號；`oauth_mutation_busy` |
+| `GET /api/oauth/accounts` | 列出遮罩帳號；通用 OAuth 帳號列也會提供 `paused` 狀態。Kiro 列包含自動選取狀態 `autoSelectable`，排除時還包含封閉集合的 `skipReason`。唯一的有效帳號仍可傳送請求，配額查詢仍為選用。 | 400 無效供應商 |
+| `DELETE /api/oauth/accounts` | 移除一個帳號 | 400 無效供應商/id；404 帳號缺失；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | 選擇現用 OAuth 帳號 | 400 無效供應商／帳號；404 帳號缺失；409 帳號已暫停；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | 暫停或恢復一個通用 OAuth 帳號。Body `{ provider, accountId, paused }`；若暫停現用帳號，且有可用帳號，會切換至下一個 | 400 不支援的供應商或無效 body；404 帳號缺失；`oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | 讀取或更新 Anthropic OAuth 池政策 | 400 非 Anthropic 供應商或無效政策 |
 | `POST /api/oauth/accounts/clear-cooldown` | 清除一個 OAuth 帳號的 runtime 冷卻 | 400 無效供應商／帳號 |
 | `PUT /api/oauth/accounts/alias` | 設定或清除 OAuth 帳號別名 | 400 無效供應商／帳號／別名 |

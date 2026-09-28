@@ -6,6 +6,7 @@ export type AccountSelectionEvent = {
 };
 
 const listeners = new Set<(event: AccountSelectionEvent) => void>();
+const oauthPauseListeners = new Set<(provider: string) => void>();
 let revision = 0;
 
 /** Call only after the authoritative selection has been persisted. */
@@ -25,6 +26,19 @@ export function subscribeAccountSelections(listener: (event: AccountSelectionEve
   const subscription = (event: AccountSelectionEvent) => listener(event);
   listeners.add(subscription);
   return () => { listeners.delete(subscription); };
+}
+
+/** Internal eligibility invalidation; separate from the public selection stream contract. */
+export function publishOAuthAccountPauseChange(provider: string): void {
+  for (const listener of [...oauthPauseListeners]) {
+    try { listener(provider); } catch { /* A disconnected cache consumer cannot undo persistence. */ }
+  }
+}
+
+export function subscribeOAuthAccountPauseChanges(listener: (provider: string) => void): () => void {
+  const subscription = (provider: string) => listener(provider);
+  oauthPauseListeners.add(subscription);
+  return () => { oauthPauseListeners.delete(subscription); };
 }
 
 export function currentAccountSelectionRevision(): number {

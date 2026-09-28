@@ -113,12 +113,13 @@ Bir sağlayıcı için saklanan OAuth kimlik bilgisini kaldırın.
 listeleyin ve değiştirin. Sağlanan yardım arayüzü şöyledir:
 
 ```text
-Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection unless an account carries that id.
+clear <provider>  Clear the manual Codex account selection unconditionally.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
@@ -185,7 +186,7 @@ kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkin
 Kiro için hız sınırı, doğrulanmış aylık kota ve doğrulanmış askıya alma retleri çıktıdan önce uygun başka bir hesaba geçebilir. Aylık kota yalnızca o hesabı sıfırlamaya veya kanıtın süresinin dolmasına kadar dışlar; aynı hesaptaki tamamlanmış yanıt eski kararı temizler. Proaktif tercih için sağlayıcı ayarı genel ayardan önceliklidir; reaktif hesap değişimi açık kalır.
 Kiro, `pool.kernel` ve proaktif tercih açıkken `least-loaded` stratejisini seçebilir. `maxConcurrentPerAccount` (1–100), süreç başına hesap kuyruğu sınırıdır: seçili hesap doluysa en çok 250 ms bekler, ardından `Retry-After: 1` ile 503 `account_capacity` döner. Sınır, isteği başka bir hesaba taşımaz.
 
-`ocx account list kiro`, otomatik seçimden dışlanan hesaplar için `not-auto-selected(<neden>)` gösterir. JSON, `autoSelectable` ve false olduğunda kapalı kümeden bir `skipReason` (`needs_reauth`, `suspended`, `cooldown` veya `quota_exhausted`) içerir. Tek etkin hesap yine istek gönderebilir. `providerCredits`, `meteringEvent` ile ölçülür: fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler toplanır; tokenlardan kredi tahmini yapılmaz.
+`ocx account list kiro`, otomatik seçimden dışlanan hesaplar için `not-auto-selected(<neden>)` gösterir. JSON, `autoSelectable` ve false olduğunda kapalı kümeden bir `skipReason` (`paused`, `needs_reauth`, `suspended`, `cooldown` veya `quota_exhausted`) içerir. Tek etkin hesap yine istek gönderebilir. `providerCredits`, `meteringEvent` ile ölçülür: fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler toplanır; tokenlardan kredi tahmini yapılmaz.
 
 `--json` şunu döndürür:
 
@@ -207,7 +208,7 @@ yine de 0 ile çıkar. `--json` şunu döndürür:
 
 ### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
 
-`auto` elle yapılan seçimi temizler; havuz işi yeniden kendi stratejisiyle yerleştirir. Bir Codex hesabı, id yerine `ocx account alias` ile verilen takma adla da belirtilebilir; bu `priority`, `pause`, `resume`, `clear-cooldown`, `remove` ve `alias` için de geçerlidir. Codex hesaplarında `auto`, `main` ve `__main__` büyük/küçük harf fark etmeksizin ayrılmış sözcüklerdir ve takma ad olarak atanamaz. OAuth hesaplarının ve API anahtarlarının görünen adları için mevcut kurallar geçerlidir.
+`auto` elle yapılan seçimi temizler; havuz işi yeniden kendi stratejisiyle yerleştirir — ancak id'si `auto` olan bir Codex hesabı varsa tam id eşleşmesi kazanır ve `ocx account clear <provider>` her zaman otomatik seçimi geri yükler. Bir Codex hesabı, id yerine `ocx account alias` ile verilen takma adla da belirtilebilir; bu `priority`, `pause`, `resume`, `clear-cooldown`, `remove` ve `alias` için de geçerlidir. Codex hesaplarında `auto`, `main` ve `__main__` büyük/küçük harf fark etmeksizin ayrılmış sözcüklerdir ve takma ad olarak atanamaz. OAuth hesaplarının ve API anahtarlarının görünen adları için mevcut kurallar geçerlidir.
 
 Mevcut bir Codex hesabını, OAuth hesabını veya API anahtarını seçer. `openai`
 için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi süreç içi yerel
@@ -233,6 +234,10 @@ ayar yalnızca kullanıma dayalı proaktif geçişi devre dışı bırakır.
 ```text
 { ok: true, provider, type, activeId }
 ```
+
+### `ocx account clear <provider> [--json]`
+
+Bir hesap id'si çözümlemeden Codex hesabının elle seçimini temizler; `auto` adında bir hesap olsa bile çalışır. Yalnızca Codex havuzları içindir; diğer sağlayıcı türlerinde geri yüklenecek otomatik seçim yoktur.
 
 ### `ocx account refresh <provider> [--json]`
 

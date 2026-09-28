@@ -29,6 +29,7 @@ import {
   loadIntegrationStates,
   previewIntegrationMutation,
   toggleIntegration,
+  canDisableKiloWithCandidateIssue,
   bindingFor,
   deleteJournalEntry,
   IntegrationApiError,
@@ -119,7 +120,7 @@ function labeledPlansFor(actions: readonly BulkDisableAction[]): LabeledIntegrat
 }
 
 function isApplied(status: IntegrationStatus): boolean {
-  return status.state === "current" || status.state === "stale";
+  return status.state === "current" || status.state === "stale" || canDisableKiloWithCandidateIssue(status);
 }
 
 /**
@@ -165,6 +166,7 @@ function OverviewCard({
       }), undefined, row.togglePath ?? undefined)
     : null;
   const toggleOn = row.toggleOn ?? row.applied;
+  const removableKiloIssue = row.status !== null && canDisableKiloWithCandidateIssue(row.status);
   return (
     <li className="integration-card" data-client={row.id}>
       <div className="integration-card-head">
@@ -189,6 +191,9 @@ function OverviewCard({
       {detail && (
         <p className={row.detail ? "integration-path" : "integration-meta"}>{detail}</p>
       )}
+      {row.status?.reason === "candidate-conflict" && row.status.conflictPaths?.map(path => (
+        <Notice key={path} tone="err">{t("integrations.status.candidateConflict", { path })}</Notice>
+      ))}
       {result?.tone === "err" && <Notice tone="err">{result.text}</Notice>}
       {result?.tone === "ok" && <Notice tone="ok">{result.text}</Notice>}
       <div className="integration-card-actions">
@@ -201,8 +206,7 @@ function OverviewCard({
               // advisory refusal must all be resolved before mutation.
               disabled={row.state === "unknown"
                 || !row.installed
-                || row.state === "conflict"
-                || row.state === "unsafe"
+                || ((row.state === "conflict" || row.state === "unsafe") && !removableKiloIssue)
                 || toggleBlocked
                 || pending}
               label={toggleOn
@@ -217,8 +221,8 @@ function OverviewCard({
         </button>
         {/*
           Only in conflict, and only for a file client. The switch beside it stays
-          disabled -- this is not a second way to toggle, it is the way past a state
-          the toggle deliberately refuses to guess about.
+          disabled -- this is not a second way to toggle, it is the way past a
+          conflict the server permits replacing.
         */}
         {onOverwrite && (
           <button type="button" className="btn btn-danger" onClick={onOverwrite} disabled={pending}>
@@ -778,7 +782,7 @@ export default function IntegrationsOverview({
               result={cardResults[row.id] ?? null}
               onOpen={() => navigateHash(row.hash)}
               onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
-              onOverwrite={row.status !== null && row.status.state === "conflict" && row.installed
+              onOverwrite={row.status !== null && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
                 ? () => void requestFilePlan(row, "overwrite")
                 : null}
             />
@@ -795,7 +799,7 @@ export default function IntegrationsOverview({
       <h3>{t("integrations.rollback.title")}</h3>
       {/*
         The newest operation stays visible and the rest collapse. This page
-        already carries a summary, an API row and fifteen cards, so fifty
+        already carries a summary, an API row and the file-client cards, so fifty
         bordered rows below them buried the one control a user wants after a
         mistake. The older rows are kept rather than dropped: this is the only
         place showing one chronology ACROSS clients, since each client tab reads

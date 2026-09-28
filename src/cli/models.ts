@@ -1,6 +1,7 @@
 /**
  * `ocx models` subcommand — list configured models and manage custom models.
  */
+import { resolveMatchedPrice, type MatchedPrice } from "../usage/cost";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
@@ -85,6 +86,7 @@ interface ModelEntry {
   contextWindow: number | null;
   inputModalities: string[] | null;
   reasoningEfforts: string[] | null;
+  price: MatchedPrice | null;
 }
 
 /**
@@ -132,6 +134,7 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
         contextWindow: configuredContextWindow(prov, model) ?? null,
         inputModalities: modalities,
         reasoningEfforts: efforts,
+        price: resolveMatchedPrice(provName, model),
       });
     };
 
@@ -428,7 +431,9 @@ function handleConfiguredModels(args: string[]): void {
     for (const m of provModels) {
       const marker = m.isDefault ? " *" : "";
       const ctx = m.contextWindow ? ` (${Math.round(m.contextWindow / 1000)}k)` : "";
-      console.log(`  ${m.model}${marker}${ctx}`);
+      const rates = m.price?.cost4;
+      const pricing = rates ? ` ~$${rates.input}/$${rates.output} input/output per 1M tokens` : " price unknown";
+      console.log(`  ${m.model}${marker}${ctx}${pricing}`);
     }
     console.log();
   }

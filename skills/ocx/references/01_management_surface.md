@@ -598,6 +598,28 @@ JSON mode: `payload`.
 
 - Uses the exact upstream model ID after the first slash. Omitted cache rates default to zero; sibling model prices are preserved.
 
+### `ocx models set`
+
+Save per-model overrides for a routed model, or clear them back to the computed values.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/model-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--context-window` | string | Context window in tokens; 0 or - clears the override. |
+| `--modalities` | string | Comma-separated text,image,audio; - clears the override. |
+| `--reasoning-efforts` | string | Comma-separated ladder; "" for no reasoning, - to inherit. |
+| `--default-reasoning-effort` | string | Ladder member a request inherits when it omits one; - to inherit. |
+| `--reset` | boolean | Clear every override on this model; cannot be combined with the options above. |
+| `--json` | boolean | Emit the saved state as JSON. |
+
+JSON mode: `envelope`.
+
+- Addresses a routed model as provider/model. The native openai lane and combos have no per-model overrides.
+- Unlike ocx models edit, which changes a custom model's own definition, this edits a row that already exists.
+
 ### `ocx hub invite`
 
 Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.
@@ -781,11 +803,13 @@ JSON mode: `payload`.
 
 ### `ocx account pause`
 
-Stop routing new requests to one account in the Codex pool.
+Exclude one account in a Codex or supported generic OAuth pool from automatic selection.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/codex-auth/accounts/pause` |
+| GET | `/api/oauth/accounts` |
+| PUT | `/api/oauth/accounts/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -793,16 +817,17 @@ Stop routing new requests to one account in the Codex pool.
 
 JSON mode: `envelope`.
 
-- Pausing also unbinds threads pinned to the account and selects a fallback if it was active -- side effects of the route, not of the word `pause`.
-- The issue that requested this reported the route as POST; it is PUT.
+- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Generic OAuth pause never dispatches to that account: it is excluded from new requests, failover and refresh, and an all-paused pool answers 403. Anthropic is unsupported.
 
 ### `ocx account resume`
 
-Return a paused account to the Codex pool.
+Return a paused account to a Codex or supported generic OAuth pool.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/codex-auth/accounts/pause` |
+| GET | `/api/oauth/accounts` |
+| PUT | `/api/oauth/accounts/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -1158,6 +1183,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 65
-- of those, state-changing: 35
+- declared capabilities: 66
+- of those, state-changing: 36
 - head-resolved invocations: 2

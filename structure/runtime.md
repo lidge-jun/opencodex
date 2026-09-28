@@ -1,8 +1,10 @@
 # Runtime
 
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+
 ## Resolved static model policy
 
-`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
+`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Fast observation, persistence and cost provenance follow the [response-tier authority contract](transports/responses.md#response-tier-observation-authority); outbound Fast policy is unchanged. Policy/combo
 route spreads retain that object. Every initial, fallback, and recovery route is recaptured for the
 request's original inbound protocol before route-dependent normalization, and all adapter rebuilds
 consume its recorded adapter. A translated Chat or Anthropic replay therefore cannot inherit a
@@ -26,7 +28,7 @@ Native steering follows [the shared WebSocket contract](transports/streaming-hea
 Responses admission and finalization are composed through the
 [core module ownership](transports/responses.md#core-module-ownership). Kiro's optional account-load admission is process-local and request-owned; its slot ends with the response body or cancellation. Other providers retain their admission path.
 
-Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing). CLI model lists expose shared catalog estimates as `price`; `models price` retains the saved override in `cost` and adds `effectiveCost`. Explicit zero overrides win; unknown prices remain null, and automatic defaults are never persisted to `modelCosts`. Covered by `tests/cli/cli-models.test.ts` and `tests/cli/cli-models-price.test.ts`.
 
 OAuth refresh coordination follows the [refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a fresh unreadable lock remains held, and release requires matching descriptor identity. A failed path-identity probe preserves the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
 
@@ -140,7 +142,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
 | `src/reasoning-effort.ts` | Codex reasoning-level definitions (`low`/`medium`/`high`/`xhigh`), per-model effort mapping, and catalog effort sanitization. |
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
-| `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. Elevated Task Scheduler repair stages bounded payloads; the unelevated launcher pins every namespace ancestor and payload with non-reparse handles that deny write/delete sharing on the payload and delete sharing on each ancestor until UAC processing exits. |
+| `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. Codex-home ownership accepts either the recorded path or the same existing physical directory so path aliases remain compatible across upgrades. Elevated Task Scheduler repair stages bounded payloads; the unelevated launcher pins every namespace ancestor and payload with non-reparse handles that deny write/delete sharing on the payload and delete sharing on each ancestor until UAC processing exits. |
 
 `src/cli/provider.ts` accepts the Google-only `--google-tool-schema-policy` creation flag and rejects
 an unknown value or non-Google effective adapter before persistence. The persisted field and default
@@ -185,7 +187,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
-until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. Service mode sets
+until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. `src/cli/index.ts` resolves same-home ownership, then checks shared client hints through the cross-home owner helper, then reconciles the journal only when no sibling is marked. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected and no pending connect marker owns the newly issued key. `src/client/connect.ts` publishes that fingerprint marker before the key, then clears it with the connection commit or rollback under the client lifecycle and config mutation locks. Connected, invalid, or mismatched client state retains an existing token. A valid pending marker retains only its matching fingerprint; an older marker does not own a replacement service key. An absent token is reported as absent; unsafe, malformed, or unreadable markers and lock, state-read, or deletion failures leave cleanup unverified.
 The package-tree integrity fence for live package replacement follows the
@@ -219,7 +221,7 @@ TTL or lock-file deletion participates in recovery.
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 
-`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`.
+`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`. Linked-machine data uses the [connection-bound relay contract](remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
 the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
@@ -448,7 +450,7 @@ following a final symlink, so an exchange during a mutation cannot redirect the 
 Config JSON preserves the boolean; only literal true activates the role-changing transform. Claude skill-bundle marker parsing follows the [bounded inbound contract](data-planes/inbound-compat.md#claude-skill-marker-path-bound).
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
-Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination.
+Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination. Native Devin alpha search likewise resolves OAuth from the routed provider name that admission checked, rather than borrowing the canonical `devin` slot for a custom Devin-adapter row.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
@@ -502,7 +504,7 @@ This is also why the classifier cannot duplicate visible output. Native byte str
 
 Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, `tests/routing/routing-policy-fallback.test.ts`, `tests/helpers/combo-context-overflow-cases.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
 
-`src/combos/failover.ts` uses a 10-minute fallback for a spent account usage window (codes `usage_limit_exceeded`, `usage_limit_reached`, `1308`, or `usage limit reached` / `usage limit has been reached` prose, including HTTP 502) and for provider-scoped credential or billing failure codes such as `invalid_api_key` and `insufficient_quota`. This duration does not change failure classification or cooldown scope; upstream retry/reset signals and configured durations retain precedence. It caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
+`src/combos/failover.ts` uses a 10-minute fallback for a spent account usage window (codes `usage_limit_exceeded`, `usage_limit_reached`, `1308`, or `usage limit reached` / `usage limit has been reached` / `token-plan <window> quota has been exhausted` prose, including HTTP 502) and for provider-scoped credential or billing failure codes such as `invalid_api_key` and `insufficient_quota`. This duration does not change failure classification or cooldown scope; upstream retry/reset signals and configured durations retain precedence. It caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
 
 ## Combo default effort precedence
 
@@ -589,9 +591,7 @@ an unreadable current record is unknown, and a valid address is probed even when
 PID is gone. Lease delegation is passed only to stop and recovery children, never package
 manager children. A replacement refusal passes through owner-aware recovery: only the same CLI
 owner revives the stopped runtime; foreign ownership stays transferred and unknown ownership
-remains a reported recovery requirement. Dashboard restart delegates the lease token to its repair child. Direct
-start holds the same lease through bind plus PID and runtime-address publication. If listener
-rollback cannot prove the socket closed, the process retains its lease until exit.
+remains a reported recovery requirement. Dashboard restart delegates the lease token to its repair child. Direct start holds the same lease through bind plus PID and runtime-address publication. If listener rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
 registration succeeds.
 

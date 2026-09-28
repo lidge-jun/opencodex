@@ -62,7 +62,7 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
       if (!provider || provider.disabled === true || provider.authMode !== "oauth") return false;
       const set = getAccountSet("xai");
       const active = set?.accounts.find(account => account.id === set.activeAccountId);
-      return !!active && active.needsReauth !== true;
+      return !!active && active.needsReauth !== true && active.paused !== true;
     },
     eligibleModel: candidate => candidate.provider === "xai",
   },
@@ -74,7 +74,7 @@ export const WEB_SEARCH_BACKENDS: readonly WebSearchBackendDescriptor[] = [
       if (!provider || provider.disabled === true || provider.authMode !== "oauth") return false;
       const set = getAccountSet("google-antigravity");
       const active = set?.accounts.find(account => account.id === set.activeAccountId);
-      if (!active || active.needsReauth === true) return false;
+      if (!active || active.needsReauth === true || active.paused === true) return false;
       return !!(active.credential as { projectId?: string } | undefined)?.projectId;
     },
     eligibleModel: candidate => candidate.provider === "google-antigravity",

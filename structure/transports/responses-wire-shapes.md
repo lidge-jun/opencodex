@@ -1,5 +1,19 @@
 # Responses Wire Shapes
 
+## Direct MCP calls in code mode
+
+On routed bridge or converted-custom passthrough paths, when the request declares a
+freeform/custom code-mode `exec`, a structured call to
+`mcp__<server>__<tool>` can be restored as an `exec` call to the matching nested host tool.
+The same applies to a provider-added `default.` prefix when neither explicit `default.` nor
+`default__` identity was declared.
+The request must carry verified custom-tool provenance: an ordinary JSON function named
+`exec` does not authorize this repair. Explicitly declared MCP tools keep their identity,
+legacy shell catalogs stay unchanged, and unknown nested tools fail at the host.
+Names and arguments are serialized as data; plain-text tool-call transcripts are never
+promoted into executable calls by this rule. Native forwarding and injection lack this
+restoration step, so their undeclared-tool guard still rejects a direct MCP call.
+
 Per-wire request and stream shapes on the Responses data plane: mixed-wire model defaults, xAI
 agent-message continuation, declared-tool membership by inbound wire, and passthrough SSE stream
 shapes. The endpoint, dispatch, and credential rules they build on are in
@@ -511,9 +525,11 @@ JavaScript. Ordinary JavaScript stays progressive. Coverage: `tests/responses/re
 An explicit custom-tool denial also requests recovery for unmapped historical results without a live
 catalog; history never adds current tool authorization. The custom-tool compatibility contract owns
 lowering and final validation. Muse may wrap an already-flattened namespace identity such as
-`default.mcp__server__tool` only when the complete suffix exactly matches a declared namespaced name
-and neither explicit `default.` nor `default__` identity exists. It cannot borrow a manufactured bare
-alias; unknown suffixes still fail as undeclared tools. See [ADR-0099](../decisions/ADR-0099-responses-http-sse.md).
+`default.mcp__server__tool` when the complete suffix exactly matches a declared namespaced name
+and neither explicit `default.` nor `default__` identity exists. The custom code-mode `exec`
+recovery above is a separate path for undeclared direct MCP names. Neither path can borrow a
+manufactured bare alias. Outside code mode, unknown suffixes fail as undeclared tools; inside
+code mode, the host rejects unknown nested tools. See [ADR-0099](../decisions/ADR-0099-responses-http-sse.md).
 
 > Decision record: [ADR-0099](../decisions/ADR-0099-responses-http-sse.md)
 

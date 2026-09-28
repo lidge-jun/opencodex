@@ -41,12 +41,12 @@ import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../../src/server/li
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { baseCompactionBody, compactionRequest, completedPayload, jsonResponse, keyProviderConfig, nativePoolConfig, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
+import { baseCompactionBody, compactionRequest, completedPayload, drainCompactionResponseState, installCompactionRoutingAclFixture, jsonResponse, keyProviderConfig, nativePoolConfig, removeCompactionFixture, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const originalFetch = globalThis.fetch;
+installCompactionRoutingAclFixture();
 
 // A case that calls a handler directly never runs startServer, so it never takes the
 // spend-journal writer lease and its dispatch is refused before it reaches its own contract.
@@ -56,9 +56,11 @@ let releaseSpendHome: (() => void) | undefined;
 const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 const dropSpendHome = (): void => { releaseSpendHome?.(); releaseSpendHome = undefined; };
 
-afterEach(() => {
-  dropSpendHome();
-  globalThis.fetch = originalFetch;
+afterEach(async () => {
+  try { await drainCompactionResponseState(); } finally {
+    dropSpendHome();
+    globalThis.fetch = originalFetch;
+  }
 });
 
 describe("supportsNativeResponsesCompactEndpoint (#422)", () => {
@@ -323,7 +325,7 @@ describe("native compact usage reporting", () => {
       clearAccountQuota();
       // Released before the directory holding it is removed.
       dropSpendHome();
-      removeTreeWithRetry(testDir);
+      await removeCompactionFixture(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -398,7 +400,7 @@ describe("native Codex pool compaction", () => {
       clearCodexUpstreamHealth();
       // Released before the directory holding it is removed.
       dropSpendHome();
-      removeTreeWithRetry(testDir);
+      await removeCompactionFixture(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -473,7 +475,7 @@ describe("native Codex pool compaction", () => {
       clearCodexUpstreamHealth();
       // Released before the directory holding it is removed.
       dropSpendHome();
-      removeTreeWithRetry(testDir);
+      await removeCompactionFixture(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -543,7 +545,7 @@ describe("native Codex pool compaction", () => {
       clearCodexUpstreamHealth();
       // Released before the directory holding it is removed.
       dropSpendHome();
-      removeTreeWithRetry(testDir);
+      await removeCompactionFixture(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -886,14 +888,14 @@ describe("compact alternate-account attempt (#913)", () => {
       });
       updateAccountQuota(id, id === "pool-a" ? 10 : 20);
     }
-    return run(twoAccountPoolConfig()).finally(() => {
+    return run(twoAccountPoolConfig()).finally(async () => {
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
       clearUpstreamHostHealth();
       clearAccountQuota();
       // Released before the directory holding it is removed.
       dropSpendHome();
-      removeTreeWithRetry(testDir);
+      await removeCompactionFixture(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

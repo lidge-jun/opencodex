@@ -1,8 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readBoundedCodexConfig } from "../../src/codex/inject/bounded-config-reader";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 
@@ -58,6 +59,35 @@ function runIsolatedSettingsRequest(options: {
   const line = child.stdout.trim().split("\n").filter(Boolean).at(-1);
   expect(line).toBeDefined();
   return JSON.parse(line!) as { status: number; body: Record<string, unknown> };
+}
+
+/**
+ * Same isolation boundary as the settings cases, for the restore path: CODEX_HOME must
+ * be fixed before the module graph binds CODEX_CONFIG_PATH. The child's last stdout line
+ * is the JSON result; earlier lines may be the restore machinery's own logs.
+ */
+function runIsolatedCodexScript(options: {
+  root: string;
+  codexHome: string;
+  script: string;
+}): Record<string, unknown> {
+  const child = spawnSync(process.execPath, ["--eval", options.script], {
+    cwd: repoRoot(),
+    env: {
+      ...process.env,
+      CODEX_HOME: options.codexHome,
+      OPENCODEX_HOME: join(options.root, "opencodex"),
+    },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (child.status !== 0) {
+    const cause = child.error ? ` (${child.error.name}: ${child.error.message})` : "";
+    throw new Error(`isolated codex script failed (status=${child.status} signal=${child.signal})${cause}: ${child.stderr || child.stdout}`);
+  }
+  const line = child.stdout.trim().split("\n").filter(Boolean).at(-1);
+  expect(line).toBeDefined();
+  return JSON.parse(line!) as Record<string, unknown>;
 }
 test("PUT /api/settings reports Codex write-lock contention as retryable", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-settings-desktop-switch-"));
@@ -214,6 +244,42 @@ test("GET /api/settings survives an unreadable config.toml during ownership dete
   }
 }, 15_000);
 
+test.skipIf(process.platform === "win32")(
+  "GET /api/settings refuses a config.toml FIFO without blocking",
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-settings-fifo-cfg-"));
+    const codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    const fifo = spawnSync("mkfifo", [join(codexHome, "config.toml")], { encoding: "utf8" });
+    expect(fifo.status).toBe(0);
+
+    try {
+      const response = runIsolatedSettingsRequest({
+        root,
+        codexHome,
+        routeConfig: ISOLATED_PROVIDER_CONFIG,
+        scriptBody: `
+          const request = new Request("http://127.0.0.1:10100/api/settings", {
+            headers: { host: "127.0.0.1:10100" },
+          });
+          const response = await handleManagementAPI(request, new URL(request.url), config, {
+            getCachedStartupHealth: async () => startupHealthFixture(),
+          });
+        `,
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        codexDesktopSwitches: {
+          apply: { applied: false, reason: "ownership_undetermined", retryable: true },
+        },
+      });
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  },
+  15_000,
+);
+
 test("PUT /api/settings keeps the undetermined-ownership explanation on a locked save", () => {
   // clientIntegrations.codex = false trips the apply gate before the injector runs, and an
   // unreadable config.toml leaves ownership undetermined. The locked save must still report
@@ -257,6 +323,134 @@ test("PUT /api/settings keeps the undetermined-ownership explanation on a locked
         authSource: { presentsCodexAccount: null },
       },
     });
+  } finally {
+    removeTreeWithRetry(root);
+  }
+}, 15_000);
+
+test("readBoundedCodexConfig returns null only for a config absent at lookup", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-bounded-reader-"));
+  try {
+    expect(readBoundedCodexConfig(join(root, "config.toml"))).toBeNull();
+    writeFileSync(join(root, "config.toml"), 'model_provider = "custom"\n');
+    expect(readBoundedCodexConfig(join(root, "config.toml"))).toContain('"custom"');
+    // Present but unreadable-as-a-bounded-regular-file is a throw, not a null.
+    mkdirSync(join(root, "as-dir.toml"));
+    expect(() => readBoundedCodexConfig(join(root, "as-dir.toml"))).toThrow();
+    writeFileSync(join(root, "big.toml"), `# ${"x".repeat(1024 * 1024)}\nmodel = "gpt-5.5"\n`);
+    expect(() => readBoundedCodexConfig(join(root, "big.toml"))).toThrow();
+  } finally {
+    removeTreeWithRetry(root);
+  }
+});
+
+test.skipIf(process.platform === "win32")(
+  "readBoundedCodexConfig resolves a symlinked config to a bounded regular target",
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-bounded-link-"));
+    try {
+      writeFileSync(join(root, "dotfiles-codex.toml"), 'model_provider = "custom"\n');
+      symlinkSync(join(root, "dotfiles-codex.toml"), join(root, "config.toml"));
+      expect(readBoundedCodexConfig(join(root, "config.toml"))).toContain('"custom"');
+      // A link does not launder an unsafe target: the descriptor check still refuses it.
+      symlinkSync("/dev/null", join(root, "null.toml"));
+      expect(() => readBoundedCodexConfig(join(root, "null.toml"))).toThrow();
+      symlinkSync(join(root, "missing.toml"), join(root, "dangling.toml"));
+      expect(readBoundedCodexConfig(join(root, "dangling.toml"))).toBeNull();
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "GET /api/settings reads ownership through a symlinked config.toml",
+  () => {
+    // Codex and the injector read the link's target, so the bounded observation must
+    // too — otherwise settings reports undetermined for a config that plainly selects
+    // an external provider.
+    const root = mkdtempSync(join(tmpdir(), "ocx-settings-link-cfg-"));
+    const codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(root, "dotfiles-codex.toml"), 'model_provider = "custom"\n');
+    symlinkSync(join(root, "dotfiles-codex.toml"), join(codexHome, "config.toml"));
+
+    try {
+      const response = runIsolatedSettingsRequest({
+        root,
+        codexHome,
+        routeConfig: ISOLATED_PROVIDER_CONFIG,
+        scriptBody: `
+          const request = new Request("http://127.0.0.1:10100/api/settings", {
+            headers: { host: "127.0.0.1:10100" },
+          });
+          const response = await handleManagementAPI(request, new URL(request.url), config, {
+            getCachedStartupHealth: async () => startupHealthFixture(),
+          });
+        `,
+      });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        codexDesktopSwitches: {
+          apply: { applied: false, reason: "external_provider", retryable: false },
+        },
+      });
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  },
+  15_000,
+);
+
+test.skipIf(process.platform === "win32")(
+  "native restore still classifies a symlinked config.toml's target",
+  () => {
+    // Regression for the shared ownership probe: a link to a small regular config must
+    // produce the external-provider result, not an early exit that leaves injected
+    // routing pointed at a stopped proxy.
+    const root = mkdtempSync(join(tmpdir(), "ocx-restore-link-cfg-"));
+    const codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(root, "dotfiles-codex.toml"), 'model_provider = "custom"\n');
+    symlinkSync(join(root, "dotfiles-codex.toml"), join(codexHome, "config.toml"));
+
+    try {
+      const result = runIsolatedCodexScript({
+        root,
+        codexHome,
+        script: `
+          const { restoreNativeCodex } = await import("./src/codex/inject");
+          const result = restoreNativeCodex();
+          console.log(JSON.stringify({ success: result.success, externalProvider: result.externalProvider ?? null }));
+        `,
+      });
+      expect(result).toMatchObject({ success: true, externalProvider: "custom" });
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  },
+  15_000,
+);
+
+test("native restore tolerates a config.toml over the observation bound", () => {
+  // A valid config larger than the 1 MiB observation bound must still classify as
+  // external — the read/write ownership probe is not the bounded settings reader.
+  const root = mkdtempSync(join(tmpdir(), "ocx-restore-big-cfg-"));
+  const codexHome = join(root, "codex");
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(join(codexHome, "config.toml"), `# ${"x".repeat(1024 * 1024)}\nmodel_provider = "custom"\n`);
+
+  try {
+    const result = runIsolatedCodexScript({
+      root,
+      codexHome,
+      script: `
+        const { restoreNativeCodex } = await import("./src/codex/inject");
+        const result = restoreNativeCodex();
+        console.log(JSON.stringify({ success: result.success, externalProvider: result.externalProvider ?? null }));
+      `,
+    });
+    expect(result).toMatchObject({ success: true, externalProvider: "custom" });
   } finally {
     removeTreeWithRetry(root);
   }

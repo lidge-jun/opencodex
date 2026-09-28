@@ -45,6 +45,7 @@ devlog/**/security-advisory-draft*
 # becomes tracked again.
 .codexclaw/
 **/.codexclaw/
+.agents/
 .omo/
 **/.omo/
 

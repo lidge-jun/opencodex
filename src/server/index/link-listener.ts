@@ -1,3 +1,4 @@
+import { createLinkRelaySessions } from "./link-relay-sessions";
 import type { Server } from "bun";
 import {
   emptyLinkStore,
@@ -13,6 +14,7 @@ export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 export interface LinkListenerStartContext<T> {
   dispatch: (req: Request, server: Server<T>) => Promise<Response>;
   maxRequestBodySize: number;
+  keyFingerprints?: (apiKeyId: string) => readonly string[];
 }
 
 export interface LinkListenerDeps {
@@ -58,6 +60,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const serve = deps.serve ?? (options => Bun.serve(options));
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   let listener: Server<T> | null = null;
+  let relaySessions: ReturnType<typeof createLinkRelaySessions> | undefined;
   let startContext: LinkListenerStartContext<T> | undefined;
   let ensureFlight: Promise<void> | undefined;
   let closeFlight: Promise<void> | undefined;
@@ -92,6 +95,10 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
+    const sessions = createLinkRelaySessions({ fingerprints: (keyId, linkId) => {
+      if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
+      return startContext?.keyFingerprints?.(keyId) ?? [];
+    } });
     let bound: Server<unknown>;
     try {
       bound = serve({
@@ -101,7 +108,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         // relayed turn that the Home holds or that streams with a long gap.
         idleTimeout: 255,
         maxRequestBodySize: startContext.maxRequestBodySize,
-        fetch: (req: Request, server: Server<unknown>) => startContext!.dispatch(req, server as Server<T>),
+        fetch: (req: Request, server: Server<unknown>) => sessions.dispatch(req, server as Server<T>, startContext!.dispatch),
       } as Parameters<typeof Bun.serve>[0]);
     } catch (error) {
       reportFailure("bind", error, "bind");
@@ -136,6 +143,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       }
     }
     listener = bound as Server<T>;
+    relaySessions = sessions;
     setStatus("listening", bound.port ?? (requestedPort > 0 ? requestedPort : null), null);
   };
 
@@ -159,8 +167,13 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     const flight = (async () => {
       if (ensureFlight) await ensureFlight;
       const current = listener;
-      listener = null;
-      if (current) await current.stop(true);
+      // Retain the bound port AND ingress ownership while an authenticated connection is
+      // reserved or a dispatched response is still being consumed. No new proofs are issued.
+      if (current) {
+        await relaySessions?.drain();
+        await current.stop(false);
+      }
+      if (listener === current) { listener = null; relaySessions = undefined; }
       // Closing is the caller saying "no links now": an earlier bind or persist failure no
       // longer describes anything, so the status reads off either way.
       setStatus("off", null, null);
@@ -194,6 +207,10 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     close,
     async stop() {
       stopped = true;
+      // Process shutdown is deliberately forceful, unlike last-link removal. Every
+      // authenticated socket is closed, and the client transport cannot reconnect it.
+      relaySessions?.abortReservations();
+      if (listener) await listener.stop(true);
       await close();
       startContext = undefined;
       setStatus("off", null, null);

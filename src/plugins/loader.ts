@@ -81,10 +81,12 @@ export function macAclListingTrustError(listing: string, currentUser = userInfo(
     if (!entry) { unparseable = true; continue; }
     if (entry[2] === "deny") continue;
     const principal = entry[1]!;
-    // The file owner, this process's user, and root already control the path without an ACE.
-    // Require the `user:` prefix: a bare or group principal might include other users.
+    // The file owner and this process's user already control the path without an ACE. Require the
+    // `user:` prefix: a bare or group principal might include other users. macOS `ls` prints a
+    // resolved directory-record NAME here, so neither `0` nor `root` proves that the ACE is UID 0.
+    // On a genuinely root-owned path, `root` is still admitted by the owner comparison.
     if (principal.startsWith("user:")
-      && [owner, currentUser, "root", "0"].includes(principal.slice(5))) continue;
+      && [owner, currentUser].includes(principal.slice(5))) continue;
     const rights = entry[3]!.split(",");
     if (rights.includes("only_inherit")) continue;
     if (rights.some(right => !MAC_ACL_BENIGN_TOKENS.has(right))) return "has an access control list";

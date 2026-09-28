@@ -18,6 +18,7 @@ export const MODELS_RUNTIME_SUBCOMMANDS = [
   "price",
   "set-price",
   "edit",
+  "set",
   "enable",
   "disable",
   "provider",

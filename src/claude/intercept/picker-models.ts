@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../../codex/catalog";
 import type { OcxClaudeDesktopProfile } from "../../types";
 import { aliasForRoute, claudeCodeNativeAlias } from "../alias";
+import { AUTO_CONTEXT_OFF, withOneMillionMarker } from "../context-windows";
 import { displayModelId, type Desktop3pRoutedModel } from "../desktop-3p";
 import { reconcileDesktopProfile, renderDesktopProfile, type DesktopProfileModel } from "../desktop-profile";
 import type { PickerModelEntry } from "./picker-bootstrap";
@@ -47,7 +48,9 @@ export function buildPickerModels(input: PickerRouteInput): PickerModelEntry[] {
     const alias = provider === "native" ? claudeCodeNativeAlias(id) : aliasForRoute(provider, id);
     if (!alias || seen.has(alias)) continue;
     seen.add(alias);
-    out.push({ id: alias, name: model.label,
+    // Desktop runners do not inherit the proxy's compaction env: mark only real >=1M windows.
+    const selector = withOneMillionMarker(alias, model.contextWindow === undefined ? {} : { [alias]: model.contextWindow }, AUTO_CONTEXT_OFF)!;
+    out.push({ id: selector, name: model.label,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) });
   }
   return out;

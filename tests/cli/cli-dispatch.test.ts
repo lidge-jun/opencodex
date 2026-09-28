@@ -654,7 +654,9 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(honorAt).toBeGreaterThan(-1);
     expect(honorAt).toBeLessThan(start.indexOf("findProxyOwnerBeforeJournalRecovery("));
     const owner = slice("async function findProxyOwnerBeforeJournalRecovery(", "async function handleStart(");
-    expect(owner).toContain("if (!currentExternalCodexModelProvider() && siblingOfLivePort() === null) {");
+    expect(owner).not.toContain("reconcileJournal(");
+    expect(start.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
+    expect(start.indexOf("markCrossHomeSibling()")).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
     expect(slice("function detachedStartEnvironment(", "async function handleEnsure("))
       .toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
     expect(cliSource).toContain("env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),");

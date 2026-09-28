@@ -1,179 +1,14 @@
 {
   "version": 1,
   "root": "tests",
-  "keepAtRoot": [
-    "preload.ts",
-    "fake-codex-server.ts",
-    "tsconfig.doctor-service-memory-contract.json",
-    "test-layout.test.ts",
-    "test-layout-tooling.test.ts"
-  ],
-  "domains": {
-    "providers": {
-      "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
-      ],
-      "children": {
-        "cursor": [
-          "^(?:cursor)-"
-        ],
-        "kiro": [
-          "^(?:kiro)-"
-        ],
-        "xai": [
-          "^(?:grok)-"
-        ],
-        "ollama": [
-          "^(?:ollama)-"
-        ],
-        "github-copilot": [
-          "^(?:github)-"
-        ]
-      }
-    },
-    "codex-integration": {
-      "match": [
-        "^context-compat\\.test\\.ts$",
-        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
-      ]
-    },
-    "server": {
-      "match": [
-        "^context-history\\.test\\.ts$",
-        "^aside-profiles-routes",
-        "^update-async-routes\\.test\\.ts$",
-        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
-      ]
-    },
-    "adapters": {
-      "match": [
-        "^(?:bridge\\.test\\.ts|buffered|identity|run|tool|translator)-"
-      ],
-      "children": {
-        "google": [
-          "^(?:antigravity|gcp|google|vertex)-"
-        ],
-        "anthropic": [
-          "^(?:anthropic)-"
-        ],
-        "openai": [
-          "^(?:openai)-"
-        ]
-      }
-    },
-    "responses": {
-      "match": [
-        "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"
-      ]
-    },
-    "lab": {
-      "match": [
-        "^(?:core|lab)-"
-      ]
-    },
-    "cli": {
-      "match": [
-        "^(?:cli|ensure|interactive|ocx|restore|star|uninstall\\.test\\.ts)-"
-      ]
-    },
-    "routing": {
-      "match": [
-        "^(?:cl01|destination|fastwire|policy|router|router\\.test\\.ts|subagent)-"
-      ]
-    },
-    "gui": {
-      "match": [
-        "^(?:dashboard|gui|models|qwen|tencent)-"
-      ]
-    },
-    "oauth": {
-      "match": [
-        "^(?:chatgpt|generic|state)-"
-      ]
-    },
-    "claude-integration": {
-      "match": []
-    },
-    "ci-workflows": {
-      "match": [
-        "^(?:assert|build|bump|ci|cleanup|closed|docs|dsh|fixture|install|keyring|package|release|repo|skill|test|zz)-"
-      ]
-    },
-    "usage": {
-      "match": [
-        "^(?:cost|request|usage|user)-"
-      ]
-    },
-    "lib": {
-      "match": [
-        "^(?:acl|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
-      ]
-    },
-    "clients": {
-      "match": [
-        "^aside-profile(?!s-routes)",
-        "^cline-(?:client|writer)(?:-|[.])",
-        "^(?:desktop|omp|pi|prime|remote|sync)-"
-      ]
-    },
-    "service": {
-      "match": [
-        "^(?:autostart|crash|doctor|init|service|service\\.test\\.ts|shutdown|stale|stop|systemd|winsw\\.test\\.ts)-"
-      ]
-    },
-    "windows": {
-      "match": [
-        "^(?:tray|win|windows|winsw)-"
-      ]
-    },
-    "storage": {
-      "match": [
-        "^(?:storage)-"
-      ]
-    },
-    "vision": {
-      "match": [
-        "^(?:sidecar)-"
-      ]
-    },
-    "config": {
-      "match": [
-        "^(?:config|expand|settings|types|url|yaml)-"
-      ]
-    },
-    "web-search": {
-      "match": [
-        "^(?:format|web)-"
-      ]
-    },
-    "update": {
-      "match": [
-        "^(?:update)-"
-      ]
-    },
-    "images": {
-      "match": [
-        "^(?:artifacts|download|loop|loop\\.test\\.ts|plan\\.test\\.ts|synthetic|z)-"
-      ]
-    },
-    "videos": {
-      "match": [
-        "^(?:fulfill|plan)-"
-      ]
-    },
-    "e2e-style": {
-      "match": [
-        "^(?:phase100)-"
-      ]
-    }
-  },
   "explicit": {
-    "provider-antigravity-quota-retry.test.ts": "providers",
+    "pnpm-command-isolation.test.ts": "update", "provider-antigravity-quota-retry.test.ts": "providers", "project-config-warning-snapshot.test.ts": "codex-integration", "codex-quota-auto-refresh-generation.test.ts": "codex-integration", "codex-account-clear-paused.test.ts": "codex-integration",
     "responses-compaction-recovery.test.ts": "responses", "compaction-recovery-settings.test.ts": "config", "responses-compaction-recovery-policy.test.ts": "responses", "plugin-loader.test.ts": "lib", "plugin-upstream-hooks.test.ts": "lib",
     "cli-kiro-auto-selection.test.ts": "cli", "codebuddy-live-models.test.ts": "providers", "kiro-auto-selection.test.ts": "providers/kiro", "kiro-quota-metrics.test.ts": "providers/kiro", "management-provider-request-pacing.test.ts": "server",
     "desktop-supervised-restart.test.ts": "clients", "cli-restart-handoff.test.ts": "cli",
     "restart-replacement.test.ts": "server", "deepseek-artifact-tool-schema.test.ts": "providers",
-    "client-config-export-output-limit.test.ts": "config",
+    "client-config-export-output-limit.test.ts": "config", "responses-skills-snapshot.test.ts": "responses", "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
+    "link-relay-bound-transport.test.ts": "clients", "claude-desktop-system-proxy.test.ts": "claude-integration", "codex-config-drift-heal.test.ts": "codex-integration",
     "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
     "openai-chat-tool-call-id-remint.test.ts": "adapters/openai",
     "coding-agent-json-lines-scaling.test.ts": "providers",
@@ -467,6 +302,7 @@
     "claude-picker-ca.test.ts": "claude-integration",
     "claude-picker-listener.test.ts": "claude-integration",
     "claude-picker-models.test.ts": "claude-integration",
+    "claude-picker-recovery.test.ts": "claude-integration",
     "claude-picker-runtime.test.ts": "claude-integration",
     "claude-picker-trust.test.ts": "claude-integration",
     "claude-desktop-remote-hub.test.ts": "claude-integration",
@@ -477,6 +313,7 @@
     "claude-inbound-cache-stabilize.test.ts": "claude-integration",
     "claude-inbound-debug.test.ts": "claude-integration",
     "claude-inbound.test.ts": "claude-integration",
+    "claude-output-schema-strict.test.ts": "claude-integration",
     "claude-intercept-integration.test.ts": "server",
     "claude-intercept-local-ca.test.ts": "claude-integration",
     "claude-intercept-model-bindings.test.ts": "claude-integration",
@@ -533,7 +370,7 @@
     "cli-models-free-only.test.ts": "cli",
     "cli-models-price.test.ts": "cli",
     "cli-models-reasoning.test.ts": "cli",
-    "cli-models-runtime-dispatch.test.ts": "cli",
+    "cli-models-runtime-dispatch.test.ts": "cli", "cli-models-set.test.ts": "cli",
     "cli-models.test.ts": "cli",
     "cli-native-profile.test.ts": "cli",
     "cli-observe-logs.test.ts": "cli",
@@ -547,6 +384,7 @@
     "cli-restore-back.test.ts": "cli",
     "cli-start-auxiliary-bind.test.ts": "cli",
     "cli-start-journal-order.test.ts": "cli",
+    "sibling-home-client-sync.test.ts": "cli",
     "cli-status-hub-state.test.ts": "cli",
     "cli-status-json.test.ts": "cli",
     "cli-status-oauth-health.test.ts": "cli",
@@ -681,6 +519,7 @@
     "codex-model-denial-evidence.test.ts": "codex-integration",
     "codex-model-entitlement-admission.test.ts": "codex-integration",
     "codex-model-entitlements-program-shape.test.ts": "codex-integration",
+    "codex-native-availability-nux.test.ts": "codex-integration",
     "codex-model-entitlements.test.ts": "codex-integration",
     "codex-models-cache-invalidate.test.ts": "codex-integration",
     "codex-native-residue.test.ts": "codex-integration",
@@ -939,6 +778,7 @@
     "doctor.test.ts": "codex-integration",
     "download-cap-default.test.ts": "images",
     "download-connect-deadline-default.test.ts": "images",
+    "droid-client.test.ts": "clients",
     "dsh-path-contract.test.ts": "ci-workflows",
     "dsh-rc6-compat-script.test.ts": "ci-workflows",
     "dsh-writer-lock.test.ts": "ci-workflows",
@@ -964,6 +804,7 @@
     "fastwire-characterization-routing.test.ts": "routing",
     "fastwire-characterization-wire.test.ts": "routing",
     "fastwire-observability.test.ts": "routing",
+    "fastwire-response-authority.test.ts": "routing",
     "fastwire-policy.test.ts": "routing",
     "featherless-provider.test.ts": "providers",
     "fetch-header-timeout.test.ts": "server",
@@ -1072,6 +913,7 @@
     "jev-decision.test.ts": "routing",
     "jev-provider.test.ts": "providers",
     "keyring-smoke.test.ts": "ci-workflows",
+    "kilo-client.test.ts": "clients",
     "kimi-oauth-identity.test.ts": "providers",
     "kimi-responses-adjacency.test.ts": "providers",
     "kiro-account-load.test.ts": "providers/kiro",
@@ -1238,7 +1080,7 @@
     "model-pinned-effort.test.ts": "codex-integration",
     "model-presets.test.ts": "providers",
     "model-rename-migration.test.ts": "providers",
-    "model-selection-guidance.test.ts": "cli",
+    "model-selection-guidance.test.ts": "cli", "model-settings-management-api.test.ts": "server",
     "model-visibility-management-api.test.ts": "codex-integration",
     "models-feedback-callback.test.ts": "gui",
     "models-free-filter.test.ts": "gui",
@@ -1445,6 +1287,7 @@
     "provider-workspace-data.test.ts": "gui",
     "provider-workspace-rail.test.ts": "gui",
     "provider-workspace-state.test.ts": "gui",
+    "proxy-env-macos.test.ts": "server",
     "proxy-env.test.ts": "server",
     "proxy-liveness-package-tree-fence.test.ts": "server",
     "proxy-liveness.test.ts": "server",
@@ -1598,6 +1441,7 @@
     "responses-self-named-namespace-scrub.test.ts": "responses",
     "responses-send-budget-counts.test.ts": "responses",
     "responses-send-budget-errors.test.ts": "responses",
+    "responses-memory-models.test.ts": "responses",
     "responses-shadow-intercept.test.ts": "responses",
     "responses-show-thinking-summary.test.ts": "responses",
     "responses-snapshot-repair-server.test.ts": "responses",
@@ -1664,6 +1508,7 @@
     "server-google-antigravity-oauth-429-budget.test.ts": "server",
     "server-gui-bundle-freshness.test.ts": "server",
     "server-images-bodyless-content-length.test.ts": "server",
+    "server-images-pool-admission.test.ts": "server",
     "server-images.test.ts": "server",
     "server-key-failover-e2e.test.ts": "server",
     "server-jev-combo-e2e.test.ts": "server",
@@ -1702,6 +1547,7 @@
     "settings-desktop-switch-apply.test.ts": "config",
     "settings-fast-rows.test.ts": "config",
     "settings-main-account-hard-lock.test.ts": "config",
+    "settings-memory-models.test.ts": "config",
     "settings-oauth-open-browser.test.ts": "config",
     "settings-startup-health-seam.test.ts": "config",
     "settings-stream-mode.test.ts": "config",
@@ -1808,18 +1654,12 @@
     "umans-provider.test.ts": "providers",
     "uninstall.test.ts": "cli",
     "update-async-routes.test.ts": "server",
-    "update-badge.test.ts": "update",
-    "update-bun-ownership-lease.test.ts": "update",
-    "update-desktop-badge.test.ts": "update",
-    "update-desktop-owner.test.ts": "update",
-    "update-job.test.ts": "update",
-    "update-worker-launch.test.ts": "update",
-    "update-notify.test.ts": "update",
-    "update-npm-cache-preflight.test.ts": "update",
-    "update-npm-invocation.test.ts": "update",
-    "update-mise-launcher-target.test.ts": "update",
-    "update-mise.test.ts": "update",
-    "update-mise-node-runtime.test.ts": "update",
+    "update-badge.test.ts": "update", "update-bun-ownership-lease.test.ts": "update",
+    "update-desktop-badge.test.ts": "update", "update-desktop-owner.test.ts": "update",
+    "update-job.test.ts": "update", "update-worker-launch.test.ts": "update",
+    "update-notify.test.ts": "update", "update-npm-cache-preflight.test.ts": "update",
+    "update-npm-invocation.test.ts": "update", "update-mise-launcher-target.test.ts": "update",
+    "update-mise.test.ts": "update", "update-mise-node-runtime.test.ts": "update",
     "update-pnpm.test.ts": "update",
     "update-refresh.test.ts": "update",
     "update-stop-classification.test.ts": "update",
@@ -1970,29 +1810,5 @@
     "injection-routing-drift.test.ts": "codex-integration", "injection-routing-healer.test.ts": "codex-integration",
     "injection-routing-heal-apply.test.ts": "codex-integration", "cli-start-routing-heal-wiring.test.ts": "cli",
     "cli-status-codex-routing-drift.test.ts": "cli"
-  },
-  "migrated": [
-    "adapters",
-    "ci-workflows",
-    "claude-integration",
-    "cli",
-    "clients",
-    "codex-integration",
-    "config",
-    "gui",
-    "lab",
-    "lib",
-    "oauth",
-    "providers",
-    "responses",
-    "routing",
-    "server",
-    "service",
-    "storage",
-    "update",
-    "usage",
-    "vision",
-    "web-search",
-    "windows"
-  ]
+  }
 }

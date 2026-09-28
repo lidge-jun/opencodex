@@ -18,6 +18,16 @@ export type ListenPidScan =
   | { ok: true; pids: number[] }
   | { ok: false; error?: string };
 
+/** One listening socket with its bound local address (host part only). */
+export interface ListenEntry {
+  pid: number;
+  address: string;
+}
+
+export type ListenEntryScan =
+  | { ok: true; listeners: ListenEntry[] }
+  | { ok: false; error?: string };
+
 export type ReclaimListenPortOptions = WaitForPortOptions & {
   /**
    * When true AND `onlyKillPids` is a non-empty allowlist, those PIDs may be
@@ -60,12 +70,49 @@ export type ReclaimListenPortOptions = WaitForPortOptions & {
   sleepMs?: (ms: number) => Promise<void>;
 };
 
+/** Split `host:port`/`[v6]:port` on a numeric port boundary; returns the host part. */
+function listenHost(token: string): string {
+  const bracketed = /^(\[[0-9a-fA-F:.]+\]):/.exec(token);
+  if (bracketed) return bracketed[1].slice(1, -1).toLowerCase();
+  // Only a trailing :<digits> is a port; a bare "::" or hostname wildcard has none.
+  const withPort = /^(.*):(\d+)$/.exec(token);
+  return (withPort ? withPort[1] : token).toLowerCase();
+}
+
+/** Normalize a listen-address host: strips brackets and the IPv4-mapped prefix. */
+export function normalizeListenAddress(token: string): string {
+  let host = listenHost(token);
+  if (host.startsWith("::ffff:")) host = host.slice(7);
+  return host;
+}
+
+/** Normalize a bare bind address (no port): drops brackets, keeps bare IPv6 whole. */
+function bareListenAddress(address: string): string {
+  let host = address.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host.startsWith("::ffff:")) host = host.slice(7);
+  return host;
+}
+
+const WILDCARD_LISTEN_HOSTS = new Set(["", "*", "0.0.0.0", "::"]);
+
 /**
- * Parse `netstat -ano` (Windows) / `netstat -anlp` listen lines for a port.
- * Exported for unit tests.
+ * Whether a socket bound to `listenerAddress` also serves connections to `bound` —
+ * exact match, or a wildcard listener, or a wildcard `bound` (the caller listens on
+ * every address). IPv4-mapped IPv6 forms of the same address are equalized first.
  */
-export function parseListenPidsFromNetstat(output: string, port: number): number[] {
-  const pids = new Set<number>();
+export function listenAddressServes(listenerAddress: string, bound: string): boolean {
+  const listener = normalizeListenAddress(listenerAddress);
+  const want = bareListenAddress(bound);
+  return WILDCARD_LISTEN_HOSTS.has(listener) || WILDCARD_LISTEN_HOSTS.has(want)
+    || listener === want;
+}
+
+/**
+ * Parse `netstat -ano` (Windows) / `netstat -anlp` listen lines for a port, keeping
+ * each distinct PID/address pair. Exported for unit tests.
+ */
+export function parseListenEntriesFromNetstat(output: string, port: number): ListenEntry[] {
+  const entries = new Map<string, ListenEntry>();
   const portSuffix = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -88,9 +135,66 @@ export function parseListenPidsFromNetstat(output: string, port: number): number
       : unixPid
         ? Number(unixPid[1])
         : NaN;
-    if (Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+    if (Number.isSafeInteger(pid) && pid > 0) {
+      const address = normalizeListenAddress(parts[localIdx]);
+      entries.set(`${pid}|${address}`, { pid, address });
+    }
   }
-  return [...pids];
+  return [...entries.values()];
+}
+
+/** Parse netstat LISTEN owners, deduplicating PIDs after preserving their addresses. */
+export function parseListenPidsFromNetstat(output: string, port: number): number[] {
+  return [...new Set(parseListenEntriesFromNetstat(output, port).map(entry => entry.pid))];
+}
+
+/**
+ * Parse `ss -Hltnp` rows for a port, keeping each distinct PID/address pair. A row
+ * without a `pid=` attribution (another user's socket) is dropped rather than
+ * reported unverifiable. Exported for unit tests.
+ */
+export function parseListenEntriesFromSs(output: string, port: number): ListenEntry[] {
+  const entries = new Map<string, ListenEntry>();
+  const portSuffix = `:${port}`;
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!/^LISTEN\b/i.test(line)) continue;
+    const parts = line.split(/\s+/);
+    // LISTEN <recv-q> <send-q> <local-addr:port> <peer-addr:port> users:(...)
+    const localIdx = parts.findIndex(part => part.endsWith(portSuffix) || part.endsWith(`]:${port}`));
+    if (localIdx < 0) continue;
+    const pidMatch = /pid=(\d+)/.exec(line);
+    const pid = pidMatch ? Number(pidMatch[1]) : NaN;
+    if (Number.isSafeInteger(pid) && pid > 0) {
+      const address = normalizeListenAddress(parts[localIdx]);
+      entries.set(`${pid}|${address}`, { pid, address });
+    }
+  }
+  return [...entries.values()];
+}
+
+/**
+ * Parse `lsof -nP -iTCP:<port> -sTCP:LISTEN` output (without -t), keeping each
+ * distinct PID/address pair. The NAME column is the last address token, optionally
+ * followed by `(LISTEN)`; skip the header and nonnumeric PIDs. Exported for tests.
+ */
+export function parseListenEntriesFromLsof(output: string, port: number): ListenEntry[] {
+  const entries = new Map<string, ListenEntry>();
+  const portSuffix = `:${port}`;
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || /^COMMAND\b/.test(line)) continue;
+    const parts = line.split(/\s+/);
+    const pid = /^\d+$/.test(parts[1] ?? "") ? Number(parts[1]) : NaN;
+    if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+    let addressIdx = parts.length - 1;
+    if (/^\(.*\)$/.test(parts[addressIdx] ?? "")) addressIdx -= 1;
+    const address = parts[addressIdx] ?? "";
+    if (!address.endsWith(portSuffix) && !address.endsWith(`]:${port}`)) continue;
+    const normalized = normalizeListenAddress(address);
+    entries.set(`${pid}|${normalized}`, { pid, address: normalized });
+  }
+  return [...entries.values()];
 }
 
 function normalizeListenPidScan(result: ListenPidScan | number[]): ListenPidScan {
@@ -121,48 +225,82 @@ function readWindowsNetstatAno(): string {
 }
 
 /**
- * Scan for PIDs currently LISTENing on `port`.
- * Distinguishes probe failure (`ok: false`) from a successful empty result.
+ * Scan for the sockets currently LISTENing on `port`, with each listener's bound
+ * local address. Distinguishes probe failure (`ok: false`) from a successful empty
+ * result. POSIX backends are tried in order — `lsof`, `ss` (iproute2, the only
+ * scanner on minimal Linux installs), then `netstat` — and a missing scanner falls
+ * through to the next instead of failing the scan.
  */
-export function scanListenPids(port: number): ListenPidScan {
+export function scanListenEntries(port: number): ListenEntryScan {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     return { ok: false, error: "invalid port" };
   }
+  const scanned = Math.trunc(port);
   try {
     if (process.platform === "win32") {
-      return { ok: true, pids: parseListenPidsFromNetstat(readWindowsNetstatAno(), port) };
+      return { ok: true, listeners: parseListenEntriesFromNetstat(readWindowsNetstatAno(), scanned) };
     }
+    const errors: string[] = [];
     try {
-      const output = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+      const output = execFileSync("lsof", ["-nP", `-iTCP:${scanned}`, "-sTCP:LISTEN"], {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 3000,
       });
-      return {
-        ok: true,
-        pids: output
-          .split(/\r?\n/)
-          .map(line => Number(line.trim()))
-          .filter(pid => Number.isSafeInteger(pid) && pid > 0),
-      };
-    } catch (lsofErr) {
-      try {
-        const output = execFileSync("netstat", ["-anlp"], {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 3000,
-        });
-        return { ok: true, pids: parseListenPidsFromNetstat(output, Math.trunc(port)) };
-      } catch (netstatErr) {
-        return {
-          ok: false,
-          error: `lsof/netstat unavailable: ${String(lsofErr)} / ${String(netstatErr)}`,
-        };
-      }
+      return { ok: true, listeners: parseListenEntriesFromLsof(output, scanned) };
+    } catch (error) {
+      errors.push(`lsof: ${String(error)}`);
     }
+    try {
+      const output = execFileSync("ss", ["-Hltnp"], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000,
+      });
+      return { ok: true, listeners: parseListenEntriesFromSs(output, scanned) };
+    } catch (error) {
+      errors.push(`ss: ${String(error)}`);
+    }
+    try {
+      const output = execFileSync("netstat", ["-anlp"], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000,
+      });
+      return { ok: true, listeners: parseListenEntriesFromNetstat(output, scanned) };
+    } catch (error) {
+      errors.push(`netstat: ${String(error)}`);
+    }
+    return { ok: false, error: `no listener scanner available (${errors.join(" / ")})` };
   } catch (error) {
     return { ok: false, error: String(error) };
   }
+}
+
+/**
+ * Scan for PIDs currently LISTENing on `port`.
+ * Distinguishes probe failure (`ok: false`) from a successful empty result.
+ */
+export function scanListenPids(port: number): ListenPidScan {
+  const scan = scanListenEntries(port);
+  if (!scan.ok) return { ok: false, error: scan.error };
+  return { ok: true, pids: [...new Set(scan.listeners.map(entry => entry.pid))] };
+}
+
+/**
+ * PIDs LISTENing on `port` that actually serve `address`: listeners bound to that
+ * exact address plus wildcards (0.0.0.0/::). A listener on a different loopback or
+ * interface address (e.g. 127.0.0.2 while the tunnel binds 127.0.0.1) never receives
+ * the connection and must not block or qualify a readiness check.
+ */
+export function scanListenPidsForAddress(port: number, address = "127.0.0.1"): ListenPidScan {
+  const scan = scanListenEntries(port);
+  if (!scan.ok) return { ok: false, error: scan.error };
+  const pids = new Set<number>();
+  for (const entry of scan.listeners) {
+    if (listenAddressServes(entry.address, address)) pids.add(entry.pid);
+  }
+  return { ok: true, pids: [...pids] };
 }
 
 /** Best-effort PIDs currently LISTENing on `port`. Empty on probe failure. */

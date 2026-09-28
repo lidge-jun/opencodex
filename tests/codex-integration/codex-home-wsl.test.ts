@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultCodexHome, wslAutomountRoot, listWslWindowsCodexHomes } from "../../src/codex/home";
@@ -211,5 +211,57 @@ describe("wsl.conf automount root", () => {
       ...deps,
       env: { ...deps.env, CODEX_HOME: windowsCodexHome },
     })).toBe(false);
+  });
+
+  test("service ownership accepts an older lexical spelling of the current physical home", () => {
+    const lexicalHome = "/home/example/.codex";
+    const physicalHome = "/srv/codex-home";
+    const deps = {
+      env: {},
+      homedir: () => "/home/example",
+      statSync: (() => ({ isDirectory: () => true })) as never,
+      realpathSync: (path: string) => path === lexicalHome ? physicalHome : path,
+    };
+
+    expect(serviceCodexHomeMatchesInstall(lexicalHome, deps)).toBe(true);
+    expect(serviceCodexHomeMatchesInstall("/srv/other-home", deps)).toBe(false);
+  });
+
+  // The injected realpath seam above isolates the policy; this exercises the production
+  // resolver itself — a real junction (Windows) or directory symlink spells the same
+  // physical home two ways.
+  test("service ownership accepts a real junction spelling of the physical home", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-junction-home-"));
+    try {
+      const physical = join(root, "real-codex");
+      const alias = join(root, "alias-codex");
+      mkdirSync(physical, { recursive: true });
+      symlinkSync(physical, alias, "junction");
+
+      const deps = { env: { CODEX_HOME: physical }, homedir: () => root };
+      expect(serviceCodexHomeMatchesInstall(alias, deps)).toBe(true);
+      expect(serviceCodexHomeMatchesInstall(join(root, "other-codex"), deps)).toBe(false);
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  });
+
+  // The home directory itself can sit under a junctioned ancestor — then the recorded
+  // spelling resolves through an intermediate link, not a link at the final component.
+  test("service ownership resolves a home through a junctioned parent directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-junction-parent-"));
+    try {
+      const parentReal = join(root, "parent-real");
+      const physical = join(parentReal, ".codex");
+      mkdirSync(physical, { recursive: true });
+      const parentAlias = join(root, "parent-alias");
+      symlinkSync(parentReal, parentAlias, "junction");
+
+      const deps = { env: { CODEX_HOME: physical }, homedir: () => root };
+      expect(serviceCodexHomeMatchesInstall(join(parentAlias, ".codex"), deps)).toBe(true);
+      expect(serviceCodexHomeMatchesInstall(join(parentAlias, "other"), deps)).toBe(false);
+    } finally {
+      removeTreeWithRetry(root);
+    }
   });
 });

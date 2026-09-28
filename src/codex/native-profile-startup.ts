@@ -78,6 +78,8 @@ interface StartupEntry {
   recoveryStarted: boolean;
   policyBindingPending: boolean;
   settled: Promise<NativeMainStartupGateSnapshot>;
+  /** Publication provenance only; never substitutes for the live convergence drain. */
+  snapshotSettled?: Promise<NativeMainStartupGateSnapshot>;
   resolveAcquisition?: (value: NativeMainStartupGateSnapshot) => void;
   deps: NativeMainStartupGateDeps;
   manager: NativeProfileManager;
@@ -401,6 +403,7 @@ export function startNativeMainStartupLifecycle(
     released = true;
     entry!.refs = Math.max(0, entry!.refs - 1);
     if (entry!.refs !== 0) return;
+    const releasedEpoch = entry!.epoch;
     entry!.epoch += 1;
     entry!.sweepStopping = true;
     if (entry!.sweepTimer) clearTimeout(entry!.sweepTimer);
@@ -413,11 +416,17 @@ export function startNativeMainStartupLifecycle(
     // the process exited, because a server whose config does not sync Codex installs a no-op
     // lifecycle that never touches the gate.
     //
-    // The gate state belonged only to this entry, so reset it to the process-initial state here,
-    // synchronously and before the first await: a NEW entry created for the same home afterwards
-    // re-arms its own gate and cannot be clobbered by this release. The epoch bump retires any
-    // in-flight `initializeNativeMainStartupGate`/convergence write from the released generation.
-    if (snapshot.homeId === homeId && !startupEntries.has(homeId)) {
+    // Reset only a snapshot published by this startup generation. A profile transaction can
+    // independently replace it with a same-home recovery fence, which must survive this release.
+    // The epoch provenance misses one case: that fence advances the global epoch while this
+    // generation's convergence is still in flight, and `completeNativeMainRecovery` then rebinds
+    // the shared `settled` to this entry's own pending chain without re-stamping either epoch.
+    // The pending snapshot is again this generation's own, so `settled` identity proves it too.
+    // Do this synchronously and before the first await: a NEW entry created for the same home
+    // afterwards re-arms its own gate and cannot be clobbered by this release. The epoch bump
+    // retires any in-flight convergence write from the released generation.
+    if (snapshot.homeId === homeId && !startupEntries.has(homeId)
+      && (epoch === releasedEpoch || settled === entry!.settled || settled === entry!.snapshotSettled)) {
       epoch += 1;
       snapshot = ready(null);
       settled = Promise.resolve(snapshot);
@@ -728,6 +737,9 @@ export function completeNativeMainRecovery(homeId: string): boolean {
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   snapshot = ready(homeId);
   settled = Promise.resolve(snapshot);
+  // Remember who published this snapshot without replacing an in-flight recovery/sweep
+  // promise: last-reference release must still drain that original convergence chain.
+  if (entry) entry.snapshotSettled = settled;
   return true;
 }
 

@@ -2,6 +2,7 @@ import { CodexStaleBanner } from "../components/codex-stale-banner";
 import ModelCatalogSettingsPanels from "../components/ModelCatalogSettingsPanels";
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
+import ModelSettingsDialog from "../components/ModelSettingsDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
 import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
@@ -361,6 +362,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
   const [priceModel, setPriceModel] = useState<ModelRow | null>(null);
   const priceTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [settingsModel, setSettingsModel] = useState<ModelRow | null>(null);
   const [displayNameSaving, setDisplayNameSaving] = useState(false);
   const [displayNameRequestError, setDisplayNameRequestError] = useState<string | null>(null);
   const [displayNameRecovery, setDisplayNameRecovery] = useState<{
@@ -1786,6 +1788,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                          </button>
                        </>
                      )}
+                     {!m.native && !m.custom && m.provider !== "combo" && <button type="button" className="btn btn-ghost btn-sm text-caption models-display-name-trigger" aria-haspopup="dialog" aria-label={t("models.settingsTitle", { model: m.namespaced })} onClick={() => setSettingsModel(m)}>{t("models.customEdit")}</button>}
                      {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
                      {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                    </div>
@@ -2773,6 +2776,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             }, 0);
           }}
         />
+      )}
+      {settingsModel && (
+        <ModelSettingsDialog key={`${apiBase}/${settingsModel.namespaced}`} row={settingsModel} apiBase={apiBase}
+          onRefresh={signal => load(true, signal)} onFeedback={publishFeedback}
+          onClose={() => setSettingsModel(null)} />
       )}
     </>
   );

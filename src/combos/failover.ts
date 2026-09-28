@@ -326,7 +326,10 @@ function normalizedFailureCode(code?: string | null): string {
 // are quota-limit codes whose window length this gateway has no evidence for, and guessing long on
 // them would hold a target that may clear sooner.
 const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_reached", "1308"]);
-const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached/;
+// Token-plan windows (Alibaba's DeepSeek/Qwen plans) report "Your token-plan 1-week quota has been
+// exhausted" (#5494). The match is anchored to that phrasing: a looser "quota ... exhausted" would
+// also catch per-minute limits, and this arm outranks the transient rate-limit duration.
+const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted/;
 
 function isAccountWindowExhausted(message: string, code?: string | null): boolean {
   return ACCOUNT_EXHAUSTION_CODES.has(normalizedFailureCode(code))

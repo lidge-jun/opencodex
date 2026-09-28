@@ -81,6 +81,19 @@ Disabling Desktop integration removes its gateway profile. It removes the owned 
 only when `claudeCode.cliFirstParty` is not set; otherwise the env stays for the CLI. With Desktop
 first-party ON, `ocx ensure` re-applies a stale env; the proxy port follows the public port.
 
+The settings env does not win everywhere. Desktop resolves the operating-system proxy for the API
+host when it spawns the Code tab and, for an HTTP answer, passes it as `HTTPS_PROXY`/`HTTP_PROXY`;
+only Claude Code managed settings override that, so a Windows system proxy without a bypass for
+`api.anthropic.com` silently routes the Code tab around the intercept. OpenCodex cannot fix this
+from its side without writing machine-wide managed settings or the user's proxy configuration, so
+`src/claude/desktop-system-proxy.ts` only observes it: on Windows with a Desktop first-party env
+(applied or stale), `ocx doctor` reads `ProxyEnable`/`ProxyServer`/`ProxyOverride`/`AutoConfigURL`
+and the auto-detect (WPAD) flag in `Connections\DefaultConnectionSettings`, and reports a conflict,
+a bypass, no covering proxy, or an undecidable PAC script or WPAD. A failed registry read is
+reported as unreadable, never as an absent value, and a stale settings env never earns an `ok`. It
+never prints the proxy value and never records a doctor failure, because the CLI and other clients
+still route.
+
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
@@ -152,6 +165,10 @@ Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
 login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
+Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
+factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
+avoiding the false reservation created by probing and closing a port pair before the ephemeral TLS
+listener starts. The injected factory does not change production port selection.
 The User-Agent is a routing hint, not a trust boundary: a client that fakes it reaches only what
 any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
@@ -159,19 +176,45 @@ because each terminator presents a certificate only its intended client trusts. 
 terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`, under
-`<OPENCODEX_HOME>/claude-picker/`, 0600 key) carries critical name constraints permitting only
-`claude.ai` and excluding every IPv4 and IPv6 address, and is regenerated on reload when either is
-missing, which gives it a new fingerprint to trust. Trust is added without a policy string: Chromium
+trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`) carries critical
+name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 address. Its signing
+key exists only in the server process; only public certificates are written under
+`<OPENCODEX_HOME>/claude-picker/`. Every intercept start drops any legacy `ca.key`, even with the intercept or picker off; on restart the lifecycle keeps the applied
+profile row in place, and removes the prior public root only when the published certificate differs
+from this process's authority — a reused authority stays trusted, and a predecessor that cannot be
+untrusted leaves the picker disabled rather than trusted beside its replacement —
+then re-runs the controller's enable flow when that profile had been applied so the replacement
+authority is trusted (with the user's keychain consent) and the selection restored. Trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it; an
-export it cannot read makes trust `unknown`, which never arms. A
-rotated-out picker certificate stays in the login keychain because `untrustPickerCa` removes only the
-current one; its key was overwritten, so it can no longer sign a leaf. The relay verifies the upstream
+export it cannot read makes trust `unknown`, which never arms. A rotated-out picker certificate is
+removed from the login keychain as its replacement is published, and a failed removal stops the
+picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
+`ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
+callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
+certificate is rewritten under the lock so a second process cannot rotate out a live owner's
+authority. The owner record carries the OS process start identity where the platform exposes one,
+so a reused PID does not count as the live owner; an older record without one still counts as live
+unless, on macOS, the PID's process started after the record was written.
+Before a startup rotation replaces `ca.pem`, the outgoing certificate's **public** PEM and its
+SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
+exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
+does. Startup (`runtime.ts` via `picker-ca-cleanup.ts`) drains that record before and after
+rotation: it defers without calling `security` while the recorded certificate is still published by
+a live owner, untrusts a private temporary copy of the public PEM otherwise, and acknowledges the
+exact record only after a confirmed removal, so a failure survives process replacement and is
+retried by the next start. While the drain is incomplete and a Desktop picker profile is applied, the
+lifecycle binds a blind-only CONNECT relay (`interceptHosts: []`, every tunnel blind) on the
+profile's recorded `egressProxyUrl` port instead of the picker: Desktop keeps its network path, no
+TLS is terminated, no trust is added, and the profile row, its previous selection and the retry
+intent stay untouched. A port held by another process is not taken over; the relay start fails with
+a warning and the row stays for the next start. The relay is chosen over restoring the pre-picker
+profile because a restore is an ownership-sensitive Desktop write that would discard the retry
+intent and cannot repair the URL a running Desktop already pinned. The `claude.ai` relay verifies the upstream
 certificate, streams every body and upgrade unchanged, and rewrites only the bootstrap response's
 local Code picker surfaces, `ccd` (what the Desktop Code tab reads) and its `code` fallback, never the
 remote `ccr` (`picker-bootstrap.ts`), failing open to the original bytes; the model list
-comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. A
+comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. Picker aliases carry `[1m]` only for authoritative windows of at least 1M, using the shared context marker helper with auto-context disabled. Sub-million opt-ins remain unmarked because the picker cannot guarantee the Desktop runner's compaction environment. A
 CONNECT to claude.ai that arrives before the first refresh waits at most 3 s, then goes blind. A
 picker proxy bind failure only disables picker mode; a picker construction or start failure closes
 every socket the start had bound before rethrowing. Nothing is logged but method, bootstrap or
@@ -412,3 +455,5 @@ The [compaction routing override](../transports/responses-failover.md#compaction
 ## Native passthrough tool-call ids
 
 Native Anthropic passthrough in `src/server/claude-messages.ts` forwards the caller's body except for tool-call ids: `sanitizePassthroughToolCallIds` runs the request-scoped allocator from `src/adapters/tool-call-id.ts` over every `*tool_use` id and `*tool_result` `tool_use_id`. Conforming ids are reserved first and stay byte-identical, a non-conforming or overlength id is rewritten to a conforming id of at most 64 characters with call/result pairing kept, and an empty id throws `AnthropicRequestError`, so the request fails with a local 400 before the upstream fetch. `tests/claude-integration/claude-native-passthrough.test.ts` covers rewriting, pairing, the empty id, the overlength id and collision with an existing valid id.
+
+Linked-machine data uses the [connection-bound relay contract](../remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.

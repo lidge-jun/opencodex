@@ -165,8 +165,10 @@ Le mode picker fait partie du mode first-party. Sur macOS, il est activé par d�
 est sélectionné, sauf si `claudeCode.intercept.picker: false` est défini. Il modifie le sélecteur de
 modèles de l'onglet Code de Desktop first-party pour y afficher les modèles opencodex disponibles par
 leur nom. Lors de la première activation, macOS peut demander l'autorisation d'une autorité de certification
-locale dans le trousseau de connexion. Cette autorité est limitée à `claude.ai` et à ses sous-domaines ;
-la demande correspond à cette étape de confiance unique pour cette AC locale.
+locale dans le trousseau de connexion. Cette autorité est limitée à `claude.ai` et à ses sous-domaines.
+Sa clé de signature n'existe que dans le processus OpenCodex en cours : chaque redémarrage d'OpenCodex
+publie une nouvelle autorité et macOS demande donc de nouveau votre confiance — approuvez la demande,
+ou lancez ensuite `ocx claude desktop picker trust`, après chaque redémarrage.
 
 Lorsque le mode picker est actif, Claude Desktop accède au réseau par OpenCodex. Si OpenCodex s'arrête,
 Desktop reste hors ligne jusqu'à son redémarrage complet ou jusqu'à la désactivation du mode picker.

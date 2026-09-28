@@ -43,6 +43,8 @@ export function createLinkKeySource(expectedFingerprint: string, deps: LinkKeySo
 
 export interface LinkIngress {
   tunnelPort: number;
+  linkId?: string;
+  apiKeyId?: string;
   /** The listener's loopback policy: the standalone Host and Origin anti-rebinding gate. */
   policy: RequestPolicyView;
   linkKey: () => string | null;
@@ -98,5 +100,5 @@ export function handleLinkIngress(
   const admissionKey = ingress.linkKey();
   if (!admissionKey) return Response.json({ error: "link_credential_unavailable" }, { status: 503 });
   liftRequestIdleTimer(req, server);
-  return relayLinkDataRequest(req, { tunnelPort: ingress.tunnelPort, admissionKey }, ingress.relay);
+  return relayLinkDataRequest(req, { tunnelPort: ingress.tunnelPort, admissionKey, linkId: ingress.linkId, apiKeyId: ingress.apiKeyId }, ingress.relay);
 }

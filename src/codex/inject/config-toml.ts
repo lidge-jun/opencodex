@@ -8,6 +8,8 @@ import {
   REALTIME_WS_BASE_URL_KEY,
   isRootOpenaiBaseUrlLine,
   isRootRealtimeWsBaseUrlLine,
+  providerTableStart,
+  providerTableString,
   rootTomlString,
   tomlStringPattern,
 } from "../injected-marker";
@@ -18,6 +20,7 @@ import {
   resolveCodexConfigPath,
   tomlString,
 } from "../paths";
+import { readBoundedCodexConfig } from "./bounded-config-reader";
 import {
   type CodexRoutingTarget,
   providerBaseHost,
@@ -28,14 +31,39 @@ import {
 
 export function externalCodexModelProvider(content: string): string | null {
   const provider = resolveEffectiveProjectModelProvider(content).provider;
-  return provider && provider !== "openai" && provider !== "opencodex"
-    ? provider
-    : null;
+  if (!provider || provider === "openai" || provider === "opencodex") return null;
+  // A provider table counts as an external owner only when it carries a `base_url` — a
+  // gateway names somebody else's endpoint. A base-url-less table is the Codex desktop
+  // app's own native-routing placeholder (since app 26.924 each app-managed rewrite
+  // writes `model_provider = "custom"` plus such a table, stripping the injected root
+  // keys alongside), which re-injects cleanly because the injector strips a root
+  // `model_provider` line first. A REAL external provider must carry a base_url.
+  if (providerTableStart(content.split("\n"), provider) !== -1 && providerTableString(content, provider, "base_url") === null) {
+    return null;
+  }
+  return provider;
 }
 
+/**
+ * The ownership answer for read/write paths — inject, sync, connect, restore, and the
+ * shutdown gate. It deliberately reads the whole file like Codex does (links included):
+ * a large or link-mediated config is still a valid config, and these callers must
+ * classify it exactly rather than degrade to "undetermined".
+ */
 export function currentExternalCodexModelProvider(): string | null {
   if (!existsSync(CODEX_CONFIG_PATH)) return null;
   return externalCodexModelProvider(readFileSync(CODEX_CONFIG_PATH, "utf8"));
+}
+
+/**
+ * The same ownership answer for read-only observation (the settings GET / poll path),
+ * through a bounded read so a special or oversized config.toml cannot stall a request.
+ * A present-but-unreadable config throws so the caller reports undetermined ownership
+ * instead of "none".
+ */
+export function observedExternalCodexModelProvider(): string | null {
+  const content = readBoundedCodexConfig(CODEX_CONFIG_PATH);
+  return content === null ? null : externalCodexModelProvider(content);
 }
 
 /**

@@ -169,6 +169,37 @@ repair writes a backup before it touches anything.
 Changes apply to newly started sessions. A session already running keeps the
 prompt settings it started with.
 
+## Keeping the skills catalog stable
+
+The proxy defaults to `skills.catalog_refresh: "per_session"`: the first
+`<skills_instructions>` catalog received for a conversation is reused on later
+requests in that conversation. This keeps skill discovery and `SKILL.md` edits
+from changing that part of the upstream prompt cache prefix mid-session.
+A request that carries more than one `<skills_instructions>` block is passed
+through unchanged, and a request the proxy rejects does not set the catalog.
+
+To use the catalog supplied by the client on every turn, set this in opencodex's
+`$OPENCODEX_HOME/config.json` (normally `~/.opencodex/config.json`), then restart
+the proxy:
+
+```json
+{
+  "skills": {
+    "catalog_refresh": "per_turn"
+  }
+}
+```
+
+The supported values are `"per_session"` (default) and `"per_turn"`. This is a
+proxy setting, separate from Codex's `skills.include_instructions` toggle.
+Requests without a reliable conversation identity use the catalog supplied by
+the client. Snapshots are held in memory and do not survive a proxy restart.
+They expire after four hours of inactivity and may be evicted when the bounded
+cache fills. An initial catalog block larger than 512 KiB is forwarded without caching.
+After expiry or eviction, the next received catalog becomes the new snapshot.
+The dashboard's prompt preview still reads the current files; it does not show
+the snapshot retained for an ongoing conversation.
+
 ## What this page reads, and what it does not
 
 opencodex reads one configuration file — your `config.toml`. Codex resolves its

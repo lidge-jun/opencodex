@@ -37,7 +37,7 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import { admissionScopeDenial } from "./admission-model-scope";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
-import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
+import { getValidAccessToken, getOAuthCredentialProjectId, OAuthAccountPausedError } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
@@ -55,6 +55,14 @@ import { codexAccountSelectionForTurn } from "./lifecycle";
 import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
 
 export type ImagesEndpoint = "generations" | "edits";
+
+function assertImagesUpstreamAuthorization(headers: Headers, config: OcxConfig): void {
+  const authorization = headers.get("authorization")?.trim() ?? "";
+  if (!/^Bearer[\t ]+[^\s,]+$/i.test(authorization)) {
+    throw new TypeError("invalid image upstream authorization");
+  }
+  validateForwardAdmissionCredential(headers, config);
+}
 
 /** Image generation is slow (tens of seconds); bound a hung upstream, not a working one. */
 const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
@@ -274,6 +282,9 @@ async function tryCcaImageGeneration(
     }
     if (linkedSignal.signal.aborted) {
       return formatErrorResponse(504, "upstream_error", "CCA image generation timed out during authentication");
+    }
+    if (err instanceof OAuthAccountPausedError) {
+      return formatErrorResponse(403, "permission_error", err.message);
     }
     // Missing/revoked credential → 401 (re-login required); transient refresh/network → 502.
     const errName = err instanceof Error ? err.name : "";
@@ -659,25 +670,41 @@ export async function handleImages(
   }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
   // Admission bearer is valid proxy auth (requireApiAuth already passed) but must never be
-  // forwarded as OpenAI ChatGPT credentials. When the caller sent it, skip OpenAI forward
-  // and allow CCA / keyed paths instead of rejecting the whole request.
-  let skipOpenAiForwardForAdmissionBearer = false;
+  // forwarded as OpenAI ChatGPT credentials. Pool replaces it with a stored credential;
+  // Direct would consume the caller bearer, so only Direct becomes ineligible.
+  let callerBearerMayBeForwarded = true;
   if (!explicitKeyedProvider) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
       if (err instanceof ForwardAdmissionCredentialError) {
-        skipOpenAiForwardForAdmissionBearer = true;
+        callerBearerMayBeForwarded = false;
       } else {
         throw err;
       }
     }
   }
 
-  const canUseOpenAiForward = !skipOpenAiForwardForAdmissionBearer && candidates.forwardCandidates.length > 0;
+  // Both relay branches copy the body upstream, so the destination is the
+  // provider chosen in that branch and the model the caller named. A scoped key
+  // is checked against each forward destination BEFORE any stored credential is
+  // resolved, refreshed or leased, so a forbidden destination spends nothing.
+  const relaySelector = requestedImageSelector(body);
+  let forwardScopeDenial: Response | undefined;
+  const eligibleForwardCandidates = candidates.forwardCandidates.filter(candidate => {
+    if (!callerBearerMayBeForwarded && candidate.accountMode === "direct") return false;
+    const denial = admissionScopeDenial(config, admission, relaySelector, {
+      providerName: candidate.providerName,
+      modelId: relaySelector,
+    });
+    if (denial) forwardScopeDenial ??= denial;
+    return denial === undefined;
+  });
+  const canUseOpenAiForward = eligibleForwardCandidates.length > 0;
 
   if (!canUseOpenAiForward && !candidates.keyed) {
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint, admission);
     if (ccaResponse) return ccaResponse;
+    if (forwardScopeDenial) return forwardScopeDenial;
     // 400, not 5xx: codex retries every 5xx up to 5 total attempts, and this is a permanent
     // configuration state that must surface on the first attempt.
     return formatErrorResponse(
@@ -696,7 +723,7 @@ export async function handleImages(
   let forwardAuthError: Response | undefined;
   if (canUseOpenAiForward) {
     try {
-      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config, {
+      forward = await resolveFirstUsableOpenAiSidecar(eligibleForwardCandidates, req.headers, config, {
         beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
       });
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);
@@ -708,38 +735,48 @@ export async function handleImages(
       } else if (err instanceof CodexThreadAffinityExpiredError) {
         forwardAuthError = formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
       } else if (err instanceof CodexAuthContextError) {
-        const safeAccountLabel = formatCodexProviderForLog("openai", err.accountId, config);
-        console.error(`[images] Pool account ${safeAccountLabel} token failed; reauthentication required`);
+        console.error("[images] Pool credential failed; reauthentication required");
         forwardAuthError = formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
       } else if (err instanceof CodexModelAvailabilityError) {
         forwardAuthError = codexModelAvailabilityErrorResponse(err);
       } else if (err instanceof CodexPoolAuthenticationError) {
         forwardAuthError = formatErrorResponse(401, "authentication_error", err.message);
+      } else if (err instanceof TypeError) {
+        // The sidecar releases any acquired probe lease if credential materialization fails.
+        return formatErrorResponse(500, "internal_error", "image generation request failed forward credential validation");
       } else {
         throw err;
       }
     }
   }
 
-  const headers: Record<string, string> = { "content-type": "application/json" };
+  const headers = new Headers({ "content-type": "application/json" });
+  const releaseForwardProbe = (): void => {
+    try { forward?.releaseProbeLease?.(); }
+    catch { console.error("[images] Failed to release probe lease"); }
+  };
   let url: string;
-  // Both relay branches copy the body upstream, so the destination is the
-  // provider chosen in that branch and the model the caller named. Each branch
-  // is checked as it is entered, before it resolves a credential or commits a
-  // key rotation, so a refused request spends nothing.
-  const relaySelector = requestedImageSelector(body);
+  // Each branch is re-checked as it is entered: the forward check is defence in
+  // depth for the pre-filter above, and the keyed check runs before a key
+  // rotation is committed.
   if (forward) {
     const denial = admissionScopeDenial(config, admission, relaySelector, {
       providerName: forward.providerName,
       modelId: relaySelector,
     });
     if (denial) {
-      forward.releaseProbeLease?.();
+      releaseForwardProbe();
       return denial;
     }
     const { provider } = forward;
-    if (provider.headers) Object.assign(headers, provider.headers);
-    for (const [name, value] of forward.headers) headers[name] = value;
+    try {
+      for (const [name, value] of Object.entries(provider.headers ?? {})) headers.set(name, value);
+      for (const [name, value] of forward.headers) headers.set(name, value);
+      assertImagesUpstreamAuthorization(headers, config);
+    } catch {
+      releaseForwardProbe();
+      return formatErrorResponse(500, "internal_error", "image generation request failed forward credential validation");
+    }
     // The ChatGPT codex backend takes bare paths (matches the adapter's `${baseUrl}/responses`).
     url = `${provider.baseUrl}/images/${endpoint}`;
   } else if (forwardAuthError) {
@@ -783,8 +820,13 @@ export async function handleImages(
       );
     }
     const apiKey = warmKeyProvider?.apiKey ?? candidates.keyed.apiKey;
-    if (provider.headers) Object.assign(headers, provider.headers);
-    headers["authorization"] = `Bearer ${apiKey}`;
+    try {
+      for (const [name, value] of Object.entries(provider.headers ?? {})) headers.set(name, value);
+      headers.set("authorization", `Bearer ${apiKey}`);
+      assertImagesUpstreamAuthorization(headers, config);
+    } catch {
+      return formatErrorResponse(500, "internal_error", "image generation request failed forward credential validation");
+    }
     logCtx.provider = providerName;
     // Keyed providers tolerate baseUrl with or without /v1 (mirrors openai-responses.ts).
     url = `${provider.baseUrl.replace(/\/v1\/?$/, "")}/v1/images/${endpoint}`;
@@ -797,6 +839,11 @@ export async function handleImages(
       "authentication_error",
       "image generation relay needs ChatGPT auth (Authorization header) or an OpenAI API-key provider",
     );
+  }
+
+  if (req.signal.aborted) {
+    releaseForwardProbe();
+    return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
   }
 
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
@@ -846,6 +893,9 @@ export async function handleImages(
     // Client cancel first: it aborts the linked signal too, and must not be logged as an
     // upstream failure (499 maps to client_closed_request in the request log).
     if (req.signal.aborted) {
+      // No upstream outcome is recorded for a client cancel, so a recovery probe
+      // lease taken by the selected Pool account must be returned explicitly.
+      releaseForwardProbe();
       return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
     }
     if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {

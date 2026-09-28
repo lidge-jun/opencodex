@@ -1,5 +1,7 @@
 import { describe, expect, test, spyOn } from "bun:test";
 import { chooseJoinTunnelPort, ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { spawnClientLinkTunnel } from "../../src/client/link-tunnel";
+import type { ListenPidScan } from "../../src/server/port-reclaim";
 import { isLinkPort, JOIN_TUNNEL_PORT_MAX, JOIN_TUNNEL_PORT_MIN } from "../../src/link/ports";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -14,6 +16,7 @@ function isWrappedIssue(argv: readonly string[]): boolean {
   return (argv.at(-1) ?? "").startsWith(`${quoteRemote(remoteOcxArgv(["link", "issue", "--alias"]))} `);
 }
 
+/** Select only the wrapped revoke command, not other SSH traffic. */
 function revokeCalls(calls: readonly string[][]): string[][] {
   return calls.filter(argv => argv.at(-1) === REVOKE_COMMAND);
 }
@@ -21,6 +24,7 @@ const API_KEY_ID = "link-key-1";
 const KEY = `ocx_data_${"a".repeat(40)}`;
 const FINGERPRINT = `SHA256:${"a".repeat(32)}`;
 
+/** Record issue and compensation calls without starting an SSH process. */
 function runnerFor(calls: string[][], issueResult = true): SshRunner {
   return {
     run: async argv => {
@@ -41,16 +45,29 @@ function runnerFor(calls: string[][], issueResult = true): SshRunner {
   };
 }
 
+/** Keep the fake tunnel alive until its owner stops it. */
 function tunnelFor(order: string[]) {
   return {
     pid: 123,
-    exited: Promise.resolve(0),
+    exited: new Promise<number>(() => {}),
     stop: async () => { order.push("stop-tunnel"); },
   };
 }
 
+/** Return the link-auth challenge before accepting the issued key. */
+function challengedFetch(order?: string[]) {
+  return async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const authed = new Headers(init?.headers).get("x-opencodex-api-key") === KEY;
+    order?.push(authed ? "readyz:key" : "readyz:probe");
+    return new Response(null, { status: authed ? 200 : 401 });
+  };
+}
+
+/** Supply isolated join dependencies and attribute the listener to the fake tunnel. */
 function joinDeps(overrides: Partial<ClientLinkJoinDeps> = {}): ClientLinkJoinDeps {
-  const calls = overrides.runner ? [] : [];
+  const calls: string[][] = [];
+  let tunnelPid = 0;
+  const spawn = overrides.spawnTunnel ?? spawnClientLinkTunnel;
   return {
     runner: overrides.runner ?? runnerFor(calls),
     knownHostsFile: "/tmp/ocx-known-hosts",
@@ -61,7 +78,14 @@ function joinDeps(overrides: Partial<ClientLinkJoinDeps> = {}): ClientLinkJoinDe
     hostname: () => "client-host",
     readSidecar: () => null,
     readConnectionState: () => ({ kind: "disconnected" }),
+    scheduleRestart: () => {},
     ...overrides,
+    spawnTunnel: (spec, spawnDeps) => {
+      const handle = spawn(spec, spawnDeps);
+      tunnelPid = handle.pid;
+      return handle;
+    },
+    scanListenPids: overrides.scanListenPids ?? (() => ({ ok: true, pids: [tunnelPid] })),
   };
 }
 
@@ -258,10 +282,8 @@ describe("client initiated link join", () => {
           hostname: () => "client-host",
           writeState: state => { order.push("write-state"); Object.assign(sidecar, state); },
           spawnTunnel: () => { order.push("spawn-tunnel"); return tunnelFor(order); },
-          fetchImpl: async (_input, init) => {
-            order.push(`readyz:${new Headers(init?.headers).get("x-opencodex-api-key") === KEY ? "key" : "missing"}`);
-            return new Response(null, { status: 200 });
-          },
+          scanListenPids: () => ({ ok: true, pids: [123] }),
+          fetchImpl: challengedFetch(order),
           connect: (async () => { order.push("connect"); }) as typeof import("../../src/client/connect").connectClient,
           scheduleRestart: () => { order.push("restart"); },
         }, { alias: "home" })),
@@ -271,7 +293,7 @@ describe("client initiated link join", () => {
     expect(response?.status).toBe(202);
     expect(responseBody).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
     expect(sidecar).toMatchObject({ linkId: LINK_ID, tunnelPort: 23456, peerListenerPort: 45678 });
-    expect(order).toEqual(["write-state", "spawn-tunnel", "readyz:key", "connect", "stop-tunnel", "restart"]);
+    expect(order).toEqual(["write-state", "spawn-tunnel", "readyz:probe", "readyz:key", "connect", "stop-tunnel", "restart"]);
     expect(isWrappedIssue(calls[0] ?? [])).toBe(true);
     expect(calls[0]?.at(-1)?.endsWith(" '--json'")).toBe(true);
   });
@@ -297,7 +319,7 @@ describe("client initiated link join", () => {
       choosePort: undefined,
       writeState: state => { sidecarPort = state.tunnelPort; },
       spawnTunnel: () => tunnelFor([]),
-      fetchImpl: async () => new Response(null, { status: 200 }),
+      fetchImpl: challengedFetch(),
       connect: (async () => {}) as typeof import("../../src/client/connect").connectClient,
       scheduleRestart: () => {},
     }), { alias: "home" });
@@ -330,7 +352,7 @@ describe("client initiated link join", () => {
         sleep: async () => {},
         writeState: () => {},
         clearState: () => { cleared += 1; },
-        spawnTunnel: () => ({ pid: 1, exited: Promise.resolve(0), stop: async () => { stopped += 1; } }),
+        spawnTunnel: () => ({ pid: 1, exited: new Promise<number>(() => {}), stop: async () => { stopped += 1; } }),
         fetchImpl: async () => readiness === "unauthorized" ? new Response(null, { status: 401 }) : new Response(null, { status: 503 }),
       });
       await expect(joinHome(deps, { alias: "home" })).rejects.toMatchObject({
@@ -342,6 +364,277 @@ describe("client initiated link join", () => {
     }
   });
 
+  test("never sends the issued key to a listener that skips the link-auth challenge", async () => {
+    const calls: string[][] = [];
+    let keyedFetches = 0;
+    let ticks = 0;
+    let stopped = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => (ticks++ === 0 ? 0 : 15_002 * ticks),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => ({ pid: 1, exited: new Promise<number>(() => {}), stop: async () => { stopped += 1; } }),
+      fetchImpl: async (_input, init) => {
+        if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
+        return new Response(null, { status: 200 });
+      },
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(keyedFetches).toBe(0);
+    expect(stopped).toBe(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("a squatter answering the 401 challenge never receives the issued key", async () => {
+    const calls: string[][] = [];
+    let keyedFetches = 0;
+    let ticks = 0;
+    let stopped = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => (ticks++ === 0 ? 0 : 15_002 * ticks),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => { stopped += 1; } }),
+      // A live SSH process alone does not prove ownership of the listener.
+      scanListenPids: () => ({ ok: true, pids: [999] }),
+      fetchImpl: async (_input, init) => {
+        if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
+        return new Response(null, { status: 401 });
+      },
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(keyedFetches).toBe(0);
+    expect(stopped).toBe(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("the readiness scan is scoped to the tunnel's loopback address", async () => {
+    const seenAddresses: Array<string | undefined> = [];
+    const order: string[] = [];
+    await joinHome(joinDeps({
+      runner: runnerFor([]),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => tunnelFor(order),
+      scanListenPids: (_port, address) => {
+        seenAddresses.push(address);
+        return { ok: true, pids: [123] };
+      },
+      fetchImpl: challengedFetch(order),
+      connect: (async () => {}) as never,
+      scheduleRestart: () => {},
+    }), { alias: "home" });
+    expect(seenAddresses.length).toBeGreaterThan(0);
+    for (const address of seenAddresses) expect(address).toBe("127.0.0.1");
+  });
+
+  test("a port flip between the probe and the keyed request never receives the key", async () => {
+    const calls: string[][] = [];
+    let keyedFetches = 0;
+    let ticks = 0;
+    let scans = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => (ticks++ === 0 ? 0 : 15_002 * ticks),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => {} }),
+      scanListenPids: () => ({ ok: true, pids: scans++ === 0 ? [123] : [999] }),
+      fetchImpl: async (_input, init) => {
+        if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
+        return new Response(null, { status: 401 });
+      },
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(keyedFetches).toBe(0);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("a redirect on the readiness probe is never followed with the issued key", async () => {
+    const calls: string[][] = [];
+    const redirects: Array<RequestRedirect | undefined> = [];
+    let keyedFetches = 0;
+    let ticks = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => (ticks++ === 0 ? 0 : 15_002 * ticks),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => {} }),
+      fetchImpl: async (_input, init) => {
+        redirects.push(init?.redirect);
+        if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
+        return new Response(null, { status: 302, headers: { location: "http://169.254.1.1/fake-readyz" } });
+      },
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(redirects).toEqual(["manual"]);
+    expect(keyedFetches).toBe(0);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("readiness polling stops after tunnel exit without waiting for its deadline", async () => {
+    const calls: string[][] = [];
+    let clock = 1, scans = 0, sleeps = 0, fetched = 0, connected = 0;
+    let releaseExit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { releaseExit = resolve; });
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => clock,
+      sleep: async ms => {
+        sleeps += 1; clock += ms; releaseExit(255);
+        await Promise.resolve();
+      },
+      writeState: () => {}, clearState: () => {},
+      spawnTunnel: () => ({ pid: 123, exited, stop: async () => {} }),
+      scanListenPids: () => { scans += 1; return { ok: true, pids: [] }; },
+      fetchImpl: async () => { fetched += 1; return new Response(null, { status: 401 }); },
+      connect: (async () => { connected += 1; }) as typeof import("../../src/client/connect").connectClient,
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(scans).toBe(1);
+    expect(sleeps).toBe(1);
+    expect(clock).toBe(101);
+    expect(fetched).toBe(0);
+    expect(connected).toBe(0);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("a tunnel that exits during connect cannot commit the connection", async () => {
+    const calls: string[][] = [];
+    let releaseExit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { releaseExit = resolve; });
+    let stopped = 0;
+    let connectCommitted = false;
+    let connectDrained = false;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => ({ pid: 1, exited, stop: async () => { stopped += 1; } }),
+      fetchImpl: challengedFetch(),
+      connect: (async (_options, deps) => {
+        releaseExit(255);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          deps?.signal?.throwIfAborted();
+          connectCommitted = true;
+        } finally { connectDrained = true; }
+      }) as typeof import("../../src/client/connect").connectClient,
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(connectDrained).toBe(true);
+    expect(connectCommitted).toBe(false);
+    expect(stopped).toBe(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  test("an exit queued after enrollment commit does not revoke the committed link", async () => {
+    const calls: string[][] = [], order: string[] = [];
+    let releaseExit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { releaseExit = resolve; });
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      writeState: () => {}, clearState: () => { order.push("clear"); },
+      spawnTunnel: () => ({ pid: 123, exited, stop: async () => { order.push("stop"); } }),
+      fetchImpl: challengedFetch(),
+      connect: (async (_options, deps) => {
+        deps?.signal?.throwIfAborted();
+        // Mirrors connectClient's synchronous final commit: no await follows it.
+        order.push("commit");
+        releaseExit(255);
+      }) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => { order.push("restart"); },
+    }), { alias: "home" })).resolves.toEqual({ linkId: LINK_ID, apiKeyId: API_KEY_ID });
+    expect(order).toEqual(["commit", "stop", "restart"]);
+    expect(revokeCalls(calls)).toHaveLength(0);
+  });
+
+  test("does not disclose the issued key when the tunnel exits during its spawn grace", async () => {
+    const calls: string[][] = [];
+    let fetches = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      writeState: () => {},
+      clearState: () => {},
+      spawnTunnel: () => ({ pid: 1, exited: Promise.resolve(255), stop: async () => {} }),
+      fetchImpl: async () => {
+        fetches += 1;
+        return new Response(null, { status: 200 });
+      },
+    }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+    expect(fetches).toBe(0);
+    expect(revokeCalls(calls)).toHaveLength(1);
+  });
+
+  for (const { name, recheck } of [
+    { name: "unavailable", recheck: { ok: false, error: "scanner unavailable" } },
+    { name: "empty", recheck: { ok: true, pids: [] } },
+    { name: "foreign", recheck: { ok: true, pids: [999] } },
+    { name: "ambiguous", recheck: { ok: true, pids: [123, 999] } },
+  ] satisfies Array<{ name: string; recheck: ListenPidScan }>) {
+    test(`repeated ${name} rechecks reach the readiness deadline and revoke the key`, async () => {
+      const calls: string[][] = [];
+      const sleeps: number[] = [];
+      let clock = 1;
+      let scans = 0;
+      let keyedFetches = 0;
+      let stopped = 0;
+      let cleared = 0;
+      let connected = 0;
+      let restarted = 0;
+      await expect(joinHome(joinDeps({
+        runner: runnerFor(calls),
+        now: () => clock,
+        sleep: async ms => { sleeps.push(ms); clock += ms; },
+        writeState: () => {},
+        clearState: () => { cleared += 1; },
+        spawnTunnel: () => ({ pid: 123, exited: new Promise<number>(() => {}), stop: async () => { stopped += 1; } }),
+        scanListenPids: () => {
+          // Terminate the broken implementation without hanging the test runner.
+          // Its bypassed deadline produces the wrong error, so this is not a pass.
+          if (++scans > 400) throw new ClientLinkJoinError("admission_failed");
+          return scans % 2 === 1 ? { ok: true, pids: [123] } : recheck;
+        },
+        fetchImpl: async (_input, init) => {
+          if (new Headers(init?.headers).has("x-opencodex-api-key")) keyedFetches += 1;
+          return new Response(null, { status: 401 });
+        },
+        connect: (async () => { connected += 1; }) as typeof import("../../src/client/connect").connectClient,
+        scheduleRestart: () => { restarted += 1; },
+      }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
+      expect(clock).toBe(15_001);
+      expect(sleeps).toHaveLength(150);
+      expect(sleeps.every(ms => ms === 100)).toBe(true);
+      expect(scans).toBe(302);
+      expect(keyedFetches).toBe(0);
+      expect(connected).toBe(0);
+      expect(restarted).toBe(0);
+      expect(stopped).toBe(1);
+      expect(cleared).toBe(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
+    });
+  }
+
+  test("a transient failed recheck polls before retrying and can still join", async () => {
+    const calls: string[][] = [];
+    const order: string[] = [];
+    let clock = 1;
+    let scans = 0;
+    await expect(joinHome(joinDeps({
+      runner: runnerFor(calls),
+      now: () => clock,
+      sleep: async ms => { clock += ms; order.push(`sleep:${ms}`); },
+      writeState: () => {},
+      spawnTunnel: () => tunnelFor(order),
+      scanListenPids: () => ++scans === 2
+        ? { ok: false, error: "transient" }
+        : { ok: true, pids: [123] },
+      fetchImpl: challengedFetch(order),
+      connect: (async () => { order.push("connect"); }) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => { order.push("restart"); },
+    }), { alias: "home" })).resolves.toEqual({ linkId: LINK_ID, apiKeyId: API_KEY_ID });
+    expect(scans).toBe(4);
+    expect(order).toEqual(["readyz:probe", "sleep:100", "readyz:probe", "readyz:key", "connect", "stop-tunnel", "restart"]);
+    expect(revokeCalls(calls)).toHaveLength(0);
+  });
+
   test("rolls back on connect failure and never exposes the issued key", async () => {
     const calls: string[][] = [];
     const logs = spyOn(console, "log").mockImplementation(() => {});
@@ -351,7 +644,7 @@ describe("client initiated link join", () => {
         writeState: () => {},
         clearState: () => {},
         spawnTunnel: () => tunnelFor([]),
-        fetchImpl: async () => new Response(null, { status: 200 }),
+        fetchImpl: challengedFetch(),
         connect: (async () => { throw new Error(`connect failed ${KEY}`); }) as typeof import("../../src/client/connect").connectClient,
       }), { alias: "home" })).rejects.toMatchObject({ code: "join_connect_failed" });
     } finally {
@@ -360,6 +653,28 @@ describe("client initiated link join", () => {
     expect(revokeCalls(calls)).toHaveLength(1);
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
   });
+
+  for (const code of ["join_connect_failed", "admission_failed"] as const) {
+    test(`rollback tunnel exit preserves the original ${code} cause`, async () => {
+      const calls: string[][] = [];
+      let exit!: (code: number) => void;
+      const exited = new Promise<number>(resolve => { exit = resolve; });
+      let stopped = 0, cleared = 0;
+      await expect(joinHome(joinDeps({
+        runner: runnerFor(calls), writeState: () => {},
+        clearState: () => { cleared += 1; },
+        spawnTunnel: () => ({ pid: 123, exited, stop: async () => { stopped += 1; exit(0); } }),
+        fetchImpl: challengedFetch(),
+        connect: (async () => {
+          if (code === "admission_failed") throw new ClientLinkJoinError(code);
+          throw new Error("catalog validation failed");
+        }) as typeof import("../../src/client/connect").connectClient,
+      }), { alias: "home" })).rejects.toMatchObject({ code });
+      expect(stopped).toBe(1);
+      expect(cleared).toBe(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
+    });
+  }
 
   test("keeps the sidecar and reports the link id when rollback revoke fails, then compensates before the next join", async () => {
     const sidecar = {
@@ -392,8 +707,8 @@ describe("client initiated link join", () => {
       readSidecar: () => sidecarPresent ? sidecar : null,
       writeState: value => { sidecarPresent = true; Object.assign(sidecar, value); },
       clearState: () => { sidecarPresent = false; },
-      spawnTunnel: () => ({ pid: 1, exited: Promise.resolve(0), stop: async () => {} }),
-      fetchImpl: async () => new Response(null, { status: 200 }),
+      spawnTunnel: () => ({ pid: 1, exited: new Promise<number>(() => {}), stop: async () => {} }),
+      fetchImpl: challengedFetch(),
       connect: (async () => { throw new Error("connect failed"); }) as typeof import("../../src/client/connect").connectClient,
     });
     await expect(joinHome(base, { alias: "home" })).rejects.toMatchObject({ code: "join_rollback_failed", linkId: LINK_ID });
@@ -426,7 +741,8 @@ describe("client initiated link join", () => {
           writeState: state => { sidecar = { ...state }; },
           clearState: () => { cleared = true; },
           spawnTunnel: () => tunnelFor([]),
-          fetchImpl: async () => new Response(null, { status: 200 }),
+          scanListenPids: () => ({ ok: true, pids: [123] }),
+          fetchImpl: challengedFetch(),
           connect: (async () => { connected = true; }) as typeof import("../../src/client/connect").connectClient,
           scheduleRestart: () => { throw new Error("restart unavailable"); },
         }, input)) as typeof import("../../src/client/link-join").joinHome,

@@ -13,7 +13,7 @@ import { readClientConnectionState, clearClientConnection } from "../../src/clie
 import { HubClientError } from "../../src/client/hub-client";
 import { RuntimeApiError } from "../../src/cli/runtime-api";
 import type { DesktopPickerStatus } from "../../src/claude/desktop-picker";
-import { ensurePickerCa } from "../../src/claude/intercept/picker-ca";
+import { ensurePickerCa, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../../src/codex/desired-state";
 import { resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
 import { resetBundledCatalogCacheForTests, setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
@@ -572,7 +572,7 @@ test("usage errors on desktop verbs exit 2, not 1", async () => {
   }
 });
 
-function pickerStatus(reason: DesktopPickerStatus["reason"] = "restart_required"): DesktopPickerStatus {
+function pickerStatus(reason: DesktopPickerStatus["reason"] = "restart_required", caSha256: string | null = null): DesktopPickerStatus {
   return {
     desired: true,
     supported: true,
@@ -584,6 +584,7 @@ function pickerStatus(reason: DesktopPickerStatus["reason"] = "restart_required"
     models: 1,
     snapshotAt: 1,
     lastBootstrapAt: null,
+    caSha256,
   };
 }
 
@@ -632,6 +633,54 @@ test("picker on answers trust_pending by trusting locally and repeating the PUT"
   } finally { log.mockRestore(); }
 });
 
+test("picker trust refuses a CA file the live server does not own", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  // The file exists but the server reports a different authority fingerprint — a swapped ca.pem
+  // must never reach the keychain.
+  ensurePickerCa(process.env.OPENCODEX_HOME!);
+  const trusted: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => { trusted.push("trust"); return { ok: true }; },
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) {
+          return { ok: true, picker: pickerStatus("restart_required", "0".repeat(64)) };
+        }
+        return { ok: true, picker: pickerStatus("trust_pending") };
+      },
+    });
+    expect(result).toBe(1);
+    expect(trusted).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("ca_unverified");
+  } finally { error.mockRestore(); }
+});
+
+test("picker trust installs the file only when it matches the server-reported CA", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const ca = ensurePickerCa(process.env.OPENCODEX_HOME!);
+  const caSha256 = pickerCaFingerprints(ca.certPem).sha256;
+  const trusted: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async (_caPath, _sec, _plat, opts) => {
+        trusted.push(opts?.pem === ca.certPem ? "pem-matched" : "pem-mismatch");
+        return { ok: true };
+      },
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) return { ok: true, picker: pickerStatus("restart_required", caSha256) };
+        return { ok: true, picker: pickerStatus("active", caSha256) };
+      },
+    });
+    expect(result).toBe(0);
+    expect(trusted).toEqual(["pem-matched"]);
+  } finally { error.mockRestore(); log.mockRestore(); }
+});
+
 test("picker off offline persists the preference and removes local artifacts", async () => {
   const log = spyOn(console, "log").mockImplementation(() => {});
   const removed: string[] = [];
@@ -658,13 +707,15 @@ test("picker trust forwards whether this run added trust", async () => {
       inspectPickerTrustImpl: async () => "untrusted",
       trustPickerCaImpl: async () => ({ ok: true }),
       runtimeRequestImpl: async (path, init) => {
-        calls.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
-        return { ok: true, picker: pickerStatus("restart_required") };
+        calls.push({ path, body: init.body === undefined ? {} : JSON.parse(String(init.body)) as Record<string, unknown> });
+        return { ok: true, picker: pickerStatus("restart_required", "server-ca-sha") };
       },
     });
     expect(result).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.body).toMatchObject({ enabled: true, persist: false, trustedLocally: true, callerAddedTrust: true });
+    // GET status (which carries the server's caSha256) precedes the enable PUT.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.body).toEqual({});
+    expect(calls[1]!.body).toMatchObject({ enabled: true, persist: false, trustedLocally: true, callerAddedTrust: true });
   } finally { log.mockRestore(); }
 });
 
@@ -682,14 +733,20 @@ test("picker trust compensates only a connection refusal, while timeout leaves t
   try {
     expect(await handleClaudeDesktopCommand(["picker", "trust"], {
       ...baseDeps,
-      runtimeRequestImpl: async () => { throw new Error("ECONNREFUSED"); },
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) return { ok: true, picker: pickerStatus("restart_required", "server-ca-sha") };
+        throw new Error("ECONNREFUSED");
+      },
     })).toBe(1);
     expect(untrusted).toEqual(["untrust"]);
 
     untrusted.length = 0;
     expect(await handleClaudeDesktopCommand(["picker", "trust"], {
       ...baseDeps,
-      runtimeRequestImpl: async () => { throw new RuntimeApiError("request timed out", 503, null); },
+      runtimeRequestImpl: async (_path, init) => {
+        if (init.body === undefined) return { ok: true, picker: pickerStatus("restart_required", "server-ca-sha") };
+        throw new RuntimeApiError("request timed out", 503, null);
+      },
     })).toBe(1);
     expect(untrusted).toEqual([]);
     expect(error.mock.calls.flat().join(" ")).toContain("state unknown - run ocx claude desktop picker status");

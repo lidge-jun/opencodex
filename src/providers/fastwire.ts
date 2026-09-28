@@ -340,6 +340,9 @@ export function createAdapterTierMetadata(
   const loggedWireValue = wireValue === null ? null : sanitizeLogMetadataString(wireValue);
   const outcome: AttemptTierOutcome = {
     wireKind,
+    ...(context.responseTierAuthoritative !== undefined
+      ? { responseTierAuthoritative: context.responseTierAuthoritative }
+      : {}),
     ...(wireValue === null
       ? { wireValue: null }
       : loggedWireValue ? { wireValue: loggedWireValue } : {}),

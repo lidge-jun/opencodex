@@ -1,4 +1,4 @@
-import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
@@ -857,8 +857,45 @@ export function serviceHomeMatches(a: string, b: string): boolean {
   return normalizePathForCompare(a) === normalizePathForCompare(b);
 }
 
+export type ServicePathComparison = "same" | "different" | "unknown";
+
+/**
+ * Tri-state physical-home compare. A realpath failure (EACCES, EPERM, a
+ * vanished directory, transient I/O) is "unknown", not "different": callers
+ * deciding whether a home is foreign must not turn an unreadable resolution
+ * into a definitive mismatch. Lifecycle guards may still fail closed on
+ * "unknown".
+ */
+export function compareServicePathToInstall(recorded: string, current: string, deps: CodexHomeDeps = {}): ServicePathComparison {
+  if (serviceHomeMatches(recorded, current)) return "same";
+  const realpath = deps.realpathSync ?? realpathSync;
+  let currentPhysical: string;
+  try {
+    currentPhysical = realpath(current);
+  } catch {
+    return "unknown";
+  }
+  try {
+    return serviceHomeMatches(realpath(recorded), currentPhysical) ? "same" : "different";
+  } catch (error) {
+    // The spellings already differ. A recorded path that no longer exists cannot be an alias of
+    // the current home, so it stays a mismatch (a stale mount keeps the foreign-owner refusal);
+    // only an error that leaves existence unproven, such as EACCES, is indeterminate.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "different" : "unknown";
+  }
+}
+
+/** Lexical compare first; when spellings differ, compare the directories both resolve to so a
+ * junction or symlink spelling recorded by an older install still names the same home.
+ * Fails closed on an indeterminate resolution — ownership classification needs the
+ * tri-state {@link compareServicePathToInstall} instead. */
+export function servicePathMatchesInstall(recorded: string, current: string, deps: CodexHomeDeps = {}): boolean {
+  return compareServicePathToInstall(recorded, current, deps) === "same";
+}
+
 export function serviceCodexHomeMatchesInstall(recordedHome: string, deps: CodexHomeDeps = {}): boolean {
-  return serviceHomeMatches(recordedHome, currentCodexHome(deps));
+  return servicePathMatchesInstall(recordedHome, currentCodexHome(deps), deps);
 }
 
 /** Single accessor for backend-sensitive service code — v1/legacy state maps to scheduler. */

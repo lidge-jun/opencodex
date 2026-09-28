@@ -50,6 +50,12 @@ export function usesProviderTable(target: CodexRoutingTarget): boolean {
     || target.clientCompaction === true;
 }
 
+/** Listing is owned by native app-server, not the inference proxy; never repair it by retagging. */
+export function remoteThreadListCompatibilityWarning(target: CodexRoutingTarget): string {
+  if (!usesProviderTable(target)) return "";
+  return "  ⚠️ Codex remote history: some app-server/mobile versions filter thread/list to the default provider and may hide existing openai-tagged threads. This is listing visibility, not deleted history. A compatible list client can request modelProviders: []; otherwise verify native client/app-server compatibility. OpenCodex does not change history tags for this warning.\n";
+}
+
 export function standaloneCodexRoutingTarget(
   port: number,
   config?: Pick<
@@ -122,4 +128,3 @@ export function providerBaseHost(hostname: string | undefined): string {
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
 }
-

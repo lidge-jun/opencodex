@@ -61,6 +61,7 @@ describe("WSL service ownership after Windows home discovery", () => {
     expect(inspectNativeCodexOwnership({
       statePaths: [statePath],
       currentHomes: { codexHome: windowsHome, opencodexHome: root },
+      realpathSync: deps.realpathSync,
     }).ownership).toBe("foreign");
   });
 

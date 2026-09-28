@@ -88,6 +88,8 @@ export interface ProviderAccount {
   credential: OAuthCredentials;
   /** Terminal refresh failure (invalid_grant / reused / revoked) — re-login required. */
   needsReauth?: boolean;
+  /** Operator exclusion from generic OAuth account selection until explicitly resumed. */
+  paused?: boolean;
   addedAt?: number;
 }
 

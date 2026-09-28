@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { commandInvocation } from "../../lib/win-exec";
 import { isStandaloneBinary } from "../../lib/standalone";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -10,9 +11,11 @@ import type { IncomingMeta } from "../base";
 import {
   buildConversationInput,
   CodingAgentProtocolError,
+  MAX_TOOL_BLOCK_STARTS,
   mapStreamMessageToEvents,
   projectedHistoryCharLimit,
   readJsonLines,
+  releaseOpenToolBlocks,
   toolBridgeInitError,
   type StreamParseState,
 } from "./protocol";
@@ -369,6 +372,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   };
 
   let streamProtocolError: string | undefined;
+  let streamProtocolCode: string | undefined;
   let turnError: string | undefined;
   // A successful result frame that arrived after every captured tool call completed but
   // before message_stop. The bridge contract still ends the leg with the synthesized
@@ -381,6 +385,9 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     sawPartialThinking: false,
     sawTerminalResult: false,
     openToolBlocks: new Map(),
+    translatorBudget: incoming.translatorBudget,
+    maxToolBlockStarts: toolBridge?.maxTurnToolCalls,
+    strictToolBlockCapture: Boolean(toolBridge),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -403,7 +410,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     if (!stdout) throw new CodingAgentProtocolError(`${profile.label} CLI produced no stdout stream`);
     try {
       let initValidated = false;
-      let toolCallStarts = 0;
       let failClosed = false;
       for await (const message of readJsonLines(stdout)) {
         if (incoming.abortSignal?.aborted) break;
@@ -447,6 +453,18 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           }
         }
         const mappedEvents = mapStreamMessageToEvents(message, state);
+        if (state.toolCallLimitExceeded) {
+          emitOnce({
+            type: "error",
+            message: `Coding-agent CLI returned more than the ${Math.min(MAX_TOOL_BLOCK_STARTS, state.maxToolBlockStarts ?? MAX_TOOL_BLOCK_STARTS)}-tool-call turn limit.`,
+            status: 502,
+            errorType: "upstream_error",
+            code: "tool_call_limit",
+            retryable: false,
+          });
+          kill();
+          break;
+        }
         if (toolBridge && state.uncapturedToolUse) {
           emitOnce({
             type: "error",
@@ -474,20 +492,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
           if (toolBridge && event.type === "tool_call_start") {
-            toolCallStarts += 1;
-            if (toolCallStarts > toolBridge.maxTurnToolCalls) {
-              emitOnce({
-                type: "error",
-                message: `Coding-agent CLI returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
-                status: 502,
-                errorType: "upstream_error",
-                code: "tool_call_limit",
-                retryable: false,
-              });
-              failClosed = true;
-              kill();
-              break;
-            }
             const wireName = toolBridge.emittedNameMap.get(event.name);
             if (wireName === undefined) {
               emitOnce({
@@ -593,8 +597,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           break;
         }
         if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
-          // Raw tool_use starts are gated before buffering, so every completed call was admitted
-          // after the bridge init handshake.
+          // The raw-start gate above already refused any call opened before the handshake.
           // The capture-only MCP handler never answers, so the CLI parks after message_stop.
           // The completed tool_use blocks are this turn's structured output: end the leg here
           // and terminate the tree; the client executes, and the next request continues.
@@ -615,11 +618,13 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     } catch (err) {
       kill();
       streamProtocolError = err instanceof Error ? err.message : String(err);
+      if (isTranslatorBudgetExceededError(err)) streamProtocolCode = err.code;
     }
   } catch (err) {
     kill();
     turnError = err instanceof Error ? err.message : String(err);
   } finally {
+    releaseOpenToolBlocks(state);
     cleanup();
     if (toolBridgeDir) {
       await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
@@ -666,7 +671,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         message: redactSecrets(streamProtocolError, profile.tokenEnv, apiKey),
         status: 502,
         errorType: "upstream_error",
-        code: "protocol_error",
+        code: streamProtocolCode ?? "protocol_error",
         retryable: false,
       });
     } else if (child.exitCode !== null && child.exitCode !== 0) {

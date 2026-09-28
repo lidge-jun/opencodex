@@ -105,6 +105,17 @@ is sorted exactly like the pre-header row's (see
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary)) before
 it goes round the recovery loop again.
 
+The boundary is the first non-control Responses event, not the first visible text delta:
+`response.created`, output/tool events and response usage all close the WebSocket replacement
+window. Quota metadata and ping/pong liveness alone do not. Cancellation and connect/silence
+deadlines never acquire the socket-death marker, even if a late close follows them.
+`tests/responses/ws-ambiguous-resend.test.ts` covers these boundaries through the exchange and
+the existing HTTP-only dispatch, including request-field preservation and terminal fallback
+answers. The replacement uses the shared credential-selection guard and physical-send ledger;
+there is no transport-local retry budget or credential snapshot with independent authority.
+
+> Decision record: [ADR-4191](../decisions/ADR-4191-established-websocket-fallback.md)
+
 ## Console upload rejection recovery
 
 `src/providers/opencode-zen-rate-limit.ts` recognizes the complete Console upload-rejection envelope only at the effective HTTPS opencode.ai Zen/Go generation endpoint. A provider row name cannot authorize another destination. The two recovery loops in `src/server/responses/core.ts` wait 800 ms and replay the captured serialized request once; cancellation, nonreplayable responses, other errors and a second upload rejection keep their failure semantics. The recovery kind is persisted as `console-go-upload-retry` and has a localized Logs label.
@@ -265,6 +276,20 @@ Translated Chat request construction uses the [inline-image budget](streaming-he
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior. Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate. Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+## Memory phase routing
+
+`src/server/responses/memory-models.ts` classifies Codex memory turns from validated
+`x-codex-turn-metadata` in HTTP headers or per-frame WebSocket `client_metadata`.
+`request_kind: "memory"` selects extract; `thread_source: "memory_consolidation"`
+selects consolidation. Supplied copies must agree. Explicit non-memory metadata blocks the
+HTTP `x-openai-subagent: memory_consolidation` fallback, which applies only when turn metadata
+is absent. WebSocket frames never use that handshake fallback. A configured phase in
+`memoryModels` wins over shadow-call interception; an unset phase keeps its existing route.
+Unavailable targets return 409 without contacting a different provider, while scoped API-key
+admission keeps its own refusal. Combo children retain the phase and its optional effort.
+The selected route decision records `memory-extract` or `memory-consolidation` as its reason,
+including when the destination is a combo, so request history names the phase that chose it.
 
 ## Compaction routing overrides
 
@@ -539,6 +564,8 @@ Generic OAuth snapshots its eligible roster before dispatch. Its request rotatio
 stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
 physical target, rather than a diagnostic key, and a real send is charged once even when recovery
 rebuilds the request.
+
+Antigravity main adapter dispatch: after same-account refresh, a second pre-output 401 or terminal refresh failure may switch once to a live sibling within existing budgets; continuations, passthrough, sidecars and 403s never rotate (contract: `docs-site/src/content/docs/reference/configuration/providers.md`, `rotateAntigravityAccountOnAuthRefusal` in `src/oauth/generic-account-failover.ts`).
 
 Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes

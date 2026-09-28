@@ -116,14 +116,16 @@ export function describeCodexDesktopSwitches(
  */
 export async function observedCodexDesktopSwitchApply(): Promise<CodexDesktopSwitchApply> {
   // Same lazy boundary as applyCodexConfigInjection: the ownership predicate lives in the
-  // injection graph, which the settings read path must not pull in at module scope.
-  const { currentExternalCodexModelProvider } = await import("./inject/config-toml");
+  // injection graph, which the settings read path must not pull in at module scope. This
+  // path uses the bounded variant — a special or oversized config.toml must answer
+  // "undetermined", never stall a settings read the way an unbounded readFileSync would.
+  const { observedExternalCodexModelProvider } = await import("./inject/config-toml");
   let provider: string | null;
   try {
-    provider = currentExternalCodexModelProvider();
+    provider = observedExternalCodexModelProvider();
   } catch (error) {
-    // A present-but-unreadable config.toml (permissions, deletion racing existsSync)
-    // must not take down the whole settings report. The undetermined reason keeps the
+    // A present-but-unreadable config.toml (permissions, deletion racing the bounded
+    // read) must not take down the whole settings report. The undetermined reason keeps the
     // reporting contract honest: effective values and the sign-in answer stay null instead
     // of presenting local state a foreign provider may still control.
     return {

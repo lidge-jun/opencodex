@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
-import { probeUncleanExitState } from "./status";
+import { fetchLiveStartupHealth, probeUncleanExitState, selectStatusStartupHealth } from "./status";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
@@ -61,6 +61,7 @@ import {
   formatLegacyCodexConfigKeyDiagnosticsForDoctor,
 } from "../codex/legacy-config-keys";
 import { collectStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
+import { collectDesktopSystemProxy, formatDesktopSystemProxyLines } from "../claude/desktop-system-proxy";
 import {
   displayCodexRuntimePath,
   effortClampAppliesToRuntime,
@@ -1354,7 +1355,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     diagnoseCodexShim(),
     serviceTokenPresent,
   );
-  const startup = collectStartupHealth(doctorConfig);
+  // Use the same attested live startup verdict as `ocx status` when the proxy is already
+  // identity-verified. A shell-local systemd probe can be a false negative for a system-wide
+  // service because the shell does not inherit the manager-owned environment.
+  const live = await findLiveProxy({
+    configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
+  });
+  const liveStartup = live ? await fetchLiveStartupHealth(live) : null;
+  const startup = selectStatusStartupHealth(liveStartup, () => collectStartupHealth(doctorConfig));
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
   console.log(`       ${formatStartupRoutingDetail(startup)}`);
@@ -1393,12 +1401,6 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     }
   }
 
-  // #618: identity-verified liveness first so pid-file absence does not hide a live service.
-  // Reuse the diagnostics config already loaded above so doctor stays read-only on malformed JSON.
-  const live = await findLiveProxy({
-    configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
-  });
-
   // Mirrors `ocx status` through the same comparison rather than a second implementation:
   // two diagnostics disagreeing about whether an install is stale is worse than one (#2701).
   // No extra probe -- findLiveProxy already carried the version back.
@@ -1426,6 +1428,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   console.log("\nConfigured proxy (value hidden)");
   console.log(`  ${configuredProxy.present ? "set    " : "unset  "} ${configuredProxy.key} (${configuredProxy.source}; ${configuredProxy.detail})`);
+
+  // Observe-only and warning-level: a bypassed Desktop first-party install still serves the
+  // CLI and every non-Desktop client, so this never records a doctor failure.
+  const desktopSystemProxyLines = formatDesktopSystemProxyLines(collectDesktopSystemProxy(doctorConfig));
+  if (desktopSystemProxyLines.length > 0) {
+    console.log("\nClaude Desktop first-party vs Windows system proxy");
+    for (const line of desktopSystemProxyLines) console.log(line);
+  }
 
   const providerApiKeys = collectProviderApiKeyDiagnostics(doctorConfig.providers);
   console.log("\nProvider API keys (value hidden)");

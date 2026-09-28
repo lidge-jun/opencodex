@@ -1448,6 +1448,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(result.success).toBe(true);
     expect(result.message).toContain("routing NOT injected");
     expect(result.message).not.toContain("All models now route through opencodex proxy");
+    expect(result.message).not.toContain("Codex remote history");
     expect(result.nativeSubagentDefaultsWarning).toContain("user-owned root openai_base_url");
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
@@ -1680,6 +1681,8 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     const enabled = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
     expect(enabled.status).toBe(0);
+    expect(JSON.parse(enabled.stdout).message).toContain("Codex remote history:");
+    expect(JSON.parse(enabled.stdout).message).toContain("modelProviders: []");
     expect(String(JSON.parse(enabled.stdout).message)).toContain("client-side compaction mode");
     const providerTable = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(providerTable).toContain('model_provider = "opencodex"');
@@ -1727,6 +1730,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     // for this mixed configuration.
     const message = String(JSON.parse(enabled.stdout).message);
     expect(message).toContain("Injected opencodex as default provider");
+    expect(message).toContain("Codex remote history");
     expect(message).not.toContain("Codex routing NOT injected");
     expect(message).not.toContain("remove your openai_base_url line");
     expect(message).toContain("left exactly as you set it");
@@ -1894,6 +1898,11 @@ describe("injectCodexConfig integration (Design B)", () => {
     const verifier = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
     expect(verifier.query("SELECT model_provider FROM threads WHERE id = 'thread-designb'").get())
       .toEqual({ model_provider: "openai" });
+    // Source-level reproduction of the reported legacy list predicate, not a native RPC
+    // test: preserving routing does not make a row match the new default provider filter.
+    expect(verifier.query("SELECT COUNT(*) AS count FROM threads WHERE model_provider = ?")
+      .get(readRootTomlString(config, "model_provider"))).toEqual({ count: 0 });
+    expect(verifier.query("SELECT COUNT(*) AS count FROM threads").get()).toEqual({ count: 1 });
     verifier.close();
   });
 

@@ -23,16 +23,21 @@ interface Harness {
   listFailure: { status: number; error: string } | null;
   run: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
   writes: () => Captured[];
+  activeId: () => string | null;
 }
 
 function harness(providers: Record<string, unknown> = {}): Harness {
   const requests: Captured[] = [];
+  // The mock active route persists what PUT writes so a verb that writes nothing (or the wrong
+  // thing) leaves observable state, not just a captured request.
+  let activeId: string | null = null;
   const state: Harness = {
     requests,
     accounts: [{ id: "chatgpt_1", plan: "pro", quota: null }],
     listFailure: null,
     run: async () => ({ code: 0, stdout: "", stderr: "" }),
     writes: () => requests.filter(r => r.method === "PUT" && r.path === "/api/codex-auth/active"),
+    activeId: () => activeId,
   };
   const config = (): OcxConfig => ({
     port: 10100,
@@ -64,10 +69,10 @@ function harness(providers: Record<string, unknown> = {}): Harness {
         return new Response(JSON.stringify({ accounts: state.accounts }), { status: 200 });
       }
       if (captured.path === "/api/codex-auth/active") {
-        const pinned = captured.method === "PUT"
-          ? (captured.body as { accountId?: string | null } | undefined)?.accountId ?? null
-          : null;
-        return new Response(JSON.stringify({ ok: true, activeCodexAccountId: pinned, activeId: pinned }), { status: 200 });
+        if (captured.method === "PUT") {
+          activeId = (captured.body as { accountId?: string | null } | undefined)?.accountId ?? null;
+        }
+        return new Response(JSON.stringify({ ok: true, activeCodexAccountId: activeId, activeId }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as unknown as typeof fetch,
@@ -166,14 +171,43 @@ describe("ocx account: alias and auto as account arguments", () => {
     expect(result.stdout).toContain("chatgpt_2");
   });
 
-  test("use auto clears the pin and says the pool decides from here", async () => {
+  test("use auto selects an exact account id before treating auto as the pool selector", async () => {
     const h = harness();
-    const result = await h.run(["use", "openai", "auto"]);
+    const automatic = await h.run(["use", "openai", "auto"]);
 
-    expect(result.code).toBe(0);
+    expect(automatic.code).toBe(0);
     expect(h.writes().at(-1)?.body).toEqual({ accountId: null });
-    expect(result.stdout).toContain("automatic account selection");
-    expect(result.stderr).not.toContain("may override this pin");
+    expect(automatic.stdout).toContain("automatic account selection");
+    expect(automatic.stderr).not.toContain("may override this pin");
+
+    h.accounts.push({ id: "auto", plan: "pro", quota: null });
+    const selected = await h.run(["use", "openai", "auto"]);
+    expect(selected.code).toBe(0);
+    expect(h.writes().at(-1)?.body).toEqual({ accountId: "auto" });
+    expect(h.activeId()).toBe("auto");
+
+    const cleared = await h.run(["clear", "openai"]);
+    expect(cleared.code).toBe(0);
+    expect(h.activeId()).toBe(null);
+
+    const paused = await h.run(["pause", "openai", "auto"]);
+    expect(paused.code).toBe(0);
+    expect(h.requests.filter(r => r.path === "/api/codex-auth/accounts/pause").at(-1)?.body)
+      .toEqual({ id: "auto", paused: true });
+  });
+
+  test("an account named auto pins through use while clear still restores automatic selection", async () => {
+    const h = harness();
+    h.accounts.push({ id: "auto", plan: "pro", quota: null });
+
+    const pinned = await h.run(["use", "openai", "auto"]);
+    expect(pinned.code).toBe(0);
+    expect(h.writes().at(-1)?.body).toEqual({ accountId: "auto" });
+
+    const cleared = await h.run(["clear", "openai"]);
+    expect(cleared.code).toBe(0);
+    expect(h.writes().at(-1)?.body).toEqual({ accountId: null });
+    expect(cleared.stdout).toContain("automatic account selection");
   });
 
   test("missing and ambiguous aliases keep distinct errors before any write", async () => {
@@ -220,8 +254,12 @@ describe("ocx account: alias and auto as account arguments", () => {
     const pause = await h.run(["pause", "openai", "auto"]);
     expect(pause.code).toBe(1);
     expect(pause.stderr).toContain("reserved");
-    // The list only serves alias resolution: without it the argument is sent as an id, as before.
     h.listFailure = { status: 500, error: "list unavailable" };
+    const automatic = await h.run(["use", "openai", "auto"]);
+    expect(automatic.code).toBe(1);
+    expect(automatic.stderr).toContain("Cannot safely resolve");
+    expect(h.writes()).toHaveLength(0);
+    // The list only serves alias resolution: without it the argument is sent as an id, as before.
     const raw = await h.run(["use", "openai", "chatgpt_1"]);
     expect(raw.code).toBe(0);
     expect(h.writes().at(-1)?.body).toEqual({ accountId: "chatgpt_1" });

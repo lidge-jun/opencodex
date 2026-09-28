@@ -6,7 +6,7 @@ import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { isNativeAliasCatalogEntry, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./metadata";
 import type { RawEntry } from "./parsing";
 
-/** Project authenticated account metadata onto native rows only. */
+/** Project access programs per native account, and availability prompts only onto bare main rows. */
 export function applyNativeAccessPrograms(
   entries: RawEntry[],
   snapshot: CodexModelEntitlementSnapshot,
@@ -15,9 +15,13 @@ export function applyNativeAccessPrograms(
   for (const entry of entries) {
     // A combo may deliberately claim a bare native slug. It is still a routed combo row,
     // so the matching native Codex roster must not project its access programs onto it.
-    if (isNativeAliasCatalogEntry(entry)) continue;
+    if (isNativeAliasCatalogEntry(entry)) {
+      delete entry.availability_nux;
+      continue;
+    }
     if (entry.owned_by === COMBO_NAMESPACE) {
       delete entry.available_access_programs;
+      delete entry.availability_nux;
       continue;
     }
     const accountBoundSlug = trustedAccountBoundNativeCatalogSlug(entry);
@@ -25,10 +29,18 @@ export function applyNativeAccessPrograms(
       && SUPPORTED_NATIVE_OPENAI_SLUGS.has(entry.slug) ? entry.slug : undefined;
     const slug = accountBoundSlug ?? bareSlug;
     if (!slug) continue;
+    if (accountBoundSlug) delete entry.availability_nux;
     const selector = accountBoundSlug && typeof entry.slug === "string"
       ? entry.slug.slice(0, entry.slug.indexOf("/")) : undefined;
     const target = selector === undefined ? MAIN_CODEX_ACCOUNT_ID : accountTargets.get(selector);
     const accountId = target && isMainCodexAccountTarget(target) ? MAIN_CODEX_ACCOUNT_ID : target;
+    if (bareSlug) {
+      entry.availability_nux = accountId === MAIN_CODEX_ACCOUNT_ID
+        && snapshot.confirmedAccountIds.has(accountId)
+        && snapshot.modelsByAccount.get(accountId)?.has(slug)
+        ? snapshot.availabilityNuxByAccount?.get(accountId)?.get(slug) ?? null
+        : null;
+    }
     if (!accountId) {
       delete entry.available_access_programs;
       continue;

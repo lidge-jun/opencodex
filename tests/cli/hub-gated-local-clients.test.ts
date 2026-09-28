@@ -135,6 +135,20 @@ describe("ocx ensure does not strip a Grok block the operator still wants", () =
     return { actions, logs, deps };
   }
 
+  test("a sibling skips both Grok ON and OFF ensure writes with its own reason", async () => {
+    markSiblingStart(10101);
+    try {
+      for (const grok of [true, false]) {
+        const h = harness(hubConfig({ runtimeRole: undefined, clientIntegrations: { grok } }));
+        await ensureGrokFenceMatchesDesired(10102, {}, h.deps);
+        expect(h.actions).toEqual([]);
+        expect(h.logs.join("\n")).toContain(siblingSkipMessage());
+      }
+    } finally {
+      resetSiblingStartForTests();
+    }
+  });
+
   test("a hub-gated skip leaves ~/.grok/config.toml untouched and says why", async () => {
     // The operator never turned Grok off. Deleting their fence and reporting it as the toggle
     // working is the defect: it destroys a working config on every `ocx ensure`.

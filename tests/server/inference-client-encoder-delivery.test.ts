@@ -16,6 +16,9 @@ import { beginInferenceAttempt } from "../../src/server/inference/attempt";
 import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import type { RequestLogContext, RequestLogEntry } from "../../src/server/request-log";
 import { markProtocolEntry, protocolTraceForRequest } from "../../src/protocols/trace";
+import { parseRequest } from "../../src/responses/parser";
+import { buildToolBridgeMaps } from "../../src/server/responses";
+import { deliverAdapterResponse } from "../../src/server/responses/adapter-delivery";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -183,5 +186,74 @@ describe("deliverClientEncodedResponse", () => {
     expect(body.model).toBe("client-model");
     expect(body.choices[0]!.message.content).toBe("hi");
     expect(run.completed).toHaveLength(1);
+  });
+
+});
+
+// The routed-adapter branch assembles the encoder's fold itself. Direct MCP recovery reaches the
+// completed response only when that fold carries the request's custom exec provenance, so this
+// drives the real delivery entry point rather than a hand-built fold.
+describe("deliverAdapterResponse through a client encoder", () => {
+  type Args = Parameters<typeof deliverAdapterResponse>;
+
+  test("the fold keeps code-mode direct MCP recovery", async () => {
+    const parsed = parseRequest({
+      model: "internal/model",
+      input: "check usage",
+      stream: true,
+      store: false,
+      tools: [{ type: "namespace", name: "functions", tools: [{ type: "custom", name: "exec", format: { type: "text" } }] }],
+    });
+    const toolBridgeMaps = buildToolBridgeMaps(parsed);
+    expect(toolBridgeMaps.bareCustomToolNames).toEqual(new Set(["exec"]));
+    const toolEvents: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_mcp", name: "mcp__codex_app__get_usage_limits" },
+      { type: "tool_call_delta", id: "call_mcp", arguments: "{}" },
+      { type: "tool_call_end", id: "call_mcp" },
+      { type: "done" },
+    ];
+    const completed: Record<string, unknown>[] = [];
+    const response = await deliverAdapterResponse(
+      {
+        logCtx: { model: "m", provider: "p" },
+        options: { clientEncoder: { protocol: "chat", stream: false, model: "client-model" } },
+        config: {},
+      } as unknown as Args[0],
+      {
+        parsed,
+        translatorBudget: createTestTranslatorBudget(),
+        toolBridgeMaps,
+        rememberKiroDeliveredFinalAnswer: () => {},
+        responseStateOptions: () => ({}),
+      } as unknown as Args[1],
+      {
+        activeAdapter: { name: "anthropic", parseStream: () => replay(toolEvents) },
+        bindKeyUsageFromBridge: () => {},
+      } as unknown as Args[2],
+      { routedCompaction: undefined } as unknown as Args[3],
+      {
+        cancelResponseCompletion: () => {},
+        commitReasoningReplayServingRoute: () => {},
+        continuationStateForResponse: () => undefined,
+        notifyResponseComplete: (folded: Record<string, unknown>) => { completed.push(folded); },
+      } as unknown as Args[4],
+      { emptyCompletionGuardEnabled: false },
+      {
+        upstreamResponse: new Response(""),
+        upstream: new AbortController(),
+        cleanupUpstreamAbort: () => {},
+        localUpstream: false,
+      } as unknown as Args[6],
+      { terminalGuardEnabled: false } as unknown as Args[7],
+    );
+    expect(response.status).toBe(200);
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      output: [{
+        type: "custom_tool_call",
+        name: "exec",
+        input: 'const result = await tools.mcp__codex_app__get_usage_limits({});\ntext(result);',
+      }],
+    });
   });
 });

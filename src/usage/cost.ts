@@ -439,13 +439,16 @@ export function serviceTierContext(entry: ServiceTierContext): ServiceTierContex
 
 /** Convert one adapter-observed attempt outcome into the existing pricing provenance shape. */
 export function serviceTierContextFromOutcome(outcome: AttemptTierOutcome): ServiceTierContext {
-  if (outcome.canonical === "priority" && outcome.confirmation === "confirmed") {
+  const responseAuthoritative = outcome.responseTierAuthoritative !== false;
+  if (responseAuthoritative && outcome.canonical === "priority" && outcome.confirmation === "confirmed") {
     return { responseServiceTier: "priority" };
   }
-  if (outcome.responseServiceTier !== undefined) {
+  // Non-authoritative echoes remain in the log, but cannot become pricing confirmation either.
+  if (responseAuthoritative && outcome.responseServiceTier !== undefined) {
     return { responseServiceTier: outcome.responseServiceTier };
   }
-  if (outcome.canonical === "priority" && outcome.confirmation === "assumed") {
+  if (outcome.canonical === "priority"
+    && (outcome.confirmation === "assumed" || (!responseAuthoritative && outcome.confirmation === "confirmed"))) {
     return { requestedServiceTier: "priority" };
   }
   // An unclassified route makes no canonical Fast claim, but its adapter can still prove that

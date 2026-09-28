@@ -1,0 +1,192 @@
+{
+  "keepAtRoot": [
+    "preload.ts",
+    "fake-codex-server.ts",
+    "tsconfig.doctor-service-memory-contract.json",
+    "test-layout.test.ts",
+    "test-layout-tooling.test.ts"
+  ],
+  "domains": {
+    "providers": {
+      "match": [
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+      ],
+      "children": {
+        "cursor": [
+          "^(?:cursor)-"
+        ],
+        "kiro": [
+          "^(?:kiro)-"
+        ],
+        "xai": [
+          "^(?:grok)-"
+        ],
+        "ollama": [
+          "^(?:ollama)-"
+        ],
+        "github-copilot": [
+          "^(?:github)-"
+        ]
+      }
+    },
+    "codex-integration": {
+      "match": [
+        "^context-compat\\.test\\.ts$",
+        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
+      ]
+    },
+    "server": {
+      "match": [
+        "^context-history\\.test\\.ts$",
+        "^aside-profiles-routes",
+        "^update-async-routes\\.test\\.ts$",
+        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
+      ]
+    },
+    "adapters": {
+      "match": [
+        "^(?:bridge\\.test\\.ts|buffered|identity|run|tool|translator)-"
+      ],
+      "children": {
+        "google": [
+          "^(?:antigravity|gcp|google|vertex)-"
+        ],
+        "anthropic": [
+          "^(?:anthropic)-"
+        ],
+        "openai": [
+          "^(?:openai)-"
+        ]
+      }
+    },
+    "responses": {
+      "match": [
+        "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"
+      ]
+    },
+    "lab": {
+      "match": [
+        "^(?:core|lab)-"
+      ]
+    },
+    "cli": {
+      "match": [
+        "^(?:cli|ensure|interactive|ocx|restore|star|uninstall\\.test\\.ts)-"
+      ]
+    },
+    "routing": {
+      "match": [
+        "^(?:cl01|destination|fastwire|policy|router|router\\.test\\.ts|subagent)-"
+      ]
+    },
+    "gui": {
+      "match": [
+        "^(?:dashboard|gui|models|qwen|tencent)-"
+      ]
+    },
+    "oauth": {
+      "match": [
+        "^(?:chatgpt|generic|state)-"
+      ]
+    },
+    "claude-integration": {
+      "match": []
+    },
+    "ci-workflows": {
+      "match": [
+        "^(?:assert|build|bump|ci|cleanup|closed|docs|dsh|fixture|install|keyring|package|release|repo|skill|test|zz)-"
+      ]
+    },
+    "usage": {
+      "match": [
+        "^(?:cost|request|usage|user)-"
+      ]
+    },
+    "lib": {
+      "match": [
+        "^(?:acl|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
+      ]
+    },
+    "clients": {
+      "match": [
+        "^aside-profile(?!s-routes)",
+        "^cline-(?:client|writer)(?:-|[.])",
+        "^(?:desktop|omp|pi|prime|remote|sync)-"
+      ]
+    },
+    "service": {
+      "match": [
+        "^(?:autostart|crash|doctor|init|service|service\\.test\\.ts|shutdown|stale|stop|systemd|winsw\\.test\\.ts)-"
+      ]
+    },
+    "windows": {
+      "match": [
+        "^(?:tray|win|windows|winsw)-"
+      ]
+    },
+    "storage": {
+      "match": [
+        "^(?:storage)-"
+      ]
+    },
+    "vision": {
+      "match": [
+        "^(?:sidecar)-"
+      ]
+    },
+    "config": {
+      "match": [
+        "^(?:config|expand|settings|types|url|yaml)-"
+      ]
+    },
+    "web-search": {
+      "match": [
+        "^(?:format|web)-"
+      ]
+    },
+    "update": {
+      "match": [
+        "^(?:update)-"
+      ]
+    },
+    "images": {
+      "match": [
+        "^(?:artifacts|download|loop|loop\\.test\\.ts|plan\\.test\\.ts|synthetic|z)-"
+      ]
+    },
+    "videos": {
+      "match": [
+        "^(?:fulfill|plan)-"
+      ]
+    },
+    "e2e-style": {
+      "match": [
+        "^(?:phase100)-"
+      ]
+    }
+  },
+  "migrated": [
+    "adapters",
+    "ci-workflows",
+    "claude-integration",
+    "cli",
+    "clients",
+    "codex-integration",
+    "config",
+    "gui",
+    "lab",
+    "lib",
+    "oauth",
+    "providers",
+    "responses",
+    "routing",
+    "server",
+    "service",
+    "storage",
+    "update",
+    "usage",
+    "vision",
+    "web-search",
+    "windows"
+  ]
+}

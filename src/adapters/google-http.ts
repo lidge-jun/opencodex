@@ -7,6 +7,7 @@ import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage
 import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 import {
   abortError,
   cancelResponseBodyBestEffort,
@@ -29,6 +30,19 @@ export interface GoogleRetryOptions {
 }
 
 async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
+  if (label === "Antigravity" && res.status === 403) {
+    const body = await readBoundedResponseBody(res, {
+      maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
+      inactivityTimeoutMs: 2000, signal,
+    });
+    const headers = new Headers(res.headers);
+    headers.delete("content-encoding");
+    headers.delete("content-length");
+    return new Response(safeGoogleHttpErrorMessage(label, res.status,
+      body.displaySafe && !body.truncated ? body.text : ""), {
+      status: res.status, statusText: res.statusText, headers,
+    });
+  }
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
     formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText),

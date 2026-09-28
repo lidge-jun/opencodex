@@ -551,7 +551,7 @@ export async function executeResponsesRunTurn(
       return retryQueue.stream();
     };
 
-    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = toolBridgeMaps;
     const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
@@ -559,7 +559,7 @@ export async function executeResponsesRunTurn(
       if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
       // This tool is declared to the adapter by the private search loop.
       if (wsPlan && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
-      const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames);
+      const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames, undefined, bareCustomToolNames);
       if (declaredToolNames.has(effectiveName)) return undefined;
       return {
         type: "error",
@@ -574,6 +574,7 @@ export async function executeResponsesRunTurn(
       if (preflight.replayUnsafe || preflight.error?.status !== 429
         || preflight.error.code === SEND_BUDGET_EXHAUSTED_CODE) return;
       const { httpStatus, error } = adapterFailureFromEvent(preflight.error);
+      transportState.bindKeyUsageFromBridge(preflight.error.usage);
       cancelResponseCompletion();
       runTurnAbort.abort();
       queue.close();
@@ -672,6 +673,7 @@ export async function executeResponsesRunTurn(
           stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
+          bareCustomToolNames,
           enforceDeclaredToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
@@ -814,6 +816,7 @@ export async function executeResponsesRunTurn(
         enforceDeclaredToolNames,
         toolParameterSchemas,
         freeformToolNames,
+        bareCustomToolNames,
         toolSearchToolNames,
         ...(routedCompaction ? { compaction: true } : {}),
         onProviderState: state => { providerState = state; },

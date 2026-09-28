@@ -64,7 +64,7 @@ To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disc
 
 ## Troubleshooting
 
-When a step fails, the dashboard shows the reason and, when SSH reported one, the last line of its error output under the message.
+When a step fails, the dashboard shows the reason and, when SSH reported one, a short sanitized hint from its last non-empty error line under the message. Remote-shell errors can appear there even when the remote shell emits non-UTF-8 text; OpenCodex removes terminal controls, link keys and URL queries and limits the hint's length.
 
 - **Could not connect to the SSH host**: the host must accept your SSH key without a password prompt; `ssh -o BatchMode=yes <alias> true` must succeed from a terminal. A `ProxyCommand` helper such as `cloudflared` must be installed in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.bun/bin`, `~/.local/bin` or another directory on the PATH OpenCodex runs with.
 - **ocx was not found on the remote computer**: OpenCodex looks for `ocx` on the PATH of a non-interactive SSH session first, then in `~/.bun/bin`, `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. If it is installed elsewhere, add that directory to PATH in a file the remote shell reads for non-interactive sessions, such as `~/.zshenv` for zsh.
@@ -73,7 +73,7 @@ When a step fails, the dashboard shows the reason and, when SSH reported one, th
 
 ## Security
 
-The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. On the Child, the key stays inside OpenCodex: credentials that Codex or Claude Code send there are not forwarded to the Home, and any program on the Child that reaches `127.0.0.1:<port>` uses the Home without a key, the same local trust a standalone install gives. Web pages from other sites are refused. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
+The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. On the Child, the key stays inside OpenCodex: credentials that Codex or Claude Code send there are not forwarded to the Home, including Bearer, Azure `api-key`, Anthropic-compatible `x-api-key`, and Google `x-goog-api-key` forms. Any program on the Child that reaches `127.0.0.1:<port>` uses the Home without a key, the same local trust a standalone install gives. Web pages from other sites are refused. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
 
 ## CLI reference
 
@@ -88,3 +88,9 @@ ocx link revoke --link-id <id> [--json]
 
 - [Remote Hub Deployment](/guides/remote-hub/)
 - [Remote Workspace](/guides/remote-workspace/)
+
+### Relay authentication compatibility
+
+Update both the Home and Child when upgrading to connection-bound relay authentication. Before sending a relayed request's link credential or body, the Child verifies the Home on the same connection it will use for that request. A closed connection is not silently replaced. A Home without this protocol causes a retryable authentication error; upgrade the Home and Child, and re-link when the stored link is no longer recognized. There is no insecure fallback switch. An unexpired pending API-key rotation remains valid until it expires or the rotation is committed or aborted.
+
+Removing the final Home link drains pending authenticated relay requests before releasing its listener. Stopping the process still cancels active connections. This does not change which caller credentials are stripped or which routes can be relayed, and it does not replace SSH's host-key verification.

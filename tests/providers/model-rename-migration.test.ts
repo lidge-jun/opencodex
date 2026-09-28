@@ -57,6 +57,15 @@ function staleConfig(): OcxConfig {
 }
 
 describe("registry model rename migration (#1610)", () => {
+  test.each([false, true])("preserves provider response-tier authority %s across a model rename", authority => {
+    const stale = staleConfig();
+    stale.providers[RENAME.provider]!.responseTierAuthoritative = authority;
+    const { config, changed } = projectModelRenames(stale, [RENAME]);
+    expect(changed).toBe(true);
+    expect(config.providers[RENAME.provider]!.models).toContain(RENAME.to);
+    expect(config.providers[RENAME.provider]!.responseTierAuthoritative).toBe(authority);
+  });
+
   test("rewrites every model-keyed field, preserving list order", () => {
     const { config, changed, warnings } = projectModelRenames(staleConfig(), [RENAME]);
     const prov = config.providers["alibaba-token-plan-intl"]!;

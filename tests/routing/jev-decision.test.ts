@@ -341,6 +341,46 @@ describe("JEV decision client", () => {
     });
   });
 
+  test("transmits only the selected candidate note without changing built-in profiles or choices", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const post = (async (_name, _provider, _url, init) => {
+      bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return Response.json(validPayload);
+    }) as JevPost;
+    const noted = [
+      { ...candidates[0]!, modelProfile: "  Subscription allowance for Astra.  " },
+      candidates[1]!,
+    ];
+    await resolveJevDecision({ body: decisionBody, candidates: noted, fallback, config: jevConfig("secret"), post });
+    await resolveJevDecision({ body: decisionBody, candidates, fallback, config: jevConfig("secret"), post });
+    await resolveJevDecision({ body: decisionBody, candidates: [candidates[1]!], fallback, config: jevConfig("secret"), post });
+
+    expect(bodies).toHaveLength(3);
+    expect(bodies[0]?.state).toEqual({
+      ...buildJevState(decisionBody),
+      operator_notes: { "openai/gpt-6-astra": "Subscription allowance for Astra." },
+    });
+    expect(bodies[1]?.state).toEqual(buildJevState(decisionBody));
+    expect(bodies[2]?.state).toEqual(buildJevState(decisionBody));
+    expect((bodies[0]?.questions as Record<string, unknown>)).toEqual(buildJevRouteQuestion(candidates));
+    expect((bodies[2]?.questions as Record<string, unknown>)).toEqual(buildJevRouteQuestion([candidates[1]!]));
+    expect(JSON.stringify(bodies[2])).not.toContain("Astra");
+  });
+
+  test("rejects an oversized note before an outbound decision", async () => {
+    let calls = 0;
+    const post = (async () => { calls++; return Response.json(validPayload); }) as JevPost;
+    const decision = await resolveJevDecision({
+      body: decisionBody,
+      candidates: [{ ...candidates[0]!, modelProfile: "x".repeat(513) }],
+      fallback,
+      config: jevConfig("secret"),
+      post,
+    });
+    expect(decision.gate).toBe("invalid");
+    expect(calls).toBe(0);
+  });
+
   test("resolves environment references and supports TypeSafe and provider-derived key fallbacks", async () => {
     const previousTypesafe = process.env.TYPESAFE_API_KEY;
     const previousJev = process.env.JEV_API_KEY;

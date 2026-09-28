@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo and Cline CLI from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Fifteen clients work this way, each with a switch:
+file, and removes it again. Seventeen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -23,6 +23,8 @@ file, and removes it again. Fifteen clients work this way, each with a switch:
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
+| Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -518,3 +520,53 @@ listens on a non-loopback address, put a data-admission key (the token described
 key) in the app's API key field. The app sends it as `Authorization: Bearer`, which
 `/v1/chat/completions` accepts as proxy admission and never forwards upstream; see the
 [authentication matrix](/reference/proxy-formats/#authentication-matrix).
+
+## Kilo
+
+Kilo CLI, VS Code, and JetBrains share one global config. This integration writes
+`provider.opencodex` into the first existing file among `kilo.jsonc`, `kilo.json`,
+`opencode.jsonc`, `opencode.json`, and `config.json` under `~/.config/kilo`
+(`XDG_CONFIG_HOME` relocates that directory). If none exist, the destination is
+`kilo.jsonc`. Project configs are never written.
+Kilo merges all of these global files. If another candidate also defines
+`provider.opencodex`, status names every competing file and Apply and Replace refuse;
+remove `provider.opencodex` from those files before enabling the integration. An unreadable or unsafe
+candidate also blocks the write. Disable can still remove a block owned in the recorded file
+while another candidate conflicts or cannot be parsed; the other candidate is left untouched.
+
+The owned fragment is only `provider.opencodex` (OpenCode V1 shape: `npm`, `options`,
+`models`). Kilo's published schema has no OpenCode V2 `providers` key, so that block is
+not emitted. `$schema`, `model`, `enabled_providers`, MCP, and other keys stay
+user-owned. Select `opencodex/<provider/model>` in Kilo after applying.
+
+Loopback uses `{env:OPENCODEX_KILO_API_KEY}` as `options.apiKey`. A non-loopback bind
+moves admission to `options.headers["x-opencodex-api-key"]` and never serializes a real
+key. Apply rewrites the whole global file as pretty JSON, so comments and trailing
+commas in other keys are not preserved. Kilo is not on the implicit catalog fan-out;
+refresh it explicitly after changing the routed model selection.
+
+```bash
+ocx integration client enable --client kilo
+ocx export --client kilo --out ./kilo.jsonc
+```
+
+## Factory Droid
+
+Run Droid once to create `~/.factory`, then explicitly enable this integration with
+`ocx integration client enable --client droid`. OpenCodex adds only documented
+`customModels` entries to your personal `settings.json`, using a keyless local
+Chat Completions endpoint. Choose a row from Droid's `/model` picker. Disable
+removes the managed rows; Undo restores the exact saved file. Other settings and
+custom models remain yours.
+
+Models whose IDs or display names contain `,` or `]` are skipped because the
+managed selector cannot address them safely; export and managed settings show
+the same rows. A nonempty catalog with no addressable models is refused.
+
+Droid also reads legacy `config.json` and local `settings.local.json`. Resolve
+legacy rows that use the OpenCodex endpoint, a generated model ID, or an
+`OpenCodex:` display name, and any local `customModels` override, before enabling;
+OpenCodex refuses those ambiguous settings. It also refuses an
+unsafe target or a row edited since apply. The integration is loopback only and
+never copies provider credentials. Factory documents the [BYOK schema](https://docs.factory.ai/model-independence/byok)
+and [personal settings path](https://docs.factory.ai/droid-cli/settings).

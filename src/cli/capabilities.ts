@@ -241,6 +241,25 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Uses the exact upstream model ID after the first slash. Omitted cache rates default to zero; sibling model prices are preserved."],
   },
   {
+    command: ["models", "set"],
+    summary: "Save per-model overrides for a routed model, or clear them back to the computed values.",
+    routes: [{ method: "PUT", path: "/api/model-settings" }],
+    flags: [
+      { name: "--context-window", value: "string", summary: "Context window in tokens; 0 or - clears the override." },
+      { name: "--modalities", value: "string", summary: "Comma-separated text,image,audio; - clears the override." },
+      { name: "--reasoning-efforts", value: "string", summary: "Comma-separated ladder; \"\" for no reasoning, - to inherit." },
+      { name: "--default-reasoning-effort", value: "string", summary: "Ladder member a request inherits when it omits one; - to inherit." },
+      { name: "--reset", value: "boolean", summary: "Clear every override on this model; cannot be combined with the options above." },
+      { name: "--json", value: "boolean", summary: "Emit the saved state as JSON." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: [
+      "Addresses a routed model as provider/model. The native openai lane and combos have no per-model overrides.",
+      "Unlike ocx models edit, which changes a custom model's own definition, this edits a row that already exists.",
+    ],
+  },
+  {
     command: ["status"],
     summary: "Proxy status, injection state, and version skew between this CLI and the running proxy.",
     // No management route: `collectStatus` identity-probes `/healthz` through
@@ -522,21 +541,28 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["account", "pause"],
-    summary: "Stop routing new requests to one account in the Codex pool.",
-    // One route, both directions: `resume` is the same PUT with `paused: false`.
-    routes: [{ method: "PUT", path: "/api/codex-auth/accounts/pause" }],
+    summary: "Exclude one account in a Codex or supported generic OAuth pool from automatic selection.",
+    // Resume uses the same endpoints with `paused: false`.
+    routes: [
+      { method: "PUT", path: "/api/codex-auth/accounts/pause" },
+      { method: "GET", path: "/api/oauth/accounts" },
+      { method: "PUT", path: "/api/oauth/accounts/pause" },
+    ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the pause result as JSON." }],
     mutates: true,
     json: "envelope",
     details: [
-      "Pausing also unbinds threads pinned to the account and selects a fallback if it was active -- side effects of the route, not of the word `pause`.",
-      "The issue that requested this reported the route as POST; it is PUT.",
+      "Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Generic OAuth pause never dispatches to that account: it is excluded from new requests, failover and refresh, and an all-paused pool answers 403. Anthropic is unsupported.",
     ],
   },
   {
     command: ["account", "resume"],
-    summary: "Return a paused account to the Codex pool.",
-    routes: [{ method: "PUT", path: "/api/codex-auth/accounts/pause" }],
+    summary: "Return a paused account to a Codex or supported generic OAuth pool.",
+    routes: [
+      { method: "PUT", path: "/api/codex-auth/accounts/pause" },
+      { method: "GET", path: "/api/oauth/accounts" },
+      { method: "PUT", path: "/api/oauth/accounts/pause" },
+    ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the resume result as JSON." }],
     mutates: true,
     json: "envelope",

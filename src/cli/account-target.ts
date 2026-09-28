@@ -15,7 +15,7 @@ const MAIN_ALIAS = "main";
 
 export type CodexAccountTarget =
   | { id: string }
-  | { error: string; kind: "not_found" | "ambiguous" | "reserved" }
+  | { error: string; kind: "not_found" | "ambiguous" | "reserved" | "unavailable" }
   | { networkDown: true; transportError?: string };
 
 /** Built-in selectors cannot be reused as Codex account aliases. */
@@ -35,18 +35,21 @@ export async function resolveCodexAccountTarget(
   requested: string,
 ): Promise<CodexAccountTarget> {
   if (requested === MAIN_ALIAS || requested === MAIN_CODEX_ACCOUNT_ID) return { id: MAIN_CODEX_ACCOUNT_ID };
-  if (isReservedCodexAccountWord(requested)) {
-    return { error: `"${requested}" is reserved; it clears the selection with \`ocx account use\` and names no account`, kind: "reserved" };
-  }
   const res = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/accounts");
   if (res.status === 0) return { networkDown: true, transportError: res.transportError };
   // The list is only needed to turn an alias into an id. If the proxy cannot produce it, send
   // the argument as the id it may already be and let the route answer, as the CLI always did.
-  if (res.status !== 200) return { id: requested };
+  if (res.status !== 200) {
+    if (!isReservedCodexAccountWord(requested)) return { id: requested };
+    return { error: `Cannot safely resolve reserved account selector "${requested}" while the account list is unavailable`, kind: "unavailable" };
+  }
   const accounts = (Array.isArray(res.json.accounts) ? res.json.accounts : [])
     .filter((entry): entry is { id: string; alias?: unknown } =>
       typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string");
   if (accounts.some(account => account.id === requested)) return { id: requested };
+  if (isReservedCodexAccountWord(requested)) {
+    return { error: `"${requested}" is reserved; it clears the selection with \`ocx account use\` and names no account`, kind: "reserved" };
+  }
   const exact = accounts.filter(account => account.alias === requested);
   const matches = exact.length > 0
     ? exact
@@ -69,10 +72,12 @@ export async function resolveCodexUseTarget(
   baseUrl: string,
   requested: string,
 ): Promise<CodexUseTarget> {
-  if (requested === AUTO_ACCOUNT_ARGUMENT) return { accountId: null };
   const target = await resolveCodexAccountTarget(deps, baseUrl, requested);
   if ("networkDown" in target) return target;
-  if ("error" in target) return target;
+  if ("error" in target) {
+    if (requested === AUTO_ACCOUNT_ARGUMENT && target.kind === "reserved") return { accountId: null };
+    return target;
+  }
   return { accountId: target.id };
 }
 

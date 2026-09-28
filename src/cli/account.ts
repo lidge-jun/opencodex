@@ -45,6 +45,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account history openai <pool-account-id> [--limit <1-200>] [--json]
   ocx account current <provider> [--json]
   ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]
+  ocx account clear <provider> [--json]
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
   ocx account alias <provider> <account-or-key-id|alias> <display-name|-> [--json]
@@ -68,8 +69,10 @@ const ACCOUNT_USAGE = `Usage:
 
 List and switch provider accounts and API-key pools (masked output only).
 'main' selects the Codex App login for the openai account pool; 'auto' clears the
-selection so the pool places work by its own strategy. A Codex account can be named
-by the alias set with 'ocx account alias' wherever an id is accepted.`;
+selection so the pool places work by its own strategy — unless an account actually
+carries that id, which wins, so 'ocx account clear' is the spelling that always
+clears. A Codex account can be named by the alias set with 'ocx account alias'
+wherever an id is accepted.`;
 
 function consumeFlag(args: string[], flag: string): boolean {
   const idx = args.indexOf(flag);
@@ -105,7 +108,8 @@ function statusText(row: AccountRow): string {
   if (row.paused) parts.push("paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) parts.push("needs-reauth");
-  if (row.provider === "kiro" && row.autoSelectable === false)
+  // A paused Kiro row already says "paused"; repeating it as a skip reason adds nothing.
+  if (row.provider === "kiro" && row.autoSelectable === false && !(row.paused && row.skipReason === "paused"))
     parts.push(row.skipReason ? `not-auto-selected(${row.skipReason})` : "not-auto-selected");
   if (row.validationPending) parts.push("validation-pending");
   if (row.selectionExcludedReason === "plan_excluded") {
@@ -352,6 +356,45 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   return 0;
 }
 
+/** `ocx account clear` never resolves its argument as an account id, so an account literally
+ * named `auto` cannot shadow the verb that returns the pool to automatic selection. */
+async function cmdClear(rest: string[], deps: AccountDeps): Promise<number> {
+  const wantsJson = consumeFlag(rest, "--json");
+  const name = rest.shift();
+  const leftover = leftoverArgsError(rest);
+  if (!name || leftover) {
+    if (leftover) console.error(leftover);
+    console.error(ACCOUNT_USAGE);
+    return 1;
+  }
+  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  const c = classifyAccount(config, name);
+  if ("error" in c) {
+    console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);
+    return 1;
+  }
+  if (c.type !== "codex") {
+    console.error(`Error: ${name} has no automatic-selection pin to clear; clear applies to Codex account pools`);
+    return 1;
+  }
+  const baseUrl = await resolveBaseUrl(deps);
+  if (!baseUrl) return proxyUnreachable();
+  const res = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/active", { accountId: null });
+  if (res.status === 0) return proxyUnreachable(res.transportError);
+  if (res.status !== 200) return apiError(res.json, `failed to clear ${name}`, res.status);
+  const pinDrainReason = typeof res.json.pinDrainReason === "string" ? res.json.pinDrainReason : undefined;
+  if (wantsJson) {
+    console.log(JSON.stringify({
+      ok: true, provider: name, type: c.type, activeId: null,
+      ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
+    }, null, 2));
+  } else {
+    console.log(`${name}: automatic account selection (pin cleared)`);
+  }
+  await explainCodexUseOutcome(deps, baseUrl, name, null, pinDrainReason);
+  return 0;
+}
+
 export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promise<number> {
   const [sub, ...rest] = args;
   try {
@@ -362,6 +405,7 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     }
     if (sub === "current") return await cmdCurrent(rest, deps);
     if (sub === "use") return await cmdUse(rest, deps);
+    if (sub === "clear") return await cmdClear(rest, deps);
     if (sub === "refresh") return await cmdRefresh(rest, deps);
     if (sub === "auto-switch") return await cmdAutoSwitch(rest, deps);
     if (sub === "alias" || sub === "rename") return await cmdAlias(rest, deps);

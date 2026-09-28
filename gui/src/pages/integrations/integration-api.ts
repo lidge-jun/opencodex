@@ -17,6 +17,8 @@ export const FILE_INTEGRATION_CLIENTS = [
   "raycast",
   "omo",
   "cline",
+  "kilo",
+  "droid",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];
@@ -29,6 +31,7 @@ export type IntegrationReason =
   | "unowned-key"
   | "blocked-container"
   | "ambiguous-selector"
+  | "candidate-conflict"
   | "unresolvable-path";
 
 export type IntegrationRefusalReason =
@@ -62,6 +65,8 @@ export interface IntegrationStatus {
   appliedAt?: string;
   lastOpId?: string;
   reason?: IntegrationReason;
+  conflictPaths?: string[];
+  candidateFailurePath?: string;
   /**
    * The store this client reads instead of `configPath`, when one exists.
    *
@@ -76,6 +81,14 @@ export interface IntegrationStatus {
   profileId?: number;
   enabled?: boolean;
   raycast?: RaycastInstall;
+}
+
+/** A candidate issue can block adding Kilo while removal still targets its recorded file. */
+export function canDisableKiloWithCandidateIssue(status: IntegrationStatus): boolean {
+  return status.clientId === "kilo" && !!status.lastOpId
+    && (status.reason === "candidate-conflict"
+      || (status.state === "unsafe" && !!status.candidateFailurePath
+        && status.candidateFailurePath !== status.configPath));
 }
 
 export interface IntegrationStateListEnvelope {
@@ -238,6 +251,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "providers.[id=opencodex]",
   "settings.providers.opencodex",
   "catalog.providers.opencodex",
+  "customModels.*",
   // ZCode reads its providers from a second file; a plan for it publishes that
   // file's templates, and a path missing here is rejected as an invalid preview.
   "config.providerConfigRules.providerRules.[providerId=opencodex]",

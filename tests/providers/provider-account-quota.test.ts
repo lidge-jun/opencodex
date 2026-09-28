@@ -1111,3 +1111,69 @@ describe("google-antigravity Fake-IP TUN quota probes without HTTP proxy (#3781)
     expect(plainFetchCalls).toBe(0);
   });
 });
+
+describe("paused generic OAuth accounts are never quota-probed", () => {
+  const { setAntigravityAccountQuotaTransportForTests } = require("../../src/providers/quota") as typeof import("../../src/providers/quota");
+  const { setAccountPaused } = require("../../src/oauth/store") as typeof import("../../src/oauth/store");
+  const { getTokenForAccountQuotaProbe } = require("../../src/providers/quota/account-cache") as typeof import("../../src/providers/quota/account-cache");
+  const proxyKeys = PROXY_ENV_KEYS.flatMap(key => [key, key.toLowerCase()]);
+  const originalProxyEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
+  beforeEach(() => { for (const key of proxyKeys) delete process.env[key]; });
+  afterEach(() => {
+    setAntigravityAccountQuotaTransportForTests(null);
+    for (const key of proxyKeys) {
+      if (originalProxyEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalProxyEnv[key];
+    }
+  });
+
+  test("a forced refresh probes only the unpaused account and keeps the paused row's last reading", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    await saveCredential("google-antigravity", { access: "agy-live", refresh: "r1", expires, projectId: "proj-live", accountId: "agy-a", email: "live@example.com" });
+    await saveCredential("google-antigravity", { access: "agy-held", refresh: "r2", expires, projectId: "proj-held", accountId: "agy-b", email: "held@example.com" });
+    const heldId = getAccountSet("google-antigravity")!.accounts.find(a => a.credential.email === "held@example.com")!.id;
+    globalThis.fetch = (async () => { throw new Error("plain fetch must not be used for account bearers"); }) as typeof fetch;
+    const seen: string[] = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (_url, _pinned, _body, _signal, requestOptions) => {
+        seen.push(new Headers(requestOptions?.headers).get("authorization") ?? "");
+        return new Response(JSON.stringify({ groups: [{ displayName: "Gemini Models", buckets: [
+          { bucketId: "gemini-5h", window: "5h", remainingFraction: 0.5, resetTime: "2026-09-02T12:00:00Z" },
+        ] }] }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+
+    await fetchProviderAccountQuotas("google-antigravity", true);
+    expect(seen.sort()).toEqual(["Bearer agy-held", "Bearer agy-live"]);
+    const heldBefore = getCachedProviderAccountQuota("google-antigravity", heldId);
+    expect(heldBefore).not.toBeNull();
+
+    await setAccountPaused("google-antigravity", heldId, true);
+    seen.length = 0;
+    const rows = await fetchProviderAccountQuotas("google-antigravity", true);
+    expect(seen).toEqual(["Bearer agy-live"]);
+    expect(rows.find(row => row.accountId === heldId)?.quota).toEqual(heldBefore);
+    await expect(getTokenForAccountQuotaProbe("google-antigravity", heldId)).rejects.toThrow("paused");
+  });
+});
+
+test("a paused Meta Muse account is never used to mint a quota key", async () => {
+  const { fetchMuseKeyQuota } = require("../../src/providers/quota/vendor-probes-oauth") as typeof import("../../src/providers/quota/vendor-probes-oauth");
+  const { resetMuseKeyQuotaBackoff } = require("../../src/providers/muse-key-quota") as typeof import("../../src/providers/muse-key-quota");
+  const { setAccountPaused } = require("../../src/oauth/store") as typeof import("../../src/oauth/store");
+  await saveCredential("meta-muse", { access: "muse-access", refresh: "muse-refresh", expires: Date.now() + 60 * 60_000,
+    email: "muse@example.com", muse: { oauthAccessToken: "meta-account-" + "z".repeat(48) } });
+  const id = getAccountSet("meta-muse")!.activeAccountId;
+  let mints = 0;
+  globalThis.fetch = (async () => { mints += 1; return new Response(JSON.stringify({}), { status: 200 }); }) as unknown as typeof fetch;
+  resetMuseKeyQuotaBackoff();
+  await fetchMuseKeyQuota("meta-muse");
+  expect(mints).toBe(1);
+
+  resetMuseKeyQuotaBackoff();
+  await setAccountPaused("meta-muse", id, true);
+  expect(await fetchMuseKeyQuota("meta-muse")).toBeNull();
+  expect(mints).toBe(1);
+  resetMuseKeyQuotaBackoff();
+});

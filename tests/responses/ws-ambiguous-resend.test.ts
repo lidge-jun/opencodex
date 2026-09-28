@@ -116,7 +116,7 @@ const QUOTA_FRAME = JSON.stringify({
   type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10, window_minutes: 10080 } },
 });
 
-/** The three ways a socket can die under the send before anything was promised to the client. */
+/** Control traffic proves liveness, not inference output or safe non-delivery. */
 const SOCKET_DEATHS: Array<[string, (ws: FakeWebSocket) => void, "pre-header" | "protocol-prelude"]> = [
   ["nothing came back", ws => {
     ws.emit("open", {});
@@ -131,6 +131,13 @@ const SOCKET_DEATHS: Array<[string, (ws: FakeWebSocket) => void, "pre-header" | 
     ws.emit("open", {});
     ws.emit("error", {});
   }, "pre-header"],
+  ["pongs and metadata arrived without a Responses event", ws => {
+    ws.emit("open", {});
+    ws.emit("pong", {});
+    ws.emit("message", { data: QUOTA_FRAME });
+    ws.emit("message", { data: JSON.stringify({ type: "codex.response.metadata", headers: {} }) });
+    ws.emit("close", { code: 1006 });
+  }, "protocol-prelude"],
 ];
 
 const noFallback = (async () => {
@@ -174,6 +181,23 @@ describe("the exchange records a socket that died under the send (#4191)", () =>
     expect(response.status).toBe(200);
     expect(codexWsSocketDeathStage(response)).toBeUndefined();
     await expect(response.text()).rejects.toThrow("closed before a Responses terminal event");
+  });
+
+  test("a connect deadline after send cannot become a socket-death replacement", async () => {
+    const abort = new AbortController();
+    installFake(ws => {
+      ws.emit("open", {});
+      abort.abort(new DOMException("connect deadline", "TimeoutError"));
+      // A late close must not replace the already settled deadline verdict.
+      ws.emit("close", { code: 1006 });
+    });
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL, { ...streamingInit(), signal: abort.signal }, noFallback,
+    );
+    expect(response.status).toBe(504);
+    expect(codexWsSocketDeathStage(response)).toBeUndefined();
+    expect(readCodexWsStage(response)?.sent).toBe(true);
+    expect(FakeWebSocket.instances[0]!.sent).toHaveLength(1);
   });
 
   test("a steering exchange's death is not offered: its channel may have sent more than the create", async () => {
@@ -251,9 +275,10 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
     config: OcxConfig,
     logCtx: RequestLogContext = { model: "", provider: "" },
     sendBudget = createRequestExecutionBudget(),
+    abortSignal?: AbortSignal,
   ): Promise<Response> {
     takeSpendHome();
-    return handleResponses(request, config, logCtx, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME, sendBudget });
+    return handleResponses(request, config, logCtx, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME, sendBudget, abortSignal });
   }
 
   describe("in pool mode", () => {
@@ -382,6 +407,7 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
   test.each([
     ["the provider grants nothing", {}, {}],
     ["the turn is stored upstream", { retryOnReset: {} }, { store: true }],
+    ["the request declares an upstream hosted tool", { retryOnReset: {} }, { tools: [{ type: "web_search" }] }],
   ])("the 502 stands and nothing else is sent when %s", async (_name, provider, body) => {
     installFake(SOCKET_DEATHS[0]![1]);
     const http = stubHttp(completed);
@@ -390,6 +416,78 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
     expect(response.status).toBe(502);
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(http).toHaveLength(0);
+  });
+
+  test.each([
+    { type: "response.created", response: { id: "r-ws", status: "in_progress" } },
+    { type: "response.output_text.delta", response_id: "r-ws", item_id: "item-ws", delta: "hello" },
+    { type: "response.output_item.added", response_id: "r-ws", output_index: 0,
+      item: { id: "item-ws", type: "function_call", call_id: "call-ws", name: "lookup", arguments: "{}" } },
+    { type: "response.in_progress", response: { id: "r-ws", usage: { input_tokens: 4, output_tokens: 1 } } },
+  ])("$type forbids HTTP replacement even with an unused grant", async event => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify(event) });
+      ws.emit("close", { code: 1006 });
+    });
+    const http = stubHttp(completed);
+    const budget = createRequestExecutionBudget();
+    const response = await send(turn(), forwardConfig({ retryOnReset: {} }), undefined, budget);
+    // Depending on preflight, this is a projected failure or a body error. Neither
+    // representation may turn an observed semantic event into another inference.
+    await response.text().catch(() => "");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]!.sent).toHaveLength(1);
+    expect(http).toHaveLength(0);
+    expect(budget.claimAmbiguousResend?.(1)).toBe(true);
+  });
+
+  test("cancellation after send wins over a late socket death without spending a grant", async () => {
+    const abort = new AbortController();
+    installFake(ws => {
+      ws.emit("open", {});
+      abort.abort();
+      ws.emit("close", { code: 1006 });
+    });
+    const http = stubHttp(completed);
+    const budget = createRequestExecutionBudget();
+    const response = await send(turn(), forwardConfig({ retryOnReset: {} }), undefined, budget, abort.signal);
+    expect(response.status).toBe(499);
+    expect(FakeWebSocket.instances[0]!.sent).toHaveLength(1);
+    expect(http).toHaveLength(0);
+    expect(budget.claimAmbiguousResend?.(1)).toBe(true);
+  });
+
+  test("HTTP replacement preserves the sent request's model, input, tools and instructions", async () => {
+    installFake(SOCKET_DEATHS[0]![1]);
+    const http = stubHttp(completed);
+    const response = await send(turn({
+      instructions: "Use the supplied lookup tool only when needed.",
+      input: [{ role: "user", content: "hello" }],
+      tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }],
+    }), forwardConfig({ retryOnReset: {} }));
+    await response.text();
+    expect(http).toHaveLength(1);
+    const frame = JSON.parse(FakeWebSocket.instances[0]!.sent[0]!);
+    const replacement = JSON.parse(http[0]!);
+    for (const field of ["model", "input", "instructions", "tools", "store"]) {
+      expect(replacement[field]).toEqual(frame[field]);
+    }
+  });
+
+  test.each(["response.failed", "response.incomplete"])("HTTP %s remains terminal, not a third send", async type => {
+    installFake(SOCKET_DEATHS[0]![1]);
+    const http = stubHttp(() => new Response(`event: ${type}\ndata: ${JSON.stringify({
+      type,
+      response: { id: "r-http", status: type.slice("response.".length), output: [],
+        ...(type === "response.failed"
+          ? { error: { code: "server_error", message: "failed" } }
+          : { incomplete_details: { reason: "max_output_tokens" } }) },
+    })}\n\n`, { headers: { "content-type": "text/event-stream" } }));
+    const response = await send(turn(), forwardConfig({ retryOnReset: {} }));
+    await response.text().catch(() => "");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(http).toHaveLength(1);
   });
 
   test.each([

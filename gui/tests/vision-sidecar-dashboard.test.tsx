@@ -395,9 +395,11 @@ test("Desktop login switch defaults off, preserves explicit opt-in, and disables
   await mount(d);
   const toggle = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.codexDesktopAuthless"]}"]`)!;
   expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(host.textContent).not.toContain(en["dash.codexRemoteHistoryHint"]);
   d.settings.codexDesktopAuthless = true;
   await mount(d);
   expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(host.textContent?.split(en["dash.codexRemoteHistoryHint"]).length).toBe(2);
   await act(async () => { toggle().click(); });
   expect(clicks).toBe(1);
   d.settings.codexDesktopAuthless = false;
@@ -417,11 +419,19 @@ test("client compaction switch defaults off, preserves explicit opt-in, and invo
   await mount(d);
   const toggle = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${en["dash.codexClientCompaction"]}"]`)!;
   expect(toggle().getAttribute("aria-pressed")).toBe("false");
+  expect(host.textContent).not.toContain(en["dash.codexRemoteHistoryHint"]);
   d.settings.codexClientCompaction = true;
   await mount(d);
   expect(toggle().getAttribute("aria-pressed")).toBe("true");
+  expect(host.textContent?.split(en["dash.codexRemoteHistoryHint"]).length).toBe(2);
   await act(async () => { toggle().click(); });
   expect(clicks).toBe(1);
+
+  // Both preferences can remain stored while authless wins routing policy; the warning is
+  // about the effective provider-table form, so duplicating it would imply two separate risks.
+  d.settings.codexDesktopAuthless = true;
+  await mount(d);
+  expect(host.textContent?.split(en["dash.codexRemoteHistoryHint"]).length).toBe(2);
 });
 
 test("client compaction preference survives a successful save followed by sync failure", async () => {

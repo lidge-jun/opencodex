@@ -2,10 +2,16 @@
 /** Completed/due markers use epoch milliseconds; persisted legacy markers may use seconds. */
 export type CodexQuotaAutoRefreshWindows = { fiveHour?: number; weekly?: number };
 
+/**
+ * Backoff evidence for one account. `generation` names the credential the failure was observed
+ * under; a record from another generation says nothing about the credential in use now.
+ */
+export type CodexQuotaRetry = { after: number; delay: number; generation: string };
+
 export const completedByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
-export const retryAfterByAccount = new Map<string, number>();
+export const retryAfterByAccount = new Map<string, CodexQuotaRetry>();
 export const scheduledByAccount = new Map<string, CodexQuotaAutoRefreshWindows>();
-export const quotaRefreshAfterByAccount = new Map<string, number>();
+export const quotaRefreshAfterByAccount = new Map<string, CodexQuotaRetry>();
 
 /** Drop every activation record when its account is removed. */
 export function forgetCodexQuotaAutoRefreshAccount(accountId: string): void {

@@ -12,7 +12,7 @@ import { commitProviderApiKeySelection } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
-import { normalizedBaseUrl } from "./quota/vendor-probes-key";
+import { isCanonicalCommandCodeBaseUrl, normalizedBaseUrl } from "./quota/vendor-probes-key";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
@@ -566,7 +566,8 @@ export function selectProactiveApiKeyTransport(
  * `enabled: false` to opt out). When the knob is absent, the OpenCode Go destination
  * (subscription traffic such as Muse Spark) falls back to a patient same-key policy so a
  * burst 429 waits and replays instead of surfacing to the client and aborting a long
- * session; every other provider without the knob keeps today's fail-fast behavior.
+ * session; key-auth Command Code at its canonical endpoints gets the same fallback (#5180), and
+ * every other provider without the knob keeps today's fail-fast behavior.
  * OAuth/forward/local credentials are never replayed on the same token. The returned
  * policy is fully defaulted so callers never re-check fields.
  */
@@ -590,10 +591,17 @@ export function rateLimitRetryPolicyFor(
       respectRetryAfter: policy.respectRetryAfter ?? DEFAULT_RATE_LIMIT_RETRY.respectRetryAfter,
     };
   }
-  // No explicit knob: patient fallback for the OpenCode Go destination only.
+  // No explicit knob: patient fallback for OpenCode Go and canonical Command Code only.
   if (provider.authMode !== undefined && provider.authMode !== "key") return null;
-  if (!isOpenCodeGoDestination(provider)) return null;
-  return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
+  if (isOpenCodeGoDestination(provider)) return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
+  // Command Code's Provider API rate-limits long muse-spark turns the same way (#5180): a single
+  // key cannot fail over, and the Codex client does not retry a 429, so the turn aborts. The key
+  // endpoint gets the same patient same-key policy. A row repointed at a custom relay is not the
+  // canonical endpoint and keeps fail-fast unless it sets `retryOn429`.
+  if (typeof provider.baseUrl === "string" && isCanonicalCommandCodeBaseUrl(provider.baseUrl.trim())) {
+    return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
+  }
+  return null;
 }
 
 /**

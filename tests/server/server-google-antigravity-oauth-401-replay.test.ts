@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -49,6 +49,16 @@ async function seedOAuth(expires = Date.now() + 3_600_000, projectId?: string | 
     ...(projectId !== undefined ? (projectId ? { projectId } : {}) : { projectId: "initial-project-id" }),
     source: "oauth",
   });
+}
+
+async function seedSibling(): Promise<string> {
+  const initial = getAccountSet("google-antigravity")!.activeAccountId;
+  await saveCredential("google-antigravity", {
+    access: "access-b", refresh: "refresh-b", expires: Date.now() + 3_600_000,
+    accountId: "account-b", projectId: "project-b", source: "oauth",
+  }, { addAccount: true });
+  await setActiveAccount("google-antigravity", initial);
+  return getAccountSet("google-antigravity")!.accounts.find(row => row.credential.access === "access-b")!.id;
 }
 
 function antigravityConfig(): OcxConfig {
@@ -142,6 +152,8 @@ function installOAuthFetch(
   apiStatuses: number[],
   options: {
     tokenErrorDescription?: string;
+    tokenHttpStatus?: number;
+    tokenThrow?: string;
     refreshedProjectId?: string | null;
     beforeFirstUnauthorized?: () => Promise<void>;
   } = {},
@@ -159,6 +171,10 @@ function installOAuthFetch(
     // Google OAuth refresh token endpoint
     if (url === GOOGLE_TOKEN_ENDPOINT) {
       counts.refresh += 1;
+      if (options.tokenThrow) throw new Error(options.tokenThrow);
+      if (options.tokenHttpStatus !== undefined) {
+        return Response.json({ error: "temporarily_unavailable" }, { status: options.tokenHttpStatus });
+      }
       if (options.tokenErrorDescription !== undefined) {
         return new Response(JSON.stringify({
           error: "invalid_grant",
@@ -274,6 +290,183 @@ function installOAuthFetch(
 }
 
 describe("Google Antigravity OAuth upstream 401 replay", () => {
+  test("same-account refresh succeeds without pool rotation", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("replayed 401 sends once on the sibling with its paired project", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 401, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id", "project-b"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("terminal refresh failure uses the sibling while the failed row needs reauth", async () => {
+    await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200], { tokenThrow: "invalid_grant" });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "project-b"]);
+      expect(getAccountSet("google-antigravity")!.accounts.find(row => row.id === failedId)?.needsReauth).toBe(true);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("a transient refresh failure does not send on a sibling", async () => {
+    await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200], { tokenHttpStatus: 503 });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+      expect(response.status).toBe(401);
+      expect(body).toContain(PUBLIC_OAUTH_AUTHENTICATION_ERROR);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id"]);
+      expect(observed.counts.refresh).toBe(1);
+      expect(getAccountSet("google-antigravity")!.accounts.find(row => row.id === failedId)?.needsReauth).not.toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test("a sibling's 401 does not trigger another account hop", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 401, 401, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(401);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id", "project-b"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("a sibling paused after the first send is never used", async () => {
+    await seedOAuth();
+    const sibling = await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 401], {
+      beforeFirstUnauthorized: async () => { await setAccountPaused("google-antigravity", sibling, true); },
+    });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(401);
+      expect(observed.chatAuth).toHaveLength(2);
+      expect(observed.chatAuth).not.toContain("Bearer access-b");
+    } finally { await server.stop(true); }
+  });
+  test("paused OAuth account returns a non-retryable permission error for CCA image generation", async () => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+    await setAccountPaused("google-antigravity", accountId, true);
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([]);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/images/generations", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+      });
+      const body = await response.text();
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(body)).toMatchObject({ error: {
+        type: "permission_error",
+        message: "OAuth account is paused. Resume it in account settings and retry.",
+      } });
+      expect(body).toContain("OAuth account is paused");
+      expect(body).not.toContain("login required");
+      expect(observed.counts.refresh).toBe(0);
+      expect(observed.requestPaths).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("paused OAuth account returns a non-retryable permission error without refresh or upstream dispatch", async () => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+    await setAccountPaused("google-antigravity", accountId, true);
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(body)).toMatchObject({ error: {
+        type: "permission_error",
+        message: "OAuth account is paused. Resume it in account settings and retry.",
+      } });
+      expect(body).toContain("OAuth account is paused");
+      expect(body).not.toContain("login google-antigravity");
+      expect(observed.counts.refresh).toBe(0);
+      expect(observed.requestPaths).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an account paused before OAuth 401 replay returns a non-retryable permission error and does not refresh", async () => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401], {
+      beforeFirstUnauthorized: async () => {
+        await setAccountPaused("google-antigravity", accountId, true);
+      },
+    });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+
+      expect(response.status).toBe(403);
+      expect(JSON.parse(body)).toMatchObject({ error: {
+        type: "permission_error",
+        message: "OAuth account is paused. Resume it in account settings and retry.",
+      } });
+      expect(body).toContain("OAuth account is paused");
+      expect(observed.counts.refresh).toBe(0);
+      expect(observed.requestPaths).toEqual(["/v1internal:generateContent"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test.each([200, 401])("native passthrough replays once and returns the second HTTP %i", async secondStatus => {
     await seedOAuth();
     saveConfig(antigravityPassthroughConfig());

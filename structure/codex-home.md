@@ -1,5 +1,7 @@
 # Codex Home
 
+Quota activation restores deadlines from OpenCodex settings; its retry backoff remains process-local. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 
 A lock in the Codex credential store is governed by [descriptor identity and age](catalog.md#accounts-namespaces-and-pool-rotation), so the mere presence of its filename is neither acquisition nor release authority. Failed path-identity probes leave the lock for stale recovery and preserve the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
@@ -95,7 +97,12 @@ to the single discoverable Windows Desktop home; recording Linux `~/.codex` inst
 later repair or uninstall look foreign even though the service and runtime were started from the
 same environment. A record written before that discovery still names Linux `~/.codex`; service
 commands refuse it and name the recorded home to rerun with, because stop and repair would otherwise
-restore a different home. An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
+restore a different home. A recorded spelling that still resolves to the same physical directory —
+a junction or symlink alias — counts as the same home for the ownership check, the recorded SQLite
+home, and the unattended ownership preflight. Access or transient I/O errors are unknown rather
+than foreign in preflight; distinct spellings with missing/non-directory paths remain mismatches.
+Lifecycle guards still fail closed on unknown and can throw `ServiceOwnershipError`.
+An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 
@@ -134,19 +141,21 @@ subsystem from fencing native traffic or creating lock contention. Presence, an 
 or any observation error still takes the locked sweep and fails closed; the fast path is based only
 on proven absence, never on an unreadable path.
 
-Native-main admission is one process-global gate owned by the live startup entry. Releasing the
-last reference to that entry returns the gate to its process-initial `ready` state synchronously,
-before the release awaits anything, so a server stopped in the middle of startup convergence
-cannot leave the process fenced for the servers that follow it; an entry created afterwards for
-the same home arms its own gate, and the retired generation's late convergence writes are ignored.
+Native-main admission is one process-global gate. Releasing the last reference to a startup entry
+returns a snapshot published by that startup generation to the process-initial `ready` state
+synchronously, before the release awaits anything, so a server stopped in the middle of startup
+convergence cannot leave the process fenced for the servers that follow it. A same-home recovery
+fence published independently by a profile transaction survives release. An entry created
+afterwards for the same home arms its own gate, and the retired generation's late convergence
+writes are ignored.
+Recovery-completion provenance is separate from the convergence promise: release retains the owner through the pending recovery and its following stage sweep.
 `tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
-A sibling instance — `ocx start --port <other>` while a live proxy serves the configured port, the
-`"sibling"` outcome of `decideStartWithLiveOwner` in `src/cli/dispatch.ts` — gets past the spend-ledger
+A sibling instance is `ocx start --port <other>` while a live proxy serves the configured port, or a start where the cross-home owner check proves a different live proxy at a managed client destination. It gets past the spend-ledger
 lease only with its own `OPENCODEX_HOME`, and still shares this Codex home, `~/.claude`, `~/.grok` and
 the launchd domain with the live owner. `handleStart` marks the process through
 `src/codex/sibling-start.ts` before the server binds, and the mark is one-way for the process's
-lifetime. It closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
+lifetime. The cross-home check follows same-home discovery and precedes journal reconciliation. It reads the default home's runtime record only for a custom home, plus managed Grok and Codex loopback URLs. It accepts only an identity-checked positive PID different from this process; a sole custom-home start still syncs. The mark closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
 `sibling`, so startup sync, cache invalidation, Grok, the retained catalog writers and the native-main
 lifecycle stand down (the sibling runs the no-op lifecycle, so it never contends for the owner lease;
 its data-plane `auth.json` refresh still runs under the machine-wide exclusive claim). Owner-level
@@ -424,6 +433,10 @@ On apply, that reason retires the relabel unit and the config/profile/journal wr
 On restore and removal, that same reason no longer refuses the config half. It selects a degraded restore: every OpenCodex root routing key comes out, `[model_providers.opencodex]` is retained verbatim including its ownership marker, and the history relabel is skipped rather than attempted. The retained table is captured from the pre-transform bytes and re-appended into the same buffer, so the write is one atomic transformation — a config carrying root `model_provider = "opencodex"` without a matching table fails the whole Codex config load, not one thread, which makes that intermediate state strictly worse than the routing it replaces. If an exact journal restore brings back a same-named provider table, retention accepts it only when the parsed provider values match. `src/codex/inject/provider-table.ts` captures lossless table spans using the shared lexical lines in `src/codex/toml-source-lines.ts`, also consumed by the native defaults editor. Header-shaped text and blank lines inside multiline values stay intact; only the isolated provider block is parsed so unrelated large integers do not prevent retention. Cosmetic spacing and comments do not change equality, but multiline string contents do. Invalid, duplicate, array-root or unsupported inline provider definitions refuse; retained bytes are never regenerated from parsed values. A different table fails the restore and compensation reinstates the pre-restore files rather than rebinding tagged threads to another destination. `resolveRestoreHistoryDisposition` in `src/codex/inject/restore.ts` is the single place that reads the preflight reason and answers the separate question of whether routing may come out. Every other reason keeps the hard refusal and compensates on every artifact, because retiring a provider definition its thread rows still name would orphan them. A failed config restore stops catalog/history work; coordinated restore rolls back its published remove transition. Legacy first-line provider patches are bound to the validated file identity before and after writing. These compensating checks do not provide a native-writer lock or authorize external ordinal allocation.
 
 The legacy external writer is now refused for affected rows in any store whose schema includes history_mode, even while their row mode is still legacy. This deliberately sacrifices automatic relabeling on migration-capable stores rather than racing native conversion. It no longer costs the home its ability to be uninstalled: synchronous and asynchronous restore, inline journal restore, and direct config removal all take routing down on that reason while keeping the provider table, so an already-paginated home can be stopped and uninstalled and plain `codex` returns to the built-in provider. Rows naming `opencodex` still resolve through the retained table; their requests reach a proxy that is gone and fail with an ordinary connection error, which is a per-conversation failure rather than a broken config. `ocx restore --remove-codex-provider-table` removes the table for a user who accepts that those conversations stop opening; nothing selects it implicitly.
+
+Provider-table routing can leave retained rows tagged `openai` while new rows use `opencodex`. Some native app-server/mobile versions scope an omitted `thread/list.modelProviders` filter to the default provider and therefore hide those retained rows; an explicit empty provider list includes all providers. The native app-server owns this RPC and the remote client talks to it directly, so the inference proxy cannot repair the filter. A successful sync/start and the dashboard's active provider-table setting show the warning; failed root routing and inactive settings do not, and the dashboard renders it once when both preferences are stored. They do not relabel history for presentation: preserving Codex's paginated-writer boundary is more important than making an incompatible remote list complete.
+
+> Decision record: [provider-table remote history visibility](decisions/ADR-5848-provider-table-remote-history-visibility.md)
 
 A degraded restore reports `artifacts.config.state = "partial"` with `action = "routing-restored-provider-retained"`, carries the retained lines and the follow-up command, and leaves `historyPreflightRefusal` unset — that field still means nothing was attempted at all, and a stop obligation that was in fact discharged must release its receipt rather than preserve it.
 

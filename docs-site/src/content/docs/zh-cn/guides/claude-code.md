@@ -132,7 +132,9 @@ unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外�
 Picker 模式是第一方模式的一部分。在 macOS 上选择第一方时默认开启；设置
 `claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
 按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中信任本地证书颁发机构。
-该颁发机构限制为 `claude.ai` 及其子域名；这个提示是对该本地 CA 的一次性信任步骤。
+该颁发机构限制为 `claude.ai` 及其子域名。其签名密钥只存在于运行中的 OpenCodex 进程内，因此每次重启
+OpenCodex 都会发布新的颁发机构，macOS 也会再次请求信任——请在每次重启后批准该提示，或稍后运行
+`ocx claude desktop picker trust`。
 
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
@@ -556,3 +558,7 @@ Claude 模型时自动加载。对于原生透传，这是正常现象；对于�
 在 `config.json` 中设置 `claudeCode.stabilizePromptCache: true`，可在转换路由上将系统指令末尾受支持的 Claude 提示移到最后一条用户消息。默认值为 `false`。仅在客户端允许这种角色变化时启用。代码围栏内的示例和不匹配的文本会保留，Anthropic 原生透传不变。没有元数据时，缓存键按稳定后的指令计算。该选项不会生成会话标识，也不保证上游缓存命中。
 
 在所有转换后的 Chat 路由上，时间线提醒都会保留在对话中的原有位置（排在尚待返回的工具结果之后）。因此，追加提醒不会重写开头的系统提示，对话中途的指令也不会被挪到它本应跟随的轮次之前。该位置携带哪个角色是单独决定的：除非提供方记录了 `foldDeveloperRoleToSystem: false`，否则提醒以 `system` 发送；该记录表示上游接受 `developer` 角色，此时提醒在同一位置按原样转发。不接受该角色的上游会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，所以未记录的目的地采用折叠。无论 `stabilizePromptCache` 是否启用，该行为都会生效；Anthropic 原生透传保持不变。缓存复用仍需要稳定的会话标识和可用的上游缓存。修改较早的指令或工具、压缩对话也可能影响缓存命中；仅保留提醒顺序并不保证缓存复用。
+
+### 第一方模型选择器的上下文标记
+
+对于权威上下文窗口至少为一百万 token 的路由模型，Desktop Code 标签页的模型选择器会添加 `[1m]`，使 Claude 按 1M 窗口计量，而不是使用自定义模型较小的默认窗口。标签、配置中的顺序和提供方路由保持不变。窗口未知或小于一百万 token 的模型（包括原生模型的大窗口选项）不添加标记，因为选择器无法保证 Desktop 或远程运行器收到配套的压缩环境设置。`ocx claude` 的自动上下文与压缩配套设置保持不变。现有对话会保留已保存的选择器，直到你在刷新后的模型选择器中重新选择该模型。

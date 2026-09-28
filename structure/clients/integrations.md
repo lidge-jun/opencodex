@@ -32,12 +32,36 @@ parsing and ownership rules below.
 | `src/integrations/registry.ts` | Canonical config/detection paths, current-provider-store declarations, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
 | `src/integrations/target.ts` | Which file one operation reads, writes and records, and whether a write there reaches the client. |
 | `src/integrations/config-io.ts` | Bounded file loading and parsing. Values that cannot round-trip through the target serializer are rejected before mutation. |
+| `src/integrations/kilo-candidates.ts` | Inspects all Kilo global config candidates for unsafe files and a competing `provider.opencodex` block before status or any operation that adds or replaces a block. |
 | `src/integrations/state.ts` | The single `absent` / `current` / `stale` / `conflict` / `unsafe` classifier used by status and every writer operation. |
 | `src/integrations/ownership.ts` | Durable ownership records: file, generated contribution, protected contribution, exact fragment paths, and operation identity. |
 | `src/integrations/ownership-policy.ts` | Client-scoped declarations for fields a client is documented to derive after apply. It must never contain a broad format-wide exemption. |
 | `src/integrations/writer.ts` | Apply, refresh, disable, and restore transactions, including snapshot-first ordering, compare-before-commit, and compensation. Freezing an input copies the proxy configuration and the model roster as plain data before the first await, so the plan a revalidation approves and the document that follows it read one input; an input that cannot be copied is refused rather than read twice. Aside captures the same configuration copy when its context is created, because its preference write edits the live configuration between the check and the profile writes. |
 | `src/integrations/mutation-plan.ts` | The shared observation both a preview and a mutation read, and the value-free plan an operator confirms. It owns no IO of its own, takes no lock, and must never import `writer.ts`. |
 | `src/integrations/store.ts` / `journal.ts` | One-root persistence for ownership records, operation history, snapshots, and retention maintenance. |
+
+Factory Droid's explicit integration writes only documented `customModels` rows in
+`~/.factory/settings.json` (`%USERPROFILE%\\.factory\\settings.json` on Windows). Each
+row is addressed by its `model` and `OpenCodex:` prefixed `displayName`; `baseUrl`
+remains in the protected row value. Duplicate matches refuse. Rows whose model ID
+or display name cannot be represented by that selector are omitted from both the
+export document and managed fragments. A nonempty catalog that yields no rows refuses.
+Direct and management exports use the live listener policy and refuse when Droid
+would need an admission header. When a previously managed catalog becomes empty
+or wholly unaddressable, classification still checks recorded fragment paths and
+their fingerprints so disable can remove owned rows without deleting foreign edits.
+The legacy settings guard also checks the recorded model IDs and endpoints when
+those rows leave the current catalog.
+Apply and refresh still refuse an empty managed contribution.
+The builder omits `apiKey` and unsupported metadata. The shared writer snapshots
+prior bytes and refuses changed managed rows or unsafe paths. `src/integrations/droid-settings.ts` refuses
+legacy `config.json` rows that share the exported endpoint, a generated model ID, or an
+`OpenCodex:` display name, and any `customModels` override in
+`settings.local.json`, because Factory merges those files with personal settings.
+Apply and refresh repeat that competing-settings check after the target-file
+compare and before taking a snapshot. Droid has no writer lock, so a competing
+settings file can still appear after this check and before the write.
+No Droid file is written by detection or on the proxy request path.
 
 ## Cursor installed capability reads
 
@@ -143,7 +167,7 @@ fan-out loads the filtered roster lazily once, leaves unowned clients alone, and
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
 rather than joining a write of a different catalog and reporting false success.
-On a sibling instance ([Codex home](../codex-home.md#codex-home)) `src/integrations/catalog-refresh.ts`
+On a sibling instance ([Codex home](../codex-home.md#codex-home)), including one identified from another home's managed client destination, `src/integrations/catalog-refresh.ts`
 and `syncEnabledClientIntegrations` in `src/server/management/config-routes.ts` refresh nothing: the
 client files name the live owner's port, and a refresh from the sibling would re-point them at its own.
 
@@ -173,7 +197,7 @@ All registered integrations consume the shared catalog, including [Anthropic see
 
 | Client | Per-model output |
 | --- | --- |
-| OpenCode | `attachment`, `modalities.input` |
+| OpenCode, Kilo | `attachment`, `modalities.input` |
 | Pi, OMP, Prime, Aside, omo, Gajae, DSH | `input` (text/image only) |
 | ZCode | `modalities.input` (text/image only) |
 | Cline | `modalities.input`, `supportsVision` |
@@ -374,6 +398,44 @@ separate. Restore reconciles target intent from validated snapshot ownership wit
 sibling policy. Profile journal views retain source-store provenance for older legacy entries.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
+
+## Kilo global JSONC
+
+Kilo owns only `provider.opencodex` in the first existing global file among `kilo.jsonc`,
+`kilo.json`, `opencode.jsonc`, `opencode.json`, and `config.json` under `~/.config/kilo`
+(`XDG_CONFIG_HOME` relocates that directory); when none exists, the destination is
+`kilo.jsonc`. Parse accepts JSONC comments and trailing
+commas; serialize rewrites the whole file as pretty JSON, so comments in other keys are
+not preserved. Kilo is not on the implicit owned-catalog fan-out. Remote admission uses
+the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode.
+All candidate files are inspected through the no-follow, bounded parser before status or
+any operation that adds or replaces a block. If another candidate defines
+`provider.opencodex`, status reports a conflict with every competing path in
+`conflictPaths`; preview/apply/overwrite refuse and name the selected and competing
+paths. An unsafe or unparseable candidate also blocks those writes. Disable instead
+classifies the recorded target and removes only a still-owned, unchanged block; a competing
+or unparseable off-target candidate remains untouched. Status retains the candidate issue,
+the recorded owner, and the unsafe candidate's path so the dashboard can offer Disable
+only when that issue is off-target. Restore uses its separate journal and drift checks.
+Apply scans the candidates again after its selected-file compare and before snapshot capture,
+so a competing file introduced during planning is refused before commit.
+
+Because that resolution depends on which candidates EXIST, a candidate created after
+apply can win discovery while the owned file still holds the block. The registry's
+opt-in `bindsDriftedRecord` seam covers exactly that case: while the recorded path is
+still one of Kilo's own candidates under the current env and home, reads and mutations
+stay bound to the recorded file (status reports it, disable removes the block from it,
+and both restore paths act on the journaled file instead of refusing) and priority
+discovery resumes only once the record is dropped. A record from a
+different home never binds, preserving the audit contract that a record for one home
+cannot authorize a write to another.
+
+Restore of a journaled candidate stays legal while that file is the current owner, and
+while no record owns the client (undoing the disable that dropped the record). It is
+refused, by both direct restore and preview, when a different Kilo candidate currently
+holds the single ownership record. Committing the older row's prior record would point
+ownership back at the old file and leave the active block on disk with nothing to
+disable it.
 
 ## Cline paired files
 

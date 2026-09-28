@@ -408,6 +408,7 @@ interface CachedAccountModels {
   readonly expiresAt: number;
   readonly models: ReadonlySet<string>;
   readonly accessProgramsByModel?: ReadonlyMap<string, CodexAvailableAccessPrograms>;
+  readonly availabilityNuxByModel?: ReadonlyMap<string, { message: string }>;
   readonly confirmed: boolean;
   readonly provenance?: CodexModelEntitlementProvenance;
 }
@@ -415,6 +416,7 @@ interface CachedAccountModels {
 export interface CodexModelEntitlementSnapshot {
   readonly modelsByAccount: ReadonlyMap<string, ReadonlySet<string>>;
   readonly accessProgramsByAccount?: ReadonlyMap<string, ReadonlyMap<string, CodexAvailableAccessPrograms>>;
+  readonly availabilityNuxByAccount?: ReadonlyMap<string, ReadonlyMap<string, { message: string }>>;
   readonly clientVersionByAccount: ReadonlyMap<string, string>;
   readonly confirmedAccountIds: ReadonlySet<string>;
   readonly credentialIdentities: ReadonlyMap<string, string>;
@@ -637,16 +639,36 @@ async function accountCredentialSnapshot(
   }
 }
 
-/** Keep valid roster slugs while dropping malformed program metadata; preserve explicit null separately from absence. */
-function parseAccountModels(text: string): { models: ReadonlySet<string>; accessProgramsByModel: ReadonlyMap<string, CodexAvailableAccessPrograms> } | null {
+const AVAILABILITY_MESSAGE_MAX_CODE_UNITS = 2_000;
+// Codex parses the catalog with a strict JSON reader that rejects a lone surrogate escape.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Trim and cap a prompt without leaving half of a surrogate pair at the cut or anywhere else. */
+function boundedAvailabilityMessage(message: string): string {
+  return message.trim().slice(0, AVAILABILITY_MESSAGE_MAX_CODE_UNITS).replace(LONE_SURROGATE, "").trim();
+}
+
+/** Keep valid roster slugs while dropping malformed program and availability metadata. */
+function parseAccountModels(text: string): {
+  models: ReadonlySet<string>;
+  accessProgramsByModel: ReadonlyMap<string, CodexAvailableAccessPrograms>;
+  availabilityNuxByModel: ReadonlyMap<string, { message: string }>;
+} | null {
   try {
     const payload = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(payload.models)) return null;
     const accessProgramsByModel = new Map<string, CodexAvailableAccessPrograms>();
+    const availabilityNuxByModel = new Map<string, { message: string }>();
     const models = payload.models.flatMap(entry => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
-      const row = entry as { slug?: unknown; supported_in_api?: unknown; visibility?: unknown; available_access_programs?: unknown };
+      const row = entry as { slug?: unknown; supported_in_api?: unknown; visibility?: unknown; available_access_programs?: unknown; availability_nux?: unknown };
       if (typeof row.slug !== "string" || row.supported_in_api !== true || row.visibility === "hide") return [];
+      const nux = row.availability_nux;
+      if (nux && typeof nux === "object" && !Array.isArray(nux)) {
+        const message = (nux as { message?: unknown }).message;
+        const bounded = typeof message === "string" ? boundedAvailabilityMessage(message) : "";
+        if (bounded) availabilityNuxByModel.set(row.slug, { message: bounded });
+      }
       const programs = row.available_access_programs;
       if (programs === null) accessProgramsByModel.set(row.slug, null);
       else if (programs && typeof programs === "object" && !Array.isArray(programs)) {
@@ -659,7 +681,7 @@ function parseAccountModels(text: string): { models: ReadonlySet<string>; access
       }
       return [row.slug];
     });
-    return { models: new Set(models), accessProgramsByModel };
+    return { models: new Set(models), accessProgramsByModel, availabilityNuxByModel };
   } catch {
     return null;
   }
@@ -730,7 +752,7 @@ async function fetchAccountModels(
     // account asked under too old a client version answers with no gated rows, and treating
     // that as authoritative is exactly how 2.36.0 denied sol/terra/luna to accounts that own
     // them (#3022). No usable rows means unconfirmed, on the 15s failure TTL, asked again.
-    const { models, accessProgramsByModel } = parsed;
+    const { models, accessProgramsByModel, availabilityNuxByModel } = parsed;
     const usable = models.size > 0;
     if (!usable) {
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "parsed-empty" });
@@ -754,6 +776,7 @@ async function fetchAccountModels(
         : MODEL_ROSTER_FAILURE_TTL_MS),
       models,
       accessProgramsByModel,
+      availabilityNuxByModel,
       confirmed: true,
     };
   } catch (error) {
@@ -1195,6 +1218,10 @@ export async function resolveCodexModelEntitlements(
     accessProgramsByAccount: new Map(results.flatMap(({ credential, result }) => (
       result.confirmed && result.accessProgramsByModel
         ? [[credential.accountId, result.accessProgramsByModel] as const] : []
+    ))),
+    availabilityNuxByAccount: new Map(results.flatMap(({ credential, result }) => (
+      result.confirmed && result.availabilityNuxByModel
+        ? [[credential.accountId, result.availabilityNuxByModel] as const] : []
     ))),
     clientVersionByAccount: new Map(results.map(({ credential, result }) => (
       [credential.accountId, result.clientVersion]

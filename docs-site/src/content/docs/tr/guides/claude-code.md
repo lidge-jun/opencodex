@@ -188,8 +188,10 @@ Picker modu first-party modunun bir parçasıdır. macOS'ta first-party seçildi
 açıktır; `claudeCode.intercept.picker: false` ayarlanırsa kapalı kalır. First-party Desktop'ın Code
 sekmesindeki model seçiciyi değiştirerek kullanılabilir opencodex modellerini adlarıyla listeler.
 İlk etkinleştirmede macOS, giriş anahtar zincirinde yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
-Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır; iletişim kutusu bu yerel CA için tek seferlik güven
-adımıdır.
+Bu yetkili `claude.ai` ve alt alan adlarıyla sınırlıdır. İmza anahtarı yalnızca çalışan OpenCodex sürecinde
+bulunduğundan her OpenCodex yeniden başlatılmasında yeni bir yetkili yayımlanır ve macOS güveni yeniden ister —
+her yeniden başlatmadan sonra iletişim kutusunu onaylayın veya daha sonra `ocx claude desktop picker trust`
+komutunu çalıştırın.
 
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`

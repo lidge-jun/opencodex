@@ -8,6 +8,7 @@ import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { saveCredential, setActiveAccount, getAccountSet } from "../../src/oauth/store";
 
 let releaseInheritedSpendHome: (() => void) | undefined;
 // Taken per inherited-home dispatch because one row below installs a different home.
@@ -573,6 +574,54 @@ describe("server terminal guard integration", () => {
     expect(text).toContain("exec_command");
     const messages = bodies[1]?.messages as Array<{ role?: string; content?: unknown }>;
     expect(messages.some(m => m.role === "developer" || m.role === "system")).toBe(true);
+  });
+
+  test("synthetic Antigravity continuation 401 does not rotate accounts", async () => {
+    const priorHome = process.env.OPENCODEX_HOME;
+    const isolated = mkdtempSync(join(tmpdir(), "ocx-antigravity-continuation-"));
+    process.env.OPENCODEX_HOME = isolated;
+    try {
+      await saveCredential("google-antigravity", { access: "access-a", refresh: "refresh-a",
+        expires: Date.now() + 3_600_000, accountId: "account-a", projectId: "project-a", source: "oauth" });
+      const a = getAccountSet("google-antigravity")!.activeAccountId;
+      await saveCredential("google-antigravity", { access: "access-b", refresh: "refresh-b",
+        expires: Date.now() + 3_600_000, accountId: "account-b", projectId: "project-b", source: "oauth" }, { addAccount: true });
+      await setActiveAccount("google-antigravity", a);
+      takeInheritedSpendHome();
+      const antigravityConfig: OcxConfig = { port: 0, defaultProvider: "google-antigravity", providers: {
+        "google-antigravity": {
+          adapter: "google", modelAdapters: { "gemini-3.8-flash": "openai-chat" },
+          baseUrl: "https://example.test/v1", authMode: "oauth", googleMode: "cloud-code-assist",
+          terminalContinuationGuard: true, models: ["gemini-3.8-flash"],
+        },
+      } } as OcxConfig;
+      const auth: string[] = [];
+      globalThis.fetch = (async (_input, init) => {
+        auth.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (auth.length === 1) return chatSse(chatFirstTurn);
+        if (auth.length === 2) return Response.json({ error: { message: "unauthorized" } }, { status: 401 });
+        return chatSse(chatContinuationTurn);
+      }) as typeof fetch;
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash",
+          input: "Please fix the file", stream: true,
+          tools: [{ type: "function", name: "exec_command", description: "run a command",
+            parameters: { type: "object" } }] }),
+      }), antigravityConfig, { model: "", provider: "" });
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).toContain("Provider continuation error 401");
+      expect(body).not.toContain("exec_command");
+      expect(auth).toEqual(["Bearer access-a", "Bearer access-a"]);
+    } finally {
+      releaseInheritedSpendHome?.();
+      releaseInheritedSpendHome = undefined;
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = priorHome;
+      removeTreeWithRetry(isolated);
+    }
   });
 
   test("combo attempts do not run an opted-in openai-chat terminal guard", async () => {

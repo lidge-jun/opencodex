@@ -53,6 +53,23 @@ describe("a depleted Codex plan window", () => {
     expect(isComboTargetInCooldown(combo, target, now + 60_000)).toBe(false);
   });
 
+  // #5494: a token-plan 429 is a spent plan window. At 60s the combo re-offered it every minute and,
+  // with one transient failure on the other target, answered every request with 503.
+  test("a spent token-plan window takes the ten-minute hold", () => {
+    const message = "Provider error 429: Your token-plan 1-week quota has been exhausted. "
+      + "The quota will reset at 10-04 12:00:00 UTC.";
+    coolComboTarget(combo, target, { now, status: 429, code: "rate_limit_exceeded", message });
+    expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000)).toBe(false);
+  });
+
+  test("a per-minute quota message keeps the short cooldown", () => {
+    coolComboTarget(combo, target, {
+      now, status: 429, code: "rate_limit_exceeded", message: "rate limit exceeded, quota exhausted for this minute",
+    });
+    expect(isComboTargetInCooldown(combo, target, now + 60_000)).toBe(false);
+  });
+
   test("a bare 1308 code with no prose still takes the exhaustion hold", () => {
     coolComboTarget(combo, target, { now, status: 429, code: "1308", message: "" });
     expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000 - 1)).toBe(true);

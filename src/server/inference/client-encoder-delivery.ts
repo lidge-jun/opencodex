@@ -91,6 +91,7 @@ export interface ClientEncodedDelivery {
     declaredToolNames?: ReadonlySet<string>;
     toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     freeformToolNames?: Set<string>;
+    bareCustomToolNames?: ReadonlySet<string>;
     toolSearchToolNames?: Set<string>;
   };
   stallTimeoutSec?: number;

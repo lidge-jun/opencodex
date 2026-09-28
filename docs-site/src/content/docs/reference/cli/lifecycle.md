@@ -29,8 +29,11 @@ independent sibling; `port: 0` only asks the OS for that instance's port and doe
 state. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
 native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`). A sibling started
 beside a running proxy does neither: it serves direct requests on its own port only, and Codex,
-Grok and Claude stay pointed at the proxy that was already running. Stopping that sibling, with
-`ocx stop` or a signal, leaves their configuration alone as well. While it runs, the proxy also
+Grok and Claude stay pointed at the proxy that was already running. With a separate
+`OPENCODEX_HOME`, startup checks the default home's runtime record and managed Grok and
+Codex loopback destinations for a live opencodex owner before syncing. A custom home with
+no live owner still syncs normally; explicit `ocx sync` and `ocx grok apply` remain available.
+Stopping that sibling with `ocx stop` or a signal leaves their configuration alone as well. While it runs, the proxy also
 keeps Codex pointed at itself: when the opencodex routing in `~/.codex/config.toml` names another
 local port where no opencodex has answered for about 20 seconds (an instance that re-pointed it and
 then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex
@@ -184,6 +187,15 @@ mismatch warning; it never changes `CODEX_HOME` automatically. It also warns whe
 opencodex wrote names a local port the running proxy does not serve. `ocx sync` repairs it
 immediately, and a running owner proxy may also re-point it on its own once nothing answers on that
 port. A sibling's status does not report it, because its routing names the proxy it runs beside.
+
+When a live proxy has already passed the identity/liveness check, `ocx status` prefers that process's
+attested startup-health report for restart safety and service viability. This avoids false negatives
+from a shell-local service-manager probe that lacks the running service's manager environment. The
+live report is schema-validated; if it is unavailable or malformed, status falls back to the local
+service and shim diagnostics. `ocx doctor` uses the same live-first rule for its **Codex restart safety**
+section, so the two commands should agree on restart protection. If you are diagnosing a discrepancy,
+compare the reported live startup verdict with the local service details rather than treating the shell
+probe as more authoritative.
 
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
@@ -489,6 +501,12 @@ supersedes it rather than replacing it.
 
 A state file with no ownership record means the CLI installation owns the runtime, which is what
 every installation made before this feature is in. Nothing changes for you until an app takes over.
+
+Home paths inside a state record are compared with the current home by the physical directory they
+resolve to, not just their spelling. A junction or symlink recorded under an older install still
+names the same home and keeps working after the move; an alias that no longer resolves is only
+treated as a different home when its recorded spelling also differs from the current one, so a
+stale mount still produces the foreign-owner refusal instead of silently claiming the runtime.
 
 While something other than this CLI owns the runtime, the subcommands that would **activate** your
 registration refuse instead:

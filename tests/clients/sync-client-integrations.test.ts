@@ -65,7 +65,7 @@ describe("ocx sync fans out to enabled native clients and owned file integration
 
     expect(fn).toContain("grokIntegrationEnabled(config)");
     expect(fn).toContain("claudeDesktopIntegrationEnabled(config)");
-    expect(fn).toContain('["mcode", "pi", "aside", "raycast", "omo", "cline"]');
+    expect(fn).toContain('["mcode", "pi", "aside", "raycast", "omo", "cline", "droid"]');
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
@@ -908,7 +908,7 @@ test("the direct ocx sync command refreshes MCode, Pi, Raycast, omo and server-o
   const start = src.indexOf("sync: async deps =>");
   const command = src.slice(start, src.indexOf("v2: async deps =>", start));
   expect(command).toContain("refreshOwnedCatalogIntegrations");
-  expect(command).toContain('["mcode", "pi", "raycast", "omo", "cline"]');
+  expect(command).toContain('["mcode", "pi", "raycast", "omo", "cline", "droid"]');
   expect(command).toContain("refreshAsideProfilesThroughServer");
   expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');
@@ -942,6 +942,9 @@ test("already-running ensure leaves Raycast untouched when saved host and listen
   let refreshCalls = 0;
   const deps = {
     findProxyOwnerBeforeJournalRecovery: async () => ({ live: { hostname: "127.0.0.1", port: 10237 } }),
+    // Cross-home ownership: this harness models a lone owner, so nothing marks it a sibling.
+    markLiveHomeSibling: async () => false,
+    siblingOfLivePort: () => null,
     loadConfig: () => savedConfig,
     codexAutoStartEnabled: () => true,
     syncModelsToCodex: async () => ({ status: "skipped" }),

@@ -114,7 +114,7 @@ export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
 
 export interface ExecArgvOptions {
   alias: string;
-  /** Remote argv. Each element is quoted for the remote POSIX shell. */
+  /** Remote argv. The command must be sh; its arguments are quoted for the remote shell. */
   argv: readonly string[];
   knownHostsFile: string;
 }
@@ -177,10 +177,13 @@ export function buildResolveArgv(alias: string): string[] {
   return ["ssh", "-G", "--", assertSshAlias(alias)];
 }
 
-/** Quote argv for a POSIX remote shell: every element single-quoted, embedded quotes escaped. */
+/** Emit only sh in command position; single-quote every argument for the remote shell. */
 export function quoteRemote(argv: readonly string[]): string {
-  return argv.map(arg => {
+  if (argv[0] !== "sh") throw new LinkSshArgumentError("remote command must be sh");
+  return argv.map((arg, index) => {
     if (arg.includes("\0")) throw new LinkSshArgumentError("remote argument contains NUL");
+    // PowerShell treats a leading quoted word as an expression, not a command invocation.
+    if (index === 0) return "sh";
     return `'${arg.replaceAll("'", `'"'"'`)}'`;
   }).join(" ");
 }

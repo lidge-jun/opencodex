@@ -65,6 +65,7 @@ import {
 import type { OcxConfig } from "../types";
 import {
   configuredManagedSubagentDefaults,
+  remoteThreadListCompatibilityWarning,
   standaloneCodexRoutingTarget,
   validateCodexRoutingTarget,
   type CodexRoutingTarget,
@@ -718,6 +719,7 @@ async function injectCodexConfigImpl(
   const catalogMessage = effectivePlan.catalogPath
     ? `  Codex model catalog: ${effectivePlan.catalogPath}\n`
     : `  Codex model catalog not injected because no opencodex catalog file exists yet.\n`;
+  const remoteHistoryMessage = remoteThreadListCompatibilityWarning(routingTarget);
   const ejected = (history as { ejectedRows?: number }).ejectedRows ?? 0;
   const migratedRows = (history.rows ?? 0) + ejected;
   const historyMessage =
@@ -753,6 +755,7 @@ async function injectCodexConfigImpl(
         `  Your root openai_base_url was left exactly as you set it, so opencodex did not add its own.\n` +
         catalogMessage +
         historyMessage +
+        remoteHistoryMessage +
         effectivePlan.managedDefaultsMessage +
         `  New threads use the injected opencodex provider and route through the proxy.\n` +
         `  Threads already tagged openai resolve through Codex's built-in provider, which your root openai_base_url points at.\n` +
@@ -791,6 +794,7 @@ async function injectCodexConfigImpl(
       headline +
       catalogMessage +
       historyMessage +
+      remoteHistoryMessage +
       effectivePlan.managedDefaultsMessage +
       `  All models now route through opencodex proxy (like OpenRouter).\n` +
       `  OpenAI models (gpt-5.5, etc.) are passed through to OpenAI.\n` +

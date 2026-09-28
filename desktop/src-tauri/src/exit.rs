@@ -146,6 +146,14 @@ pub struct Supervision {
     pub reason_set: bool,
 }
 
+/// State restored when an update's coordinated restart is abandoned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AbortedRestart {
+    pub phase: ExitPhase,
+    /// Whether the person wanted a runtime before the drain or requested one while it ran.
+    pub runtime_was_wanted: bool,
+}
+
 impl Supervision {
     /// Nothing is in flight, nobody asked for the runtime to stop, and the app is not ending.
     pub fn allowed(self) -> bool {
@@ -161,6 +169,14 @@ struct Inner {
     deferred: bool,
     /// See [`Supervision::wanted`]. Sticky: finishing a stop does not restore it.
     wanted: bool,
+    /// The intent an update temporarily replaced with `wanted=false`; consumed if it aborts.
+    restart_wanted: Option<bool>,
+}
+
+fn remember_restart_intent(inner: &mut Inner, reason: ExitReason, prior_wanted: bool) {
+    if reason == ExitReason::CoordinatedRestart {
+        inner.restart_wanted.get_or_insert(prior_wanted);
+    }
 }
 
 /// The exit sequence's state, managed by the app.
@@ -179,6 +195,7 @@ impl ExitCoordinator {
                 hides_to_tray: TrayAvailability::assumed().hides_to_tray(),
                 deferred: false,
                 wanted: true,
+                restart_wanted: None,
             }),
         }
     }
@@ -215,17 +232,20 @@ impl ExitCoordinator {
     /// [`ExitCoordinator::finish_stop`] is holding the phase.
     pub fn claim_drain(&self, fallback: ExitReason) -> Option<ExitReason> {
         let mut inner = self.inner();
+        let prior_wanted = inner.wanted;
         // A quit or an update is on its way, whoever ends up running the drain: the runtime it
         // stops is not one to bring back.
         inner.wanted = false;
         match inner.phase {
             ExitPhase::Idle => {
                 let reason = *inner.reason.get_or_insert(fallback);
+                remember_restart_intent(&mut inner, reason, prior_wanted);
                 inner.phase = ExitPhase::Draining;
                 Some(reason)
             }
             ExitPhase::Spawning | ExitPhase::Stopping => {
-                inner.reason.get_or_insert(fallback);
+                let reason = *inner.reason.get_or_insert(fallback);
+                remember_restart_intent(&mut inner, reason, prior_wanted);
                 inner.deferred = true;
                 None
             }
@@ -235,6 +255,7 @@ impl ExitCoordinator {
             // is the one thing a user with a runtime that would not stop cannot easily do.
             ExitPhase::DrainFailed | ExitPhase::OwnershipUnknown => {
                 let reason = *inner.reason.get_or_insert(fallback);
+                remember_restart_intent(&mut inner, reason, prior_wanted);
                 inner.phase = ExitPhase::Draining;
                 Some(reason)
             }
@@ -256,10 +277,12 @@ impl ExitCoordinator {
     /// An update drains before it installs. When the install then fails, or the drain itself did,
     /// the drain's phase used to be the end of the road: `Drained` is terminal, so no runtime could
     /// be started again and a bare window close quit the app. This returns the app to `Idle` with
-    /// no claimed reason and wants a runtime again, which is what a successful update would have
-    /// ended in too. It touches nothing unless an update's restart holds the phase: a quit is never
-    /// aborted, and a drain still running belongs to whoever runs it. Returns the phase it left.
-    pub fn abort_restart(&self) -> Option<ExitPhase> {
+    /// no claimed reason and restores the runtime intent the update temporarily suppressed. A
+    /// retry requested while the drain was in flight wins too: aborting an older update must not
+    /// overwrite newer user intent. It touches nothing unless an update's restart holds the phase:
+    /// a quit is never aborted, and a
+    /// drain still running belongs to whoever runs it. Returns the phase and restored intent.
+    pub fn abort_restart(&self) -> Option<AbortedRestart> {
         let mut inner = self.inner();
         let left = inner.phase;
         let restart = inner.reason == Some(ExitReason::CoordinatedRestart);
@@ -273,8 +296,15 @@ impl ExitCoordinator {
         inner.phase = ExitPhase::Idle;
         inner.reason = None;
         inner.deferred = false;
-        inner.wanted = true;
-        Some(left)
+        // `resume` can arrive after the update captured its original intent. Preserve that newer
+        // request as well as the older snapshot; otherwise the abort races the startup retry and
+        // can leave a runtime stopped even though the person just asked for it.
+        let runtime_was_wanted = inner.wanted || inner.restart_wanted.take().unwrap_or(false);
+        inner.wanted = runtime_was_wanted;
+        Some(AbortedRestart {
+            phase: left,
+            runtime_was_wanted,
+        })
     }
 
     /// What the runtime supervisor reads before it acts.
@@ -293,7 +323,14 @@ impl ExitCoordinator {
 
     /// A person asked for a runtime again (the startup page's retry).
     pub fn resume(&self) {
-        self.inner().wanted = true;
+        let mut inner = self.inner();
+        inner.wanted = true;
+        // A pending update snapshot must learn about the request too. A retried install that finds
+        // the drain already settled clears `wanted` again without replacing the snapshot, so a
+        // retry recorded only in `wanted` would be lost when that install fails and aborts.
+        if let Some(snapshot) = inner.restart_wanted.as_mut() {
+            *snapshot = true;
+        }
     }
 
     /// Reserve the right to start a runtime. False once something else owns the phase.
@@ -624,7 +661,7 @@ fn hide_windows(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        decide, DrainVerdict, ExitCoordinator, ExitDecision, ExitPhase, ExitReason,
+        decide, AbortedRestart, DrainVerdict, ExitCoordinator, ExitDecision, ExitPhase, ExitReason,
         RestartReadiness, Supervision,
     };
     use crate::tray_availability::TrayAvailability;
@@ -707,13 +744,98 @@ mod tests {
             );
             coordinator.finish_drain(verdict);
             let left = coordinator.phase();
-            assert_eq!(coordinator.abort_restart(), Some(left));
+            assert_eq!(
+                coordinator.abort_restart(),
+                Some(AbortedRestart {
+                    phase: left,
+                    runtime_was_wanted: true,
+                })
+            );
             assert_eq!(coordinator.phase(), ExitPhase::Idle);
             // A bare close hides again instead of quitting out of a terminal phase.
             assert_eq!(coordinator.decision(), ExitDecision::Hide);
             assert!(coordinator.supervision_allowed());
             assert!(coordinator.begin_spawn());
         }
+    }
+
+    #[test]
+    fn a_failed_update_preserves_a_completed_tray_stop() {
+        let coordinator = ExitCoordinator::new();
+        coordinator.set_tray(TrayAvailability::Available);
+        assert!(coordinator.begin_stop());
+        assert_eq!(coordinator.finish_stop(), None);
+        assert!(!coordinator.supervision().wanted);
+
+        assert_eq!(
+            coordinator.claim_drain(ExitReason::CoordinatedRestart),
+            Some(ExitReason::CoordinatedRestart)
+        );
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert_eq!(
+            coordinator.abort_restart(),
+            Some(AbortedRestart {
+                phase: ExitPhase::Drained,
+                runtime_was_wanted: false,
+            })
+        );
+        assert_eq!(coordinator.phase(), ExitPhase::Idle);
+        assert_eq!(coordinator.decision(), ExitDecision::Hide);
+        assert!(!coordinator.supervision_allowed());
+    }
+
+    #[test]
+    fn a_startup_retry_during_an_update_drain_is_not_overwritten_by_abort() {
+        let coordinator = ExitCoordinator::new();
+        coordinator.set_tray(TrayAvailability::Available);
+        assert!(coordinator.begin_stop());
+        assert_eq!(coordinator.finish_stop(), None);
+        assert!(!coordinator.supervision().wanted);
+
+        assert_eq!(
+            coordinator.claim_drain(ExitReason::CoordinatedRestart),
+            Some(ExitReason::CoordinatedRestart)
+        );
+        coordinator.resume();
+        // The ending claim still prevents supervision until the failed update is handed back.
+        assert!(!coordinator.supervision_allowed());
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert_eq!(
+            coordinator.abort_restart(),
+            Some(AbortedRestart {
+                phase: ExitPhase::Drained,
+                runtime_was_wanted: true,
+            })
+        );
+        assert!(coordinator.supervision_allowed());
+    }
+
+    #[test]
+    fn a_retry_between_update_attempts_survives_the_second_claim() {
+        let coordinator = ExitCoordinator::new();
+        coordinator.set_tray(TrayAvailability::Available);
+        assert!(coordinator.begin_stop());
+        assert_eq!(coordinator.finish_stop(), None);
+
+        assert_eq!(
+            coordinator.claim_drain(ExitReason::CoordinatedRestart),
+            Some(ExitReason::CoordinatedRestart)
+        );
+        coordinator.finish_drain(DrainVerdict::Drained);
+        coordinator.resume();
+        // The next install attempt finds the drain settled and clears `wanted` again.
+        assert_eq!(
+            coordinator.claim_drain(ExitReason::CoordinatedRestart),
+            None
+        );
+        assert_eq!(
+            coordinator.abort_restart(),
+            Some(AbortedRestart {
+                phase: ExitPhase::Drained,
+                runtime_was_wanted: true,
+            })
+        );
+        assert!(coordinator.supervision_allowed());
     }
 
     #[test]

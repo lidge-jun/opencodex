@@ -62,6 +62,7 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { guiUpdateWorkerCommand } from "./worker-launch";
 import { withoutSiblingMarker } from "../codex/sibling-start";
+import type { WorkerLaunchContext } from "./worker-launch";
 
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
 const UPDATE_JOB_FILENAME = "update-job.json";
@@ -568,6 +569,7 @@ export function spawnGuiUpdateWorker(
   jobId: string,
   channel: Channel,
   restart: boolean,
+  context: WorkerLaunchContext = {},
 ): UpdateWorkerProcess {
   const args = selfLaunchArgv([
     "__gui-update-worker",
@@ -576,7 +578,7 @@ export function spawnGuiUpdateWorker(
     restart ? "restart" : "no-restart",
   ]);
   if (process.platform !== "win32") {
-    const launch = guiUpdateWorkerCommand(process.execPath, args);
+    const launch = guiUpdateWorkerCommand(process.execPath, args, context);
     return spawn(launch.command, launch.argv, {
       detached: true,
       stdio: "ignore",
