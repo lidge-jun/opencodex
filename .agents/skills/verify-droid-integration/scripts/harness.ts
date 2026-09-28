@@ -124,14 +124,16 @@ async function launch(): Promise<void> {
   const { dir } = paths(id);
   const opencodexHome = resolve(dir, "opencodex-home");
   const codexHome = resolve(dir, "codex-home");
+  let run: Run | undefined;
   try {
     await mkdir(opencodexHome, { recursive: true });
     await mkdir(codexHome, { recursive: true });
     await seedFixtures(dir);
-    const run = await startRun(id);
+    run = await startRun(id);
     await writeEvidence(id, "launch.json", { runId: id, pid: run.pid, servicePort, guiPort, mockPort, fixtureModels, opencodexHome: "isolated scratch", codexHome: "isolated scratch", ready: true });
     console.log(JSON.stringify({ runId: id, pid: run.pid, serviceUrl: `http://127.0.0.1:${servicePort}`, dashboardUrl: `http://127.0.0.1:${servicePort}/#integrations/droid`, interceptPort: guiPort, mockPort, evidence: resolve(evidenceRoot, id) }, null, 2));
   } catch (error) {
+    if (run) await stopChild(run.pid, id);
     await rm(dir, { recursive: true, force: true });
     fail(error instanceof Error ? `${error.message} Launch scratch state was cleaned.` : "Launch failed; its process and scratch state were cleaned.");
   }
