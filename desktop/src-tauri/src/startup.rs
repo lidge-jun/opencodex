@@ -923,7 +923,7 @@ async fn run(app: &AppHandle, started: Instant) {
                         home: target.home.display().to_string(),
                         owner: ownership::owner_label(&answer.ownership),
                         blocked: None,
-                        version_note: answer.skew_warning().map(str::to_owned),
+                        version_note: consent_version_note(answer),
                     });
                     emit(app, progress, None);
                     // The user may take any time; the budget exists to bound the machinery, not
@@ -1175,6 +1175,22 @@ fn attach_plan(consent: ownership::Consent, answer: &resolve::Resolved, mode: Mo
             resolve::Takeover::Supported { .. } => AttachPlan::Ask,
         },
     }
+}
+
+/// What the consent panel shows about versions. The skew warning comes first; when the
+/// versions could not be compared at all (fake, empty or unorderable version strings) the
+/// panel still gets one honest line instead of silently asking for a takeover.
+fn consent_version_note(answer: &resolve::Resolved) -> Option<String> {
+    answer
+        .skew_warning()
+        .map(str::to_owned)
+        .or_else(|| {
+            matches!(
+                answer.runtime_relation(),
+                resolve::VersionRelation::Unknown | resolve::VersionRelation::Incomparable,
+            )
+            .then(|| "the listening runtime's version could not be compared".to_owned())
+        })
 }
 
 /// Report, bind and finish as a guest on the runtime that answered.
@@ -1800,8 +1816,8 @@ fn elapsed(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_still_current, attach_plan, claim_after_silence, keeps_update_page,
-        loads_dashboard_on_ready, navigate_once, return_ready_dashboard, shows_window,
+        approval_still_current, attach_plan, claim_after_silence, consent_version_note,
+        keeps_update_page, loads_dashboard_on_ready, navigate_once, return_ready_dashboard, shows_window,
         stop_after_approval, unavailable, waits_on_child, AttachPlan, ConsentState, Expiry,
         LaunchOrigin, Mode, Phase, Progress, Startup, AUTOSTART_FLAG, CHILD_START_GRACE, DEADLINE,
         PHASES, POLL,
@@ -2065,6 +2081,39 @@ mod tests {
             }
             AttachPlan::Ask => panic!("a recovery must not prompt"),
         }
+    }
+
+    #[test]
+    fn the_consent_note_reports_an_uncomparable_version() {
+        // A fake or missing version yields no skew warning, but the consent panel must not
+        // ask for a takeover with the version row silently empty.
+        let mut answer = approved_answer();
+        answer.version_skew = Some(VersionSkew {
+            cli_version: "2.61.0".to_owned(),
+            proxy_version: None,
+            skewed: false,
+            relation: VersionRelation::Incomparable,
+            warning: None,
+        });
+        assert_eq!(
+            consent_version_note(&answer).as_deref(),
+            Some("the listening runtime's version could not be compared")
+        );
+        // A comparable version without a warning needs no extra line.
+        answer.version_skew = Some(VersionSkew {
+            cli_version: "2.61.0".to_owned(),
+            proxy_version: Some("2.61.0".to_owned()),
+            skewed: false,
+            relation: VersionRelation::Match,
+            warning: None,
+        });
+        assert_eq!(consent_version_note(&answer), None);
+        // A real warning always wins over the fallback.
+        let warned = skewed_answer(VersionRelation::CliNewer, "CLI 2.61.0 does not match");
+        assert_eq!(
+            consent_version_note(&warned).as_deref(),
+            Some("CLI 2.61.0 does not match")
+        );
     }
 
     #[test]
