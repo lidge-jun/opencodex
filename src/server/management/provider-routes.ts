@@ -74,7 +74,7 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaRepo
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
-import { JEV_MODEL, resolveJevDecision } from "../../combos/jev";
+import { JEV_MODEL, probeJevDecisionContract, resolveJevDecision } from "../../combos/jev";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -1828,6 +1828,38 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           : err instanceof Error ? err.message : "Connection test failed",
       });
     }
+  }
+
+  // Decision-contract probe: which question kinds a destination can actually serve, with the
+  // calibration checks a bounded decision job makes before trusting an answer. Reachability is
+  // already covered by /api/providers/test; this answers "can this destination be used for the
+  // decision workflows at all", optionally for one named row instead of the chosen destination.
+  if (url.pathname === "/api/decision-probe" && req.method === "POST") {
+    const name = url.searchParams.get("name")?.trim();
+    if (name && (!isValidProviderName(name) || !hasOwnProvider(config.providers, name))) {
+      return jsonResponse({ error: "unknown provider" }, 404);
+    }
+    const probe = await probeJevDecisionContract(config, {
+      signal: req.signal,
+      ...(name ? { providerId: name } : {}),
+    });
+    if (probe.gate === "missing_key") {
+      return jsonResponse({
+        ok: false,
+        gate: probe.gate,
+        error: "No decision destination with a usable credential.",
+      }, 409);
+    }
+    return jsonResponse({
+      ok: probe.ok,
+      gate: probe.gate,
+      latencyMs: probe.latencyMs,
+      providerId: probe.providerId,
+      baseUrl: probe.baseUrl,
+      model: probe.model,
+      ...(probe.answeredBy ? { answeredBy: probe.answeredBy } : {}),
+      kinds: probe.kinds,
+    });
   }
 
   if (url.pathname === "/api/providers" && req.method === "DELETE") {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   JEV_API_URL,
+  probeJevDecisionContract,
   resolveJevDecision,
   resolveJevDecisionDestination,
   type JevCandidate,
@@ -291,5 +292,93 @@ describe("OpenCode JEV provider preset", () => {
     });
     expect(entry?.models).toBeUndefined();
     expect(entry?.freeTier).not.toBe(true);
+  });
+});
+
+describe("JEV decision contract probe", () => {
+  const contractPayload = (overrides: Record<string, unknown> = {}) => ({
+    model: "jev-1.13-free",
+    answers: {
+      choice_probe: {
+        type: "choice",
+        choice: "alpha",
+        confidence: 0.93,
+        probabilities: { alpha: 0.93, beta: 0.07 },
+      },
+      score_probe: {
+        type: "score",
+        score: 2,
+        confidence: 0.9,
+        // Weighted mean 1.97 against a declared score of 2: inside the 0.06 tolerance with room.
+        probabilities: { "0": 0.005, "1": 0.02, "2": 0.975 },
+      },
+      ...overrides,
+    },
+  });
+
+  test("reports both question kinds for a conforming answer", async () => {
+    const post = (async () => Response.json(contractPayload())) as never;
+    const result = await probeJevDecisionContract(configWith({ "jev-opencode": opencodeRow }), { post });
+    expect(result.ok).toBe(true);
+    expect(result.providerId).toBe("jev-opencode");
+    expect(result.baseUrl).toBe(OPENCODE_JEV_URL);
+    expect(result.answeredBy).toBe("jev-1.13-free");
+    expect(result.kinds.choice).toMatchObject({ supported: true, confidence: 0.93 });
+    expect(result.kinds.score).toMatchObject({ supported: true, confidence: 0.9 });
+  });
+
+  test("fails closed on an answer that only looks compatible", async () => {
+    // Probabilities that do not sum to one, a choice that is not the argmax, and a score that is
+    // not the weighted mean all have to come back unsupported rather than rounded up.
+    const post = (async () => Response.json(contractPayload({
+      choice_probe: { type: "choice", choice: "beta", confidence: 0.5, probabilities: { alpha: 0.9, beta: 0.9 } },
+      score_probe: { type: "score", score: 0, confidence: 0.5, probabilities: { "0": 0.4, "1": 0.1, "2": 0.1 } },
+    }))) as never;
+    const result = await probeJevDecisionContract(configWith({ "jev-opencode": opencodeRow }), { post });
+    expect(result.ok).toBe(false);
+    expect(result.gate).toBe("apply");
+    expect(result.kinds.choice).toMatchObject({ supported: false, reason: "probabilities_do_not_sum_to_one" });
+    expect(result.kinds.score).toMatchObject({ supported: false, reason: "probabilities_do_not_sum_to_one" });
+  });
+
+  test("rejects a score that is not the probability-weighted mean", async () => {
+    const post = (async () => Response.json(contractPayload({
+      score_probe: { type: "score", score: 2, confidence: 0.9, probabilities: { "0": 0.4, "1": 0.4, "2": 0.2 } },
+    }))) as never;
+    const result = await probeJevDecisionContract(configWith({ "jev-opencode": opencodeRow }), { post });
+    expect(result.ok).toBe(false);
+    expect(result.kinds.choice.supported).toBe(true);
+    expect(result.kinds.score).toMatchObject({ supported: false, reason: "score_is_not_weighted_mean" });
+  });
+
+  test("reports a missing score answer without failing the choice kind", async () => {
+    const post = (async () => Response.json({ model: "jev-latest", answers: { choice_probe: contractPayload().answers.choice_probe } })) as never;
+    const result = await probeJevDecisionContract(configWith({ jev: typesafeRow }), { post });
+    expect(result.ok).toBe(false);
+    expect(result.kinds.choice.supported).toBe(true);
+    expect(result.kinds.score).toMatchObject({ supported: false, reason: "missing_answer" });
+  });
+
+  test("fails closed without a credential and never goes outbound", async () => {
+    let calls = 0;
+    const post = (async () => { calls += 1; return Response.json(contractPayload()); }) as never;
+    const result = await probeJevDecisionContract(configWith({
+      "jev-opencode": { adapter: "jev-decision", baseUrl: OPENCODE_JEV_URL, authMode: "key" },
+    }), { post });
+    expect(result.ok).toBe(false);
+    expect(result.gate).toBe("missing_key");
+    expect(result.kinds.choice).toMatchObject({ supported: false, reason: "no_credential" });
+    expect(calls).toBe(0);
+  });
+
+  test("probes the named row instead of the destination the strategy would pick", async () => {
+    const urls: string[] = [];
+    const post = (async (_name: string, _provider: unknown, url: string) => {
+      urls.push(url);
+      return Response.json(contractPayload());
+    }) as never;
+    const config = configWith({ jev: typesafeRow, "jev-opencode": opencodeRow });
+    await probeJevDecisionContract(config, { post, providerId: "jev-opencode" });
+    expect(urls).toEqual([OPENCODE_JEV_URL]);
   });
 });

@@ -3,7 +3,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice, EmptyState } from "../ui";
-import { useT } from "../i18n/shared";
+import { useT, type TKey } from "../i18n/shared";
 import { IconRefresh } from "../icons";
 
 /**
@@ -14,6 +14,10 @@ import { IconRefresh } from "../icons";
  * strategy resolves which row it calls from config — the row named `jev` first, otherwise the first
  * enabled row that resolves a credential — so this page mirrors that rule and marks the row that is
  * actually in use.
+ *
+ * Below the destinations sits the capability check and the bounded job catalog of the
+ * `Sun-Season/jev-codex` skill, whose modes are what a destination has to be able to serve:
+ * calibrated `choice` answers everywhere, plus `score` for search ranking.
  */
 
 interface ProviderRow {
@@ -34,7 +38,34 @@ interface PresetRow {
 
 type DecisionPayload = { providers: ProviderRow[]; presets: PresetRow[] };
 
+type KindSupport = { supported: boolean; reason?: string; confidence?: number };
+type ContractResult = {
+  ok: boolean;
+  gate?: string;
+  latencyMs?: number;
+  providerId?: string | null;
+  model?: string | null;
+  answeredBy?: string;
+  kinds?: Record<string, KindSupport>;
+  error?: string;
+};
+
+/**
+ * The bounded decision jobs of the `Sun-Season/jev-codex` skill, mirrored so operators can see what
+ * a destination is expected to serve. Question kinds and budgets are the skill's own defaults
+ * (`choice` throughout, `score` where ranking needs a scale; 12 calls / 25s for the browser loop,
+ * 1 call / 15s for the single-request data modes).
+ */
+const DECISION_MODES: Array<{ id: string; tkey: TKey; kinds: string; budget: string }> = [
+  { id: "browser", tkey: "dec.modeBrowser", kinds: "choice", budget: "≤12 / ≤25s" },
+  { id: "context", tkey: "dec.modeContext", kinds: "choice", budget: "1 / ≤15s" },
+  { id: "search", tkey: "dec.modeSearch", kinds: "choice + score", budget: "1 / ≤15s" },
+  { id: "supervisor", tkey: "dec.modeSupervisor", kinds: "choice", budget: "1 / ≤15s" },
+  { id: "review", tkey: "dec.modeReview", kinds: "choice", budget: "1 / ≤15s" },
+];
+
 const DECISION_ADAPTER = "jev-decision";
+const SKILL_URL = "https://github.com/Sun-Season/jev-codex";
 /** Loopback or RFC1918 host: a decision service running on this machine or the local network. */
 const LOCAL_ENDPOINT = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)(?::\d+)?(?:\/|$)/i;
 
@@ -48,10 +79,17 @@ function activeDecisionRow(rows: ProviderRow[]): string | undefined {
   return decision.find(row => row.disabled !== true && row.hasApiKey === true)?.name;
 }
 
+const kindLabel = (kind: string, support: KindSupport | undefined) => {
+  if (!support) return `${kind} ?`;
+  if (!support.supported) return `${kind} ✗${support.reason ? ` (${support.reason})` : ""}`;
+  const confidence = typeof support.confidence === "number" ? ` ${support.confidence.toFixed(2)}` : "";
+  return `${kind} ✓${confidence}`;
+};
+
 export default function Decisions({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [probing, setProbing] = useState("");
+  const [busy, setBusy] = useState<{ kind: "connect" | "contract"; name: string } | null>(null);
 
   const load = useCallback(async (signal: AbortSignal): Promise<DecisionPayload> => {
     const [providersRes, presetsRes] = await Promise.all([
@@ -74,7 +112,7 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
   );
 
   const probe = async (name: string) => {
-    setProbing(name);
+    setBusy({ kind: "connect", name });
     setNotice(null);
     try {
       const res = await fetch(`${apiBase}/api/providers/test?name=${encodeURIComponent(name)}`, { method: "POST" });
@@ -86,7 +124,30 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
     } catch (error) {
       setNotice({ tone: "err", text: error instanceof Error && error.message ? error.message : t("dec.probeFail") });
     } finally {
-      setProbing("");
+      setBusy(null);
+    }
+  };
+
+  const contract = async (name: string) => {
+    setBusy({ kind: "contract", name });
+    setNotice(null);
+    try {
+      const res = await fetch(`${apiBase}/api/decision-probe?name=${encodeURIComponent(name)}`, { method: "POST" });
+      const data = await readJsonOrThrow<ContractResult>(res, t("dec.probeFail"));
+      const kinds = data?.kinds ?? {};
+      const parts = ["choice", "score"].map(kind => kindLabel(kind, kinds[kind]));
+      const latency = typeof data?.latencyMs === "number"
+        ? ` · ${t("dec.latencySeconds", { seconds: (data.latencyMs / 1000).toFixed(1) })}`
+        : "";
+      const answered = data?.answeredBy ? ` · ${data.answeredBy}` : "";
+      setNotice({
+        tone: data?.ok === true ? "ok" : "err",
+        text: `${name}: ${parts.join(" · ")}${latency}${answered}`,
+      });
+    } catch (error) {
+      setNotice({ tone: "err", text: error instanceof Error && error.message ? error.message : t("dec.probeFail") });
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -150,8 +211,11 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
                   <td>{statusCell(row)}</td>
                   <td className="muted">{presetsById.get(row.name)?.defaultModel ?? "—"}</td>
                   <td>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void probe(row.name)} disabled={probing === row.name}>
-                      {probing === row.name ? t("dec.probing") : t("dec.probe")}
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void probe(row.name)} disabled={busy?.kind === "connect" && busy.name === row.name}>
+                      {busy?.kind === "connect" && busy.name === row.name ? t("dec.probing") : t("dec.probe")}
+                    </button>{" "}
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void contract(row.name)} disabled={busy?.kind === "contract" && busy.name === row.name}>
+                      {busy?.kind === "contract" && busy.name === row.name ? t("dec.contractProbing") : t("dec.contractProbe")}
                     </button>
                   </td>
                 </tr>
@@ -191,6 +255,33 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
           <p className="muted">{t("dec.addHint")}</p>
         </>
       )}
+
+      <div className="h-section">{t("dec.capTitle")} <span className="count">{DECISION_MODES.length}</span></div>
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>{t("dec.colMode")}</th>
+              <th>{t("dec.colDelegates")}</th>
+              <th>{t("dec.colKinds")}</th>
+              <th>{t("dec.colBudget")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {DECISION_MODES.map(mode => (
+              <tr key={mode.id}>
+                <td className="mono text-label">{mode.id}</td>
+                <td>{t(mode.tkey)}</td>
+                <td className="muted mono text-label">{mode.kinds}</td>
+                <td className="muted mono text-label">{mode.budget}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted">
+        {t("dec.capSource")} <a href={SKILL_URL} target="_blank" rel="noreferrer">{SKILL_URL}</a>
+      </p>
     </>
   );
 }

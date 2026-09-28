@@ -586,6 +586,27 @@ export interface JevDecisionDestination {
   apiKey: string;
 }
 
+/**
+ * Build the destination one configured row describes.
+ *
+ * Credentials stay destination-bound: a row may use its own key anywhere, while the environment
+ * credential is a TypeSafe credential and only counts for the official `JEV_API_URL`.
+ */
+function destinationFromRow(
+  providerId: string,
+  provider: OcxProviderConfig,
+  environmentKey: string | undefined,
+): JevDecisionDestination | null {
+  const configuredUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
+  const baseUrl = configuredUrl.length > 0
+    ? configuredUrl
+    : getProviderRegistryEntry(providerId)?.baseUrl ?? JEV_API_URL;
+  const rowKey = resolveProviderApiKey(provider.apiKey)?.trim();
+  const apiKey = rowKey ?? (baseUrl === JEV_API_URL ? environmentKey : undefined);
+  if (!apiKey) return null;
+  return { providerId, baseUrl, model: jevDecisionModel(providerId), apiKey };
+}
+
 export function resolveJevDecisionDestination(config: OcxConfig): JevDecisionDestination | null {
   const providers = config.providers ?? {};
   const ordered: Array<[string, OcxProviderConfig]> = [];
@@ -601,22 +622,8 @@ export function resolveJevDecisionDestination(config: OcxConfig): JevDecisionDes
   const environmentKey = process.env.TYPESAFE_API_KEY?.trim()
     || process.env.JEV_API_KEY?.trim();
   for (const [providerId, provider] of ordered) {
-    const configuredUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
-    const baseUrl = configuredUrl.length > 0
-      ? configuredUrl
-      : getProviderRegistryEntry(providerId)?.baseUrl ?? JEV_API_URL;
-    const rowKey = resolveProviderApiKey(provider.apiKey)?.trim();
-    // An environment credential is a TypeSafe credential. It may only travel to the official
-    // TypeSafe destination: a row pointing anywhere else must bring its own key, or the secret
-    // would be handed to a host the operator never authenticated against.
-    const apiKey = rowKey ?? (baseUrl === JEV_API_URL ? environmentKey : undefined);
-    if (!apiKey) continue;
-    return {
-      providerId,
-      baseUrl,
-      model: jevDecisionModel(providerId),
-      apiKey,
-    };
+    const destination = destinationFromRow(providerId, provider, environmentKey);
+    if (destination) return destination;
   }
   // Legacy shape: no `jev` row exists at all. A lone environment credential still drives the
   // TypeSafe destination the `jev-latest` alias belongs to, exactly as before. A row that exists
@@ -740,6 +747,224 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
     if (options.signal?.aborted) throw options.signal.reason;
     if (timeoutSignal.aborted
       || (error instanceof DOMException && error.name === "TimeoutError")) {
+      return failed("timeout");
+    }
+    return failed("network");
+  }
+}
+
+/**
+ * The question kinds a bounded decision job may use.
+ *
+ * `choice` picks one of a declared set, `score` places the state on a declared ordered scale.
+ * Both carry a `confidence` and a full probability distribution, which is what lets a caller gate
+ * on calibration instead of self-reported certainty.
+ */
+export const JEV_QUESTION_KINDS = ["choice", "score"] as const;
+export type JevQuestionKind = (typeof JEV_QUESTION_KINDS)[number];
+
+export interface JevKindSupport {
+  supported: boolean;
+  /** Present when the kind was answered but the answer did not satisfy the contract. */
+  reason?: string;
+  confidence?: number;
+}
+
+export interface JevContractProbeResult {
+  ok: boolean;
+  providerId: string | null;
+  baseUrl: string | null;
+  model: string | null;
+  gate: JevDecision["gate"];
+  latencyMs: number;
+  kinds: Record<JevQuestionKind, JevKindSupport>;
+  /** Upstream `model` field, which names the version that actually answered. */
+  answeredBy?: string;
+}
+
+function kindUnsupported(reason: string): JevKindSupport {
+  return { supported: false, reason };
+}
+
+/**
+ * Validate one answer against the contract the JEV decision jobs rely on.
+ *
+ * Mirrors the checks a caller must make before trusting an answer: a probability per declared
+ * option that sums to one, a confidence in range, `choice` naming the argmax, and `score` equal to
+ * the probability-weighted mean of the scale. Anything else is reported unsupported rather than
+ * rounded up — the point of the probe is to fail closed on a destination that only looks
+ * compatible.
+ */
+function judgeAnswer(kind: JevQuestionKind, question: Record<string, unknown>, answer: unknown): JevKindSupport {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return kindUnsupported("missing_answer");
+  const record = answer as Record<string, unknown>;
+  if (record.type !== kind) return kindUnsupported("wrong_type");
+  const confidence = record.confidence;
+  if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    return kindUnsupported("invalid_confidence");
+  }
+  const options = kind === "choice"
+    ? Object.keys((question.criteria ?? {}) as Record<string, unknown>)
+    : ((question.criteria ?? []) as unknown[]).map((_, index) => String(index));
+  const probabilities = record.probabilities;
+  if (!probabilities || typeof probabilities !== "object" || Array.isArray(probabilities)) {
+    return kindUnsupported("missing_probabilities");
+  }
+  const distribution = probabilities as Record<string, unknown>;
+  if (Object.keys(distribution).length !== options.length) return kindUnsupported("probability_cardinality");
+  let total = 0;
+  const values: number[] = [];
+  for (const option of options) {
+    const value = distribution[option];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+      return kindUnsupported("invalid_probability");
+    }
+    total += value;
+    values.push(value);
+  }
+  if (Math.abs(total - 1) > 0.025) return kindUnsupported("probabilities_do_not_sum_to_one");
+  if (kind === "choice") {
+    const choice = record.choice;
+    if (typeof choice !== "string" || !options.includes(choice)) return kindUnsupported("unknown_choice");
+    if (Number(distribution[choice]) + 0.015 < Math.max(...values)) return kindUnsupported("choice_is_not_argmax");
+  } else {
+    const score = record.score;
+    if (typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > options.length - 1) {
+      return kindUnsupported("invalid_score");
+    }
+    const weighted = options.reduce((sum, option, index) => sum + Number(option) * values[index]!, 0);
+    if (Math.abs(weighted - score) > 0.06) return kindUnsupported("score_is_not_weighted_mean");
+  }
+  return { supported: true, confidence };
+}
+
+const CONTRACT_PROBE_STATE = {
+  probe: "decision_contract",
+  note: "Fixed probe. The contract under test is choice/score answers with calibrated probabilities.",
+};
+const CONTRACT_PROBE_QUESTIONS: Record<string, unknown> = {
+  choice_probe: {
+    type: "choice",
+    instructions: "Which labelled option best matches state.probe? Answer from the labels only.",
+    criteria: { alpha: "The probe field is named decision_contract.", beta: "The probe field is named anything else." },
+  },
+  score_probe: {
+    type: "score",
+    instructions: "Place state.probe on the scale below.",
+    criteria: ["No relation", "Weakly related", "Directly relates"],
+  },
+};
+
+/**
+ * Ask the resolved destination one batched job and report which question kinds it can serve.
+ *
+ * This is the capability check a bounded decision workflow needs before it adopts a destination:
+ * the answer kinds and their calibration, not reachability. Failures land in `gate` with every kind
+ * reported unsupported, so a caller never reads a partial answer as a pass.
+ */
+export async function probeJevDecisionContract(
+  config: OcxConfig,
+  options: {
+    signal?: AbortSignal;
+    post?: typeof providerOutboundPost;
+    now?: () => number;
+    /** Probe this configured row instead of the destination the strategy would pick. */
+    providerId?: string;
+  } = {},
+): Promise<JevContractProbeResult> {
+  const now = options.now ?? Date.now;
+  const startedAt = now();
+  const unsupportedAll = (gate: JevDecision["gate"], providerId: string | null = null, baseUrl: string | null = null, model: string | null = null): JevContractProbeResult => ({
+    ok: false,
+    providerId,
+    baseUrl,
+    model,
+    gate,
+    latencyMs: Math.max(0, now() - startedAt),
+    kinds: {
+      choice: kindUnsupported(gate === "missing_key" ? "no_credential" : "no_answer"),
+      score: kindUnsupported(gate === "missing_key" ? "no_credential" : "no_answer"),
+    },
+  });
+
+  const environmentKey = process.env.TYPESAFE_API_KEY?.trim() || process.env.JEV_API_KEY?.trim();
+  let destination: JevDecisionDestination | null;
+  if (options.providerId) {
+    const row = config.providers?.[options.providerId];
+    destination = row && row.adapter === "jev-decision" && row.disabled !== true
+      ? destinationFromRow(options.providerId, row, environmentKey)
+      : null;
+  } else {
+    destination = resolveJevDecisionDestination(config);
+  }
+  if (!destination) return unsupportedAll("missing_key");
+
+  const requestBody = JSON.stringify({
+    model: destination.model,
+    state: CONTRACT_PROBE_STATE,
+    questions: CONTRACT_PROBE_QUESTIONS,
+  });
+  const timeoutSignal = AbortSignal.timeout(JEV_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  const post = options.post ?? providerOutboundPost;
+
+  const failed = (gate: JevDecision["gate"]): JevContractProbeResult => {
+    const shell = unsupportedAll(gate, destination.providerId, destination.baseUrl, destination.model);
+    return { ...shell, latencyMs: Math.max(0, now() - startedAt) };
+  };
+
+  try {
+    const response = await post(
+      destination.providerId,
+      canonicalJevProvider(config, destination),
+      destination.baseUrl,
+      {
+        headers: {
+          Authorization: `Bearer ${destination.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: requestBody,
+        signal,
+      },
+      JEV_OUTBOUND_DEPENDENCIES,
+    );
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (await providerRedirectError(response, destination.baseUrl)) return failed("redirect");
+    if (!response.ok) {
+      try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
+      return failed("http");
+    }
+    const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (bounded.oversized) return failed("malformed");
+    let payload: unknown;
+    try {
+      payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bounded.bytes));
+    } catch {
+      return failed("malformed");
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return failed("malformed");
+    const answers = (payload as Record<string, unknown>).answers;
+    if (!answers || typeof answers !== "object" || Array.isArray(answers)) return failed("malformed");
+    const byName = answers as Record<string, unknown>;
+    const kinds = {
+      choice: judgeAnswer("choice", CONTRACT_PROBE_QUESTIONS.choice_probe as Record<string, unknown>, byName.choice_probe),
+      score: judgeAnswer("score", CONTRACT_PROBE_QUESTIONS.score_probe as Record<string, unknown>, byName.score_probe),
+    };
+    const answeredBy = (payload as Record<string, unknown>).model;
+    return {
+      ok: kinds.choice.supported && kinds.score.supported,
+      providerId: destination.providerId,
+      baseUrl: destination.baseUrl,
+      model: destination.model,
+      gate: "apply",
+      latencyMs: Math.max(0, now() - startedAt),
+      kinds,
+      ...(typeof answeredBy === "string" ? { answeredBy } : {}),
+    };
+  } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (timeoutSignal.aborted || (error instanceof DOMException && error.name === "TimeoutError")) {
       return failed("timeout");
     }
     return failed("network");
