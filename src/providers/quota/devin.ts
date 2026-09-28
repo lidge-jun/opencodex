@@ -20,7 +20,7 @@
  *                           #36 hide_daily_quota, #37 hide_weekly_quota }
  */
 import { buildMetadata } from "../../adapters/devin/cloud-direct/metadata";
-import { encodeMessage, encodeTag, encodeVarint, iterFields } from "../../adapters/devin/cloud-direct/wire";
+import { encodeMessage } from "../../adapters/devin/cloud-direct/wire";
 import { DEVIN_DEFAULT_API_SERVER, validateDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { epochMillis, QUOTA_RESPONSE_MAX_BYTES, REQUEST_TIMEOUT_MS } from "../quota-wire";
@@ -29,8 +29,11 @@ import { AUTHORITATIVE_EMPTY_QUOTA, report, TERMINAL_QUOTA_FAILURE, type Provide
 
 const GET_USER_STATUS_PATH = "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 const BILLING_STRATEGY_CREDITS = 1;
-/** Timeout, Connect `aborted`, throttle, client-closed: the account may be fine. */
-const RETRYABLE_STATUSES = new Set([408, 409, 429, 499]);
+const RESPONSE_WIRES = new Map([[1, 2], [2, 2]]);
+const USER_WIRES = new Map([[10, 0], [13, 2]]);
+const STATUS_WIRES = new Map<number, number>([[1, 2], [3, 2], ...[4, 5, 6, 7, 8, 9, 14, 15, 16, 17, 18].map(n => [n, 0] as const)]);
+const PLAN_WIRES = new Map([[1, 0], [2, 2], [13, 0], [35, 0], [36, 0], [37, 0]]);
+const TIMESTAMP_WIRES = new Map([[1, 0], [2, 0]]);
 
 export interface DevinPlanInfo {
   teamsTier: number;
@@ -55,27 +58,54 @@ export interface DevinUserStatus {
   dailyResetMs?: number;
   weeklyResetMs?: number;
   overageBalanceMicros: number;
+  promptCreditBalancePresent: boolean;
 }
 
 type Fields = Map<number, bigint | Buffer>;
 
 /**
- * Last occurrence wins, as protobuf specifies for a non-repeated field. Null when the fields do
- * not account for every byte: iterFields stops quietly at a truncated field, and a status read
- * from half a response would otherwise be published as an authoritative empty quota.
+ * Last occurrence wins. Parse locally so an overlong varint, truncated field, or wrong wire
+ * type for a known status field cannot turn a malformed credential-bearing RPC into quota.
  */
-function fieldsOf(buf: Buffer | undefined): Fields | null {
+function fieldsOf(buf: Buffer | undefined, known: Map<number, number>): Fields | null {
   const out: Fields = new Map();
   if (!buf) return out;
-  let consumed = 0;
-  for (const field of iterFields(buf)) {
-    out.set(field.num, field.value);
-    const body = typeof field.value === "bigint" ? encodeVarint(field.value).length
-      : field.wire === 2 ? encodeVarint(field.value.length).length + field.value.length
-      : field.value.length;
-    consumed += encodeTag(field.num, field.wire).length + body;
+  let offset = 0;
+  const varint = (): bigint | null => {
+    let value = 0n;
+    for (let byte = 0; byte < 10; byte++) {
+      if (offset >= buf.length) return null;
+      const part = buf[offset++];
+      if (byte === 9 && part > 1) return null;
+      value |= BigInt(part & 0x7f) << BigInt(byte * 7);
+      if (!(part & 0x80)) return value;
+    }
+    return null;
+  };
+  while (offset < buf.length) {
+    const tag = varint();
+    if (tag === null || tag > 0xffffffffn) return null;
+    const num = Number(tag >> 3n);
+    const wire = Number(tag & 7n);
+    if (num === 0 || (known.has(num) && known.get(num) !== wire)) return null;
+    if (wire === 0) {
+      const value = varint();
+      if (value === null) return null;
+      out.set(num, value);
+    } else if (wire === 1 || wire === 5) {
+      const size = wire === 1 ? 8 : 4;
+      if (size > buf.length - offset) return null;
+      out.set(num, buf.subarray(offset, offset + size));
+      offset += size;
+    } else if (wire === 2) {
+      const length = varint();
+      if (length === null || length > BigInt(buf.length - offset)) return null;
+      const end = offset + Number(length);
+      out.set(num, buf.subarray(offset, end));
+      offset = end;
+    } else return null;
   }
-  return consumed === buf.length ? out : null;
+  return out;
 }
 
 /** int32/int64 on the wire are two's-complement varints; -1 arrives as 2^64-1. */
@@ -92,14 +122,14 @@ function sub(fields: Fields, num: number): Buffer | undefined {
 /** Undefined for an absent timestamp; null for one that is present but malformed. */
 function timestampMs(buf: Buffer | undefined): number | undefined | null {
   if (!buf) return undefined;
-  const f = fieldsOf(buf);
+  const f = fieldsOf(buf, TIMESTAMP_WIRES);
   return f ? epochMillis(int(f, 1)) : null;
 }
 
 /** Null when neither plan copy is present: a zero-valued plan would read as an exhausted account. */
 function decodePlanInfo(buf: Buffer | undefined): DevinPlanInfo | null {
   if (!buf) return null;
-  const f = fieldsOf(buf);
+  const f = fieldsOf(buf, PLAN_WIRES);
   if (!f) return null;
   return {
     teamsTier: int(f, 1),
@@ -113,11 +143,11 @@ function decodePlanInfo(buf: Buffer | undefined): DevinPlanInfo | null {
 
 /** Null when the response carries no PlanStatus, which is not something a mapper can use. */
 export function decodeDevinUserStatus(buf: Buffer): DevinUserStatus | null {
-  const response = fieldsOf(buf);
-  const user = response && fieldsOf(sub(response, 1));
+  const response = fieldsOf(buf, RESPONSE_WIRES);
+  const user = response && fieldsOf(sub(response, 1), USER_WIRES);
   const statusBuf = user && sub(user, 13);
   if (!statusBuf) return null;
-  const status = fieldsOf(statusBuf);
+  const status = fieldsOf(statusBuf, STATUS_WIRES);
   if (!status) return null;
   // The top-level PlanInfo is authoritative; the nested copy covers servers that omit it.
   const plan = decodePlanInfo(sub(response, 2) ?? sub(status, 1));
@@ -141,6 +171,7 @@ export function decodeDevinUserStatus(buf: Buffer): DevinUserStatus | null {
     ...(dailyResetMs !== undefined ? { dailyResetMs } : {}),
     ...(weeklyResetMs !== undefined ? { weeklyResetMs } : {}),
     overageBalanceMicros: int(status, 16),
+    promptCreditBalancePresent: status.has(6) && status.has(8),
   };
 }
 
@@ -187,7 +218,7 @@ export function devinQuotaFromStatus(status: DevinUserStatus, now = Date.now()):
   const creditBilled = strategy === BILLING_STRATEGY_CREDITS
     || (strategy === 0 && !ahead(status.dailyResetMs) && !ahead(status.weeklyResetMs));
   const available = status.availablePromptCredits + status.availableFlexCredits;
-  const credits = !creditBilled || status.availablePromptCredits < 0 || status.availableFlexCredits < 0
+  const credits = !creditBilled || !status.promptCreditBalancePresent || status.availablePromptCredits < 0 || status.availableFlexCredits < 0
     ? undefined
     // A credit-billed plan with nothing used and nothing left has no balance to serve from;
     // leaving it unmeasured would rank it as untested headroom.
@@ -226,7 +257,7 @@ export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseU
     });
     if (!response.ok) {
       void response.body?.cancel().catch(() => undefined);
-      return response.status >= 400 && response.status < 500 && !RETRYABLE_STATUSES.has(response.status)
+      return response.status === 401 || response.status === 403
         ? TERMINAL_QUOTA_FAILURE
         : null;
     }

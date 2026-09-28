@@ -80,9 +80,12 @@ publishes only daily and weekly windows the plan does not hide whose reset is st
 because a credit-billed plan leaves those percents at a zero default and a past reset describes a
 rolled-over window; both would read as exhausted. Prompt plus flex credits form one monthly pool
 measured against the server balance, published only for a credit-billed plan (or an unknown
-strategy with no dated window); a negative balance is the unlimited sentinel. A 4xx other than
-408/409/429/499 is terminal; a malformed body keeps last-good; a decoded status with nothing
-measurable is authoritative-empty.
+strategy with no dated window) when both prompt balance fields are present; a negative balance is
+the unlimited sentinel, while explicit zero used and available is exhausted. Only 401/403 reject
+the credential and clear last-good. Other HTTP failures and malformed protobufs, including a wrong
+wire type for a known field or a varint longer than ten bytes, keep last-good; a decoded status
+with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
+cache identity; generic OAuth pause still suppresses per-account probes.
 
 Kiro's account quota cache persists quota and an optional exhaustion verdict under one
 opaque account key and a non-secret login identity. Hydration admits only matching live

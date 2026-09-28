@@ -141,6 +141,28 @@ describe("Devin GetUserStatus decode and mapping", () => {
     expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 6: 0, 8: 0 }))!, 1).monthlyPercent).toBe(100);
   });
 
+  test("missing credit balance fields do not publish an exhausted monthly window", () => {
+    for (const balances of [{}, { 6: 0 }, { 8: 0 }]) {
+      expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan(balances))!, 1).monthlyPercent).toBeUndefined();
+    }
+  });
+
+  test("a known field with the wrong protobuf wire type rejects the status", () => {
+    const plan = planInfo({ tier: 16, name: "Pro", billing: 1 });
+    for (const bad of [encodeMessage(6, Buffer.alloc(0)), encodeMessage(8, Buffer.alloc(0))]) {
+      const status = Buffer.concat([encodeMessage(1, plan), bad, int(6, 0), int(8, 0)]);
+      const response = Buffer.concat([encodeMessage(1, encodeMessage(13, status)), encodeMessage(2, plan)]);
+      expect(decodeDevinUserStatus(response)).toBeNull();
+    }
+  });
+
+  test("an overlong varint in a nested status is rejected", () => {
+    const plan = planInfo({ tier: 16, name: "Pro", billing: 1 });
+    const status = Buffer.concat([encodeMessage(1, plan), Buffer.from([0x30, ...Array(10).fill(0x80), 0x01])]);
+    const response = Buffer.concat([encodeMessage(1, encodeMessage(13, status)), encodeMessage(2, plan)]);
+    expect(decodeDevinUserStatus(response)).toBeNull();
+  });
+
   test("a status with no plan copy is not decoded into a zero-valued plan", () => {
     // Neither the top-level PlanInfo nor PlanStatus #1: a zero plan would read as an exhausted account.
     const planStatus = Buffer.concat([encodeMessage(3, int(1, PLAN_END)), int(6, 0), int(8, 0)]);
@@ -183,12 +205,12 @@ describe("fetchDevinQuota transport", () => {
     expect(([...iterFields(metadata)].find(f => f.num === 3)?.value as Buffer).toString()).toBe(KEY);
   });
 
-  test("401/403/404 are terminal; 408/409/429/499, 5xx and network faults keep the last-good row", async () => {
-    for (const status of [401, 403, 404]) {
+  test("only 401/403 are terminal; other 4xx, 5xx and network faults keep last-good", async () => {
+    for (const status of [401, 403]) {
       globalThis.fetch = (async () => new Response("unauthenticated: " + KEY, { status })) as unknown as typeof fetch;
       expect(await fetchDevinQuota("devin", KEY, undefined)).toBe(TERMINAL_QUOTA_FAILURE);
     }
-    for (const status of [408, 409, 429, 499, 503]) {
+    for (const status of [400, 404, 408, 409, 422, 429, 499, 503]) {
       globalThis.fetch = (async () => new Response("", { status })) as unknown as typeof fetch;
       expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
     }
@@ -279,5 +301,13 @@ describe("Devin quota cache identity", () => {
     const eu = quotaCredentialIdentity("devin", "a1", { ...base, apiBaseUrl: "https://eu.windsurf.com/_route/api_server" }, target);
     expect(us).not.toBe(eu);
     expect(quotaCredentialIdentity("devin", "a1", base, target)).toBe(quotaCredentialIdentity("devin", "a1", { ...base, apiBaseUrl: undefined }, target));
+  });
+  test("another provider's apiBaseUrl does not alter its quota credential identity", async () => {
+    const { quotaCredentialIdentity } = await import("../../src/providers/quota/account-cache");
+    const target = { adapter: "openai-chat", authMode: "oauth" } as any;
+    const base = { access: KEY, refresh: "", expires: Number.MAX_SAFE_INTEGER } as any;
+    expect(quotaCredentialIdentity("github-copilot", "a1", base, target)).toBe(
+      quotaCredentialIdentity("github-copilot", "a1", { ...base, apiBaseUrl: "https://api.githubcopilot.com" }, target),
+    );
   });
 });
