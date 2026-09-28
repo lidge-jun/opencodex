@@ -167,7 +167,10 @@ describe("main hard-lock background recovery", () => {
       await runMainAccountHardLockRecovery(config());
       for (let tick = 0; tick < 14; tick++) {
         now += 60_000;
-        await fetchMainAccountInfo(true);
+        const skipped = await fetchMainAccountInfoAttempt(true, 0);
+        expect(skipped.freshQuota).toBeUndefined();
+        expect(skipped.resetRecoveryProof).toBeUndefined();
+        expect(skipped.quotaRefresh).toBeUndefined();
         await runMainAccountHardLockRecovery(config());
       }
       expect(calls).toEqual([whamUrl]);
