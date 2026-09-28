@@ -336,6 +336,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers/test", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/decision-probe", module: "server/management/provider-routes", mutates: false },
+  { method: "POST", path: "/api/decision-discover", module: "server/management/model-routes", mutates: false },
   { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Issue #3280 scopes this atomic batch endpoint to the GUI JSON editor; a matching CLI verb is outside wp5 and remains owed.", owner: "wp5-followup", ownerDoc: "devlog/_fin/260903_bug_drawdown_bcda/050_phase5.md" } },
   { method: "PUT", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: true },
   // server/management/quota-reset-routes

@@ -39,6 +39,22 @@ interface PresetRow {
 type DecisionPayload = { providers: ProviderRow[]; presets: PresetRow[] };
 
 type KindSupport = { supported: boolean; reason?: string; confidence?: number };
+type DiscoveryFinding = {
+  provider: string;
+  model: string;
+  namespaced?: string;
+  pricingStatus?: string;
+  disabled?: boolean;
+  endpoint?: string;
+  probed: boolean;
+  reason?: string;
+  ok?: boolean;
+  gate?: string;
+  latencyMs?: number;
+  answeredBy?: string;
+  kinds?: Record<string, KindSupport>;
+};
+type DiscoveryPayload = { scanned: number; query: string; probed: number; probeLimit: number; candidates: DiscoveryFinding[] };
 type ContractResult = {
   ok: boolean;
   gate?: string;
@@ -90,6 +106,9 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState<{ kind: "connect" | "contract"; name: string } | null>(null);
+  const [query, setQuery] = useState("");
+  const [discovery, setDiscovery] = useState<DiscoveryPayload | null>(null);
+  const [discovering, setDiscovering] = useState(false);
 
   const load = useCallback(async (signal: AbortSignal): Promise<DecisionPayload> => {
     const [providersRes, presetsRes] = await Promise.all([
@@ -149,6 +168,28 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
     } finally {
       setBusy(null);
     }
+  };
+
+  const discover = async () => {
+    setDiscovering(true);
+    setNotice(null);
+    try {
+      const res = await fetch(`${apiBase}/api/decision-discover?query=${encodeURIComponent(query.trim())}`, { method: "POST" });
+      const data = await readJsonOrThrow<DiscoveryPayload>(res, t("dec.loadFail"));
+      setDiscovery(data ?? null);
+    } catch (error) {
+      setNotice({ tone: "err", text: error instanceof Error && error.message ? error.message : t("dec.loadFail") });
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const reasonText = (reason: string) => {
+    if (reason === "provider_not_configured") return t("dec.reasonNoProvider");
+    if (reason === "no_endpoint") return t("dec.reasonNoEndpoint");
+    if (reason === "no_credential") return t("dec.reasonNoCredential");
+    if (reason === "probe_limit") return t("dec.reasonProbeLimit");
+    return reason;
   };
 
   if (resource.state.showSkeleton) return <DataSurfaceSkeleton label={t("common.loading")} rows={3} />;
@@ -253,6 +294,59 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
             </table>
           </div>
           <p className="muted">{t("dec.addHint")}</p>
+        </>
+      )}
+
+      <div className="h-section">{t("dec.discoverTitle")}{discovery ? <span className="count">{discovery.candidates.length}</span> : null}</div>
+      <div className="card-row">
+        <input
+          className="input"
+          type="search"
+          value={query}
+          placeholder={t("dec.discoverPlaceholder")}
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => { if (event.key === "Enter") void discover(); }}
+        />
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void discover()} disabled={discovering}>
+          {discovering ? t("dec.discoverRunning") : t("dec.discoverRun")}
+        </button>
+      </div>
+      <p className="muted">{t("dec.discoverHint")}</p>
+      {discovery && discovery.candidates.length === 0 && <EmptyState title={t("dec.discoverEmpty")} />}
+      {discovery && discovery.candidates.length > 0 && (
+        <>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>{t("dash.col.name")}</th>
+                  <th>{t("dec.colPricing")}</th>
+                  <th>{t("dash.col.baseUrl")}</th>
+                  <th>{t("dec.colKinds")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discovery.candidates.map(finding => (
+                  <tr key={`${finding.provider}/${finding.model}`}>
+                    <td className="font-semibold">
+                      {finding.model}
+                      <span className="muted mono text-label" style={{ marginLeft: 8 }}>{finding.provider}</span>
+                    </td>
+                    <td className="muted">{finding.pricingStatus ?? "—"}</td>
+                    <td className="muted mono text-label">{finding.endpoint ?? "—"}</td>
+                    <td className="muted">
+                      {finding.probed
+                        ? ["choice", "score"].map(kind => kindLabel(kind, finding.kinds?.[kind])).join(" · ")
+                        : reasonText(finding.reason ?? "")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="muted">
+            {t("dec.discoverScanned", { scanned: String(discovery.scanned), probed: String(discovery.probed), limit: String(discovery.probeLimit) })}
+          </p>
         </>
       )}
 

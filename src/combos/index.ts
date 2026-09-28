@@ -66,6 +66,7 @@ export {
   JEV_QUESTION_KINDS,
   parseJevDecision,
   probeJevDecisionContract,
+  probeSystemOneContract,
   resolveJevDecision,
   resolveJevDecisionDestination,
   type JevCandidate,
@@ -74,5 +75,6 @@ export {
   type JevContractProbeResult,
   type JevKindSupport,
   type JevQuestionKind,
+  type SystemOneProbeOptions,
   type ResolveJevDecisionOptions,
 } from "./jev";

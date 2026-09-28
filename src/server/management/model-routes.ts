@@ -120,6 +120,9 @@ import { commitProviderPatch } from "./provider-patch-transaction";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import type { CatalogDisposition } from "../../codex/convergence-types";
 import { comboPublicModelId } from "../../combos/types";
+import { probeSystemOneContract } from "../../combos/jev";
+import { resolveProviderApiKey } from "../../providers/api-key-resolve";
+import { systemOneEndpoint, uniqueDiscoveryCandidates, type DiscoveryModelRow } from "./decision-discovery";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -381,6 +384,74 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   if (url.pathname === "/api/models" && req.method === "GET") {
     return jsonResponse(await listManagementModelRows(config));
+  }
+
+  // Search the catalog for models that can serve as decision destinations, then ask each one the
+  // fixed contract job. The catalog is the right source because a resold decision model appears
+  // there under the gateway's id (e.g. `typesafe-ai/jev`, `opencode-zen/jev-1.13`), long before
+  // anyone configures it as a `jev-decision` row. Probing is capped: the answer checks are the same
+  // per candidate and an operator searching a 2000-row catalog does not want 2000 outbound calls.
+  if (url.pathname === "/api/decision-discover" && req.method === "POST") {
+    const query = url.searchParams.get("query") ?? "";
+    const limit = 8;
+    const rows = (await listManagementModelRows(config)) as unknown as DiscoveryModelRow[];
+    const candidates = uniqueDiscoveryCandidates(rows, query);
+    const findings: Array<Record<string, unknown>> = [];
+    let probed = 0;
+    for (const row of candidates) {
+      const providerId = row.provider!;
+      const provider = config.providers[providerId];
+      const endpoint = systemOneEndpoint(provider?.baseUrl);
+      const apiKey = resolveProviderApiKey(provider?.apiKey)?.trim();
+      const base = {
+        provider: providerId,
+        model: row.id,
+        ...(row.namespaced ? { namespaced: row.namespaced } : {}),
+        ...(row.pricingStatus ? { pricingStatus: row.pricingStatus } : {}),
+        ...(row.disabled === true ? { disabled: true } : {}),
+        ...(endpoint ? { endpoint } : {}),
+      };
+      if (!provider || provider.disabled === true) {
+        findings.push({ ...base, probed: false, reason: "provider_not_configured" });
+        continue;
+      }
+      if (!endpoint) {
+        findings.push({ ...base, probed: false, reason: "no_endpoint" });
+        continue;
+      }
+      if (!apiKey) {
+        findings.push({ ...base, probed: false, reason: "no_credential" });
+        continue;
+      }
+      if (probed >= limit) {
+        findings.push({ ...base, probed: false, reason: "probe_limit" });
+        continue;
+      }
+      probed += 1;
+      const result = await probeSystemOneContract({
+        url: endpoint,
+        apiKey,
+        providerId,
+        model: row.id,
+        signal: req.signal,
+      });
+      findings.push({
+        ...base,
+        probed: true,
+        ok: result.ok,
+        gate: result.gate,
+        latencyMs: result.latencyMs,
+        kinds: result.kinds,
+        ...(result.answeredBy ? { answeredBy: result.answeredBy } : {}),
+      });
+    }
+    return jsonResponse({
+      scanned: rows.length,
+      query,
+      probeLimit: limit,
+      probed,
+      candidates: findings,
+    });
   }
 
   const modelCostsMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-costs$/);

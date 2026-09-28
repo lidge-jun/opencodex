@@ -862,6 +862,114 @@ const CONTRACT_PROBE_QUESTIONS: Record<string, unknown> = {
  * the answer kinds and their calibration, not reachability. Failures land in `gate` with every kind
  * reported unsupported, so a caller never reads a partial answer as a pass.
  */
+export interface SystemOneProbeOptions {
+  /** Absolute endpoint that speaks the System One contract. */
+  url: string;
+  apiKey: string;
+  /** Provider row this endpoint belongs to, used for transport policy and reporting. */
+  providerId: string;
+  model: string;
+  signal?: AbortSignal;
+  post?: typeof providerOutboundPost;
+  now?: () => number;
+}
+
+/**
+ * Probe one endpoint with the fixed contract job.
+ *
+ * Split from destination resolution so a caller can also test a model it has merely discovered in a
+ * catalog: the answer checks are identical whether the endpoint came from config or from a search.
+ */
+export async function probeSystemOneContract(options: SystemOneProbeOptions): Promise<JevContractProbeResult> {
+  const now = options.now ?? Date.now;
+  const startedAt = now();
+  const shell = (gate: JevDecision["gate"]): JevContractProbeResult => ({
+    ok: false,
+    providerId: options.providerId,
+    baseUrl: options.url,
+    model: options.model,
+    gate,
+    latencyMs: Math.max(0, now() - startedAt),
+    kinds: {
+      choice: kindUnsupported(gate === "missing_key" ? "no_credential" : "no_answer"),
+      score: kindUnsupported(gate === "missing_key" ? "no_credential" : "no_answer"),
+    },
+  });
+
+  const requestBody = JSON.stringify({
+    model: options.model,
+    state: CONTRACT_PROBE_STATE,
+    questions: CONTRACT_PROBE_QUESTIONS,
+  });
+  const timeoutSignal = AbortSignal.timeout(JEV_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  const post = options.post ?? providerOutboundPost;
+
+  try {
+    const response = await post(
+      options.providerId,
+      { baseUrl: options.url },
+      options.url,
+      {
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: requestBody,
+        signal,
+      },
+      JEV_OUTBOUND_DEPENDENCIES,
+    );
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (await providerRedirectError(response, options.url)) return shell("redirect");
+    if (!response.ok) {
+      try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
+      return shell("http");
+    }
+    const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (bounded.oversized) return shell("malformed");
+    let payload: unknown;
+    try {
+      payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bounded.bytes));
+    } catch {
+      return shell("malformed");
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return shell("malformed");
+    const answers = (payload as Record<string, unknown>).answers;
+    if (!answers || typeof answers !== "object" || Array.isArray(answers)) return shell("malformed");
+    const byName = answers as Record<string, unknown>;
+    const kinds = {
+      choice: judgeAnswer("choice", CONTRACT_PROBE_QUESTIONS.choice_probe as Record<string, unknown>, byName.choice_probe),
+      score: judgeAnswer("score", CONTRACT_PROBE_QUESTIONS.score_probe as Record<string, unknown>, byName.score_probe),
+    };
+    const answeredBy = (payload as Record<string, unknown>).model;
+    return {
+      ok: kinds.choice.supported && kinds.score.supported,
+      providerId: options.providerId,
+      baseUrl: options.url,
+      model: options.model,
+      gate: "apply",
+      latencyMs: Math.max(0, now() - startedAt),
+      kinds,
+      ...(typeof answeredBy === "string" ? { answeredBy } : {}),
+    };
+  } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (timeoutSignal.aborted || (error instanceof DOMException && error.name === "TimeoutError")) {
+      return shell("timeout");
+    }
+    return shell("network");
+  }
+}
+
+/**
+ * Ask the resolved destination one batched job and report which question kinds it can serve.
+ *
+ * This is the capability check a bounded decision workflow needs before it adopts a destination:
+ * the answer kinds and their calibration, not reachability. Failures land in `gate` with every kind
+ * reported unsupported, so a caller never reads a partial answer as a pass.
+ */
 export async function probeJevDecisionContract(
   config: OcxConfig,
   options: {
@@ -872,21 +980,6 @@ export async function probeJevDecisionContract(
     providerId?: string;
   } = {},
 ): Promise<JevContractProbeResult> {
-  const now = options.now ?? Date.now;
-  const startedAt = now();
-  const unsupportedAll = (gate: JevDecision["gate"], providerId: string | null = null, baseUrl: string | null = null, model: string | null = null): JevContractProbeResult => ({
-    ok: false,
-    providerId,
-    baseUrl,
-    model,
-    gate,
-    latencyMs: Math.max(0, now() - startedAt),
-    kinds: {
-      choice: kindUnsupported(gate === "missing_key" ? "no_credential" : "no_answer"),
-      score: kindUnsupported(gate === "missing_key" ? "no_credential" : "no_answer"),
-    },
-  });
-
   const environmentKey = process.env.TYPESAFE_API_KEY?.trim() || process.env.JEV_API_KEY?.trim();
   let destination: JevDecisionDestination | null;
   if (options.providerId) {
@@ -897,76 +990,28 @@ export async function probeJevDecisionContract(
   } else {
     destination = resolveJevDecisionDestination(config);
   }
-  if (!destination) return unsupportedAll("missing_key");
-
-  const requestBody = JSON.stringify({
-    model: destination.model,
-    state: CONTRACT_PROBE_STATE,
-    questions: CONTRACT_PROBE_QUESTIONS,
-  });
-  const timeoutSignal = AbortSignal.timeout(JEV_TIMEOUT_MS);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-  const post = options.post ?? providerOutboundPost;
-
-  const failed = (gate: JevDecision["gate"]): JevContractProbeResult => {
-    const shell = unsupportedAll(gate, destination.providerId, destination.baseUrl, destination.model);
-    return { ...shell, latencyMs: Math.max(0, now() - startedAt) };
-  };
-
-  try {
-    const response = await post(
-      destination.providerId,
-      canonicalJevProvider(config, destination),
-      destination.baseUrl,
-      {
-        headers: {
-          Authorization: `Bearer ${destination.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: requestBody,
-        signal,
-      },
-      JEV_OUTBOUND_DEPENDENCIES,
-    );
-    if (options.signal?.aborted) throw options.signal.reason;
-    if (await providerRedirectError(response, destination.baseUrl)) return failed("redirect");
-    if (!response.ok) {
-      try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
-      return failed("http");
-    }
-    const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
-    if (options.signal?.aborted) throw options.signal.reason;
-    if (bounded.oversized) return failed("malformed");
-    let payload: unknown;
-    try {
-      payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bounded.bytes));
-    } catch {
-      return failed("malformed");
-    }
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return failed("malformed");
-    const answers = (payload as Record<string, unknown>).answers;
-    if (!answers || typeof answers !== "object" || Array.isArray(answers)) return failed("malformed");
-    const byName = answers as Record<string, unknown>;
-    const kinds = {
-      choice: judgeAnswer("choice", CONTRACT_PROBE_QUESTIONS.choice_probe as Record<string, unknown>, byName.choice_probe),
-      score: judgeAnswer("score", CONTRACT_PROBE_QUESTIONS.score_probe as Record<string, unknown>, byName.score_probe),
-    };
-    const answeredBy = (payload as Record<string, unknown>).model;
+  if (!destination) {
     return {
-      ok: kinds.choice.supported && kinds.score.supported,
-      providerId: destination.providerId,
-      baseUrl: destination.baseUrl,
-      model: destination.model,
-      gate: "apply",
-      latencyMs: Math.max(0, now() - startedAt),
-      kinds,
-      ...(typeof answeredBy === "string" ? { answeredBy } : {}),
+      ok: false,
+      providerId: null,
+      baseUrl: null,
+      model: null,
+      gate: "missing_key",
+      latencyMs: 0,
+      kinds: {
+        choice: kindUnsupported("no_credential"),
+        score: kindUnsupported("no_credential"),
+      },
     };
-  } catch (error) {
-    if (options.signal?.aborted) throw options.signal.reason;
-    if (timeoutSignal.aborted || (error instanceof DOMException && error.name === "TimeoutError")) {
-      return failed("timeout");
-    }
-    return failed("network");
   }
+  // Delegating keeps one implementation of the answer checks for both callers.
+  return probeSystemOneContract({
+    url: destination.baseUrl,
+    apiKey: destination.apiKey,
+    providerId: destination.providerId,
+    model: destination.model,
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.post ? { post: options.post } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
 }
