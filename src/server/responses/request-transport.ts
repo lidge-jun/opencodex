@@ -558,8 +558,8 @@ export async function prepareResponsesTransport(
         anthropicRouteDecision = routeResult.decision;
         const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision);
         if (!selection.accountId) {
-          // Route names are operator labels and may resemble account IDs; keep them in the proxy log only.
-          if (anthropicRouteDecision) console.warn(`[anthropic-pool] route:${anthropicRouteDecision.name} ${selection.reason}; answering locally`);
+          // Route names may resemble account IDs; log only the matched rule position.
+          if (anthropicRouteDecision) console.warn(`[anthropic-pool] route:#${anthropicRouteDecision.position} ${selection.reason}; answering locally`);
           if (selection.reason === "all-cooled") {
             const retryAfterSec = getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision);
             return formatErrorResponse(
@@ -574,7 +574,7 @@ export async function prepareResponsesTransport(
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(selection.accountId), true, selection.reason);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         anthropicPoolAccountId = admitted.accountId;
-        if (anthropicRouteDecision) console.info(`[anthropic-pool] route:${anthropicRouteDecision.name} ${selection.reason}`);
+        if (anthropicRouteDecision) console.info(`[anthropic-pool] route:#${anthropicRouteDecision.position} ${selection.reason}`);
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } else {

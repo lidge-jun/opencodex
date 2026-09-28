@@ -485,7 +485,7 @@ export type AnthropicAccountSelectionReason =
 export interface AnthropicAccountSelection {
   accountId: string | null;
   reason: AnthropicAccountSelectionReason;
-  routeName?: string;
+  routePosition?: number;
 }
 
 function stickyLimitForPool(config: OcxConfig): number {
@@ -572,7 +572,7 @@ export function resolveAnthropicAccountForSession(
 ): AnthropicAccountSelection {
   pruneExpiredAffinity(now);
   const set = getAccountSet(PROVIDER);
-  if (!set || set.accounts.length === 0) return { accountId: null, reason: "none", ...(decision ? { routeName: decision.name } : {}) };
+  if (!set || set.accounts.length === 0) return { accountId: null, reason: "none", ...(decision ? { routePosition: decision.position } : {}) };
 
   if (manualPreference === undefined) {
     manualPreference = set.selectionRevision !== undefined
@@ -586,8 +586,17 @@ export function resolveAnthropicAccountForSession(
 
   const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision);
   if (decision && eligible.length === 0) {
-    const cooled = decision.accounts.every(id => set.accounts.some(account => account.id === id && isCooled(id, now)));
-    return { accountId: null, reason: cooled ? "all-cooled" : "none", routeName: decision.name };
+    let cooled: boolean;
+    if (decision.fallback) {
+      // A removed route member is not a candidate, but fallback can still use the
+      // ordinary pool once those accounts recover. Only usable stored accounts count.
+      const ordinary = set.accounts.filter(account =>
+        account.needsReauth !== true && isPoolCredentialUsable(account.id, now));
+      cooled = ordinary.length > 0 && ordinary.every(account => isCooled(account.id, now));
+    } else {
+      cooled = decision.accounts.every(id => set.accounts.some(account => account.id === id && isCooled(id, now)));
+    }
+    return { accountId: null, reason: cooled ? "all-cooled" : "none", routePosition: decision.position };
   }
 
   // A manual choice is a one-dispatch preference, not a lower-priority quota hint.
@@ -602,7 +611,7 @@ export function resolveAnthropicAccountForSession(
         ...(quota?.customWindows ?? []).map(window => window.percent)]
         .some(percent => typeof percent === "number" && percent >= 100);
       if (!exhausted && eligible.includes(chosen)) {
-        return { accountId: chosen, reason: "manual", routeName: decision?.name };
+        return { accountId: chosen, reason: "manual", routePosition: decision?.position };
       }
     }
   }
@@ -613,7 +622,7 @@ export function resolveAnthropicAccountForSession(
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
       const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
       if (stillThere && eligible.includes(affined.accountId)) {
-        return { accountId: affined.accountId, reason: "affinity", routeName: decision?.name };
+        return { accountId: affined.accountId, reason: "affinity", routePosition: decision?.position };
       }
       sessionAffinity.delete(key);
     }
@@ -628,13 +637,13 @@ export function resolveAnthropicAccountForSession(
       && !isCooled(set.activeAccountId, now)
       && eligible.includes(set.activeAccountId);
     if (activeOk) {
-      return { accountId: set.activeAccountId, reason: "active", routeName: decision?.name };
+      return { accountId: set.activeAccountId, reason: "active", routePosition: decision?.position };
     }
   }
 
   const strategyPick = pickUnboundStrategyAccount(config, now, decision);
   if (strategyPick) {
-    return { accountId: strategyPick.accountId, reason: strategyPick.reason, routeName: decision?.name };
+    return { accountId: strategyPick.accountId, reason: strategyPick.reason, routePosition: decision?.position };
   }
 
   const threshold = anthropicAutoSwitchThreshold(config);
@@ -676,10 +685,10 @@ export function resolveAnthropicAccountForSession(
 
   if (!accountId) {
     const anyCooled = set.accounts.some(a => (!decision || decision.accounts.includes(a.id)) && isCooled(a.id, now));
-    return { accountId: null, reason: anyCooled ? "all-cooled" : "none", routeName: decision?.name };
+    return { accountId: null, reason: anyCooled ? "all-cooled" : "none", routePosition: decision?.position };
   }
 
-  return { accountId, reason, routeName: decision?.name };
+  return { accountId, reason, routePosition: decision?.position };
 }
 
 export function bindAnthropicSessionAffinity(
@@ -753,12 +762,12 @@ export function rotateAnthropicAccountOn429(
     ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision)
     : pickLowestUsage(config, failedAccountId, now);
   if (!next) {
-    console.warn(`[anthropic-pool] ${decision ? `route:${decision.name} ` : ""}no eligible replacement; returning 429`);
+    console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning 429`);
     return null;
   }
 
   console.warn(
-    `[anthropic-pool] ${decision ? `route:${decision.name} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
+    `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
   );
   return next;
 }

@@ -80,8 +80,8 @@ test("bounded first-match globs and invalid rules", () => {
     { name: "exact", match: "claude-sonnet-4-5", accounts: ["a"] },
     { name: "glob", match: "claude-*", accounts: ["b"] },
   ];
-  expect(resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision?.name).toBe("exact");
-  expect(resolveAnthropicModelRoute(cfg, "claude-haiku-4").decision?.name).toBe("glob");
+  expect(resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision?.position).toBe(1);
+  expect(resolveAnthropicModelRoute(cfg, "claude-haiku-4").decision?.position).toBe(2);
   expect(resolveAnthropicModelRoute(cfg, "CLAUDE-HAIKU-4").decision).toBeNull();
   expect(parseAnthropicModelRoutes([{ name: "a", match: "*", accounts: ["a", "a"] }]).ok).toBe(false);
   expect(parseAnthropicModelRoutes([{ name: "a", match: "[bad]", accounts: ["a"] }]).ok).toBe(false);
@@ -186,6 +186,31 @@ test("fallback route advertises the earliest ordinary-pool cooldown when every a
   expect(sends).toHaveLength(0);
 });
 
+test("removed fallback route account returns 429 using cooling ordinary-pool accounts", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.routes = [{ name: ACCOUNT_LIKE_ROUTE, match: "claude-*", accounts: ["removed-account"], fallback: true }];
+  const decision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+  const now = Date.now();
+  rotateAnthropicAccountOn429(cfg, ids[0]!, "120", null, now, null, decision);
+  rotateAnthropicAccountOn429(cfg, ids[1]!, "60", null, now, null, decision);
+  rotateAnthropicAccountOn429(cfg, ids[2]!, "180", null, now, null, decision);
+
+  expect(resolveAnthropicAccountForSession("removed-route", cfg, now, decision).reason).toBe("all-cooled");
+  const expanded = await post(cfg);
+  expect(expanded.status).toBe(429);
+  expect(Number(expanded.headers.get("retry-after"))).toBeGreaterThan(0);
+  expect(Number(expanded.headers.get("retry-after"))).toBeLessThanOrEqual(60);
+  expect(await expanded.text()).not.toContain(ACCOUNT_LIKE_ROUTE);
+  expect(sends).toHaveLength(0);
+
+  cfg.anthropicAccountPool!.routes[0]!.fallback = false;
+  const strict = await post(cfg);
+  expect(strict.status).toBe(401);
+  expect(strict.headers.get("retry-after")).toBeNull();
+  expect(sends).toHaveLength(0);
+});
+
 test("malformed enabled routes reject before upstream send", async () => {
   const ids = await seed();
   const cfg = config(ids, () => answer());
@@ -204,7 +229,7 @@ test("an out-of-route affinity and manual active account cannot preempt the mode
   bindAnthropicSessionAffinity("same-session", ids[0]!);
   const route = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
   const choice = resolveAnthropicAccountForSession("same-session", cfg, Date.now(), route);
-  expect(choice.routeName).toBe("sonnet");
+  expect(choice.routePosition).toBe(1);
   expect(choice.accountId).not.toBe(ids[0]);
   expect(route.accounts).toContain(choice.accountId!);
   const sent = await post(cfg);
@@ -228,4 +253,33 @@ test("fill-first uses declared route order when the active account is outside th
   const decision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
   const choice = resolveAnthropicAccountForSession("fresh", cfg, Date.now(), decision);
   expect(choice.accountId).toBe(ids[2]);
+});
+
+test("selection, refusal and 429 rotation logs use the rule position, never its account-like name", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.routes = [
+    { name: "other", match: "claude-haiku-*", accounts: [ids[0]!] },
+    { name: ACCOUNT_LIKE_ROUTE, match: "claude-*", accounts: [ids[1]!, ids[2]!] },
+  ];
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const lines: string[] = [];
+  console.info = (...parts: unknown[]) => { lines.push(parts.map(String).join(" ")); };
+  console.warn = (...parts: unknown[]) => { lines.push(parts.map(String).join(" ")); };
+  try {
+    expect((await post(cfg)).status).toBe(200);
+    const decision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+    rotateAnthropicAccountOn429(cfg, ids[1]!, "30", null, Date.now(), null, decision);
+    cfg.anthropicAccountPool!.routes[1]!.accounts = ["removed-account"];
+    expect((await post(cfg)).status).toBe(401);
+  } finally {
+    console.info = originalInfo;
+    console.warn = originalWarn;
+  }
+  const routeLines = lines.filter(line => line.includes("[anthropic-pool] route:"));
+  expect(routeLines.some(line => line.includes("route:#2") && line.includes("answering locally"))).toBe(true);
+  expect(routeLines.some(line => line.includes("route:#2") && line.includes("429 on"))).toBe(true);
+  expect(routeLines.some(line => line.includes("route:#2") && !line.includes("answering locally") && !line.includes("429 on"))).toBe(true);
+  expect(routeLines.every(line => !line.includes(ACCOUNT_LIKE_ROUTE))).toBe(true);
 });

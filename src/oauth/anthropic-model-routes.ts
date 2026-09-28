@@ -1,7 +1,8 @@
 import type { AnthropicModelRoute, OcxConfig } from "../types/config";
 
 export interface AnthropicRouteDecision {
-  name: string;
+  /** One-based position in the saved rule list; safe for request logs. */
+  position: number;
   accounts: readonly string[];
   fallback: boolean;
 }
@@ -79,9 +80,9 @@ export function resolveAnthropicModelRoute(
   if (raw === undefined) return { decision: null };
   const parsed = parseAnthropicModelRoutes(raw);
   if (!parsed.ok) return { decision: null, error: parsed.error };
-  for (const route of parsed.routes) {
+  for (const [index, route] of parsed.routes.entries()) {
     if (matches(route.match, modelId)) {
-      return { decision: { name: route.name, accounts: route.accounts, fallback: route.fallback === true } };
+      return { decision: { position: index + 1, accounts: route.accounts, fallback: route.fallback === true } };
     }
   }
   return { decision: null };
