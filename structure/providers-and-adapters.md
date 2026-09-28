@@ -85,7 +85,9 @@ rolled-over window; both would read as exhausted. Prompt plus flex credits form 
 measured against the server balance, published only for a credit-billed plan (or an unknown
 strategy with both reset fields absent) when at least one of the four prompt/flex balance fields
 is present (proto3 omits zeros, so an exhausted pool arrives as a used count alone); a negative
-balance is the unlimited sentinel, and zero available reads as exhausted. Expired dated windows
+available balance is the unlimited sentinel; a negative used balance is malformed and omits the
+monthly window even when zero is available. Valid zero available reads as exhausted.
+Expired dated windows
 do not cause the credit fallback. Only a 401 rejects the credential and clears last-good; a 403
 may scope this one RPC away from a key that still serves
 chat. Other HTTP failures and malformed protobufs, including a wrong

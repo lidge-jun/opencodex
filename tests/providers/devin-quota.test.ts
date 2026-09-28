@@ -147,6 +147,11 @@ describe("Devin GetUserStatus decode and mapping", () => {
     expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 6: 0, 8: 0 }))!, 1).monthlyPercent).toBe(100);
   });
 
+  test.each([6, 7])("a negative used credit field %i cannot mark a zero-available pool exhausted", usedField => {
+    const status = decodeDevinUserStatus(creditPlan({ [usedField]: -1, 8: 0, 4: 0 }))!;
+    expect(devinQuotaFromStatus(status, 1)).toEqual({ updatedAt: 1 });
+  });
+
   test("missing credit balance fields do not publish an exhausted monthly window", () => {
     expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({}))!, 1).monthlyPercent).toBeUndefined();
   });

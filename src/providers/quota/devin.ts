@@ -221,7 +221,9 @@ export function devinQuotaFromStatus(status: DevinUserStatus, now = Date.now()):
   const creditBilled = strategy === BILLING_STRATEGY_CREDITS
     || (strategy === 0 && status.dailyResetMs === undefined && status.weeklyResetMs === undefined);
   const available = status.availablePromptCredits + status.availableFlexCredits;
-  const credits = !creditBilled || !status.promptCreditBalancePresent || status.availablePromptCredits < 0 || status.availableFlexCredits < 0
+  const credits = !creditBilled || !status.promptCreditBalancePresent
+    || status.availablePromptCredits < 0 || status.availableFlexCredits < 0
+    || status.usedPromptCredits < 0 || status.usedFlexCredits < 0
     ? undefined
     // A credit-billed plan with nothing used and nothing left has no balance to serve from;
     // leaving it unmeasured would rank it as untested headroom.
