@@ -237,8 +237,14 @@ interface TextBlock {
   state: "probing" | "held" | "queued" | "dropped" | "streaming";
   ended: boolean;
   interrupted: boolean;
-  /** Tool inputs open when the block started; the native call that duplicates it is one of them. */
+  /**
+   * Tool inputs the block could echo: those open when it started, plus, for a post-prose tail,
+   * at most one later input of the envelope's own tool. The block waits only while one of them
+   * is still open.
+   */
   candidates: Set<string>;
+  /** The one later input a post-prose tail admitted as a candidate, if any. */
+  lateCandidate?: string;
 }
 
 interface TextChunk {
@@ -297,7 +303,19 @@ export class CommandCodeToolTextFilter {
 
   toolInputStart(id: unknown, name: unknown): AdapterEvent[] {
     const events = this.breakOpenBlocks();
-    if (typeof id === "string" && typeof name === "string") this.openInputs.set(id, name);
+    if (typeof id === "string" && typeof name === "string") {
+      this.openInputs.set(id, name);
+      // A post-prose echo can precede the start of the native input it duplicates. An echo
+      // duplicates one call, so a complete tail admits one later input of its own tool and no
+      // other: unrelated or repeated starts cannot keep extending the wait. Once every candidate
+      // closes without a match, matchNative releases the tail as text.
+      for (const block of this.held) {
+        if (!block.interrupted || block.candidates.size === 0 || block.lateCandidate !== undefined) continue;
+        if (looseEnvelopeName(block.markupParts.join(""), this.declared) !== name) continue;
+        block.lateCandidate = id;
+        block.candidates.add(id);
+      }
+    }
     return events;
   }
 

@@ -125,6 +125,72 @@ describe("Command Code markup after prose in one text block", () => {
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
+  test("strips a post-prose echo whose native input starts while an unrelated input is open", () => {
+    const { budget, filter } = twoToolFilter();
+    const readArgs = JSON.stringify({ path: "src/a.ts" });
+    filter.toolInputStart("call_r1", "read");
+    const proseEvents = filter.textDelta("t", PROSE);
+    expect(proseEvents).toEqual([{ type: "text_delta", text: PROSE }]);
+    expect(filter.textDelta("t", MARKUP)).toEqual([]);
+    expect(filter.textEnd("t")).toEqual([]);
+    filter.toolInputStart("call_c1", "exec");
+    const unrelated = filter.nativeCall("call_r1", "read", readArgs);
+    // The echo's own input is still open, so the tail and the call queued behind it wait.
+    expect(unrelated).toEqual([]);
+    const events = [
+      ...proseEvents,
+      ...unrelated,
+      ...filter.nativeCall("call_c1", "exec", JS),
+      ...filter.releaseAll(),
+    ];
+    expect(texts(events)).toBe(PROSE);
+    expect(calls(events)).toEqual([
+      { id: "call_r1", name: "read", args: readArgs },
+      { id: "call_c1", name: "exec", args: JS },
+    ]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("releases a post-prose tail as text once every input it could echo has closed", () => {
+    const { budget, filter } = twoToolFilter();
+    const readArgs = JSON.stringify({ path: "src/a.ts" });
+    filter.toolInputStart("call_r1", "read");
+    expect(filter.textDelta("t", PROSE)).toEqual([{ type: "text_delta", text: PROSE }]);
+    expect(filter.textDelta("t", MARKUP)).toEqual([]);
+    expect(filter.textEnd("t")).toEqual([]);
+    // The only open input closes without matching: the tail is released at once, before the
+    // call queued behind it, instead of waiting for the end of the turn.
+    const released = filter.nativeCall("call_r1", "read", readArgs);
+    expect(texts(released)).toBe(MARKUP);
+    expect(calls(released)).toEqual([{ id: "call_r1", name: "read", args: readArgs }]);
+    expect(filter.finish().events).toEqual([]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("admits only one later input of the envelope's own tool, so starts cannot extend the wait", () => {
+    const { budget, filter } = twoToolFilter();
+    const readArgs = JSON.stringify({ path: "src/a.ts" });
+    filter.toolInputStart("call_r1", "read");
+    expect(filter.textDelta("t", PROSE)).toEqual([{ type: "text_delta", text: PROSE }]);
+    expect(filter.textDelta("t", MARKUP)).toEqual([]);
+    expect(filter.textEnd("t")).toEqual([]);
+    // Of the inputs that start while the tail is held, only the first exec input is admitted.
+    filter.toolInputStart("call_r2", "read");
+    filter.toolInputStart("call_c1", "exec");
+    filter.toolInputStart("call_c2", "exec");
+    expect(filter.nativeCall("call_r1", "read", readArgs)).toEqual([]);
+    // The admitted exec input closes with different content: the tail is released right away,
+    // although call_r2 and call_c2 are still open.
+    const released = filter.nativeCall("call_c1", "exec", "text(1);");
+    expect(texts(released)).toBe(MARKUP);
+    expect(calls(released)).toEqual([
+      { id: "call_r1", name: "read", args: readArgs },
+      { id: "call_c1", name: "exec", args: "text(1);" },
+    ]);
+    expect(filter.finish().events).toEqual([]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("splits a prose-prefixed marker inside a single delta", () => {
     const { budget, filter } = execFilter();
     expect(filter.textDelta("t", PROSE + MARKUP)).toEqual([{ type: "text_delta", text: PROSE }]);
