@@ -90,9 +90,26 @@ jobs:
                     candidate.base?.repo?.owner?.login === owner &&
                     candidate.base?.repo?.name === repo
                 );
-                if (inRepoPrs.length !== associatedPrs.length) {
+                // A null base.repo is not "another repository": it is a base the
+                // index could not identify, so log it as its own kind of skip.
+                const foreignRepoPrs = associatedPrs.filter(
+                  candidate =>
+                    candidate.base?.repo != null &&
+                    !(
+                      candidate.base.repo.owner?.login === owner &&
+                      candidate.base.repo.name === repo
+                    )
+                );
+                const unidentifiedPrs =
+                  associatedPrs.length - inRepoPrs.length - foreignRepoPrs.length;
+                if (foreignRepoPrs.length > 0) {
                   core.info(
-                    `Ignored ${associatedPrs.length - inRepoPrs.length} associated PR(s) based on other repositories in the fork network.`
+                    `Ignored ${foreignRepoPrs.length} associated PR(s) based on other repositories in the fork network.`
+                  );
+                }
+                if (unidentifiedPrs > 0) {
+                  core.info(
+                    `Ignored ${unidentifiedPrs} associated PR(s) whose base repository could not be identified.`
                   );
                 }
                 candidates = inRepoPrs.filter(
