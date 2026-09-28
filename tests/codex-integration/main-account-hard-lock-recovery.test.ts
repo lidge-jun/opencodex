@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  fetchMainAccountInfo, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
+  fetchMainAccountInfo, listCodexAuthAccounts, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
 } from "../../src/codex/auth-api";
 import { fetchMainAccountInfoAttempt } from "../../src/codex/auth-api/main-account-probe";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
@@ -342,8 +342,7 @@ describe("main hard-lock background recovery", () => {
       const replacement = JSON.parse(originalAuth);
       replacement.tokens.access_token += "-rotated";
       const data = { plan_type: "prolite", rate_limit: {
-        allowed: true, limit_reached: false,
-        primary_window: { used_percent: 64, limit_window_seconds: 604_800 }, secondary_window: null,
+        primary_window: { used_percent: 64, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,
       }, rate_limit_reset_credits: { available_count: 2 } };
       let reads = 0;
       globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
@@ -404,6 +403,48 @@ describe("main hard-lock background recovery", () => {
       }
     });
   }
+
+  test("account list shows cached quota when a replaced token's result is unpublished", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const authPath = join(home, "auth.json");
+    const replacement = JSON.parse(readFileSync(authPath, "utf8"));
+    replacement.tokens.access_token += "-rotated";
+    setMainAccountInfoCache({ email: null, plan: "plus", quota: { shortPercent: 99 }, ts: 1 });
+    const data = { plan_type: "prolite", rate_limit: {
+      primary_window: { used_percent: 64, limit_window_seconds: 604_800 },
+      secondary_window: null, tertiary_window: null,
+    } };
+    let reads = 0;
+    globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+      expect(String(input)).toBe(whamUrl);
+      if (++reads > 1) return new Response(null, { status: 503 });
+      const response = Response.json(data);
+      response.json = async () => {
+        started.resolve();
+        await finish.promise;
+        return data;
+      };
+      return response;
+    }, { preconnect: previousFetch.preconnect });
+    const pending = listCodexAuthAccounts(config(), true);
+    try {
+      await started.promise;
+      writeFileSync(authPath, JSON.stringify(replacement));
+      expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+      const cached = structuredClone(getMainAccountInfoCache());
+      finish.resolve();
+      const main = (await pending).find(account => account.isMain);
+      expect(main?.plan).toBe("plus");
+      expect(main?.quota?.shortPercent).toBe(99);
+      expect(main?.quota?.weeklyPercent).toBeUndefined();
+      expect(main?.mainAccountHardLock?.state).toBe("blocked");
+      expect(getMainAccountInfoCache()).toEqual(cached);
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+  });
 
   for (const status of [401, 403]) {
     for (const phase of ["request", "error-body"] as const) {

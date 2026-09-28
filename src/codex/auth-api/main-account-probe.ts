@@ -95,6 +95,8 @@ export interface MainResetQuotaProof {
 
 export interface MainAccountInfoFetchResult {
   info: MainAccountInfo;
+  /** Parsed ordinary info from a stale credential; callers must not display it as shared state. */
+  infoUnpublished?: true;
   resetRecoveryProof?: MainResetQuotaProof & { dispatchSequence: number };
   /** Ephemeral result of this attempt, omitted when no WHAM request was made. */
   quotaRefresh?: CodexQuotaRefreshOutcome;
@@ -328,9 +330,11 @@ export async function fetchMainAccountInfoWhileOwned(
       };
       if (!credentialIsCurrent()) {
         // Preserve same-identity ordinary info, but never publish stale evidence or state.
-        return { info: mainQuotaWriter && isMainQuotaWriterLive(mainQuotaWriter)
-          ? result : getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
-        credentialChecked: true, hasCredential: true };
+        if (mainQuotaWriter && isMainQuotaWriterLive(mainQuotaWriter)) {
+          return { info: result, infoUnpublished: true, credentialChecked: true, hasCredential: true };
+        }
+        return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
+          credentialChecked: true, hasCredential: true };
       }
       const freshResetCredits = quota?.resetCredits;
       // Tag the count with the identity it was read from, so a later response that omits the

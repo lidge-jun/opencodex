@@ -171,7 +171,8 @@ Omitted secondary/tertiary fields, an unknown primary duration, or partial respo
 Once a credential replacement is observed, a delayed response from an earlier request cannot update
 the usage cache or release the lock, even for the same account or after restoring the original token.
 Its parsed ordinary usage can still be returned to the requesting caller, without shared-state updates
-or recovery evidence. Conflicting account identities and stale 401/403 replies retain the current
+or recovery evidence. The account card shows the published cached usage, keeping its quota aligned
+with the lock status. Conflicting account identities and stale 401/403 replies retain the current
 cached info and cannot clear or set the current account's reauthentication state.
 
 The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or

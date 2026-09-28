@@ -383,8 +383,9 @@ including terminal 401/403 mutations. A missing identity writer cannot bypass th
 An observed same-account credential replacement, including A→B→A, prevents publication even
 when a newer read fails without publishing; an unchanged credential still permits an older success.
 Successful same-identity responses may still return parsed ordinary info to their caller, without
-shared-state updates, fresh quota or recovery proof. Conflicting identities and stale errors return
-cached info. The request/body races are covered by
+shared-state updates, fresh quota or recovery proof. The account-list card uses the published cache
+for such a return, so its displayed quota agrees with the hard-lock state. Conflicting identities
+and stale errors return cached info. The request/body races and card projection are covered by
 `tests/codex-integration/main-account-hard-lock-recovery.test.ts`; the ordinary return and Reserve
 revocation contract remains covered by `tests/codex-integration/reserve-passive-revocation.test.ts`.
 
