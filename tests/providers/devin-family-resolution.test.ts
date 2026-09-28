@@ -312,6 +312,8 @@ describe("family-aware picker", () => {
     expect(result.defaultEfforts["glm-5-2"]).toBe("high");
     expect(result.efforts["gpt-6-sol"]).toEqual(["none", "low", "medium", "high", "xhigh", "max"]);
     expect(result.defaultEfforts["gpt-6-sol"]).toBe("medium");
+    expect(result.efforts["gemini-3-5-flash"]).toEqual(["minimal", "medium"]);
+    expect(result.defaultEfforts["gemini-3-5-flash"]).toBe("medium");
     // A family without a default member advertises no default effort.
     expect(result.defaultEfforts["gpt-5-4"]).toBeUndefined();
     expect(result.inputModalities["swe-1-6"]).toEqual(["text"]);

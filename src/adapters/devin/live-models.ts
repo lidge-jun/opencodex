@@ -103,7 +103,7 @@ export function collapseDevinModelUid(uid: string): string {
  * Offering them on a reasoning control would name a setting that does something
  * else, so the collapse keeps stripping them while the ladder ignores them.
  */
-const REASONING_RUNG_TOKENS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
+const REASONING_RUNG_TOKENS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /**
  * The reasoning rungs a catalog UID carries, in ladder order.
@@ -124,16 +124,15 @@ export function devinReasoningRungsOf(uid: string): string[] {
 }
 
 /** Ladder order for display, matching the Codex rung order. */
-const RUNG_ORDER = ["none", "low", "medium", "high", "xhigh", "max"];
+const RUNG_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 export function sortDevinRungs(rungs: Iterable<string>): string[] {
   return [...new Set(rungs)].sort((a, b) => RUNG_ORDER.indexOf(a) - RUNG_ORDER.indexOf(b));
 }
 
 /**
- * Effort rungs a catalog family axis can name, in ladder order. Wider than
- * RUNG_ORDER because the catalog also spells `Minimal` (Gemini Flash) and
- * `No Thinking` (GLM), which resolution has to place even though the Codex
- * ladder does not offer them.
+ * Effort rungs a catalog family axis can name, in ladder order.
+ * The catalog spells `Minimal` (Gemini Flash) and `No Thinking` (GLM), which
+ * resolution and the picker place alongside the usual Codex rungs.
  */
 const FAMILY_EFFORT_LADDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 const EFFORT_AXES = ["Effort", "Reasoning Effort"];
