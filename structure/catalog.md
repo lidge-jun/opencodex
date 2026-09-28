@@ -226,7 +226,7 @@ in-flight publication; unrelated unscoped rows require no credential lookup.
 A Devin live row spreads its measured `inputModalities` before
 `catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy
 `modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live
-value survives only when none of them applies. Devin live rows collapse by catalog family (so `swe-1-6-fast` stays its own row), read their ladder from the family effort axis (including `minimal`), and carry the family default member's effort as `defaultReasoningEffort`; `swe-1-6` is marked text-only because it drops images without an error.
+value survives only when none of them applies. Devin live rows collapse by catalog family (so `swe-1-6-fast` stays its own row), read their ladder from the family effort axis (including `minimal`), and carry the effective enabled default member's effort as `defaultReasoningEffort` when the family marks a default; `swe-1-6` is marked text-only because it drops images without an error.
 
 For `liveModels: false`, a static provider publishes the ordered union of `models` and `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
 union before retained ids; a nonempty explicit list does not import a different default.

@@ -327,7 +327,6 @@ export async function fetchDevinUsableModels(opts: {
     const contextWindows: Record<string, number> = {};
     // Effort rungs per base, recovered from the suffixes the collapse strips.
     const rungs = new Map<string, Set<string>>();
-    const defaultRungs = new Map<string, string>();
     // supportsImages votes per base; only rows that asserted field #5 vote.
     const imageVotes = new Map<string, { sawTrue: boolean; sawFalse: boolean }>();
     for (const entry of catalog.byUid.values()) {
@@ -342,7 +341,6 @@ export async function fetchDevinUsableModels(opts: {
       const found = family
         ? (familyRung && REASONING_RUNG_TOKENS.has(familyRung) ? [familyRung] : [])
         : devinReasoningRungsOf(entry.modelUid);
-      if (family && entry.isFamilyDefault && familyRung) defaultRungs.set(base, familyRung);
       if (found.length > 0) {
         let set = rungs.get(base);
         if (!set) { set = new Set(); rungs.set(base, set); }
@@ -376,8 +374,11 @@ export async function fetchDevinUsableModels(opts: {
       if (set.size > 1) efforts[base] = sortDevinRungs(set);
     }
     const defaultEfforts: Record<string, string> = {};
-    for (const [base, rung] of defaultRungs) {
-      if (efforts[base]?.includes(rung)) defaultEfforts[base] = rung;
+    for (const [base, members] of devinFamiliesOf(catalog)) {
+      if (!members.some((member) => member.isFamilyDefault)) continue;
+      const selected = selectDevinFamilyMember(members, {});
+      const rung = selected && devinFamilyEffortOf(selected);
+      if (rung && efforts[base]?.includes(rung)) defaultEfforts[base] = rung;
     }
     // supportsImages arrives tri-state per catalog row, so the collapse votes:
     // a row that never asserted field #5 abstains, which keeps an unsuffixed

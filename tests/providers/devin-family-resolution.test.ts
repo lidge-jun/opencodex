@@ -319,4 +319,19 @@ describe("family-aware picker", () => {
     expect(result.inputModalities["swe-1-6"]).toEqual(["text"]);
     expect(result.inputModalities["swe-1-6-fast"]).toEqual(["text", "image"]);
   });
+
+  test("publishes the enabled default when the marked default is disabled", async () => {
+    const family = "devin-test-default";
+    const catalog = catalogOf([
+      { uid: "default-low", family, axes: [["Reasoning Effort", 0, "Low"]] },
+      { uid: "default-high", family, axes: [["Reasoning Effort", 1, "High"]], isDefault: true, disabled: true },
+      { uid: "default-max", family, axes: [["Reasoning Effort", 2, "Max"]] },
+    ]);
+    setCachedCatalogForTests(catalog);
+    const result = await fetchDevinUsableModels({ apiKey: KEY, baseUrl: HOST });
+    if (!result.ok) throw new Error(`expected ok, got ${result.error}`);
+    expect(result.efforts[family]).toEqual(["low", "max"]);
+    expect(result.defaultEfforts[family]).toBe("max");
+    expect(await resolve(catalog, family)).toBe("default-max");
+  });
 });
