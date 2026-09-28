@@ -978,7 +978,8 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   field: this is not an API-key path, it drives the signed-in CLI (`claude -p`) and bills that
   subscription, and a key entered for it is never used. The Providers workspace counts and filters
   it as paid and shows **Subscription CLI** as its auth mode. Any provider with
-  `"adapter": "claude-cli"` is treated the same way.
+  `"adapter": "claude-cli"` is treated the same way, including a renamed or hand-written row: the
+  dashboard lists it as ready without a key and never prompts for one.
 - **One sign-in serves the whole proxy:** the harness reads the Claude Code sign-in of the user
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;

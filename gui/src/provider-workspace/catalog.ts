@@ -8,6 +8,7 @@
  * Binning rules (applied in priority order):
  *  1. disabled === true              -> disabled
  *  2. keyOptional === true           -> ready  (key not required — not the same as free pricing)
+ *     subscription CLI adapter       -> ready  (`claude-cli`: the CLI owns the login; see subscription-cli.ts)
  *  3. authMode === "oauth"           -> ready  (credentials managed externally)
  *  4. authMode === "forward"         -> ready  (passes caller credentials through)
  *  5. authMode === "local"           -> ready  (local runtime, no key required)
@@ -137,7 +138,11 @@ export function hasLoopbackBaseUrl(baseUrl: string): boolean {
 }
 
 function isConfigurationReady(p: WorkspaceProvider): boolean {
+  // A subscription CLI row is ready by adapter alone: `keyOptional` is enriched from the
+  // registry only for the canonical `claude-cli` name, and a renamed or hand-authored row using
+  // that adapter still never reads a key.
   return p.keyOptional === true ||
+    isSubscriptionCliProvider(p) ||
     p.authMode === "oauth" ||
     p.authMode === "forward" ||
     p.authMode === "local" ||

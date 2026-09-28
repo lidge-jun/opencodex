@@ -3,6 +3,7 @@ import { buildProviderWorkspace, isFreeProvider, providerTier, type WorkspaceIte
 import { bucketPresets, presetTier, type CatalogPreset } from "../../gui/src/components/provider-catalog/provider-presets";
 import { isSubscriptionCliProvider } from "../../gui/src/provider-workspace/subscription-cli";
 import { authModeLabel } from "../../gui/src/components/provider-workspace/ProviderRail";
+import { providerAuthSurface } from "../../gui/src/provider-workspace/auth";
 import { en } from "../../gui/src/i18n/en";
 import { DICTS } from "../../gui/src/i18n/catalogs";
 import { interpolate, type TFn } from "../../gui/src/i18n/shared";
@@ -61,6 +62,33 @@ describe("subscription CLI grouping", () => {
     expect(authModeLabel(item, englishT)).toBe(en["modal.badge.subscriptionCli"]);
     expect(authModeLabel({ ...item, adapter: "anthropic" }, englishT)).toBe(en["modal.badge.apiKey"]);
   });
+
+  // `keyOptional` is enriched from the registry only for the canonical `claude-cli` name. A
+  // renamed or hand-authored row using the adapter arrives without it and must still be ready,
+  // paid, labelled, and free of key prompts, because the transport never reads a key.
+  test("a custom-named claude-cli row without keyOptional is ready and offers no key prompt", () => {
+    const custom = { adapter: "claude-cli", baseUrl: CLAUDE_CLI.baseUrl, authMode: "key" };
+    const sections = buildProviderWorkspace({ "my-claude": custom });
+    expect(sections.needsSetup).toEqual([]);
+    const item = sections.ready.find(p => p.name === "my-claude") as WorkspaceItem;
+    expect(item).toBeDefined();
+    expect(item.keyOptional).toBeUndefined();
+    expect(item.tier).toBe("paid");
+    expect(isFreeProvider(item)).toBe(false);
+    expect(authModeLabel(item, englishT)).toBe(en["modal.badge.subscriptionCli"]);
+    expect(providerAuthSurface(item)).toBeNull();
+
+    // A hand-authored row with no authMode at all is the same row.
+    expect(providerAuthSurface({ name: "bare", adapter: "claude-cli", baseUrl: CLAUDE_CLI.baseUrl })).toBeNull();
+    expect(buildProviderWorkspace({ bare: { adapter: "claude-cli", baseUrl: CLAUDE_CLI.baseUrl } }).ready.map(p => p.name)).toEqual(["bare"]);
+
+    // A key saved on it by other means keeps the surface so it can be removed.
+    expect(providerAuthSurface({ ...item, hasApiKey: true })).toBe("api-keys");
+    // Contrast: the same shape on a key adapter still needs setup and prompts for a key.
+    const keyRow = { adapter: "anthropic", baseUrl: CLAUDE_CLI.baseUrl, authMode: "key" };
+    expect(buildProviderWorkspace({ "my-anthropic": keyRow }).needsSetup.map(p => p.name)).toEqual(["my-anthropic"]);
+    expect(providerAuthSurface({ name: "my-anthropic", ...keyRow })).toBe("api-keys");
+  });
 });
 
 describe("subscription CLI warning copy", () => {
@@ -84,4 +112,3 @@ describe("subscription CLI warning copy", () => {
     }
   });
 });
-
