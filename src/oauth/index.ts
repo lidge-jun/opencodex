@@ -1588,6 +1588,10 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   // Login used to rebuild the whole row from the preset, so catalog data refreshed
   // immediately. Keep that timing without overwriting unrelated operator-owned fields.
   applyOAuthPresetCatalog(next, providerConfig);
+  // The per-model Copilot tier is operator intent, not account or preset metadata.
+  if (existing?.modelContextTiers !== undefined) {
+    next.modelContextTiers = structuredClone(existing.modelContextTiers);
+  }
   // The original Command Code seed was an implementation-owned static catalog, not an
   // operator opt-out. Promote that exact legacy shape when OAuth login refreshes the row.
   if (provider === "command-code" && existing && isLegacyCommandCodeStaticCatalog(existing)) {

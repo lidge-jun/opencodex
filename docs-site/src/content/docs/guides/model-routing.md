@@ -105,6 +105,13 @@ Routing and catalog visibility are separate controls:
   switching it on restores that selection. A remembered selection never applies a limit while disabled.
   Sending `{ "setAll": true }` without `value` enables all configured providers at the current
   global value and replaces their remembered selections.
+- A GitHub Copilot model that supports the upstream long-context tier can opt in with
+  `providers.github-copilot.modelContextTiers.<model> = "long_context"` or
+  `ocx provider edit github-copilot --model-context-tier <model>=long_context`.
+  OpenCodex advertises a 1,000,000-token capability before applying the provider cap, so a
+  400,000-token cap remains 400,000. Copilot Chat and Responses requests send
+  `contextTier: "long_context"`; `"default"` retains normal live context metadata.
+  The dashboard control is planned separately.
 
 ```json
 {

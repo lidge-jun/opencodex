@@ -179,6 +179,7 @@ export function createAdapterContinuations(
         try {
           continuationRequest = await transportState.activeAdapter.buildRequest(nextParsed, {
             headers: requestState.selectedForwardHeaders,
+            providerName: route.providerName,
             translatorBudget,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });

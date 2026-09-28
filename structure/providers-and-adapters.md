@@ -2,6 +2,10 @@
 
 For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
 
+GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses
+adapters add `contextTier` only when the canonical routed provider is `github-copilot`;
+other OpenAI-compatible destinations never receive it. The server carries provider identity
+through initial builds, retries, continuations, and sidecar builds.
 
 The coding-agent stream parser buffers each tool-use block by its content-block index
 and emits a complete start/delta/end sequence on closure. Distinct indices can interleave.

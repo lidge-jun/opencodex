@@ -835,6 +835,7 @@
   "gemini-web-search.test.ts": "adapters/google",
   "generic-oauth-failover.test.ts": "oauth",
   "github-copilot-account-origin.test.ts": "providers/github-copilot",
+  "github-copilot-context-tier.test.ts": "providers/github-copilot",
   "github-copilot-oauth.test.ts": "providers/github-copilot",
   "github-copilot-sse-rewrite.test.ts": "providers/github-copilot",
   "github-copilot-stream-contract.test.ts": "providers/github-copilot",

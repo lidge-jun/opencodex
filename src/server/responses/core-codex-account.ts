@@ -777,6 +777,7 @@ export async function retryCodexPoolOnAlternateAccount(
   }
   const request = await retryAdapter.buildRequest(parsed, {
     headers: retryHeaders,
+    providerName: route.providerName,
     translatorBudget: options.translatorBudget,
   });
   recordAdapterReasoning(logCtx, request);

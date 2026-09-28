@@ -10,6 +10,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  contextTierRecordConfigError,
   mergeModelCapabilities,
 } from "../provider-validation";
 import { isValidCodexAccountNamespaceTarget } from "../../codex/account-namespace-match";
@@ -279,6 +280,10 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  */
 export const providerConfigSchema = z.object({
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  modelContextTiers: z.unknown().superRefine((value, ctx) => {
+    const error = contextTierRecordConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["modelContextTiers"]),
   pinnedReasoningEffort: pinnedReasoningEffortSchema.optional(),
   modelPinnedReasoningEfforts: modelPinnedEffortsSchema.optional(),
   // Validated rather than left to passthrough: an unrecognized strategy would otherwise

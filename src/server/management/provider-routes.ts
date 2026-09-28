@@ -1,4 +1,4 @@
-import { modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -530,6 +530,14 @@ function applyProviderPatchFields(
     else next.modelCapabilities = capabilities;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelContextTiers")) {
+    const value = rawBody.modelContextTiers;
+    const error = contextTierRecordConfigError(value, true);
+    if (error) return { error };
+    if (value === null) delete next.modelContextTiers;
+    else next.modelContextTiers = Object.assign(Object.create(null), next.modelContextTiers ?? {}, value);
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "modelContextWindows")) {
     const value = rawBody.modelContextWindows;
     if (value === null) {
@@ -933,6 +941,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelContextTiers: p.modelContextTiers,
       modelCapabilities: p.modelCapabilities,
       pinnedReasoningEffort: p.pinnedReasoningEffort,
       modelPinnedReasoningEfforts: p.modelPinnedReasoningEfforts,
@@ -1213,6 +1222,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
+    const submittedModelContextTiers = Object.hasOwn(prov, "modelContextTiers");
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
@@ -1309,6 +1319,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       prov.modelContextWindows = submittedModelContextWindows
         ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
         : { ...existing.modelContextWindows };
+    }
+    if (existing?.modelContextTiers) {
+      prov.modelContextTiers = submittedModelContextTiers
+        ? Object.assign(Object.create(null), existing.modelContextTiers, prov.modelContextTiers ?? {})
+        : { ...existing.modelContextTiers };
     }
     if (existing?.modelAutoCompactTokenLimits) {
       prov.modelAutoCompactTokenLimits = submittedModelAutoCompactTokenLimits
