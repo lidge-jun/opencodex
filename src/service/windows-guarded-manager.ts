@@ -308,10 +308,11 @@ function inspectWindowsSchedulerManager(
   const strays = wrapperProcessesAlive(processes, paths);
   const state = io.winTaskState();
   if (state === "unknown") return unknown("the registered task's running state could not be proven");
-  if (state === "not-running" && ancestors.length === 0) {
-    // Registered but inert: nothing supervises the approved PID, so the stop owes
-    // the manager nothing. A stray wrapper with no task instance is still live
-    // supervision and must not read as absence.
+  if (state === "not-running") {
+    // A task with no running instance owes nothing ONLY when no wrapper survives.
+    // A live wrapper outside a task instance — whether it parents the approved
+    // PID or not — is unaccounted supervision: schtasks /end would report success
+    // on the inert task while the wrapper stayed alive to respawn the proxy.
     return strays.length === 0
       ? { kind: "absent" }
       : unknown("a surviving scheduler wrapper could not be tied to the registered task");

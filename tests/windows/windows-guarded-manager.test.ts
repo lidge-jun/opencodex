@@ -133,6 +133,15 @@ describe("windows guarded manager target", () => {
     expect(target.kind).toBe("unknown");
   });
 
++  test("a live wrapper ancestor with an inert task is unaccounted supervision", () => {
+    // The registered task is not running, but the approved PID still hangs off
+    // the wrapper chain — the detached-supervision case, not absence.
+    const target = inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { winTaskState: () => "not-running" as const },
+    }));
+    expect(target.kind).toBe("unknown");
+  });
+
   test("two registered managers stay unknown", () => {
     const target = inspectGuardedManagerTarget(42, 10100,
       schedulerDeps({ winsw: winswStarted }));
