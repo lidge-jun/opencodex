@@ -24,7 +24,7 @@ describe("Devin Anthropic signature fallback", () => {
   const previousFetch = globalThis.fetch;
   let home = "";
   let requests: Buffer[] = [];
-  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok" | "usage-reasoning-then-refuse" | "usage-ok"> = [];
+  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok" | "usage-reasoning-then-refuse" | "usage-ok" | "many-reasoning-then-refuse" | "large-reasoning-then-refuse"> = [];
 
   const frame = (body: Buffer, flags = 0) => {
     const header = Buffer.alloc(5);
@@ -77,6 +77,8 @@ describe("Devin Anthropic signature fallback", () => {
         // ModelUsageStats (#7) arrives with the reasoning, before the refusal trailer.
         : next === "usage-reasoning-then-refuse" ? Buffer.concat([frame(Buffer.concat([encodeMessage(7, Buffer.concat([encodeVarintField(2, 1000), encodeVarintField(3, 40)])), encodeString(9, "thinking")])), frame(encodeString(9, " more")), refusal])
         : next === "usage-ok" ? Buffer.concat([frame(Buffer.concat([encodeMessage(7, Buffer.concat([encodeVarintField(2, 1100), encodeVarintField(3, 20)])), encodeString(3, "ok"), encodeVarintField(5, 2)])), frame(Buffer.from("{}"), 2)])
+        : next === "many-reasoning-then-refuse" ? Buffer.concat([frame(encodeString(9, "x")), ...Array.from({ length: 1_024 }, () => frame(encodeString(9, "x"))), refusal])
+        : next === "large-reasoning-then-refuse" ? Buffer.concat([frame(encodeString(9, "x".repeat(524_289))), refusal])
         : ok;
       return new Response(body, { headers: { "content-type": "application/connect+proto" } });
     }) as typeof fetch;
@@ -187,6 +189,22 @@ describe("Devin Anthropic signature fallback", () => {
       jest.clearAllTimers();
       jest.useRealTimers();
     }
+  });
+
+  test("a held event count above the cap flushes and disables unsigned retry", async () => {
+    responses = ["many-reasoning-then-refuse", "ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    expect(requests).toHaveLength(1);
+    expect(events.some(e => e.type === "thinking_delta")).toBe(true);
+    expect(events.some(e => e.type === "error")).toBe(true);
+  });
+
+  test("a held reasoning text budget above the cap flushes and disables unsigned retry", async () => {
+    responses = ["large-reasoning-then-refuse", "ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    expect(requests).toHaveLength(1);
+    expect(events.some(e => e.type === "thinking_delta")).toBe(true);
+    expect(events.some(e => e.type === "error")).toBe(true);
   });
 
   test("an accepted signed Claude turn is sent once, signature included", async () => {
