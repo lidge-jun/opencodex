@@ -92,6 +92,27 @@ describe("Droid managed reasoning defaults", () => {
     expect(readOwnedDroidReasoningDefaults(input([changedModel], { port: 10101, config }))).toEqual({ "mock/chat": "high" });
   });
 
+  test.each([
+    ["provider", { ...MODEL, namespaced: "renamed/chat", provider: "renamed" }],
+    ["model", { ...MODEL, namespaced: "mock/renamed", id: "renamed" }],
+    ["combo alias", { ...MODEL, namespaced: "combo/renamed", provider: "combo", id: "renamed" }],
+  ] as const)("refresh clears a selected effort after a %s selector rename", async (_kind, changedModel) => {
+    const path = install();
+    expect(applyIntegration({ ...input(), droidReasoningDefaults: { "mock/chat": "high" } }).ok).toBe(true);
+
+    const results = await refreshOwnedCatalogIntegrations({
+      models: [changedModel], config: CONFIG, port: 10100, env: {}, home, store,
+    }, ["droid"]);
+
+    expect(results).toEqual([{ client: "droid", ok: true, changed: true }]);
+    expect(settings(path).customModels).toEqual([{
+      model: changedModel.namespaced, displayName: "OpenCodex: Chat Model",
+      baseUrl: "http://127.0.0.1:10100/v1", provider: "generic-chat-completion-api",
+      noImageSupport: true,
+    }]);
+    expect(readOwnedDroidReasoningDefaults(input([changedModel]))).toEqual({});
+  });
+
   test("a changed owned header remains a conflict and is not projected as ours", () => {
     const path = install();
     expect(applyIntegration({ ...input(), droidReasoningDefaults: { "mock/chat": "high" } }).ok).toBe(true);

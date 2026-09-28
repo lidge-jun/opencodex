@@ -82,15 +82,18 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 `src/server/droid-reasoning-default.ts` reads the model-scoped
 `x-opencodex-droid-default-effort` preference at Chat ingress for both native and
-translated routes. After route resolution, a canonical value declared in that
-model's effective reasoning ladder fills `reasoning_effort` only when neither
-that property nor nested `reasoning.effort` is present. With no configured or
-metadata ladder, the routed catalog's canonical fallback ladder applies; an
-explicit empty per-model ladder stays empty. Unsupported or invalid defaults have
-no effect; even an explicit null or invalid effort suppresses the default and
-retains the existing request semantics. Synthetic effort rows keep their selected
-effort. Provider headers do not forward this internal preference. Existing pins
-and caps run afterward with their usual authority. The [Droid integration](../clients/integrations.md#droid-reasoning-defaults)
+translated routes. A canonical value fills `reasoning_effort` only when neither
+that property nor nested `reasoning.effort` is present. A concrete route validates
+the preference against that model's effective reasoning ladder. Combo and policy
+routes retain it as logical request intent until each concrete attempt applies the
+existing target-specific reasoning normalization, so an incompatible first target
+cannot discard it for a compatible fallback. With no configured or metadata ladder,
+the routed catalog's canonical fallback ladder applies; an explicit empty per-model
+ladder stays empty. Unsupported or invalid defaults have no effect; even an explicit
+null or invalid effort suppresses the default and retains the existing request
+semantics. Synthetic effort rows keep their selected effort. Provider headers do
+not forward this internal preference. Existing pins and caps run afterward with
+their usual authority. The [Droid integration](../clients/integrations.md#droid-reasoning-defaults)
 owns the persisted per-model values.
 
 ### Route selection

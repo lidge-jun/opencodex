@@ -171,3 +171,58 @@ test("Chat synthetic low effort row takes precedence over the Droid high default
   );
   expect(sent.body.reasoning?.effort ?? sent.body.reasoning_effort).toBe("low");
 });
+
+test("translated Chat preserves a Droid default for a later compatible combo target", async () => {
+  releaseSpendHome ??= acquireOwnedSpendHome();
+  const firstBodies: Record<string, unknown>[] = [];
+  const firstHeaders: Headers[] = [];
+  const first = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      firstHeaders.push(new Headers(req.headers));
+      firstBodies.push(await req.json() as Record<string, unknown>);
+      return Response.json({
+        error: { type: "server_error", code: "upstream_server_error", message: "busy" },
+      }, { status: 500 });
+    },
+  });
+  upstreamServers.push(first);
+  const second = upstream();
+  const config = {
+    defaultProvider: "first",
+    providers: {
+      first: {
+        adapter: "openai-chat", baseUrl: `${first.url}v1`, apiKey: "fixture",
+        allowPrivateNetwork: true, modelReasoningEfforts: { m1: [] },
+      },
+      second: {
+        adapter: "openai-chat", baseUrl: second.baseUrl, apiKey: "fixture",
+        allowPrivateNetwork: true, modelReasoningEfforts: { m2: ["high"] },
+      },
+    },
+    combos: {
+      fallback: {
+        strategy: "failover",
+        targets: [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }],
+      },
+    },
+  } as OcxConfig;
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-opencodex-droid-default-effort": "high" },
+    body: JSON.stringify({
+      model: "combo/fallback", stream: false, messages: [{ role: "user", content: "hello" }],
+    }),
+  }), config, { model: "", provider: "" });
+  await response.text();
+
+  expect(response.status).toBe(200);
+  expect(firstBodies).toHaveLength(1);
+  expect(Object.hasOwn(firstBodies[0]!, "reasoning_effort")).toBe(false);
+  expect(Object.hasOwn(firstBodies[0]!, "reasoning")).toBe(false);
+  expect(second.captured).toHaveLength(1);
+  expect(second.captured[0]!.body.reasoning_effort
+    ?? (second.captured[0]!.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("high");
+  expect(firstHeaders[0]!.has("x-opencodex-droid-default-effort")).toBe(false);
+  expect(second.captured[0]!.headers.has("x-opencodex-droid-default-effort")).toBe(false);
+});

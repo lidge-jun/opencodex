@@ -75,11 +75,14 @@ an ambiguous legacy model ID or managed endpoint suppresses the projected map.
 Preview and apply accept optional `droidReasoningDefaults`. Omission preserves
 owned defaults; an empty map clears them. A supplied map is validated against the
 same roster used to build the contribution, and the contribution participates in
-the preview fingerprint and frozen mutation input. Refresh preserves defaults on
-retained models. Ordinary refresh omits the map unless the user has edited it,
-so an unsupported saved value does not block unrelated refresh. Removing models
-uses the ordinary removal preview. Disable and restore remove or restore the rows
-and their defaults as one owned value.
+the preview fingerprint and frozen mutation input. Refresh preserves defaults only
+while the exact namespaced selector remains in the roster. Provider, model, and
+combo alias names are mutable selectors rather than stable identities, so renaming
+one removes the old managed row and its default; the replacement row starts without
+a default. Ordinary refresh omits the map unless the user has edited it, so an
+unsupported saved value does not block unrelated refresh. Removing models uses the
+ordinary removal preview. Disable and restore remove or restore the rows and their
+defaults as one owned value.
 
 The request preference is interpreted before Chat route selection under the
 [inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).

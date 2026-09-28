@@ -194,14 +194,13 @@ async function handleChatCompletionsWithBudget(
       getOrAllocateRequestSessionLane(req),
       routedProvider,
     );
-    if (!effortRow) {
-      applyDroidReasoningDefault(
-        chatBody,
-        req.headers.get(DROID_DEFAULT_EFFORT_HEADER),
-        route.provider,
-        route.modelId,
-      );
-    }
+    if (!effortRow) applyDroidReasoningDefault(
+      chatBody,
+      req.headers.get(DROID_DEFAULT_EFFORT_HEADER),
+      route.combo || route.routeKind === "policy"
+        ? undefined
+        : { provider: route.provider, modelId: route.modelId },
+    );
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
