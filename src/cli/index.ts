@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
+import { serviceChildOwnershipDecision } from "../service/service-child-ownership";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -368,6 +369,17 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  // A supervised service child defers to a foreign recorded owner before doing
+  // anything else. 'ocx service start' refuses this activation path already, but
+  // the process managers below it — the Windows boot wrapper's restart loop and
+  // the launchd/systemd units — spawn 'start' directly, which let an npm service
+  // resurrect beside a desktop-owned runtime. The stay-out exit is the wrapper's
+  // intentional-stop protocol, so a refusal does not read as a crash to respawn.
+  const childOwnership = serviceChildOwnershipDecision(process.env);
+  if (childOwnership.kind === "stay-out") {
+    console.error("❌ " + childOwnership.refusal);
+    process.exit(serviceStayOutExitCode());
+  }
   // Native (WinSW) service mode has no batch wrapper to read the service token file into
   // the environment, and a FOREGROUND `ocx start` has no wrapper at all — so the app loads
   // the token here, before the server binds, with the same precedence the launchd plist and
