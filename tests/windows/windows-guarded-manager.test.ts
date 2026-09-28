@@ -45,7 +45,7 @@ const schedulerUnknown = () => ({ status: "unknown" as const, detail: "query fai
 const winswAbsent = () => "nonexistent" as const;
 const winswStarted = () => "started" as const;
 
-const schedulerDeps = (overrides: Record<string, unknown> = {}) => {
+const schedulerDeps = (overrides: Record<string, unknown> = {}, realRegistration = false) => {
   const { win, ...top } = overrides;
   return {
     platform: "win32" as const,
@@ -55,7 +55,7 @@ const schedulerDeps = (overrides: Record<string, unknown> = {}) => {
     ...top,
     win: {
       winTaskXml: () => "<Task>xml</Task>",
-      winRegistrationOurs: () => true,
+      ...(realRegistration ? {} : { winRegistrationOurs: () => true }),
       winTaskState: () => "running" as const,
       winProcs: () => SUPERVISED,
       winScriptPath: () => CMD,
@@ -192,10 +192,9 @@ describe("guarded scheduler registration identity", () => {
   const inspect = () => inspectGuardedManagerTarget(42, 10100, schedulerDeps({
     win: {
       winTaskXml: () => xml,
-      winRegistrationOurs: undefined,
       winTaskUserIds: currentWindowsTaskUserIds,
     },
-  }));
+  }, true));
 
   afterEach(() => {
     setWindowsPrincipalRunnerForTests(null);
