@@ -130,6 +130,9 @@ next attempt: a child that was just launched may still be binding, and post-heal
 may have thrown on an already-serving proxy. A live reading means
 no second start is spawned: a clean refusal then attests success, while a throw
 propagates as a start failure because post-health work failed on a serving process.
+During crash recovery after an accepted live restart, success instead requires a different
+runtime PID on the original port: if the original PID reads live again, the restart fails
+as a missed replacement rather than reporting success.
 Confirmed absence and launch-exit evidence together permit another start attempt. While the previous PID is still live, or a probe is uncertain, the
 confirmation window keeps polling for a replacement inside the reserve instead of
 failing at once. A second proxy is never spawned next to a live one.
