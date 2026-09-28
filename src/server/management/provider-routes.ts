@@ -74,7 +74,7 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaRepo
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
-import { resolveJevDecision } from "../../combos/jev";
+import { JEV_MODEL, resolveJevDecision } from "../../combos/jev";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -1616,14 +1616,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
       });
     }
-    if (name === "jev" && providerMatchesRegistryTransport(name, prov)) {
-      const probe = { targetKey: "jev/probe", effort: null } as const;
+    if (prov.adapter === "jev-decision") {
+      // Decision destinations all speak the same System One contract, and the JEV strategy
+      // resolves WHICH configured destination to call from config. The probe must exercise that
+      // same choice: keying it to the `jev` row alone left a reseller destination untestable
+      // (it fell through to the static-catalog answer below).
+      const label = getProviderRegistryEntry(name)?.label ?? name;
+      const probe = { targetKey: `${name}/probe`, effort: null } as const;
       const decision = await resolveJevDecision({
-        body: { input: "Verify the configured TypeSafe JEV decision service." },
+        body: { input: `Verify the configured decision service "${name}".` },
         candidates: [{
           key: probe.targetKey,
-          provider: "jev",
-          model: "jev-latest",
+          provider: name,
+          model: getProviderRegistryEntry(name)?.defaultModel ?? JEV_MODEL,
           reasoningEfforts: [],
         }],
         fallback: probe,
@@ -1634,15 +1639,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         return jsonResponse({
           ok: true,
           latencyMs: decision.latencyMs,
-          message: "Connected. TypeSafe JEV answered a decision probe.",
+          message: `Connected. ${label} answered a decision probe.`,
         });
       }
       return jsonResponse({
         ok: false,
         latencyMs: decision.latencyMs,
         error: decision.gate === "missing_key"
-          ? "TypeSafe JEV API key is not configured"
-          : `TypeSafe JEV decision probe failed (${decision.gate})`,
+          ? `${label} API key is not configured`
+          : `${label} decision probe failed (${decision.gate})`,
       });
     }
     if (prov.liveModels === false) {

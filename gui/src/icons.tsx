@@ -38,6 +38,8 @@ export const IconGithub = (p: P) => (<svg {...S(p)}><path d="M9 19c-5 1.5-5-2.5-
 export const IconPower = (p: P) => (<svg {...S(p)}><path d="M18.4 5.6a9 9 0 1 1-12.8 0"/><path d="M12 2v10"/></svg>);
 export const IconExternal = (p: P) => (<svg {...S(p)}><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>);
 export const IconKey = (p: P) => (<svg {...S(p)}><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.6-9.6M16 7l3 3M14 9l2 2"/></svg>);
+/** Decision routing: one input, one chosen branch. */
+export const IconBranch = (p: P) => (<svg {...S(p)}><path d="M6 3v6a3 3 0 0 0 3 3h9"/><path d="M6 21v-6a3 3 0 0 1 3-3h9"/><circle cx="18" cy="12" r="2"/></svg>);
 
 /**
  * The Codex mark — a terminal prompt (`>` and an underscore) inside a ring.
