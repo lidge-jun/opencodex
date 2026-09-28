@@ -250,6 +250,7 @@ export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseU
     triggerId: crypto.randomUUID(),
   });
   try {
+    const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const response = await fetch(`${base}${GET_USER_STATUS_PATH}`, {
       method: "POST",
       headers: { "Content-Type": "application/proto", "Connect-Protocol-Version": "1" },
@@ -257,7 +258,7 @@ export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseU
       body: new Uint8Array(encodeMessage(1, metadata)),
       // The body carries the api_key; a redirect would replay it at another host.
       redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: deadline,
     });
     if (!response.ok) {
       void response.body?.cancel().catch(() => undefined);
@@ -266,6 +267,7 @@ export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseU
       return response.status === 401 ? TERMINAL_QUOTA_FAILURE : null;
     }
     const body = await readBoundedResponseBytes(response, {
+      signal: deadline,
       maxBytes: QUOTA_RESPONSE_MAX_BYTES,
       inactivityTimeoutMs: REQUEST_TIMEOUT_MS,
     });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -234,6 +234,37 @@ describe("fetchDevinQuota transport", () => {
     expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
     globalThis.fetch = (async () => new Response(new Uint8Array(QUOTA_RESPONSE_MAX_BYTES + 1), { status: 200 })) as unknown as typeof fetch;
     expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+  });
+
+  test("one deadline stops a continuing byte drip and keeps last-good", async () => {
+    const deadline = new AbortController();
+    const reason = new DOMException("fixture deadline", "TimeoutError");
+    const budgets: number[] = [];
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      budgets.push(ms);
+      return deadline.signal;
+    });
+    const bytes = new Uint8Array(quotaPlan());
+    let index = 0;
+    let cancelledWith: unknown;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(deadline.signal);
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(bytes.subarray(index, ++index));
+          if (index === 3) deadline.abort(reason);
+          if (index === bytes.length) controller.close();
+        },
+        cancel(value) { cancelledWith = value; },
+      }, { highWaterMark: 0 }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
+      expect(budgets).toEqual([8_000]);
+      expect(cancelledWith).toBe(reason);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   test("a missing plan or a truncated nested timestamp keeps the last-good row", async () => {

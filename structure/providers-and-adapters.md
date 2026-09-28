@@ -77,7 +77,8 @@ Devin account quota in `src/providers/quota/devin.ts` reads Cognition's unary
 `SeatManagementService/GetUserStatus` with the default cloud-direct Metadata, against the
 credential's allowlisted api-server host, falling back to the configured allowlisted provider
 base URL (or the US default) for a legacy credential without a usable host. Redirects are
-refused and the body read is bounded. It
+refused; one eight-second deadline covers both the fetch and bounded body read, so a
+continuing byte drip keeps last-good when that deadline expires. It
 publishes only daily and weekly windows the plan does not hide whose reset is still ahead,
 because a credit-billed plan leaves those percents at a zero default and a past reset describes a
 rolled-over window; both would read as exhausted. Prompt plus flex credits form one monthly pool
