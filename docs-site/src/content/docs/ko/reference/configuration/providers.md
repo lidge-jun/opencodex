@@ -499,3 +499,7 @@ source 재정의가 0이면 꺼지고, 전역 0이어도 source에 양수 재정
 후보의 양수 유효 임계값은 사용량 상한이며, 후보 0은 그 선호만 끕니다. 후보 0도 알 수 없거나
 소진된 사용량을 허용하지 않습니다. 판단에 쓰는 각 quota window는 이 프로세스에서 최근 관측되어야
 하며, credit-only 갱신이나 다른 window의 부분 갱신은 오래된 사용량을 새 관측으로 만들지 않습니다.
+
+### `anthropicAccountPool.routes`
+
+`anthropicAccountPool.routes`는 모델을 저장된 Anthropic OAuth 계정 ID에 연결합니다. 풀이 활성화되면 대소문자를 구분하는 `match` 글롭의 첫 일치가 최초 선택과 429 재시도를 제한합니다. `fallback: true`는 해당 경로에 적격 계정이 없을 때만 일반 풀로 확장합니다.

@@ -602,3 +602,7 @@ geçerli adı kontrol edin.
   "visionSidecar": { "enabled": true }
 }
 ```
+
+### `anthropicAccountPool.routes`
+
+`anthropicAccountPool.routes`, modeli kayıtlı Anthropic OAuth hesap kimliklerine bağlar. Havuz açıkken büyük/küçük harfe duyarlı `match` kalıbıyla ilk eşleşen kural ilk seçimi ve 429 yeniden denemesini sınırlar. `fallback: true` yalnızca kuralda uygun hesap kalmadığında normal havuza döner.

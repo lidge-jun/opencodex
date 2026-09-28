@@ -483,3 +483,7 @@ Vercel AI Gateway は、1 つのモデルを複数の基盤となる推論プロ
   "visionSidecar": { "enabled": true }
 }
 ```
+
+### `anthropicAccountPool.routes`
+
+`anthropicAccountPool.routes` は Anthropic OAuth の保存済みアカウント ID をモデルに割り当てます。有効なプールでは、大文字小文字を区別する `match` グロブの最初の一致が初回選択と 429 再試行を制限します。`fallback: true` はルート内に適格なアカウントがない場合だけ通常のプールを使います。

@@ -554,3 +554,7 @@ le nom actuel avant d'effectuer une autre modification.
   "visionSidecar": { "enabled": true }
 }
 ```
+
+### `anthropicAccountPool.routes`
+
+Les routes `anthropicAccountPool.routes` associent un modèle à des identifiants de comptes OAuth Anthropic enregistrés. La première règle correspondante (`match`, glob sensible à la casse) limite la sélection initiale et les reprises 429 lorsque le pool est activé. `fallback: true` élargit la sélection seulement si aucun compte de la règle n’est éligible.
