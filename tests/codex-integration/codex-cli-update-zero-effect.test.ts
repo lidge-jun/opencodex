@@ -163,7 +163,10 @@ describe("Codex CLI updater zero-effect boundary", () => {
     expect(typeof report.reason).toBe("string");
     expect(report.candidateAvailable).toBe(true);
     expect(report.candidateSource).toBe("environment");
-    expect(report.selectionAttested).toBe(false);
+    // The launcher's proof-bound snapshot attests the environment-declared
+    // candidate on POSIX; the win32 inspection still defers selection
+    // attestation, so the flag is platform-dependent by design.
+    expect(report.selectionAttested).toBe(process.platform !== "win32");
     for (const stale of ["selected", "selectedVersion", "selectionSource", "selectionEvidence"]) {
       expect(stale in report).toBe(false);
     }
