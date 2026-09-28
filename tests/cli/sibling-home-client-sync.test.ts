@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findCrossHomeOwner, findCrossHomeOwnerDetailed, markCrossHomeSibling, markLiveHomeSibling } from "../../src/cli/cross-home-owner";
-import { readOwnerRegistryHomes, registerOwnerRegistryHome } from "../../src/config/owner-registry";
-import { writeRuntimePort } from "../../src/config/process-state";
+import { ownerRegistryDir, readOwnerRegistry, registerOwnerRegistryHome } from "../../src/config/owner-registry";
+import { removeRuntimePort, writeRuntimePort } from "../../src/config/process-state";
 import { directLocalHttpFetch } from "../../src/server/direct-local-http";
 import { resetSiblingStartForTests, siblingOfLivePort } from "../../src/codex/sibling-start";
 import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
@@ -122,7 +122,7 @@ afterEach(async () => {
   }
   for (const server of servers.splice(0)) server.stop(true);
   for (const root of roots.splice(0)) removeTreeWithRetry(root);
-  for (const key of ["HOME", "USERPROFILE", "OPENCODEX_HOME", "CODEX_HOME", "GROK_HOME", "CLAUDE_CONFIG_DIR"]) {
+  for (const key of ["HOME", "USERPROFILE", "OPENCODEX_HOME", "CODEX_HOME", "GROK_HOME", "CLAUDE_CONFIG_DIR", "OCX_OWNER_REGISTRY_DIR"]) {
     if (originalEnv[key] === undefined) delete process.env[key];
     else process.env[key] = originalEnv[key];
   }
@@ -438,7 +438,7 @@ test("a registered custom-home owner is proven through its own runtime record", 
   resetSiblingStartForTests();
 
   registerOwnerRegistryHome(homeA);
-  expect(readOwnerRegistryHomes()).toContain(homeA);
+  expect(readOwnerRegistry().homes).toContain(homeA);
   expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(port);
 });
 
@@ -519,7 +519,58 @@ test("an attested sibling record defers to the owner port it names", async () =>
 test("publishing a runtime record registers the home for cross-home discovery", () => {
   const fx = fixture();
   writeRuntimePort({ pid: process.pid, port: 0 });
-  expect(readOwnerRegistryHomes()).toContain(fx.ocx);
+  expect(readOwnerRegistry().homes).toContain(fx.ocx);
+});
+
+test("removing a runtime record retires its registry pointer", () => {
+  const fx = fixture();
+  writeRuntimePort({ pid: process.pid, port: 42101 });
+  expect(readOwnerRegistry().homes).toContain(fx.ocx);
+  removeRuntimePort(process.pid);
+  expect(readOwnerRegistry().homes).not.toContain(fx.ocx);
+});
+
+test("stale registry pointers are pruned before they can crowd out a live owner", async () => {
+  const fx = fixture();
+  // More dead pointers than the entry cap, each naming a home that no longer
+  // publishes a record - the pile must not hide the registered live owner.
+  // Pointer files are written directly: the production register call pays an
+  // atomic fsync per entry, which alone would blow the test's own budget here.
+  mkdirSync(ownerRegistryDir(), { recursive: true });
+  for (let i = 0; i < 70; i++) {
+    writeFileSync(join(ownerRegistryDir(), "dead-" + i + ".json"), JSON.stringify({ home: join(fx.root, "dead" + i, ".opencodex") }));
+  }
+  const ownerPid = process.pid + 1;
+  const port = healthServer(ownerPid);
+  const homeA = join(fx.root, "homeA", ".opencodex");
+  mkdirSync(homeA, { recursive: true });
+  writeFileSync(join(homeA, "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port, attestationSecret: TEST_ATTESTATION_SECRET,
+  }));
+  registerOwnerRegistryHome(homeA);
+  const registry = readOwnerRegistry();
+  expect(registry.homes).toContain(homeA);
+  expect(registry.truncated).toBe(false);
+  expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(port);
+});
+
+test("a registry listing too deep to scan fully reports truncation instead of a false none", async () => {
+  const fx = fixture();
+  // Entries whose homes still publish records pass the existence prune, so the
+  // result cap is the bound that actually cuts off the owner - truncation, not
+  // a confident none, is the only honest answer left.
+  mkdirSync(ownerRegistryDir(), { recursive: true });
+  for (let i = 0; i < 70; i++) {
+    const deadHome = join(fx.root, "full" + i, ".opencodex");
+    mkdirSync(deadHome, { recursive: true });
+    writeFileSync(join(deadHome, "runtime-port.json"), JSON.stringify({ pid: process.pid + 1000 + i, port: 1 }));
+    writeFileSync(join(ownerRegistryDir(), "full-" + i + ".json"), JSON.stringify({ home: deadHome }));
+  }
+  const registry = readOwnerRegistry();
+  expect(registry.truncated).toBe(true);
+  expect(registry.homes.length).toBe(64);
+  const verdict = await findCrossHomeOwnerDetailed({ homeDir: fx.home });
+  expect(verdict.kind).toBe("indeterminate");
 });
 
 /**
@@ -594,4 +645,45 @@ test("a live legacy record without an attestation secret vetoes shared writes en
   }));
   registerOwnerRegistryHome(homeA);
   await secondaryStartPreservesBytes(fx, ownerPort, ownerPort);
+}, 30_000);
+
+test("a registry-only discovered owner vetoes shared writes end to end", async () => {
+  const fx = fixture();
+  // No managed URL in any shared client: the registry pointer is the only way a
+  // secondary can find this owner, so the e2e proves registry discovery rather
+  // than the URL-hint path the other end-to-end cases already cover.
+  const ownerPid = process.pid + 1;
+  const ownerPort = healthServer(ownerPid);
+  const homeA = join(fx.root, "homeA", ".opencodex");
+  mkdirSync(homeA, { recursive: true });
+  writeFileSync(join(homeA, "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port: ownerPort, attestationSecret: TEST_ATTESTATION_SECRET,
+  }));
+  registerOwnerRegistryHome(homeA);
+  const grokPath = join(fx.grok, "config.toml");
+  const codexPath = join(fx.codex, "config.toml");
+  const claudePath = join(fx.claude, "agents", "ocx-existing.md");
+  writeFileSync(grokPath, "# user content\n");
+  writeFileSync(codexPath, "model = \"gpt-6\"\n");
+  writeFileSync(claudePath, "owned roster bytes\n");
+  const before = [grokPath, codexPath, claudePath].map(path => readFileSync(path));
+  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
+  const secondaryPort = reservation.port;
+  reservation.stop(true);
+  writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
+    port: secondaryPort, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
+    checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
+    claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
+  }));
+  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
+    cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
+  });
+  children.push(child);
+  const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
+  expect(runtime.siblingOfPort).toBe(ownerPort);
+  await waitForClientStartup(child);
+  expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
+  child.kill("SIGTERM");
+  await child.exited;
+  expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
 }, 30_000);

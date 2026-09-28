@@ -14,7 +14,7 @@ import { readClientConnectionState } from "../client/state";
 import { findManagedRegion, resolveGrokHome } from "../grok/inject";
 import { providerTableString } from "../codex/injected-marker";
 import { isLocalAttestationSecret } from "../lib/local-management-attestation";
-import { readOwnerRegistryHomes } from "../config/owner-registry";
+import { readOwnerRegistry } from "../config/owner-registry";
 import {
   classifyHealthz,
   loopbackProbeHosts,
@@ -163,7 +163,9 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
   recordHome(defaultHome);
   // The shared registry is what lets one custom home find another: every runtime
   // that published a runtime record registered its home beside the shared clients.
-  for (const home of readOwnerRegistryHomes()) recordHome(home);
+  const registry = readOwnerRegistry();
+  for (const home of registry.homes) recordHome(home);
+  const registryTruncated = registry.truncated;
 
   // Grok's writer reads its config in full; cap discovery separately so startup stays bounded.
   const grok = readBoundedRegularFile(join(resolveGrokHome(), "config.toml"), MAX_GROK_CONFIG_BYTES);
@@ -194,6 +196,12 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
       indeterminateReason = reason;
     }
   };
+
+  if (registryTruncated) {
+    // A truncated registry can hide the live owner's home entirely; "no owner
+    // found" is then indistinguishable from "owner never read". Fail closed.
+    noteIndeterminate(null, "the owner registry listing was truncated before every pointer could be checked");
+  }
 
   const queue = [...candidates];
   const probed = new Set<number>();

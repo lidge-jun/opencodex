@@ -24,7 +24,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { atomicWriteFile } from "./atomic-write";
@@ -91,25 +91,37 @@ export function registerOwnerRegistryHome(home: string): void {
   } catch { /* discovery aid only */ }
 }
 
+export interface OwnerRegistryRead {
+  homes: string[];
+  /**
+   * The listing or the validated result hit a bound before every pointer could be
+   * checked. Callers must treat truncation as "discovery may have missed a live
+   * owner" and fail closed rather than concluding no owner exists.
+   */
+  truncated: boolean;
+}
+
 /**
  * Every registered home path, including this process's own (the caller filters it
  * out). Entries are pointers, not facts: malformed, oversized, or unreadable entries
- * are skipped rather than trusted. Bounded so a cluttered directory cannot stall
- * startup discovery.
+ * are skipped rather than trusted, and a pointer whose home no longer publishes a
+ * runtime record nominates nothing - it is pruned before the entry cap so a pile
+ * of dead homes cannot crowd out a live owner. Bounded so a cluttered directory
+ * cannot stall startup discovery; when a bound actually cuts off unchecked
+ * pointers, {@link OwnerRegistryRead.truncated} says the answer is incomplete.
  */
-export function readOwnerRegistryHomes(): string[] {
+export function readOwnerRegistry(): OwnerRegistryRead {
   const dir = ownerRegistryDir();
   let names: string[];
   try {
     names = readdirSync(dir)
-      .filter(name => name.endsWith(REGISTRY_ENTRY_SUFFIX))
-      .slice(0, MAX_REGISTRY_LISTING);
+      .filter(name => name.endsWith(REGISTRY_ENTRY_SUFFIX));
   } catch {
-    return [];
+    return { homes: [], truncated: false };
   }
+  let truncated = names.length > MAX_REGISTRY_LISTING;
   const homes: string[] = [];
-  for (const name of names) {
-    if (homes.length >= MAX_REGISTRY_ENTRIES) break;
+  for (const name of names.slice(0, MAX_REGISTRY_LISTING)) {
     const path = join(dir, name);
     try {
       const stat = statSync(path);
@@ -118,10 +130,22 @@ export function readOwnerRegistryHomes(): string[] {
       const home = parsed && typeof parsed === "object"
         ? (parsed as Record<string, unknown>).home
         : undefined;
-      if (typeof home === "string" && home.length > 0) homes.push(home);
+      if (typeof home !== "string" || home.length === 0) continue;
+      // The record is written before the pointer, so a registered home without
+      // runtime-port.json is a dead entry: skip it before it can spend the cap.
+      if (!existsSync(join(home, "runtime-port.json"))) continue;
+      if (homes.length >= MAX_REGISTRY_ENTRIES) { truncated = true; break; }
+      homes.push(home);
     } catch { /* a bad entry names nothing */ }
   }
-  return homes;
+  return { homes, truncated };
+}
+
+/** Retire 'home' from the shared registry. Best-effort like registration. */
+export function unregisterOwnerRegistryHome(home: string): void {
+  try {
+    unlinkSync(registryEntryPath(ownerRegistryDir(), home));
+  } catch { /* a missing pointer needs no removal */ }
 }
 
 /** Register this process's own home after its runtime record is published. */

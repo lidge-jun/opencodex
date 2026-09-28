@@ -9,7 +9,7 @@ import {
 } from "../lib/windows-elevation";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir, hardenConfigDir } from "./paths";
-import { registerOwnHome } from "./owner-registry";
+import { registerOwnHome, unregisterOwnerRegistryHome } from "./owner-registry";
 
 export function getPidPath(): string {
   return join(getConfigDir(), "ocx.pid");
@@ -105,6 +105,9 @@ export function removePid(expectedPid?: number): void {
 export function removeRuntimePort(expectedPid?: number): void {
   if (expectedPid !== undefined && readRuntimePort(expectedPid) === null) return;
   try { unlinkSync(getRuntimePortPath()); } catch { /* ignore */ }
+  // The record is gone, so the registry pointer names a dead home. Retire it
+  // beside the record or stale pointers accumulate toward the reader's cap.
+  unregisterOwnerRegistryHome(getConfigDir());
 }
 
 /**
