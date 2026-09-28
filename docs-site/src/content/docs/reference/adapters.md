@@ -560,6 +560,9 @@ configuration that names the old id is rewritten at startup.
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
   with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
   `parseStream` path is disabled.
+- Reasoning continuity carries provider signatures across turns. If Cognition refuses a signed
+  Anthropic replay before visible output, Devin retries once with the signature withheld and the
+  thinking text preserved.
 - Live model discovery via `GetCascadeModelConfigs`; the static seed is filtered against the
   account's live roster so models not on the plan drop out instead of failing at request time.
 - Tool definitions are encoded in the request and tool-call events are decoded from the response

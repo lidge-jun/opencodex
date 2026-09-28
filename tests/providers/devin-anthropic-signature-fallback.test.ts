@@ -169,7 +169,7 @@ describe("Devin Anthropic signature fallback", () => {
     const observed: AdapterEvent[] = [];
     let first = true;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (!first) return regularFetch(input, init);
+      if (!String(input).endsWith("/GetChatMessage") || !first) return regularFetch(input, init);
       first = false;
       requests.push(Buffer.from(await (init!.body as Blob).arrayBuffer()).subarray(5));
       const body = new ReadableStream<Uint8Array>({
