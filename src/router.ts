@@ -576,7 +576,18 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
       ? PROVIDER_REGISTRY.find(entry => entry.id === targetProvider)
       : undefined;
     const authMode = effective.authMode ?? registry?.authKind ?? "key";
-    return authMode !== "key" || effective.keyOptional === true || Boolean(effective.apiKey?.trim())
+    if (authMode === "forward") return undefined; // The source caller bearer is stripped on a redirect.
+    if (authMode === "oauth") {
+      if (registry?.authKind !== "oauth") return undefined;
+      const usable = peekAuthStore()[targetProvider]?.accounts.some(account =>
+        account.paused !== true && account.needsReauth !== true
+        && (account.credential.expires > Date.now()
+          ? Boolean(account.credential.access.trim())
+          : Boolean(account.credential.refresh.trim()))
+      );
+      return usable ? value : undefined;
+    }
+    return authMode === "local" || effective.keyOptional === true || Boolean(effective.apiKey?.trim())
       ? value : undefined;
   } catch {
     return undefined;
@@ -713,7 +724,7 @@ function routeModelInternal(
     const selected = evaluation.candidates[evaluation.selectedIndex]!;
     const concrete = `${selected.provider}/${selected.model}`;
     const routed = routeModelInternal(config, concrete, true, undefined, false, preview, redirectState);
-    if (routed.credentialDomainRewrite && !evaluation.candidates.some(candidate =>
+    if (routed.routeReason === "blocked-model-redirect" && !evaluation.candidates.some(candidate =>
       candidate.provider === routed.providerName && candidate.model === routed.modelId && candidate.eligible
     )) {
       throw new NoEligiblePolicyCandidateError(policyId, evaluation.trace);

@@ -89,6 +89,26 @@ describe("blocked-model redirect compatibility and provider changes", () => {
     expect(routeModel(missing, "openai/m1")).toMatchObject({ providerName: "google", modelId: "g1" });
   });
 
+  test("forward destination cannot borrow the caller bearer from a cross-provider redirect", () => {
+    const configured = config({ m1: "forward/g1" });
+    configured.providers.forward = {
+      adapter: "openai-chat", baseUrl: "https://example.test/v1", authMode: "forward", models: ["g1"],
+    };
+    expect(routeModel(configured, "openai/m1")).toMatchObject({
+      providerName: "openai", modelId: "forward/g1", routeReason: "blocked-model-redirect",
+    });
+  });
+
+  test("policy rejects a same-provider substitute outside its eligible candidate list", () => {
+    const configured = config({ m1: "m2" });
+    configured.routingProfiles = { fast: { candidates: [{ provider: "openai", model: "m1" }] } };
+    expect(() => routeModel(configured, "policy/fast")).toThrow(/No eligible candidates/);
+    configured.routingProfiles!.fast!.candidates.push({ provider: "openai", model: "m2" });
+    expect(routeModel(configured, "policy/fast")).toMatchObject({
+      providerName: "openai", modelId: "m2", routeKind: "policy", routeReason: "blocked-model-redirect",
+    });
+  });
+
   test("policy rejects a redirected destination outside its candidate list or hard requirements", () => {
     const configured: OcxConfig = {
       port: 10100,

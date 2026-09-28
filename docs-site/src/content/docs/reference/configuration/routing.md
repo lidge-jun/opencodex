@@ -83,8 +83,9 @@ with one shared five-edge limit and cycle detection. A pinned account selector n
 account: a cross-provider target fails closed, whether its key is bare or account-qualified.
 The destination uses its own credentials and quota, and never inherits source account fields;
 a caller `Authorization` header addressed to the source route is stripped, as for combo and policy routes.
-A disabled or key-required destination without a usable credential keeps the legacy same-provider
-substitution. Policy routes accept the final destination only if it is an eligible declared candidate.
+A disabled destination, a forward destination, or a key/OAuth destination without usable stored
+credentials keeps the source route's legacy behavior. Under a routing policy, every redirect target
+must itself be a declared eligible candidate, even when it keeps the same provider.
 Malformed redirect maps are ignored with a warning on load and rejected on configuration writes.
 Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
