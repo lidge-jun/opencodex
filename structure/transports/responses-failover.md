@@ -24,7 +24,7 @@ without returning the source lease would block cap-one fallback and leak capacit
 Retry, replay, and combo failover on the Responses data plane: upstream reset retry, the
 ambiguous-resend gate and replay boundary, combo quota fallback and commit boundaries, compaction
 routing overrides, and output headroom. The endpoint and dispatch rules they build on are in
-[Responses transport](responses.md). `src/lib/errors.ts` classifies Google's HTTP 400 input-token-count overflow as `context_length_exceeded`, including the counted-token variant. Output-token limits and protected failures retain their existing categories. Classification does not itself shorten input or authorize replay.
+[Responses transport](responses.md). `src/lib/errors.ts` classifies an HTTP 400 input-token-count overflow as `context_length_exceeded`, including the counted-token variant; the wording is Google's, but the shared classifier matches it for any provider. Output-token limits and protected failures retain their existing categories. Classification does not itself shorten input or authorize replay.
 
 ## Chat-to-Responses message phase inference
 
