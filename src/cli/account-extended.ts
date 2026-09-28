@@ -1,7 +1,7 @@
 import { loadConfig } from "../config";
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
   MIN_ACCOUNT_PRIORITY,
@@ -47,6 +47,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
+  ocx account routes anthropic [--file <json-file>|--clear] [--json]
   ocx account remove <provider> <id|alias|main> --yes [--json]
   ocx account clear-cooldown <provider> <id|alias|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
@@ -1088,5 +1089,34 @@ export async function cmdAlias(args: string[], deps: AccountDeps): Promise<numbe
   const result = { ok: true, provider: name, id, alias: alias || null };
   if (wantsJson) console.log(JSON.stringify(result, null, 2));
   else console.log(alias ? `${name}: ${requestedId} is now “${alias}”` : `${name}: cleared alias for ${requestedId}`);
+  return 0;
+}
+
+/** Read or replace the ordered Anthropic model routes through the unified settings API. */
+export async function cmdRoutes(args: string[], deps: AccountDeps): Promise<number> {
+  const wantsJson = flag(args, "--json");
+  const file = flagValue(args, "--file");
+  const clear = flag(args, "--clear");
+  if (args.shift() !== "anthropic" || args.length || (file.found && (!file.value || clear))) return usage();
+  const baseUrl = await resolveBaseUrl(deps);
+  if (!baseUrl) return proxyUnreachable();
+  let routes: unknown;
+  if (file.found) {
+    try {
+      const info = statSync(file.value!);
+      if (!info.isFile() || info.size > 64 * 1024) return usage("Error: route file must be a regular JSON file of at most 64 KiB");
+      routes = JSON.parse(readFileSync(file.value!, "utf8"));
+    } catch {
+      return usage("Error: could not read a valid JSON route file");
+    }
+  }
+  const writing = file.found || clear;
+  const response = await apiJson(deps, baseUrl, writing ? "PUT" : "GET",
+    writing ? "/api/pool/settings" : "/api/pool/settings?provider=anthropic",
+    writing ? { provider: "anthropic", routes: clear ? null : routes } : undefined);
+  if (response.status === 0) return proxyUnreachable(response.transportError);
+  if (response.status !== 200) return apiError(response.json, "failed to manage Anthropic routes", response.status);
+  if (wantsJson) console.log(JSON.stringify(response.json, null, 2));
+  else console.log(JSON.stringify(response.json.routes ?? [], null, 2));
   return 0;
 }

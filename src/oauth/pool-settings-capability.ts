@@ -1,6 +1,7 @@
 import { isGenericFailoverProvider } from "./generic-account-failover";
 import { parseAccountPoolStickyLimit, parseAccountPoolStrategy, parseCodexAccountPoolStrategy } from "./pool-kernel";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import type { AnthropicModelRoute } from "../types/config";
 
 /**
  * Which pool-settings contract a provider speaks (#695, slice 1).
@@ -48,7 +49,7 @@ export function parseGenericStickyLimit(value: unknown): number | null {
 
 /** Fields the unified pool-settings contract can carry, per kind. */
 export const POOL_SETTINGS_FIELDS = [
-  "enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "maxConcurrentPerAccount",
+  "enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "maxConcurrentPerAccount", "routes",
 ] as const;
 export type PoolSettingsField = typeof POOL_SETTINGS_FIELDS[number];
 
@@ -81,6 +82,7 @@ export interface PoolSettingsDto {
   autoSwitchThreshold: number | null;
   quotaWindow: string | null;
   maxConcurrentPerAccount: number | null;
+  routes: AnthropicModelRoute[] | null;
 }
 
 
@@ -129,7 +131,7 @@ export function genericPoolSettingsDto(
 /** Which fields each kind actually honours. Declared, never silently omitted. */
 const SUPPORTED_BY_KIND: Record<PoolSettingsKind, PoolSettingsField[]> = {
   codex: ["strategy", "stickyLimit", "autoSwitchThreshold"],
-  anthropic: ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow"],
+  anthropic: ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold", "quotaWindow", "routes"],
   generic: ["enabled", "strategy", "stickyLimit", "autoSwitchThreshold"],
 };
 
@@ -159,6 +161,7 @@ export function unifiedPoolSettingsDto(
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(config.autoSwitchThreshold) ?? 80,
       quotaWindow: null,
       maxConcurrentPerAccount: null,
+      routes: null,
     };
   }
   if (kind === "anthropic") {
@@ -173,6 +176,7 @@ export function unifiedPoolSettingsDto(
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(pool.autoSwitchThreshold) ?? 80,
       quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
       maxConcurrentPerAccount: null,
+      routes: pool.routes ?? null,
     };
   }
   const failover = config.providers?.[provider]?.oauthAccountFailover ?? {};
@@ -190,5 +194,6 @@ export function unifiedPoolSettingsDto(
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
     quotaWindow: null,
     maxConcurrentPerAccount: provider === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
+    routes: null,
   };
 }

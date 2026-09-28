@@ -612,6 +612,19 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting."],
   },
   {
+    command: ["account", "routes"],
+    summary: "Read, replace, or clear Anthropic OAuth model account routes.",
+    routes: [{ method: "GET", path: "/api/pool/settings" }, { method: "PUT", path: "/api/pool/settings" }],
+    flags: [
+      { name: "--file", value: "string", summary: "Read a bounded JSON route array from a local file." },
+      { name: "--clear", value: "boolean", summary: "Remove the stored routes." },
+      { name: "--json", value: "boolean", summary: "Emit the unified settings response as JSON." },
+    ],
+    mutates: true,
+    json: "envelope",
+    details: ["Only anthropic is supported. The server validates route names, patterns, and account IDs."],
+  },
+  {
     command: ["account", "auto-switch"],
     summary: "Show or set the usage percentage at which a pool moves to another account.",
     // Declared here rather than riding on `account strategy`, which is what it did before the
