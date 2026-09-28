@@ -100,3 +100,24 @@ Raw captures: `.tmp/sonnet55/` (scratch, not committed).
 Write scope: files above plus this unit. PR to `dev`, exact-head CI, merge, then release via
 `scripts/release.ts` (user asked to deploy on 2026-09-29).
 
+
+## Plan after audit (020)
+
+- Item 5 is two files: `src/providers/registry/entries-core.ts` devin seed list and
+  `DEVIN_MODEL_CONTEXT_WINDOWS` in `src/adapters/devin/live-models.ts`. `DEVIN_STATIC_MODELS` stays
+  untouched; live discovery owns the roster.
+- Item 6: no `KIRO_NATIVE_EFFORT_FIELDS` entry. Kiro's `claude-sonnet-5` uses emulated effort and only
+  Opus has a measured native field.
+- Item 7: no `models-capabilities.ts` regex change, matching what Opus 5.5 actually shipped. The Cursor
+  row is regular-only until the id appears in the live GetUsableModels roster; that listing is the
+  trigger to re-shape it (thinking variant or flat effort ids, whichever the roster shows).
+- Sidecars: add a shared `anthropicThinkingOff(modelId)` in the adapter and use it in the web-search
+  and vision sidecars, so a sidecar pointed at Sonnet 5.5 sends `between_tools` instead of a
+  rejected `disabled`. Defaults stay `claude-sonnet-5`.
+- Tests: `kiro-adapter.test.ts` gets only the in-line roster element (3 lines of ratchet headroom);
+  new assertions go to sibling files registered in `scripts/test-layout/layout.json` and
+  `tests/fixtures/test-layout-expected.json`. Update the usage-cost surface loops, the cursor catalog
+  flat-wire case, the devin context pin and add anthropic wire-shape cases.
+- Residuals recorded, not fixed here: dotted Bedrock ids do not parse in `claudeFamilyVersion` (all
+  families), and the Messages-native passthrough forwards caller `thinking`/sampling verbatim.
+
