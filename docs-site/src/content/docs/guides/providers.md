@@ -699,15 +699,18 @@ interrupted or filtered turns leave the markup as text. Create Provider-API keys
 
 For a provider using the native `command-code` adapter, `projectContext: "on"` opts into
 sending local project files in the `/alpha/generate` `memory`, `taste`, and `skills` fields.
-Unset or `"off"` leaves those fields empty and does not read project-context files.
+With `projectContext` unset or `"off"`, no project files (`AGENTS.md`, taste, or skills)
+are read or sent; the existing `config` metadata payload is unchanged.
 The roots are resolved from the **opencodex proxy process working directory**, not from a
 caller's remote workspace. The loader reads `AGENTS.md`, `.commandcode/taste/taste.md`,
 and `SKILL.md` files in immediate child directories of `.commandcode/skills`,
 `.agents/skills`, and `.pi/skills` under that working directory. Enabling the option sends
 the collected contents upstream to the configured Command Code endpoint. It is rejected
-for other adapters. Reads remain inside the resolved working directory, count every
-visited skill-directory entry, select at most 16 skills, and limit file bytes, total
-skill bytes, and skill-loading time; unreadable or missing files produce empty fields.
+for other adapters. Asynchronous path checks keep reads inside the resolved working
+directory, including when that directory is a filesystem root; only regular-file
+content is read. Every visited skill-directory entry counts toward the scan budget; at
+most 16 skills are selected. File bytes, total skill bytes, and loading time are bounded;
+unreadable or missing files produce empty fields.
 Results are cached for 30 seconds.
 
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for

@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -12,22 +13,29 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 
 const fsPromises = await import("node:fs/promises");
 const realOpendir = fsPromises.opendir;
 const realOpen = fsPromises.open;
+const realLstat = fsPromises.lstat;
+const realRealpath = fsPromises.realpath;
+const lstatMock = mock(realLstat);
+const realpathMock = mock(realRealpath);
 const opendirMock = mock(realOpendir);
 const openMock = mock(realOpen);
 mock.module("node:fs/promises", () => ({
   ...fsPromises,
   opendir: opendirMock,
   open: openMock,
+  lstat: lstatMock,
+  realpath: realpathMock,
 }));
 
 const {
   EMPTY_COMMAND_CODE_PROJECT_CONTEXT,
   loadCommandCodeProjectContext,
+  isContainedCanonicalPath,
   projectContextCache,
   pruneProjectContextCache,
   setCommandCodeFileOpTimeoutForTests,
@@ -59,6 +67,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  lstatMock.mockImplementation(realLstat);
+  realpathMock.mockImplementation(realRealpath);
   projectContextCache.clear();
   setCommandCodeFileOpTimeoutForTests(undefined);
 });
@@ -67,6 +77,69 @@ describe("loadCommandCodeProjectContext", () => {
   test("undefined cwd returns empty context", async () => {
     const result = await loadCommandCodeProjectContext(undefined);
     expect(result).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
+  });
+
+  test("relative containment includes descendants of a filesystem root", () => {
+    const fsRoot = parse(tmpdir()).root;
+    expect(isContainedCanonicalPath(fsRoot, join(fsRoot, "AGENTS.md"))).toBe(true);
+    const nested = join(fsRoot, "project");
+    expect(isContainedCanonicalPath(nested, join(nested, "..hidden"))).toBe(true);
+    expect(isContainedCanonicalPath(nested, join(fsRoot, "project-sibling", "SKILL.md"))).toBe(false);
+  });
+
+  test("stalled asynchronous path metadata obeys the overall deadline", async () => {
+    const root = makeTempDir("ocx-cc-ctx-metadata-timeout-");
+    const agentsPath = join(root, "AGENTS.md");
+    try {
+      writeFileSync(agentsPath, "private memory", "utf8");
+      for (const stalled of ["lstat", "realpath"] as const) {
+        projectContextCache.clear();
+        let stalledCalls = 0;
+        if (stalled === "lstat") {
+          lstatMock.mockImplementation(async path => {
+            if (String(path) !== agentsPath) return realLstat(path);
+            stalledCalls++;
+            return new Promise<never>(() => {});
+          });
+        } else {
+          realpathMock.mockImplementation(async path => {
+            if (String(path) !== agentsPath) return realRealpath(path);
+            stalledCalls++;
+            return new Promise<never>(() => {});
+          });
+        }
+        setCommandCodeFileOpTimeoutForTests(500);
+        const result = await loadCommandCodeProjectContext(root);
+        expect(stalledCalls).toBe(1);
+        expect(result.memory).toBe("");
+        lstatMock.mockImplementation(realLstat);
+        realpathMock.mockImplementation(realRealpath);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a FIFO without attempting a blocking open", async () => {
+    if (process.platform === "win32") return;
+    const root = makeTempDir("ocx-cc-ctx-fifo-");
+    const fifo = join(root, "AGENTS.md");
+    let openedFifo = false;
+    try {
+      execFileSync("mkfifo", [fifo]);
+      openMock.mockImplementation(async (path, flags) => {
+        if (String(path) === fifo) {
+          openedFifo = true;
+          throw new Error("FIFO must be rejected before open");
+        }
+        return realOpen(path, flags);
+      });
+      expect((await loadCommandCodeProjectContext(root)).memory).toBe("");
+      expect(openedFifo).toBe(false);
+    } finally {
+      openMock.mockImplementation(realOpen);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("missing files return empty memory, null taste, null skills", async () => {
@@ -162,7 +235,7 @@ describe("loadCommandCodeProjectContext", () => {
     });
 
     try {
-      setCommandCodeFileOpTimeoutForTests(20);
+      setCommandCodeFileOpTimeoutForTests(250);
       const result = await loadCommandCodeProjectContext(root);
       expect(result).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
       expect(closeCalls).toBe(1);
@@ -361,6 +434,7 @@ describe("loadCommandCodeProjectContext", () => {
     const agentsPath = join(root, "AGENTS.md");
     let closeCalls = 0;
     const hangingFile = {
+      stat: async () => ({ isFile: () => true }),
       read: () => new Promise<never>(() => {}),
       close: async () => {
         closeCalls++;
@@ -375,7 +449,7 @@ describe("loadCommandCodeProjectContext", () => {
 
     try {
       writeFileSync(agentsPath, "hanging", "utf8");
-      setCommandCodeFileOpTimeoutForTests(20);
+      setCommandCodeFileOpTimeoutForTests(250);
       const result = await loadCommandCodeProjectContext(root);
 
       expect(result).not.toBe("timeout");

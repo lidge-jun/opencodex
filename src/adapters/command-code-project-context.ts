@@ -1,6 +1,6 @@
-import { lstatSync, realpathSync } from "node:fs";
-import { open, opendir } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { constants } from "node:fs";
+import { lstat, open, opendir, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export type CommandCodeProjectContext = {
   memory: string;
@@ -69,11 +69,18 @@ export function pruneProjectContextCache(now: number): void {
   }
 }
 
-/** Fail-soft canonical path; returns null when the path does not exist or cannot be resolved. */
-function canonicalPath(candidate: string): string | null {
+/** Keep filesystem metadata work off the request thread and inside one load deadline. */
+async function withinDeadline<T>(operation: () => Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("timeout");
+  return withTimeout(operation(), remaining);
+}
+
+/** Fail-soft canonical path; no synchronous filesystem calls run on the request thread. */
+async function canonicalPath(candidate: string, deadline: number): Promise<string | null> {
   try {
-    lstatSync(candidate);
-    return realpathSync.native(candidate);
+    await withinDeadline(() => lstat(candidate), deadline);
+    return await withinDeadline(() => realpath(candidate), deadline);
   } catch {
     return null;
   }
@@ -83,13 +90,23 @@ function normalizePathIdentity(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
-function confinedCanonicalPath(filePath: string, cwdCanonical: string): string | null {
-  const fileCanonical = canonicalPath(filePath);
-  if (!fileCanonical) return null;
-  const fileId = normalizePathIdentity(fileCanonical);
-  const cwdId = normalizePathIdentity(cwdCanonical);
-  if (fileId === cwdId || fileId.startsWith(cwdId + sep)) return fileCanonical;
-  return null;
+/** Relative paths also work when cwd is a filesystem root; other volumes remain outside. */
+export function isContainedCanonicalPath(cwdCanonical: string, fileCanonical: string): boolean {
+  const rel = relative(normalizePathIdentity(cwdCanonical), normalizePathIdentity(fileCanonical));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+async function confinedCanonicalPath(
+  filePath: string, cwdCanonical: string, deadline: number, kind: "file" | "directory",
+): Promise<string | null> {
+  const canonical = await canonicalPath(filePath, deadline);
+  if (!canonical || !isContainedCanonicalPath(cwdCanonical, canonical)) return null;
+  try {
+    const info = await withinDeadline(() => stat(canonical), deadline);
+    return (kind === "file" ? info.isFile() : info.isDirectory()) ? canonical : null;
+  } catch {
+    return null;
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -117,11 +134,15 @@ function truncateUtf8(text: string, capBytes: number): string {
   return buf.subarray(0, end).toString("utf8") + TRUNCATION_MARKER;
 }
 
-async function readUtf8File(path: string, capBytes: number, timeoutMs = COMMAND_CODE_FILE_OP_TIMEOUT_MS): Promise<string | null> {
+async function readUtf8File(path: string, capBytes: number, deadline: number): Promise<string | null> {
   type FileHandle = Awaited<ReturnType<typeof open>>;
   let fileHandle: FileHandle | undefined;
   const closedHandles = new WeakSet<object>();
-  const opened = open(path, "r");
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return null;
+  // O_NONBLOCK prevents a race that swaps a checked regular file for a FIFO.
+  const flags = process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+  const opened = open(path, flags);
   const closeBestEffort = (handle: FileHandle): Promise<void> => {
     if (closedHandles.has(handle)) return Promise.resolve();
     closedHandles.add(handle);
@@ -136,6 +157,8 @@ async function readUtf8File(path: string, capBytes: number, timeoutMs = COMMAND_
     const handle = await opened;
     fileHandle = handle;
     try {
+      if (Date.now() >= deadline || !(await handle.stat()).isFile()) return null;
+      if (Date.now() >= deadline) return null;
       const data = Buffer.alloc(capBytes + 1);
       const { bytesRead } = await handle.read(data, 0, data.length, 0);
       return data.subarray(0, bytesRead).toString("utf8");
@@ -146,7 +169,7 @@ async function readUtf8File(path: string, capBytes: number, timeoutMs = COMMAND_
   })();
 
   try {
-    return await withTimeout(read, timeoutMs);
+    return await withTimeout(read, remaining);
   } catch {
     if (fileHandle) void closeBestEffort(fileHandle);
     void opened.then(handle => closeBestEffort(handle), () => undefined);
@@ -183,20 +206,20 @@ function parseSkillFrontmatter(text: string): { name: string | null; body: strin
   return { name, body };
 }
 
-async function readMemory(cwd: string, cwdCanonical: string, timeoutMs: number): Promise<string> {
+async function readMemory(cwd: string, cwdCanonical: string, deadline: number): Promise<string> {
   const path = join(cwd, "AGENTS.md");
-  const canonical = confinedCanonicalPath(path, cwdCanonical);
+  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
   if (!canonical) return "";
-  const text = await readUtf8File(canonical, MEMORY_CAP_BYTES, timeoutMs);
+  const text = await readUtf8File(canonical, MEMORY_CAP_BYTES, deadline);
   if (text === null) return "";
   return truncateUtf8(text, MEMORY_CAP_BYTES);
 }
 
-async function readTaste(cwd: string, cwdCanonical: string, timeoutMs: number): Promise<string | null> {
+async function readTaste(cwd: string, cwdCanonical: string, deadline: number): Promise<string | null> {
   const path = join(cwd, ".commandcode", "taste", "taste.md");
-  const canonical = confinedCanonicalPath(path, cwdCanonical);
+  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
   if (!canonical) return null;
-  const text = await readUtf8File(canonical, TASTE_CAP_BYTES, timeoutMs);
+  const text = await readUtf8File(canonical, TASTE_CAP_BYTES, deadline);
   if (text === null) return null;
   return truncateUtf8(text, TASTE_CAP_BYTES);
 }
@@ -207,25 +230,30 @@ interface SkillEntry {
   bytesRead: number;
 }
 
-async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget: number, timeoutMs: number): Promise<string[]> {
+async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget: number, deadline: number): Promise<string[]> {
   if (scanBudget <= 0) return [];
-  const skillRootCanonical = confinedCanonicalPath(skillRoot, cwdCanonical);
+  const skillRootCanonical = await confinedCanonicalPath(skillRoot, cwdCanonical, deadline, "directory");
   if (!skillRootCanonical) return [];
   let dir: Awaited<ReturnType<typeof opendir>> | undefined;
   try {
-    return await withTimeout(
-      (async () => {
+    return await withinDeadline(
+      async () => {
         const openedDir = await opendir(skillRootCanonical);
         dir = openedDir;
+        if (Date.now() >= deadline) {
+          void openedDir.close().catch(() => undefined);
+          return [];
+        }
         const names: string[] = [];
         let visitedEntries = 0;
         try {
           for await (const entry of openedDir) {
+            if (Date.now() >= deadline) break;
             visitedEntries++;
             const atLimit = visitedEntries >= scanBudget;
             if (!entry.name.startsWith(".") && entry.isDirectory()) {
               const skillMd = join(skillRoot, entry.name, "SKILL.md");
-              const skillMdCanonical = confinedCanonicalPath(skillMd, cwdCanonical);
+              const skillMdCanonical = await confinedCanonicalPath(skillMd, cwdCanonical, deadline, "file");
               if (skillMdCanonical) {
                 names.push(entry.name);
               }
@@ -234,7 +262,7 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
           }
         } catch {
           try {
-            await openedDir.close();
+            void openedDir.close().catch(() => undefined);
           } catch {
             /* closing a failed iterator is best-effort */
           }
@@ -242,13 +270,13 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
         }
         names.sort();
         return names;
-      })(),
-      timeoutMs,
+      },
+      deadline,
     );
   } catch {
     if (dir) {
       try {
-        await dir.close();
+        void dir.close().catch(() => undefined);
       } catch {
         /* closing a timed-out iterator is best-effort */
       }
@@ -257,11 +285,11 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
   }
 }
 
-async function readSkill(skillRoot: string, dirName: string, cwdCanonical: string, capBytes: number, timeoutMs: number): Promise<SkillEntry | null> {
+async function readSkill(skillRoot: string, dirName: string, cwdCanonical: string, capBytes: number, deadline: number): Promise<SkillEntry | null> {
   const path = join(skillRoot, dirName, "SKILL.md");
-  const canonical = confinedCanonicalPath(path, cwdCanonical);
+  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
   if (!canonical) return null;
-  const text = await readUtf8File(canonical, capBytes, timeoutMs);
+  const text = await readUtf8File(canonical, capBytes, deadline);
   if (text === null) return null;
   const { name, body } = parseSkillFrontmatter(truncateUtf8(text, capBytes));
   return { name: name ?? dirName, body, bytesRead: Buffer.byteLength(text, "utf8") };
@@ -330,22 +358,21 @@ function truncateUtf8BodyForXml(body: string, capBytes: number): string | null {
   return best;
 }
 
-async function readSkills(cwd: string, cwdCanonical: string, timeoutMs: number): Promise<string | null> {
+async function readSkills(cwd: string, cwdCanonical: string, deadline: number): Promise<string | null> {
   const seen = new Set<string>();
   const collected: SkillEntry[] = [];
-  const deadline = Date.now() + timeoutMs;
   let remainingBytes = SKILLS_READ_CAP_BYTES;
 
   for (const rootRel of SKILL_ROOTS) {
     const remainingScanMs = deadline - Date.now();
     if (remainingScanMs <= 0) break;
     const skillRoot = join(cwd, ...rootRel.split("/"));
-    const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, remainingScanMs);
+    const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, deadline);
     for (const dirName of dirs) {
       if (collected.length >= MAX_SKILLS || remainingBytes <= 1) break;
       const remainingReadMs = deadline - Date.now();
       if (remainingReadMs <= 0) break;
-      const skill = await readSkill(skillRoot, dirName, cwdCanonical, Math.min(SKILL_FILE_CAP_BYTES, remainingBytes - 1), remainingReadMs);
+      const skill = await readSkill(skillRoot, dirName, cwdCanonical, Math.min(SKILL_FILE_CAP_BYTES, remainingBytes - 1), deadline);
       if (!skill) continue;
       remainingBytes -= skill.bytesRead;
       if (seen.has(skill.name)) continue;
@@ -359,13 +386,14 @@ async function readSkills(cwd: string, cwdCanonical: string, timeoutMs: number):
 }
 
 async function collectProjectContext(cwd: string, timeoutMs: number): Promise<CommandCodeProjectContext> {
-  const cwdCanonical = canonicalPath(cwd);
+  const deadline = Date.now() + timeoutMs;
+  const cwdCanonical = await canonicalPath(cwd, deadline);
   if (!cwdCanonical) return { ...EMPTY_COMMAND_CODE_PROJECT_CONTEXT };
 
   const [memory, taste, skills] = await Promise.all([
-    readMemory(cwd, cwdCanonical, timeoutMs),
-    readTaste(cwd, cwdCanonical, timeoutMs),
-    readSkills(cwd, cwdCanonical, timeoutMs),
+    readMemory(cwd, cwdCanonical, deadline),
+    readTaste(cwd, cwdCanonical, deadline),
+    readSkills(cwd, cwdCanonical, deadline),
   ]);
 
   return { memory, taste, skills };
