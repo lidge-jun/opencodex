@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { observeCodexLowQuota } from "../../src/codex/low-quota-observer";
-import { clearLowQuotaEventsForTests, listLowQuotaEvents } from "../../src/codex/low-quota-events";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { startServer, type StartServerDeps } from "../../src/server";
 import { registerStateSweepAfterTick } from "../../src/lib/state-store-sweeper";
@@ -295,7 +294,6 @@ afterEach(async () => {
 
 describe("server background lifecycle", () => {
   test("authenticated low-quota history is bounded and an unauthenticated reader is refused", async () => {
-    clearLowQuotaEventsForTests();
     const config = baseConfig();
     config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
     config.codexPool = { lowQuotaProtection: {
@@ -313,13 +311,12 @@ describe("server background lifecycle", () => {
     expect(allowed.status).toBe(200);
     const body = await allowed.json() as { events: Array<{ accountId: string; window: string; percentUsed: number; status: string }> };
     expect(body.events).toHaveLength(1);
-    expect(body.events[0]).toMatchObject({ accountId: "low-quota-pool", window: "weekly", percentUsed: 85, status: "delivered" });
+    expect(body.events[0]).toMatchObject({ accountId: "low-quota-pool", window: "weekly", percentUsed: 85, status: "logged" });
     expect((await managementFetch(new URL("/api/codex-auth/low-quota-events?limit=oops", server.url))).status).toBe(400);
     await stopTracked(server);
   });
 
   test("two live owners observe independently and either stop order preserves the survivor", async () => {
-    clearLowQuotaEventsForTests();
     const config = baseConfig();
     config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
     config.codexPool = { lowQuotaProtection: {
@@ -332,16 +329,48 @@ describe("server background lifecycle", () => {
     const reset = Date.now() + 60_000;
     observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85, weeklyResetAt: reset });
     await Promise.resolve();
-    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(2);
+    const eventsOf = async (server: StartedServer) => {
+      const response = await managementFetch(new URL("/api/codex-auth/low-quota-events", server.url));
+      return (await response.json() as { events: Array<{ status: string }> }).events;
+    };
+    expect((await eventsOf(older)).filter(event => event.status === "logged")).toHaveLength(1);
+    expect((await eventsOf(newer)).filter(event => event.status === "logged")).toHaveLength(1);
     await stopTracked(older);
     observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85, weeklyResetAt: reset + 60_000 });
     await Promise.resolve();
-    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(3);
+    expect((await eventsOf(newer)).filter(event => event.status === "logged")).toHaveLength(2);
     await stopTracked(newer);
   });
 
+  test("each server GET excludes another live owner's account events", async () => {
+    const firstConfig = baseConfig();
+    firstConfig.codexAccounts = [{ id: "low-quota-a", email: "a@example.com", isMain: false }];
+    firstConfig.codexPool = { lowQuotaProtection: {
+      enabled: true, threshold: 80,
+      windows: { short: false, weekly: true }, actions: { pause: false, notify: true },
+    } };
+    saveConfig(firstConfig);
+    const first = trackedStart();
+    const secondConfig = baseConfig();
+    secondConfig.codexAccounts = [{ id: "low-quota-b", email: "b@example.com", isMain: false }];
+    secondConfig.codexPool = firstConfig.codexPool;
+    saveConfig(secondConfig);
+    const second = trackedStart();
+    observeCodexLowQuota("low-quota-a", { weeklyPercent: 85 });
+    observeCodexLowQuota("low-quota-b", { weeklyPercent: 85 });
+    const accountIds = async (server: StartedServer) => {
+      const response = await managementFetch(new URL("/api/codex-auth/low-quota-events", server.url));
+      expect(response.status).toBe(200);
+      const body = await response.json() as { events: Array<{ accountId: string }> };
+      return body.events.map(event => event.accountId);
+    };
+    await expect(accountIds(first)).resolves.toEqual(["low-quota-a"]);
+    await expect(accountIds(second)).resolves.toEqual(["low-quota-b"]);
+    await stopTracked(second);
+    await stopTracked(first);
+  });
+
   test("a newer disabled server cannot suppress the older low-quota owner", async () => {
-    clearLowQuotaEventsForTests();
     const enabled = baseConfig();
     enabled.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
     enabled.codexPool = { lowQuotaProtection: {
@@ -354,11 +383,14 @@ describe("server background lifecycle", () => {
     const newer = trackedStart();
     observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85 });
     await Promise.resolve();
-    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(1);
+    const olderUrl = new URL("/api/codex-auth/low-quota-events", older.url);
+    const newerUrl = new URL("/api/codex-auth/low-quota-events", newer.url);
+    expect((await (await managementFetch(olderUrl)).json() as { events: unknown[] }).events).toHaveLength(1);
+    expect((await (await managementFetch(newerUrl)).json() as { events: unknown[] }).events).toHaveLength(0);
     await stopTracked(newer);
     observeCodexLowQuota("low-quota-pool", { weeklyPercent: 90, weeklyResetAt: Date.now() + 60_000 });
     await Promise.resolve();
-    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(2);
+    expect((await (await managementFetch(olderUrl)).json() as { events: unknown[] }).events).toHaveLength(2);
     await stopTracked(older);
   });
   test("low-quota pause survives reload and server stop unregisters protection", async () => {

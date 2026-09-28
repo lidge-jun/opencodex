@@ -1,5 +1,4 @@
 /** Auth is enforced by the management dispatcher before this lazy route runs. */
-import { listLowQuotaEvents } from "../../codex/low-quota-events";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
@@ -11,5 +10,5 @@ export async function handleLowQuotaRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse({ error: { code: "invalid_limit", message: "limit must be a non-negative integer" } }, 400, req, config);
   }
   const limit = raw === null ? 20 : Math.min(100, Number(raw));
-  return jsonResponse({ events: listLowQuotaEvents(limit) }, 200, req, config);
+  return jsonResponse({ events: ctx.deps.listLowQuotaEvents?.(limit) ?? [] }, 200, req, config);
 }

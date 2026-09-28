@@ -1,5 +1,6 @@
 import type { OcxConfig, StorageCleanupPolicy } from "../types";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../codex/low-quota-protection";
+import type { LowQuotaEvent } from "../codex/low-quota-events";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   abortStorageCleanupPolicyJobAsync,
@@ -46,6 +47,7 @@ type LeaseOwner = {
 
 export type ServerBackgroundLifecycleLease = {
   scheduleStartupRun(): void;
+  listLowQuotaEvents(limit?: number): LowQuotaEvent[];
   release(): Promise<void>;
   releaseAfterFailedStart(): void;
 };
@@ -198,6 +200,7 @@ export function acquireServerBackgroundLifecycle(
 
   let releaseFlight: Promise<void> | null = null;
   return {
+    listLowQuotaEvents(limit) { return owner.lowQuota.listEvents(limit); },
     scheduleStartupRun() {
       if (owners.some(candidate => candidate.token === owner.token)) {
         scheduleStorageCleanupStartupRun();

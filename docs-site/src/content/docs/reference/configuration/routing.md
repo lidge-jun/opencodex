@@ -35,11 +35,13 @@ a restart before a successful save cannot preserve the pause. In-flight requests
 captured account. Manual resume suppresses repause for that account/window episode until a
 below-threshold reading or a new reset boundary. A reset never resumes an account automatically.
 
-With `notify`, the server records a bounded event and writes a local log line with window and
-percentage but no account id. Authenticated `GET /api/codex-auth/low-quota-events` exposes the
-account id, window, usage percentage, known reset time, timestamp, and delivery status. `notify`
-does not create an OS popup. Each account/window notifies once per process-local episode;
-failed delivery can retry on the next eligible observation.
+With `notify`, the server writes a local log line with window and percentage but no account id
+and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only
+that server’s events, including account id, window, usage percentage, known reset time, timestamp,
+and status. The default status is `logged`: the alert reached the log and event history only.
+There is no desktop or OS notification. Each account/window logs once per server-local episode.
+If an injected notification sink fails, its failure is recorded and a later eligible observation
+can retry it; only a successful sink is marked `delivered`.
 
 ## Model resolution order
 

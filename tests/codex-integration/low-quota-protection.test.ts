@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { validateConfigCandidate } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { observeCodexLowQuota, registerLowQuotaObserver } from "../../src/codex/low-quota-observer";
-import { clearLowQuotaEventsForTests, listLowQuotaEvents, publishLowQuotaEvent } from "../../src/codex/low-quota-events";
+import { createLowQuotaEventLedger } from "../../src/codex/low-quota-events";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../../src/codex/low-quota-protection";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
 import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
@@ -47,7 +47,7 @@ function configWith(policy?: CodexLowQuotaProtectionConfig): OcxConfig {
 
 function register(config: OcxConfig, deps: {
   persist?: (next: OcxConfig) => void;
-  notify?: (notice: Notice) => Promise<void>;
+  notify?: (notice: Notice) => void | Promise<void>;
 } = {}): LowQuotaRegistration {
   const cleanup = registerCodexLowQuotaProtection(config, deps);
   cleanups.push(cleanup);
@@ -60,7 +60,6 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   cleanups = [];
   clearAccountQuota();
-  clearLowQuotaEventsForTests();
 });
 
 afterEach(async () => {
@@ -243,17 +242,28 @@ describe("low quota protection", () => {
   test("notice failure retries on a later observation and only then reports delivery", async () => {
     const config = configWith(protection({ actions: { pause: false, notify: true } }));
     let calls = 0;
-    register(config, { notify: async () => { if (++calls === 1) throw new Error("sink failed"); } });
+    const registration = register(config, { notify: async () => { if (++calls === 1) throw new Error("sink failed"); } });
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 80 });
     await Promise.resolve();
-    expect(listLowQuotaEvents(1)[0]?.status).toBe("failed");
+    expect(registration.listEvents(1)[0]?.status).toBe("failed");
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 82 });
     await Promise.resolve();
-    expect(listLowQuotaEvents(1)[0]?.status).toBe("delivered");
+    expect(registration.listEvents(1)[0]?.status).toBe("delivered");
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
     expect(calls).toBe(2);
-    expect(listLowQuotaEvents(100).every(event => Object.keys(event).sort().join(",") ===
+    expect(registration.listEvents(100).every(event => Object.keys(event).sort().join(",") ===
       "accountId,delivery,percentUsed,resetAt,status,timestamp,window")).toBe(true);
+  });
+
+  test("the default headless alert is logged, never reported as delivered", () => {
+    const config = configWith(protection({ actions: { pause: false, notify: true } }));
+    const registration = register(config);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    expect(registration.listEvents(1)[0]).toMatchObject({
+      accountId: ACCOUNT_A, delivery: "notice", status: "logged",
+    });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    expect(registration.listEvents(100).filter(event => event.delivery === "notice")).toHaveLength(1);
   });
 
   test("a blocked save times out flush and later work is fenced", async () => {
@@ -266,7 +276,7 @@ describe("low quota protection", () => {
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
     await registration.flush();
     expect(writes).toBe(1);
-    expect(listLowQuotaEvents(1)[0]?.status).toBe("failed");
+    expect(registration.listEvents(1)[0]?.status).toBe("failed");
     resolveSave?.();
     observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 90 });
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -286,8 +296,8 @@ describe("low quota protection", () => {
     await Promise.race([succeeded, new Promise((_, reject) => setTimeout(() => reject(new Error("save retry timeout")), 1_000))]);
     await registration.flush();
     expect(writes).toBe(2);
-    expect(listLowQuotaEvents(100).map(event => event.status)).toContain("failed");
-    expect(listLowQuotaEvents(1)[0]?.status).toBe("delivered");
+    expect(registration.listEvents(100).map(event => event.status)).toContain("failed");
+    expect(registration.listEvents(1)[0]?.status).toBe("delivered");
   });
 
   test("fan-out isolates throwing observers and independent server configs", async () => {
@@ -313,11 +323,12 @@ describe("low quota protection", () => {
   });
 
   test("the event ledger retains only its newest hundred sanitized entries", () => {
+    const ledger = createLowQuotaEventLedger();
     for (let i = 0; i < 120; i++) {
-      publishLowQuotaEvent({ accountId: `account-${i}`, window: "weekly", percentUsed: 80,
+      ledger.publish({ accountId: `account-${i}`, window: "weekly", percentUsed: 80,
         resetAt: null, timestamp: i, status: "delivered", delivery: "notice" });
     }
-    const events = listLowQuotaEvents(999);
+    const events = ledger.list(999);
     expect(events).toHaveLength(100);
     expect(events[0]?.accountId).toBe("account-119");
     expect(events.at(-1)?.accountId).toBe("account-20");
@@ -332,7 +343,7 @@ describe("low quota protection", () => {
     expect(writes).toBe(0);
     await registration.flush();
     expect(writes).toBe(1);
-    expect(new Set(listLowQuotaEvents(100).filter(event => event.status === "delivered")
+    expect(new Set(registration.listEvents(100).filter(event => event.status === "delivered")
       .map(event => event.accountId))).toEqual(new Set([ACCOUNT_A, ACCOUNT_B]));
   });
 
@@ -342,6 +353,6 @@ describe("low quota protection", () => {
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
     setCodexAccountPaused(config, ACCOUNT_A, false);
     await registration.flush();
-    expect(listLowQuotaEvents(1)[0]).toMatchObject({ accountId: ACCOUNT_A, delivery: "pause-save", status: "cancelled" });
+    expect(registration.listEvents(1)[0]).toMatchObject({ accountId: ACCOUNT_A, delivery: "pause-save", status: "cancelled" });
   });
 });

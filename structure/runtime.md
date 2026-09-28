@@ -182,7 +182,7 @@ their own files.
 ## Lifecycle
 
 Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog).
-`src/server/background-lifecycle.ts` registers low-quota protection for each live server, flushes pending saves before releasing its owner, and unregisters it on failed startup or stop; see [configuration](config.md#remote-client-key-files). Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
+`src/server/background-lifecycle.ts` registers low-quota protection for each live server, flushes pending saves before releasing its owner, binds its own event ledger to management requests, and unregisters it on failed startup or stop; see [configuration](config.md#remote-client-key-files). Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
 described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-contract).
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and

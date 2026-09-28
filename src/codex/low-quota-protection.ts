@@ -2,7 +2,7 @@ import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig } from "../types";
 import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "./account-id";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
-import { publishLowQuotaEvent, type LowQuotaEvent } from "./low-quota-events";
+import { createLowQuotaEventLedger, type LowQuotaEvent } from "./low-quota-events";
 import { registerLowQuotaObserver } from "./low-quota-observer";
 import { resetAtToMs } from "./quota-types";
 
@@ -13,8 +13,8 @@ type Dependencies = {
   notify?: (notice: Notice) => void | Promise<void>;
 };
 type EventBase = Omit<LowQuotaEvent, "timestamp" | "status" | "delivery">;
-type Episode = { reset: string; notice: "in-flight" | "delivered" | "failed" | undefined; pausedByUs: boolean; noticeBase?: EventBase };
-export type LowQuotaRegistration = (() => void) & { flush(): Promise<void> };
+type Episode = { reset: string; notice: "in-flight" | "logged" | "delivered" | "failed" | undefined; pausedByUs: boolean; noticeBase?: EventBase };
+export type LowQuotaRegistration = (() => void) & { flush(): Promise<void>; listEvents(limit?: number): LowQuotaEvent[] };
 
 const RETRY_DELAYS_MS = [100, 250];
 const FLUSH_DEADLINE_MS = 500;
@@ -22,8 +22,8 @@ const FLUSH_DEADLINE_MS = 500;
 /** Each server owns its own policy, episode state and deferred writer. */
 export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Dependencies = {}): LowQuotaRegistration {
   const episodes = new Map<string, Episode>();
+  const ledger = createLowQuotaEventLedger();
   const persist = deps.persist ?? saveConfigPreservingClaudeCode;
-  const notify = deps.notify ?? (() => {});
   let policyKey: string | undefined;
   let closed = false;
   let generation = 0;
@@ -36,7 +36,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
 
   function event(base: EventBase,
     delivery: LowQuotaEvent["delivery"], status: LowQuotaEvent["status"]): void {
-    publishLowQuotaEvent({ ...base, delivery, status, timestamp: Date.now() });
+    ledger.publish({ ...base, delivery, status, timestamp: Date.now() });
   }
   function cancelTimer(): void {
     if (saveTimer) clearTimeout(saveTimer);
@@ -184,13 +184,18 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
         scheduleSave();
       }
       // A manual resume leaves pausedByUs set until recovery or a new reset episode.
-      if (policy.actions.notify && episode.notice !== "in-flight" && episode.notice !== "delivered") {
+      if (policy.actions.notify && episode.notice !== "in-flight" && episode.notice !== "logged" && episode.notice !== "delivered") {
+        console.warn(`[codex-low-quota] ${window === "short" ? "5-hour" : "weekly"} quota reached ${percentUsed}% used (threshold ${policy.threshold}%)`);
+        if (!deps.notify) {
+          event(base, "notice", "logged");
+          episode.notice = "logged";
+          continue;
+        }
         episode.notice = "in-flight";
         episode.noticeBase = base;
         event(base, "notice", "pending");
-        console.warn(`[codex-low-quota] ${window === "short" ? "5-hour" : "weekly"} quota reached ${percentUsed}% used (threshold ${policy.threshold}%)`);
         try {
-          void Promise.resolve(notify({ window, percentUsed, threshold: policy.threshold })).then(() => {
+          void Promise.resolve(deps.notify({ window, percentUsed, threshold: policy.threshold })).then(() => {
             if (closed || episodes.get(key) !== episode) return;
             event(base, "notice", "delivered");
             episode.notice = "delivered";
@@ -209,5 +214,5 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       }
     }
   });
-  return Object.assign(close, { flush });
+  return Object.assign(close, { flush, listEvents: ledger.list });
 }
