@@ -256,6 +256,79 @@ describe("Codex CLI install provenance", () => {
     expect(JSON.stringify(report)).not.toContain("authority");
   });
 
+  test.skipIf(process.platform === "win32")("a proof-bound selection makes an npm-global install managed", async () => {
+    const prefix = tempRoot("ocx-codex-managed-");
+    const { launcher } = createPosixNpmGlobal(prefix);
+    const report = await inspectCodexCliInstall({
+      platform: process.platform,
+      env: { CODEX_CLI_PATH: launcher, PATH: "" },
+      selectionAttested: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    });
+    expect(report).toMatchObject({
+      candidateSource: "environment",
+      selectionAttested: true,
+      provenance: "npm-global",
+      managed: true,
+      reason: "managed_npm_global",
+      packageVersion: "1.2.3",
+      versionEvidence: { kind: "package-manifest" },
+    });
+    // The attestation flag changes only the caller's assertion; paths stay redacted.
+    expect(JSON.stringify(report)).not.toContain(prefix);
+  });
+
+  test.skipIf(process.platform === "win32")("attestation never rescues an install that is not manifest-owned", async () => {
+    const prefix = tempRoot("ocx-codex-unmanaged-");
+    const launcher = join(prefix, "bin", "codex");
+    const packageRoot = join(prefix, "node_modules", "@openai", "codex");
+    const entrypoint = join(packageRoot, "bin", "codex.js");
+    mkdirSync(join(prefix, "bin"), { recursive: true });
+    mkdirSync(join(packageRoot, "bin"), { recursive: true });
+    writeFileSync(entrypoint, "#!/usr/bin/env node\n", "utf8");
+    chmodSync(entrypoint, 0o755);
+    symlinkSync(entrypoint, launcher);
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+      name: "@openai/codex", version: "1.2.3", bin: { codex: "bin/codex.js" },
+    }), "utf8");
+    const report = await inspectCodexCliInstall({
+      platform: process.platform,
+      env: { CODEX_CLI_PATH: launcher, PATH: "" },
+      selectionAttested: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    });
+    // The selection is attested but the layout is not a global npm install, so
+    // ownership stays unproven and nothing becomes managed.
+    expect(report.selectionAttested).toBe(true);
+    expect(report.managed).toBe(false);
+    expect(report.provenance).not.toBe("npm-global");
+    expect(report.reason).toBe("npm_global_unverified");
+  });
+
+  test.skipIf(process.platform === "win32")("a persisted selection stays unmanaged even when the caller asserts it", async () => {
+    const root = tempRoot("ocx-codex-persisted-unmanaged-");
+    const { launcher } = createPosixNpmGlobal(root);
+    writeFileSync(join(root, "codex-runtime.json"), `${JSON.stringify({
+      version: 1,
+      command: launcher,
+      source: "path",
+      selectedVersion: "1.2.3",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    })}\n`, "utf8");
+    const report = await inspectCodexCliInstall({
+      platform: process.platform,
+      configDir: root,
+      env: { PATH: "" },
+      selectionAttested: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    });
+    // The flag attests the environment channel only; a persisted candidate records
+    // the configured intent, not the resolved runtime.
+    expect(report.selectionAttested).toBe(false);
+    expect(report.managed).toBe(false);
+    expect(report.reason).toBe("selection_unattested");
+  });
+
   test.skipIf(process.platform !== "linux")("does not mistake a flatpak path component for an app bundle", async () => {
     const prefix = join(tempRoot("ocx-codex-flatpak-component-"), "flatpak", "tools");
     const { launcher } = createPosixNpmGlobal(prefix);
@@ -502,7 +575,9 @@ describe("Codex CLI install provenance", () => {
       selectionAttested: false,
       managed: false,
       reason: "selection_unattested",
-      versionEvidence: { kind: "unavailable" },
+      // The manifest proves the on-disk version even though an environment
+      // candidate reports no advisory version of its own.
+      versionEvidence: { kind: "package-manifest" },
     });
   });
 

@@ -46,12 +46,13 @@ export type CodexCliInstallReason =
   | "shim_state_unknown"
   | "shim_update_deferred"
   | "app_bundle"
-  | "version_manager_owned"
-  | "npm_global_unverified"
-  | "selection_unattested"
-  | "version_mismatch"
-  | "unverified_standalone"
-  | "inspection_failed";
+ | "version_manager_owned"
+ | "npm_global_unverified"
+  | "managed_npm_global"
+ | "selection_unattested"
+ | "version_mismatch"
+ | "unverified_standalone"
+ | "inspection_failed";
 
 export type CodexCliCandidateSource = "environment" | "persisted";
 export type CodexCliInstallEvidence =
@@ -105,6 +106,12 @@ export interface CodexCliInstallProvenanceDeps {
     platform: NodeJS.Platform,
     configDir: string,
   ) => CodexShimBackingForCommand;
+  /**
+   * Caller assertion that `env.CODEX_CLI_PATH` is the runtime the launcher actually
+   * selected, not merely a configured name. Only a proof-bound caller may set this;
+   * a persisted selection and an arbitrary environment stay unattested.
+   */
+  readonly selectionAttested?: boolean;
 }
 
 interface PackageManifestEvidence {
@@ -635,10 +642,16 @@ export async function inspectCodexCliInstall(
         evidence: Object.freeze([appBundle ? "app_bundle_path" : "version_manager_path"]),
       });
     }
-    return unknownWindowsReport("windows_inspection_deferred", candidate, {
-      location: publicExecutableLocation(lexicalCandidatePath, platform),
-    });
-  }
+   return unknownWindowsReport("windows_inspection_deferred", candidate, {
+     location: publicExecutableLocation(lexicalCandidatePath, platform),
+   });
+ }
+  // Only a proof-bound caller may attest that the environment candidate is the
+  // runtime it actually selected. A persisted selection records intent, not the
+  // resolved binary, and an arbitrary environment is ambient — neither can become
+  // managed here.
+  const selectionAttested =
+    deps.selectionAttested === true && candidate.evidence === "environment";
   const configDir = deps.configDir ?? getConfigDir();
   if (!isSafeLocalInspectionPath(configDir, deps)) {
     return unknownReport("shim_state_unknown", candidate);
@@ -658,6 +671,7 @@ export async function inspectCodexCliInstall(
       ...unknownReport("shim_state_unknown", candidate, {
         location: publicExecutableLocation(canonicalCandidatePath, platform),
       }),
+      selectionAttested,
       shim: shimReport(shim),
     });
   }
@@ -666,6 +680,7 @@ export async function inspectCodexCliInstall(
       ...unknownReport("shim_update_deferred", candidate, {
         location: publicExecutableLocation(canonicalCandidatePath, platform),
       }),
+      selectionAttested,
       provenance: "standalone-unverified",
       shim: shimReport(shim),
       evidence: Object.freeze(["canonical_path", "shim_backing"] as const),
@@ -685,7 +700,7 @@ export async function inspectCodexCliInstall(
       candidateAvailable: true,
       candidateVersion: candidate.version,
       candidateSource: candidate.evidence,
-      selectionAttested: false,
+      selectionAttested,
       versionEvidence: Object.freeze({
         kind: candidate.version ? "advisory-runtime" as const : "unavailable" as const,
       }),
@@ -706,7 +721,7 @@ export async function inspectCodexCliInstall(
       candidateAvailable: true,
       candidateVersion: candidate.version,
       candidateSource: candidate.evidence,
-      selectionAttested: false,
+      selectionAttested,
       versionEvidence: Object.freeze({
         kind: candidate.version ? "advisory-runtime" as const : "unavailable" as const,
       }),
@@ -722,6 +737,7 @@ export async function inspectCodexCliInstall(
   if (/codex[.]opencodex-real(?:[.](?:cmd|bat|exe))?$/i.test(pathTools(platform).basename(candidatePath))) {
     return freezeReport({
       ...unknownReport("shim_state_unknown", candidate, { location }),
+      selectionAttested,
       shim: shimReport(shim),
     });
   }
@@ -745,20 +761,24 @@ export async function inspectCodexCliInstall(
     const versionMatches = candidate.version === null || candidate.version === manifest.version;
     const reason: CodexCliInstallReason = !global || !linked
       ? "npm_global_unverified"
-      : !versionMatches ? "version_mismatch" : "selection_unattested";
+      : !versionMatches ? "version_mismatch"
+        : selectionAttested ? "managed_npm_global" : "selection_unattested";
     return freezeReport({
       schemaVersion: 1,
       candidateAvailable: true,
       candidateVersion: candidate.version,
       candidateSource: candidate.evidence,
-      selectionAttested: false,
+      selectionAttested,
       versionEvidence: Object.freeze({
-        kind: manifestOwned && candidate.version !== null && versionMatches
+        // The manifest is the on-disk record of what is installed. An absent advisory
+        // version (the launcher snapshot carries no version) cannot contradict it,
+        // while a reported one that disagrees already classified as version_mismatch.
+        kind: manifestOwned && versionMatches
           ? "package-manifest" as const
           : candidate.version !== null ? "advisory-runtime" as const : "unavailable" as const,
       }),
       provenance: manifestOwned ? "npm-global" : "standalone-unverified",
-      managed: false,
+      managed: manifestOwned && versionMatches && selectionAttested,
       reason,
       location,
       packageVersion: manifest.version,
@@ -786,7 +806,7 @@ export async function inspectCodexCliInstall(
     candidateAvailable: true,
     candidateVersion: candidate.version,
     candidateSource: candidate.evidence,
-    selectionAttested: false,
+    selectionAttested,
     versionEvidence: Object.freeze({
       kind: candidate.version ? "advisory-runtime" as const : "unavailable" as const,
     }),

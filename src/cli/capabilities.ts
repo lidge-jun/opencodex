@@ -877,6 +877,24 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["system", "codex-cli-update", "plan"],
+    summary: "Dry-run a Codex CLI update and print the plan id that authorizes applying it.",
+    routes: [],
+    flags: [
+      { name: "--channel", value: "string", summary: "Registry channel to resolve. Only the stable latest channel is offered." },
+      { name: "--json", value: "boolean", summary: "Emit the plan as JSON." },
+    ],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.",
+      "The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.",
+      "Writes nothing and installs nothing. A refusal is a normal dry-run answer and still exits 0.",
+      "The plan id is a digest of the evidence the decision rests on, not a stored job. There is no plan state on disk to expire, collide or clean up.",
+      "An unreadable process table refuses rather than reading as no live session.",
+    ],
+  },
+  {
     command: ["system", "codex-restart"],
     summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],

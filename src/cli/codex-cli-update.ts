@@ -11,20 +11,25 @@ import type {
   CodexCliInstallationSnapshot,
   CodexCliInstallationTargetDerivation,
 } from "../codex/cli-installation-targets";
+import {
+  createCodexCliUpdatePlan,
+  type CodexCliUpdateChannel,
+  type CodexCliUpdatePlan,
+  type CodexCliUpdatePlanDeps,
+} from "../codex/cli-update-plan";
 import { CliUsageError, isJsonOption, printData, runCliAction } from "./runtime-api";
 import { trustedNodeLauncherContext } from "./launcher-context";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
   ocx system codex-cli-update check [--json]
   ocx system codex-cli-update attest [--json]
-  ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]`;
+  ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+  ocx system codex-cli-update plan [--channel latest] [--json]`;
 
-export type ParsedCodexCliUpdateArgs = Readonly<{
-  json: boolean;
-}> | Readonly<{
-  json: boolean;
-  attest: CodexCliInstallationIdentityInput | "selected";
-}>;
+export type ParsedCodexCliUpdateArgs =
+  | Readonly<{ action: "check"; json: boolean }>
+  | Readonly<{ action: "plan"; json: boolean; channel: CodexCliUpdateChannel }>
+  | Readonly<{ json: boolean; attest: CodexCliInstallationIdentityInput | "selected" }>;
 
 export interface CodexCliUpdateCommandDeps {
   readonly inspectInstall?: (deps: CodexCliInstallProvenanceDeps) => Promise<CodexCliInstallReport>;
@@ -32,7 +37,8 @@ export interface CodexCliUpdateCommandDeps {
   readonly deriveInstallationInput?: (
     snapshot: CodexCliInstallationSnapshot,
   ) => Promise<CodexCliInstallationTargetDerivation>;
-}
+  readonly createPlan?: (deps: CodexCliUpdatePlanDeps) => Promise<CodexCliUpdatePlan>;
+  }
 
 function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
   return [
@@ -68,24 +74,60 @@ function installSummary(report: CodexCliInstallReport): string[] {
   ];
 }
 
+function planSummary(plan: CodexCliUpdatePlan): string[] {
+  const lines = [
+    `applicable: ${plan.applicable ? "yes" : "no"}`,
+    `reason: ${plan.refusal ?? "none"}`,
+    `provenance: ${plan.provenance}`,
+    `installed-version: ${plan.installedVersion ?? "unavailable"}`,
+    `version-evidence: ${plan.versionEvidence}`,
+    `channel: ${plan.channel}`,
+    `target-version: ${plan.targetVersion ?? "unresolved"}`,
+    `target-integrity: ${plan.targetIntegrity ?? "unresolved"}`,
+    `session: ${plan.session.state}${plan.session.matches === null ? "" : ` (${plan.session.matches})`}`,
+  ];
+  if (plan.planId) lines.push(`plan: ${plan.planId}`);
+  if (plan.command) lines.push(`command: ${plan.command.join(" ")} (indicative — a future apply phase verifies the packed tarball and installs the verified file)`);
+  return lines;
+}
+
+/**
+ * Read ``--name value`` and ``--name=value`` alike; both spellings reach this CLI. */
+function optionValue(tokens: readonly string[], index: number, name: string): { value: string; next: number } {
+  const token = tokens[index]!;
+  const inline = `--${name}=`;
+  if (token.startsWith(inline)) {
+    const value = token.slice(inline.length);
+    if (!value) throw new CliUsageError(`--${name} requires a value`, CODEX_CLI_UPDATE_USAGE);
+    return { value, next: index + 1 };
+  }
+  const value = tokens[index + 1];
+  if (value === undefined) throw new CliUsageError(`--${name} requires a value`, CODEX_CLI_UPDATE_USAGE);
+  return { value, next: index + 2 };
+}
+
+function isOption(token: string, name: string): boolean {
+  return token === `--${name}` || token.startsWith(`--${name}=`);
+}
+
 export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCliUpdateArgs {
   // `--json` is accepted in any argv position CLI-wide, so remove it before positional
-  // validation. Requiring `check` at index 0 first would reject `--json check`, which
+  // validation. Requiring the action at index 0 first would reject `--json check`, which
   // automation that puts output flags ahead of the subcommand legitimately produces.
   let json = false;
-  const positional: string[] = [];
+  const rest: string[] = [];
   for (const token of argv) {
     if (isJsonOption(token)) {
       if (json) throw new CliUsageError("--json may be specified only once", CODEX_CLI_UPDATE_USAGE);
       json = true;
       continue;
     }
-    positional.push(token);
+    rest.push(token);
   }
-  if (positional[0] === "attest") {
+  if (rest[0] === "attest") {
     // No options: attest the selected candidate identified from the proof-bound
     // launcher snapshot. The four explicit paths remain all-or-none.
-    if (positional.length === 1) {
+    if (rest.length === 1) {
       return Object.freeze({ json, attest: "selected" as const });
     }
     const options = new Map<string, keyof CodexCliInstallationIdentityInput>([
@@ -93,12 +135,12 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
       ["--npm-cli", "npmCli"], ["--node", "node"],
     ]);
     const input: Partial<Record<keyof CodexCliInstallationIdentityInput, string>> = {};
-    for (let index = 1; index < positional.length; index += 2) {
-      const key = options.get(positional[index]!);
+    for (let index = 1; index < rest.length; index += 2) {
+      const key = options.get(rest[index]!);
       if (!key || input[key] !== undefined) {
         throw new CliUsageError("unsupported or duplicate attest option", CODEX_CLI_UPDATE_USAGE);
       }
-      const value = positional[index + 1];
+      const value = rest[index + 1];
       if (!value || !value.trim() || /[\0\r\n]/.test(value)
         || !(value.startsWith("/") || /^[a-z]:[\\/]/i.test(value))) {
         throw new CliUsageError("attest options require explicit absolute paths", CODEX_CLI_UPDATE_USAGE);
@@ -112,13 +154,65 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
       candidate: input.candidate, npmPrefix: input.npmPrefix, npmCli: input.npmCli, node: input.node,
     }) });
   }
-  if (positional[0] !== "check") {
-    throw new CliUsageError("codex-cli-update action must be check or attest", CODEX_CLI_UPDATE_USAGE);
+  const action = rest[0];
+  if (action !== "check" && action !== "plan") {
+    throw new CliUsageError("codex-cli-update action must be check, attest or plan", CODEX_CLI_UPDATE_USAGE);
   }
-  if (positional.length > 1) {
-    throw new CliUsageError("unsupported codex-cli-update argument", CODEX_CLI_UPDATE_USAGE);
+
+  if (action === "check") {
+    if (rest.length > 1) throw new CliUsageError("unsupported codex-cli-update argument", CODEX_CLI_UPDATE_USAGE);
+    return Object.freeze({ action, json });
   }
-  return Object.freeze({ json });
+
+  if (action === "plan") {
+    let channel: CodexCliUpdateChannel = "latest";
+    let seen = false;
+    let index = 1;
+    while (index < rest.length) {
+      const token = rest[index]!;
+      if (!isOption(token, "channel")) {
+        throw new CliUsageError("unsupported codex-cli-update argument", CODEX_CLI_UPDATE_USAGE);
+      }
+      if (seen) throw new CliUsageError("--channel may be specified only once", CODEX_CLI_UPDATE_USAGE);
+      const read = optionValue(rest, index, "channel");
+      // Only the stable channel is offered. A preview channel would need its own
+      // provenance story before it may install anything on the operator's behalf.
+      if (read.value !== "latest") throw new CliUsageError("--channel must be latest", CODEX_CLI_UPDATE_USAGE);
+      channel = read.value;
+      seen = true;
+      index = read.next;
+    }
+    return Object.freeze({ action, json, channel });
+  }
+
+  // Unreachable: the action check above already rejected every other verb, but the
+  // fallthrough keeps the parser total for the type checker.
+  throw new CliUsageError("unsupported codex-cli-update action", CODEX_CLI_UPDATE_USAGE);
+}
+
+/**
+ * Inspection inputs for this one-shot CLI process.
+ *
+ * The published Node launcher supplies a proof-bound snapshot of configured candidate
+ * evidence, not selected-runtime admission. A direct Bun or source launch has no such
+ * proof, so nothing ambient or persisted is inspected at all.
+ */
+function inspectionDeps(): CodexCliInstallProvenanceDeps {
+  const trusted = trustedNodeLauncherContext()?.codexCliInspectionEnv;
+  if (!trusted || trusted.managerRoots === null) return { env: { PATH: "" }, configDir: "." };
+  return {
+    env: {
+      ...trusted.managerRoots,
+      CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
+      PATH: trusted.path ?? undefined,
+      PATHEXT: trusted.pathExt ?? undefined,
+    },
+    configDir: trusted.configDir,
+    // The snapshot is proof-bound to the launcher, so a codexCliPath it carries is
+    // the runtime that was actually selected — the predicate that turns an
+    // npm-global report into a managed one.
+    selectionAttested: true,
+  };
 }
 
 export async function handleCodexCliUpdateCommand(
@@ -136,7 +230,9 @@ export async function handleCodexCliUpdateCommand(
     }
     throw error;
   }
-  return runCliAction(async () => {
+  // A refusal or an unapplied update is a legitimate answer rather than a crash, so the
+  // outcome exit code is decided here and only a thrown error is left to runCliAction.
+  const code = await runCliAction(async () => {
     if ("attest" in parsed) {
       let report: CodexCliInstallationIdentityReport;
       try {
@@ -167,25 +263,20 @@ export async function handleCodexCliUpdateCommand(
       printData(report, parsed.json, identitySummary(report));
       return;
     }
-    const trustedInspectionEnv = trustedNodeLauncherContext()?.codexCliInspectionEnv;
-    const inspectionDeps: CodexCliInstallProvenanceDeps = trustedInspectionEnv
-      && trustedInspectionEnv.managerRoots !== null ? {
-      env: {
-        ...trustedInspectionEnv.managerRoots,
-        CODEX_CLI_PATH: trustedInspectionEnv.codexCliPath ?? undefined,
-        PATH: trustedInspectionEnv.path ?? undefined,
-        PATHEXT: trustedInspectionEnv.pathExt ?? undefined,
-      },
-      configDir: trustedInspectionEnv.configDir,
-      // This is a fresh one-shot CLI process. Its proof-bound launcher snapshot
-      // supplies configured candidate evidence, not selected-runtime admission.
-    } : {
-      // Direct Bun/source launches have no pre-dotenv proof. Do not inspect
-      // ambient or persisted candidate state at all.
-      env: { PATH: "" },
-      configDir: ".",
-    };
-    const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(inspectionDeps);
-    printData(report, parsed.json, installSummary(report));
+    if (parsed.action === "check") {
+      const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(inspectionDeps());
+      printData(report, parsed.json, installSummary(report));
+      return;
+    }
+    if (parsed.action === "plan") {
+      const plan = await (deps.createPlan ?? createCodexCliUpdatePlan)({
+        channel: parsed.channel,
+        inspectionDeps: inspectionDeps(),
+        inspect: deps.inspectInstall,
+      });
+      printData(plan, parsed.json, planSummary(plan));
+      return;
+    }
   });
+  return code;
 }
