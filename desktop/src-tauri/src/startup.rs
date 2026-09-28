@@ -1181,16 +1181,13 @@ fn attach_plan(consent: ownership::Consent, answer: &resolve::Resolved, mode: Mo
 /// versions could not be compared at all (fake, empty or unorderable version strings) the
 /// panel still gets one honest line instead of silently asking for a takeover.
 fn consent_version_note(answer: &resolve::Resolved) -> Option<String> {
-    answer
-        .skew_warning()
-        .map(str::to_owned)
-        .or_else(|| {
-            matches!(
-                answer.runtime_relation(),
-                resolve::VersionRelation::Unknown | resolve::VersionRelation::Incomparable,
-            )
-            .then(|| "the listening runtime's version could not be compared".to_owned())
-        })
+    answer.skew_warning().map(str::to_owned).or_else(|| {
+        matches!(
+            answer.runtime_relation(),
+            resolve::VersionRelation::Unknown | resolve::VersionRelation::Incomparable,
+        )
+        .then(|| "the listening runtime's version could not be compared".to_owned())
+    })
 }
 
 /// Report, bind and finish as a guest on the runtime that answered.
@@ -1817,10 +1814,10 @@ fn elapsed(started: Instant) -> u64 {
 mod tests {
     use super::{
         approval_still_current, attach_plan, claim_after_silence, consent_version_note,
-        keeps_update_page, loads_dashboard_on_ready, navigate_once, return_ready_dashboard, shows_window,
-        stop_after_approval, unavailable, waits_on_child, AttachPlan, ConsentState, Expiry,
-        LaunchOrigin, Mode, Phase, Progress, Startup, AUTOSTART_FLAG, CHILD_START_GRACE, DEADLINE,
-        PHASES, POLL,
+        keeps_update_page, loads_dashboard_on_ready, navigate_once, return_ready_dashboard,
+        shows_window, stop_after_approval, unavailable, waits_on_child, AttachPlan, ConsentState,
+        Expiry, LaunchOrigin, Mode, Phase, Progress, Startup, AUTOSTART_FLAG, CHILD_START_GRACE,
+        DEADLINE, PHASES, POLL,
     };
     use crate::claim::ClaimResult;
     use crate::ownership::{Claim, Consent, Owner, Recorded};
