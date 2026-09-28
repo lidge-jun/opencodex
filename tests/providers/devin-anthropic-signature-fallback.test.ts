@@ -26,7 +26,7 @@ describe("Devin Anthropic signature fallback", () => {
   const previousFetch = globalThis.fetch;
   let home = "";
   let requests: Buffer[] = [];
-  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok" | "usage-reasoning-then-refuse" | "usage-ok" | "many-reasoning-then-refuse" | "large-reasoning-then-refuse"> = [];
+  let responses: Array<"refuse" | "ok" | "text-then-refuse" | "reasoning-then-refuse" | "reasoning-then-ok" | "usage-reasoning-then-refuse" | "split-usage-then-refuse" | "usage-ok" | "many-reasoning-then-refuse" | "large-reasoning-then-refuse"> = [];
 
   const frame = (body: Buffer, flags = 0) => {
     const header = Buffer.alloc(5);
@@ -78,6 +78,10 @@ describe("Devin Anthropic signature fallback", () => {
         : next === "reasoning-then-ok" ? Buffer.concat([frame(Buffer.concat([encodeString(9, "thinking"), encodeString(10, "EpcBNew"), encodeString(21, "anthropic")])), ok])
         // ModelUsageStats (#7) arrives with the reasoning, before the refusal trailer.
         : next === "usage-reasoning-then-refuse" ? Buffer.concat([frame(Buffer.concat([encodeMessage(7, Buffer.concat([encodeVarintField(2, 1000), encodeVarintField(3, 40)])), encodeString(9, "thinking")])), frame(encodeString(9, " more")), refusal])
+        : next === "split-usage-then-refuse" ? Buffer.concat([
+          frame(encodeMessage(7, Buffer.concat([encodeVarintField(2, 1000), encodeVarintField(4, 100), encodeVarintField(5, 600)]))),
+          frame(encodeMessage(7, encodeVarintField(3, 40))), refusal,
+        ])
         : next === "usage-ok" ? Buffer.concat([frame(Buffer.concat([encodeMessage(7, Buffer.concat([encodeVarintField(2, 1100), encodeVarintField(3, 20)])), encodeString(3, "ok"), encodeVarintField(5, 2)])), frame(Buffer.from("{}"), 2)])
         : next === "many-reasoning-then-refuse" ? Buffer.concat([frame(encodeString(9, "x")), ...Array.from({ length: 1_024 }, () => frame(encodeString(9, "x"))), refusal])
         : next === "large-reasoning-then-refuse" ? Buffer.concat([frame(encodeString(9, "x".repeat(524_289))), refusal])
@@ -179,6 +183,17 @@ describe("Devin Anthropic signature fallback", () => {
     const done = events.find(e => e.type === "done") as { usage?: { inputTokens?: number; outputTokens?: number } } | undefined;
     expect(done?.usage?.inputTokens).toBe(2100);
     expect(done?.usage?.outputTokens).toBe(60);
+  });
+
+  test("partial held usage frames retain input and cache counts when the last frame reports output only", async () => {
+    responses = ["split-usage-then-refuse", "usage-ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
+    expect(requests).toHaveLength(2);
+    const done = events.find(e => e.type === "done");
+    expect(done).toMatchObject({
+      type: "done",
+      usage: { inputTokens: 2100, outputTokens: 60, totalTokens: 2160, cachedInputTokens: 600, cacheCreationInputTokens: 100 },
+    });
   });
 
   test("the refused attempt's usage survives a retry with no usage frame or an early failure", async () => {

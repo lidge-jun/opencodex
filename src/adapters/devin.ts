@@ -63,6 +63,30 @@ const HELD_REASONING_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type DevinUsageEvent = Extract<CloudChatEvent, { kind: "usage" }>;
 
+function toOcxDevinUsage(event: DevinUsageEvent): OcxUsage {
+  const total = event.totalTokens ?? ((event.promptTokens ?? 0) + (event.completionTokens ?? 0));
+  return {
+    inputTokens: event.promptTokens ?? 0,
+    outputTokens: event.completionTokens ?? 0,
+    ...(total > 0 ? { totalTokens: total } : {}),
+    ...(event.cachedInputTokens !== undefined ? { cachedInputTokens: event.cachedInputTokens } : {}),
+    ...(event.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: event.cacheCreationInputTokens } : {}),
+    ...(event.reasoningTokens !== undefined ? { reasoningOutputTokens: event.reasoningTokens } : {}),
+  };
+}
+
+function toCloudDevinUsage(usage: OcxUsage): DevinUsageEvent {
+  return {
+    kind: "usage",
+    promptTokens: usage.inputTokens,
+    completionTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    cacheCreationInputTokens: usage.cacheCreationInputTokens,
+    reasoningTokens: usage.reasoningOutputTokens,
+  };
+}
+
 /** The retry's cumulative usage plus the refused attempt's final counts. */
 function addDevinUsage(event: DevinUsageEvent, prior: DevinUsageEvent): DevinUsageEvent {
   const sum = (a?: number, b?: number) => (a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0));
@@ -785,7 +809,7 @@ export function createDevinAdapter(
           const held: CloudChatEvent[] = [];
           // Usage is still real: the refused attempt was processed, so its final counts are
           // added to every usage frame of the retry (frames are cumulative per request).
-          let refusedUsage: Extract<CloudChatEvent, { kind: "usage" }> | undefined;
+          let refusedUsage: OcxUsage | undefined;
           let visible = false;
           let heldPayloadBytes = 0;
           // The iterator may pause before a trailer. A timer feeds the bridge during that
@@ -807,7 +831,10 @@ export function createDevinAdapter(
                 continue;
               }
               held.push(event);
-              if (event.kind === "usage") refusedUsage = event;
+              if (event.kind === "usage") {
+                const next = toOcxDevinUsage(event);
+                refusedUsage = refusedUsage ? mergeDevinUsage(refusedUsage, next) : next;
+              }
               if (event.kind === "reasoning") heldPayloadBytes += event.text.length * 2;
               if (event.kind === "reasoning_signature") heldPayloadBytes += event.signature.length * 2;
               if (held.length > HELD_REASONING_MAX_EVENTS || heldPayloadBytes > HELD_REASONING_MAX_PAYLOAD_BYTES) {
@@ -823,10 +850,11 @@ export function createDevinAdapter(
               throw error;
             }
             // Emitted first so the counts survive a retry that reports no usage or fails early.
-            if (refusedUsage) yield refusedUsage;
+            const cumulativeRefusedUsage = refusedUsage ? toCloudDevinUsage(refusedUsage) : undefined;
+            if (cumulativeRefusedUsage) yield cumulativeRefusedUsage;
             try {
               for await (const event of request(unsignedMessages)) {
-                yield event.kind === "usage" && refusedUsage ? addDevinUsage(event, refusedUsage) : event;
+                yield event.kind === "usage" && cumulativeRefusedUsage ? addDevinUsage(event, cumulativeRefusedUsage) : event;
               }
             } catch (retryError) {
               if (retryError instanceof SendBudgetExhaustedError) {
@@ -891,15 +919,7 @@ export function createDevinAdapter(
             continue;
           }
           if (event.kind === "usage") {
-            const total = event.totalTokens ?? ((event.promptTokens ?? 0) + (event.completionTokens ?? 0));
-            const next: OcxUsage = {
-              inputTokens: event.promptTokens ?? 0,
-              outputTokens: event.completionTokens ?? 0,
-              ...(total > 0 ? { totalTokens: total } : {}),
-              ...(event.cachedInputTokens !== undefined ? { cachedInputTokens: event.cachedInputTokens } : {}),
-              ...(event.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: event.cacheCreationInputTokens } : {}),
-              ...(event.reasoningTokens !== undefined ? { reasoningOutputTokens: event.reasoningTokens } : {}),
-            };
+            const next = toOcxDevinUsage(event);
             // Merge rather than replace. A turn can carry more than one usage
             // frame, and the counters are cumulative, so a later partial frame
             // that omits a field used to zero a count the earlier frame had
