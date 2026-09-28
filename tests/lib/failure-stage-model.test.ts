@@ -188,6 +188,7 @@ describe("recovery kinds speak the shared dictionary", () => {
     expect(causeForRecoveryKind("image-413")).toBe("payload-too-large");
     expect(causeForRecoveryKind("connection-reset")).toBe("transport-ambiguous");
     expect(causeForRecoveryKind("transient-5xx")).toBe("upstream-fault");
+    expect(causeForRecoveryKind("oauth-account-403")).toBe("credential-rejected");
     expect(causeForRecoveryKind("reasoning-effort-downgrade")).toBe("parameter-rejected");
   });
 
