@@ -42,6 +42,14 @@
  * survivor that never closes keeps holding it. A client can cancel the response and core returns the
  * turn's own admission on that cancel - the harness is not the turn's, so nothing about it comes back
  * on a timer, on an eviction, or because its local pipes were closed.
+ *
+ * One `close` is not even the parent's own: taking this turn's side of the pipes back is what makes
+ * Node emit it for a child whose stdio a descendant inherited, so the event can arrive for a process
+ * that died with a tree this ladder could not reach. Returning the capacity there would hand out a
+ * slot for a descendant that is still using the working directory. A child the ladder hands to the
+ * quarantine as an unresolved tree therefore keeps its lease past that `close`, and only the
+ * platform's answer that no member of the group is left - `kill(-pid, 0)` on POSIX, nothing at all
+ * on Windows - hands it back.
  */
 import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions as NodeSpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -186,6 +194,38 @@ interface HarnessQuarantineEntry {
 
 const quarantine: HarnessQuarantineEntry[] = [];
 
+/**
+ * True while any member of the process group this child led is still present.
+ *
+ * `kill(-pid, 0)` delivers nothing, so it can only answer the question and can never harm whoever is
+ * behind the answer - which matters, because a group id outlives its leader and can be reused
+ * afterwards. ESRCH is the group being empty, the one answer that establishes a tree is gone.
+ * Windows has no such question to ask: a dead parent's tree cannot be enumerated there, so the
+ * ownership stays instead of being guessed away.
+ */
+export type HarnessTreeProbeFn = (pid: number) => boolean;
+
+function defaultTreeMemberAlive(pid: number): boolean {
+  if (process.platform === "win32") return true;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException | undefined)?.code !== "ESRCH";
+  }
+}
+
+/**
+ * Recreated by the test seam, like the gate above: a case that pins what a survivor keeps when its
+ * tree cannot be reached decides the answer itself instead of probing the machine it runs on.
+ */
+let harnessTreeProbe: HarnessTreeProbeFn = defaultTreeMemberAlive;
+
+/** Test seam: the probe is process state, so a case that asserts on it sets its own answer. */
+export function setHarnessTreeProbeForTests(probe?: HarnessTreeProbeFn): void {
+  harnessTreeProbe = probe ?? defaultTreeMemberAlive;
+}
+
 /** One quarantined teardown, as reported to tests and diagnostics. */
 export interface HarnessQuarantineSnapshot {
   pid: number | undefined;
@@ -205,18 +245,22 @@ export function harnessQuarantineSnapshot(now = Date.now()): HarnessQuarantineSn
 }
 
 /**
- * Sweep the quarantine: drop teardowns that settled, retry the one thing that is still safe to retry
- * for the rest. Called from the turn path, so the sweep costs nothing while the quarantine is empty
- * and needs no timer of its own.
+ * Sweep the quarantine: drop teardowns that settled, ask the platform about the ones whose tree was
+ * never reached, and retry the one thing that is still safe to retry for the rest. Called from the
+ * turn path, so the sweep costs nothing while the quarantine is empty and needs no timer of its own.
  */
 export function reapHarnessQuarantine(now = Date.now()): number {
   for (let index = quarantine.length - 1; index >= 0; index -= 1) {
     const entry = quarantine[index]!;
-    const live = entry.children.filter(child => !child.closed);
+    // A closed handle is not a settled one while the tree behind it was never reached: the `close`
+    // the ladder's own pipe reclamation produced says the parent's stdio is gone and nothing else.
+    // The probe is asked here, and only an answer that no member of the group is left clears it.
+    for (const child of entry.children) if (child.treeOwnershipUnresolved) child.settleTreeOwnership();
+    const live = entry.children.filter(child => child.ownsUnsettledProcess);
     if (live.length === 0) {
-      // The survivor's `close` arrived between turns, and that is what released its lease: an
-      // observation on a handle pinned to that process, not a pid that could have been recycled.
-      // The entry is only the record now, so it can go.
+      // Either the survivor's `close` arrived between turns - an observation on a handle pinned to
+      // that process, not a pid that could have been recycled - or the tree probe found the group
+      // empty. The entry is only the record now, so it can go.
       quarantine.splice(index, 1);
       continue;
     }
@@ -245,6 +289,7 @@ export function reapHarnessQuarantine(now = Date.now()): number {
 export function resetHarnessQuarantineForTests(): void {
   for (const entry of quarantine) for (const child of entry.children) child.releaseTeardownLease();
   quarantine.length = 0;
+  harnessTreeProbe = defaultTreeMemberAlive;
   harnessTeardownGate = createAdmissionGate("harness_teardowns", MAX_ACTIVE_HARNESS_TEARDOWNS);
 }
 
@@ -310,6 +355,12 @@ class HarnessChild implements SpawnedProcess {
   private exitedFlag = false;
   private signalFailures = 0;
   private treeFailures = 0;
+  /**
+   * Set by the ladder when this child is handed to the quarantine as an unresolved tree. It is what
+   * keeps the direct child's `close` from returning the capacity afterwards: that event can be the
+   * ladder's own pipe reclamation talking, and it says nothing about the descendant behind it.
+   */
+  private treeOwnershipUnsettled = false;
   private resolveClosed: () => void = () => undefined;
   private readonly closeBarrier = new Promise<void>(resolve => { this.resolveClosed = resolve; });
 
@@ -369,6 +420,41 @@ class HarnessChild implements SpawnedProcess {
     if (this.leaseReleased) return;
     this.leaseReleased = true;
     this.teardownLease?.release();
+  }
+
+  /**
+   * The ladder's verdict for this child was "unresolved tree": the direct process is gone and the
+   * tree behind it could not be signalled. Ownership is latched before the local pipes are reclaimed,
+   * because reclaiming them is itself what makes Node emit the `close` that would otherwise hand the
+   * capacity to a descendant that is still there.
+   */
+  markTreeOwnershipUnsettled(): void {
+    this.treeOwnershipUnsettled = true;
+  }
+
+  /** True while this handle owns something the platform has not yet shown to be gone. */
+  get ownsUnsettledProcess(): boolean {
+    return !this.closedFlag || this.treeOwnershipUnsettled;
+  }
+
+  /** True while a descendant behind a gone parent may still be alive, and nothing has disproved it. */
+  get treeOwnershipUnresolved(): boolean {
+    return this.treeOwnershipUnsettled;
+  }
+
+  /**
+   * Ask the platform whether anything behind this child is left, and return the capacity only on an
+   * answer that says no. A child whose process is still running keeps its own answer - the probe is
+   * for the case where the parent's `close` already arrived and the ownership survived it.
+   */
+  settleTreeOwnership(probe: HarnessTreeProbeFn = harnessTreeProbe): boolean {
+    if (!this.treeOwnershipUnsettled) return true;
+    if (!this.closedFlag) return false;
+    const pid = this.child.pid;
+    if (pid !== undefined && probe(pid)) return false;
+    this.treeOwnershipUnsettled = false;
+    this.releaseTeardownLease();
+    return true;
   }
 
   /**
@@ -446,7 +532,8 @@ class HarnessChild implements SpawnedProcess {
    * A descendant that inherited the harness's pipes keeps `close` withheld after the harness itself
    * is gone; those pipes have no other owner, so the turn takes them back rather than awaiting a
    * `close` that cannot arrive. Destroying the write end also hands a lingering harness the stdin
-   * EOF it is waiting for.
+   * EOF it is waiting for. Taking the pipes back is itself what makes Node emit that `close`, which
+   * is why the ladder latches its tree verdict before this runs.
    */
   reclaimPipes(): void {
     for (const stream of [this.stdin, this.stdout, this.child.stderr]) {
@@ -519,7 +606,10 @@ class HarnessChild implements SpawnedProcess {
   private deliverExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (this.closedFlag) return;
     this.closedFlag = true;
-    this.releaseTeardownLease();
+    // `close` proves this process's stdio is released. For a tree the ladder could not reach it does
+    // not prove the descendant is gone, and the lease is exactly the accounting for "may still be
+    // alive": it comes back from the probe, not from an event the ladder produced itself.
+    if (!this.treeOwnershipUnsettled) this.releaseTeardownLease();
     this.resolveClosed();
     const entries = [...this.exitEntries];
     this.exitEntries.clear();
@@ -627,24 +717,35 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
       // Handles are taken back after both observation windows, never between them: a child that
       // exited inside the KILL window would otherwise keep this turn's stdio open to no purpose, and
       // one that is still running gets the stdin EOF it may be waiting for.
-      for (const child of live) if (!child.closed) child.reclaimPipes();
-      const unresolved: HarnessUnresolvedChild[] = live
+      const settlement = live
         .filter(child => !child.closed)
         .map(child => ({
-          pid: child.pid,
-          // A child that is itself still running is the stronger fact and stays named as such; the
-          // tree question only decides what an *exited* child leaves behind, which is exactly the
-          // case where a descendant holding the inherited pipes can outlive its parent unseen.
-          reason: !child.exited
-            ? "running" as const
-            : child.treeUnreachable ? "unresolved-tree" as const : "pipes-held" as const,
-          signalFailed: child.signalFailed,
+          child,
+          entry: {
+            pid: child.pid,
+            // A child that is itself still running is the stronger fact and stays named as such; the
+            // tree question only decides what an *exited* child leaves behind, which is exactly the
+            // case where a descendant holding the inherited pipes can outlive its parent unseen.
+            reason: !child.exited
+              ? "running" as const
+              : child.treeUnreachable ? "unresolved-tree" as const : "pipes-held" as const,
+            signalFailed: child.signalFailed,
+          },
         }));
+      // The verdict is latched before the pipes go back, because reclaiming them is itself what makes
+      // Node emit the `close` for a child whose stdio a descendant inherited. A `close` that arrives
+      // that way must not return the capacity of a tree this ladder never reached.
+      for (const item of settlement) {
+        if (item.entry.reason === "unresolved-tree") item.child.markTreeOwnershipUnsettled();
+      }
+      for (const child of live) if (!child.closed) child.reclaimPipes();
+      const unresolved: HarnessUnresolvedChild[] = settlement.map(item => item.entry);
       // Whatever is left stays owned: each child still holds the lease reserved for it at spawn, and
       // the handles move to the quarantine where the next turn observes them. Capacity is not
-      // returned here - a child that closed already returned it through its own `close`.
+      // returned here - a child that closed already returned it through its own `close`, and a tree
+      // that could not be reached keeps it until the probe says the group is empty.
       if (unresolved.length > 0) {
-        quarantineSurvivors(live.filter(child => !child.closed), unresolved[0]!.reason);
+        quarantineSurvivors(settlement.map(item => item.child), unresolved[0]!.reason);
       }
       return {
         confirmed: unresolved.length === 0,
@@ -654,7 +755,7 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
         // alive, and those are the ones that must not release the scratch cwd.
         allExited: unresolved.every(entry => entry.reason === "pipes-held"),
         unresolved,
-        quarantined: unresolved.length === 0 ? 0 : live.filter(child => !child.closed).length,
+        quarantined: settlement.length,
       };
     },
   };

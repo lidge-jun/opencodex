@@ -34,8 +34,11 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
   family module (`src/adapters/claude-agent-sdk/`) supplies its own option assembly
   (`sdk-options.ts`), the in-process catalog server (`sdk-bridge.ts`), the scoped child environment
-  (`env.ts`) and the SDK-driven runner (`sdk-turn.ts`), which owns the turn's lifecycle where the
-  spawned-CLI families hand theirs to `../coding-agent/turn.ts`. That profile is the first credentialless one: it omits `tokenEnv`, the harness reads
+  (`env.ts`), the SDK-driven runner (`sdk-turn.ts`), which owns the turn's lifecycle where the
+  spawned-CLI families hand theirs to `../coding-agent/turn.ts`, and the process ownership behind
+  that runner (`harness-process.ts`): the harness is spawned there, a bounded cleanup lease is
+  reserved before the spawn, and a tree the ladder could not signal keeps that lease past the
+  direct child's `close` until the platform reports the process group empty. That profile is the first credentialless one: it omits `tokenEnv`, the harness reads
   the operator's own Claude Code sign-in, and the turn neither requires nor injects an API key.
   The turn itself runs through Anthropic's Claude Agent SDK — the harness behind the Claude Code CLI
   — and `tests/providers/claude-agent-sdk-adapter.test.ts` pins the options it sets: built-in tools

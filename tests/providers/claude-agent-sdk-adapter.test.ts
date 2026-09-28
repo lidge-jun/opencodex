@@ -31,6 +31,7 @@ import {
   MAX_ACTIVE_HARNESS_TEARDOWNS,
   reapHarnessQuarantine,
   resetHarnessQuarantineForTests,
+  setHarnessTreeProbeForTests,
 } from "../../src/adapters/claude-agent-sdk/harness-process";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
@@ -845,6 +846,11 @@ function fakeHarnessChild(options: {
   stderr?: string;
   /** A launcher/descendant inherited the harness's stdio: the process ends, `close` never arrives. */
   exitWithoutClose?: boolean;
+  /**
+   * The same inherited pipe, seen from the other side: the process ends, `close` is withheld, and it
+   * is the turn's own pipe reclamation that produces it - so the event reports stdio, not the tree.
+   */
+  closeOnPipeReclaim?: boolean;
   /** The runtime refuses the signal: `kill()` reports that nothing was delivered. */
   refuseSignals?: boolean;
   /** Runs when the child ends, so a test can pin the order of the teardown. */
@@ -876,6 +882,19 @@ function fakeHarnessChild(options: {
         child.exitCode = 0;
         child.signalCode = ending;
         child.emit("exit", null, ending);
+        if (options.closeOnPipeReclaim === true) {
+          // Nothing this child does on its own releases `close`; the descendant holds the write end.
+          const finish = (): void => {
+            if (closed) return;
+            closed = true;
+            child.emit("close", null, ending);
+            options.onEnd?.();
+          };
+          child.stdout.once("close", finish);
+          child.stdin.once("close", finish);
+          child.stderr?.once("close", finish);
+          return;
+        }
         if (options.exitWithoutClose !== true) {
           closed = true;
           child.emit("close", null, ending);
@@ -1034,6 +1053,43 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
     // The survivor keeps the bounded cleanup lease, which is the whole point of taking it: the
     // teardown outlives its turn, and it does not do so unaccounted for.
     expect(harnessTeardownMetrics().active).toBe(1);
+  });
+
+  test("a reclaimed pipe does not hand back the capacity of a tree that was never reached", async () => {
+    // The `close` this turn is entitled to see can be its own doing: a descendant inherited the
+    // harness's pipes, so the process ends without `close`, the ladder reclaims its side of those
+    // pipes, and Node then emits `close` for a process whose tree it never reached. Reading that
+    // event as the exit would return the lease and let the next sweep drop the entry, for a
+    // descendant that is still running against the working directory this turn kept.
+    let descendantAlive = true;
+    setHarnessTreeProbeForTests(() => descendantAlive);
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", closeOnPipeReclaim: true });
+
+    const outcome = await supervisorFor(harness, { killProcessTree: () => false }).terminate();
+
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "unresolved-tree", signalFailed: false }],
+      quarantined: 1,
+    });
+    // The parent did close - because the ladder took its pipes back - and the lease is still held:
+    // that event speaks for stdio, and the descendant behind it is a different question.
+    await Bun.sleep(10);
+    expect(harness.closed()).toBe(true);
+    expect(harnessTeardownMetrics().active).toBe(1);
+
+    // The next turn sweeps and asks the platform. A descendant that is still there keeps the entry
+    // and its lease; nothing is dropped silently because the parent's stdio went away.
+    expect(reapHarnessQuarantine()).toBe(1);
+    expect(harnessQuarantineSnapshot()).toMatchObject([{ pid: 4711, reason: "unresolved-tree" }]);
+    expect(harnessTeardownMetrics().active).toBe(1);
+
+    // The descendant ends, the group is empty, and only then does the capacity come back.
+    descendantAlive = false;
+    expect(reapHarnessQuarantine()).toBe(0);
+    expect(harnessQuarantineSnapshot()).toEqual([]);
+    expect(harnessTeardownMetrics().active).toBe(0);
   });
 
   test("a quarantined survivor that closes later hands its cleanup lease back", async () => {
