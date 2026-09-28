@@ -188,7 +188,7 @@ describe("Devin Anthropic signature fallback", () => {
     try {
       const pending = run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium", observed);
       await started.promise;
-      jest.advanceTimersByTime(15_000);
+      jest.advanceTimersByTime(20_000);
       expect(observed).toContainEqual({ type: "heartbeat" });
       expect(observed.some(e => e.type === "thinking_delta")).toBe(false);
       releaseTrailer.resolve();
