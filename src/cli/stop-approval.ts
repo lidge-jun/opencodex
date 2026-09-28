@@ -159,7 +159,15 @@ export async function runGuardedManagerStep(
   }
   const service = snapshot.manager.kind === "absent" ? "absent" : io.stopManager();
   let handledByProxy = false;
-  if (snapshot.manager.kind === "absent") {
+  // A bound manager whose stop cascades to the child needs no signal: launchd and
+  // systemd end the job's whole process tree. A bound Task Scheduler or WinSW
+  // manager does not — schtasks /end can leave both the wrapper and the approved
+  // PID alive (#764) — so those get the same graceful signal the absent path uses,
+  // run AFTER the manager stop so the proxy's respawn-refusal sees the manager
+  // already ended (the deferral receipt still bypasses it as before).
+  const needsApprovedSignal = snapshot.manager.kind === "absent"
+    || snapshot.manager.childNeedsSeparateStop;
+  if (needsApprovedSignal) {
     try { handledByProxy = await io.signalApproved(); }
     catch { return { service, effect: "failed", proxy: "unknown", handledByProxy }; }
   }
