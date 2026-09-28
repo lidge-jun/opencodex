@@ -384,7 +384,11 @@ describe("Windows tray packaging and command safety", () => {
     expect(cli).toContain("waitForProxy(40_000)");
     expect(cli).toContain("await handleProxyRestart(() => handleTrayProxyStart(false))");
     expect(cli).toContain("function detachedStartEnvironment()");
-    expect(cli).toContain("delete env.OCX_SERVICE");
+    // The strip lives in the service module so the ratchet-capped CLI file only
+    // holds the call; the oracle checks both ends of the contract.
+    expect(cli).toContain("stripServiceSupervisionMarkers(env)");
+    const markerStrip = readFileSync(repoPath("src", "service", "service-child-ownership.ts"), "utf8");
+    expect(markerStrip).toContain("delete env.OCX_SERVICE;");
     expect(cli).not.toContain("OCX_KEEP_ROUTING");
     expect(source).toContain('Load-TrayIcon "opencodex-tray-online.ico"');
     expect(source).toContain('Load-TrayIcon "opencodex-tray-warning.ico"');
