@@ -659,9 +659,13 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(start.indexOf("markCrossHomeSibling()")).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
     const detached = slice("function detachedStartEnvironment(", "async function handleEnsure(");
     expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
-    expect(detached).toContain("delete env.OCX_SERVICE;");
-    expect(detached).toContain("delete env[SERVICE_MANAGED_ENV];");
-    expect(detached).toContain("delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];");
+    // The strip lives in the service module so the ratchet-capped CLI file only
+    // holds the call; the oracle checks both ends of the contract.
+    expect(detached).toContain("stripServiceSupervisionMarkers(env)");
+    const markerStrip = readFileSync(repoPath("src/service/service-child-ownership.ts"), "utf8");
+    expect(markerStrip).toContain("delete env.OCX_SERVICE;");
+    expect(markerStrip).toContain("delete env[SERVICE_MANAGED_ENV];");
+    expect(markerStrip).toContain("delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];");
     expect(cliSource).toContain("env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),");
     // Every other detached `ocx start` is an ordinary owner too: the client auto-starts and the
     // updater's restart. A stray marker would mark them before any probe.
