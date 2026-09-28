@@ -169,7 +169,8 @@ export async function recycleStandalone(
   // operator noticed. Exit 1 is what those configs are watching for, and it is the same
   // policy the dashboard recycle already uses (src/server/management/system-restart.ts).
   //
-  // launchd's KeepAlive restarts on any exit, so it is correct under both branches.
+  // launchd's KeepAlive is failure-only too (`SuccessfulExit` false), so exit 1 is what
+  // relaunches it as well; an exit 0 would leave the job stopped.
   if (process.env.OCX_SERVICE === "1") {
     exit(1);
     return;
