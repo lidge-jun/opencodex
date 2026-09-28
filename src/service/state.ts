@@ -7,6 +7,8 @@ import { resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
 import { resolveCodexSqliteHome } from "../codex/paths";
 import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
 import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
+import { isTransientServiceLauncherPath } from "../lib/transient-service-path";
+export { filterTransientServicePath, isTransientServiceLauncherPath } from "../lib/transient-service-path";
 import { isProtectedHomeUnderTest, isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { isStandaloneBinary } from "../lib/standalone";
 import {
@@ -58,21 +60,6 @@ export function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bu
     bunRuntimeSource: runtime.source,
     cli: runtime.source === "standalone" || isStandaloneBinary() ? null : join(serviceSourceDir, "cli", "index.ts"),
   };
-}
-
-/** Shell-local version-manager bins disappear when the installing shell exits. */
-export function isTransientServiceLauncherPath(path: string, platform: NodeJS.Platform = process.platform): boolean {
-  const pathTools = platform === "win32" ? win32 : posix;
-  return pathTools.normalize(path).replace(/\\/g, "/").split("/").some(component =>
-    /^(?:asdf|fnm|mise|nvm|volta)_multishells?$/i.test(component));
-}
-
-export function filterTransientServicePath(
-  path: string,
-  pathDelimiter = delimiter,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  return path.split(pathDelimiter).filter(entry => !isTransientServiceLauncherPath(entry, platform)).join(pathDelimiter);
 }
 
 export function serviceLauncherPathDiagnostic(

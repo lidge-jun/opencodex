@@ -454,6 +454,10 @@ interrupted package update removed either file, it logs one `installation is inc
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
 run `ocx service repair` to refresh the task with the restored package paths.
 
+Service definitions omit shell-local version-manager multishell directories from their saved
+`PATH`. This includes the native Windows service installed with `ocx service install --native`;
+run `ocx service repair` to regenerate an older WinSW definition with a durable `PATH`.
+
 On Linux, the systemd unit invokes the first regular, executable `ocx` file found on `PATH` at
 install time rather than the Bun and CLI paths inside the installed package tree. Version managers
 such as **mise** and **asdf** install into a versioned directory and delete the old one on upgrade;

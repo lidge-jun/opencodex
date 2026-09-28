@@ -70,8 +70,10 @@ credential-bearing service state to a mutable PATH launcher, and a `launcherPath
 older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
 
 Service launchers reject recorded and newly discovered paths inside shell-local `fnm`, `nvm`,
-`mise`, `asdf`, or `volta` multishell directories. Systemd, launchd, and Windows definitions
-remove those entries from their rendered PATH while keeping other environment values. Launchd
+`mise`, `asdf`, or `volta` multishell directories. Systemd, launchd, Windows Task Scheduler,
+and native WinSW definitions remove those entries from their rendered PATH while keeping other
+environment values. WinSW uses the same pure filter in `src/lib/transient-service-path.ts`
+without importing the service state module. Launchd
 repair compares the full plist after normalizing its previous PATH: a PATH cleanup or any other
 definition change reloads the live job through the guarded eviction and bootstrap path.
 

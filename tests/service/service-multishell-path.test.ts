@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { delimiter, join } from "node:path";
 import { buildPlist, buildUnit, buildWindowsServiceScript, repairService, stableLauncherEntry } from "../../src/service";
+import { buildWinswXml } from "../../src/lib/winsw";
 import { filterTransientServicePath, isTransientServiceLauncherPath, serviceLauncherPathDiagnostic } from "../../src/service/state";
 
 describe("shell-scoped service paths", () => {
@@ -80,6 +81,19 @@ describe("shell-scoped service paths", () => {
       if (oldProxy === undefined) delete process.env.HTTPS_PROXY;
       else process.env.HTTPS_PROXY = oldProxy;
     }
+  });
+
+  test("filters shell-local Windows PATH from native WinSW XML", () => {
+    const xml = buildWinswXml(
+      { bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\OpenCodex\\cli.ts" },
+      {
+        PATH: "C:\\Windows\\System32;C:\\Temp\\VOLTA_multishells\\1\\bin;C:\\Tools & More\\bin",
+        USERNAME: "operator",
+      },
+    );
+    expect(xml).not.toContain("VOLTA_multishells");
+    expect(xml).toContain('<env name="PATH" value="C:\\Windows\\System32;C:\\Tools &amp; More\\bin"/>');
+    expect(xml).toContain('<env name="OCX_BUN_RUNTIME_SOURCE" value="bundled"/>');
   });
 
   test("launchd renders a cleaned PATH with bundled Bun and proxy settings intact", () => {
