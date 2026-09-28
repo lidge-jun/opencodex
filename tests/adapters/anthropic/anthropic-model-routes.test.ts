@@ -255,6 +255,31 @@ test("fill-first uses declared route order when the active account is outside th
   expect(choice.accountId).toBe(ids[2]);
 });
 
+test("fill-first fallback advances from the active ordinary-pool account", async () => {
+  const ids = await seed();
+  const ordinaryOrder = [...ids].sort((a, b) => a.localeCompare(b));
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.strategy = "fill-first";
+  cfg.anthropicAccountPool!.routes = [{
+    name: "missing", match: "claude-*", accounts: ["removed-account"], fallback: true,
+  }];
+  // The middle account is the current ordinary-pool account. Crossing its threshold
+  // must advance to its successor, rather than restart at the first account.
+  await setActiveAccount("anthropic", ordinaryOrder[0]!);
+  cfg.anthropicAccountPool!.enabled = false;
+  resolveAnthropicAccountForSession("", cfg); // establish the old manual preference
+  cfg.anthropicAccountPool!.enabled = true;
+  await setActiveAccount("anthropic", ordinaryOrder[1]!);
+  setCachedProviderAccountQuotaForTests("anthropic", ordinaryOrder[0]!, { fiveHourPercent: 10 });
+  setCachedProviderAccountQuotaForTests("anthropic", ordinaryOrder[1]!, { fiveHourPercent: 90 });
+  setCachedProviderAccountQuotaForTests("anthropic", ordinaryOrder[2]!, { fiveHourPercent: 10 });
+  const decision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+  const choice = resolveAnthropicAccountForSession("fresh", cfg, Date.now(), decision);
+  expect(choice.reason).toBe("fill-first");
+  expect(choice.accountId).toBe(ordinaryOrder[2]);
+  expect(choice.accountId).not.toBe(ordinaryOrder[0]);
+});
+
 test("selection, refusal and 429 rotation logs use the rule position, never its account-like name", async () => {
   const ids = await seed();
   const cfg = config(ids, () => answer());

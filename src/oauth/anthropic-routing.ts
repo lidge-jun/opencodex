@@ -409,6 +409,11 @@ function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: 
   return best.accountId;
 }
 
+/** A fallback route uses ordinary ordering only after it widens beyond its declared accounts. */
+function usesDeclaredRouteOrder(eligible: readonly string[], decision: AnthropicRouteDecision | null): boolean {
+  return decision !== null && (!decision.fallback || eligible.some(id => decision.accounts.includes(id)));
+}
+
 /** Next eligible Anthropic account in stable order after `afterId` (wrapping). */
 function pickNextFillFirstAnthropicAccount(
   config: OcxConfig,
@@ -420,9 +425,10 @@ function pickNextFillFirstAnthropicAccount(
   const available = window === "weekly" ? eligible.filter(id => !exhausted5h(id)) : eligible;
   const candidates = available.length > 0 ? available : eligible;
   if (candidates.length === 0) return null;
-  const ordered = decision ? candidates : [...candidates].sort((a, b) => a.localeCompare(b));
+  const routeOrder = usesDeclaredRouteOrder(eligible, decision);
+  const ordered = routeOrder ? candidates : [...candidates].sort((a, b) => a.localeCompare(b));
   const set = getAccountSet(PROVIDER);
-  const stableAll = decision ? [...decision.accounts] : set
+  const stableAll = routeOrder ? [...decision!.accounts] : set
     ? [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b))
     : ordered;
   const startIdx = stableAll.indexOf(afterId);
@@ -521,7 +527,7 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number, decision:
   }
 
   if (!active || !set) {
-    const ordered = decision ? eligible : [...eligible].sort((a, b) => a.localeCompare(b));
+    const ordered = usesDeclaredRouteOrder(eligible, decision) ? eligible : [...eligible].sort((a, b) => a.localeCompare(b));
     for (const id of ordered) {
       if (isActiveUnderFillFirstThreshold(config, id)) return id;
     }
