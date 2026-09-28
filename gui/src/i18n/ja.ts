@@ -438,7 +438,7 @@ export const ja: Record<TKey, string> = {
   "compactionRouting.comboWarning": "この設定では、適用対象の圧縮リクエストのたびに会話の全内容が要約のためコンボ {combo} へ送信されます。コンボはルーティング戦略に従ってターゲット（{providers}）のいずれかを選びますが、再試行可能な失敗の後には同じ会話全内容のリクエストを別のターゲットで再試行する可能性があるため、ターゲットのうち 1 つ以上が会話を受け取る可能性があります。",
   "compactionRouting.comboProvidersUnknown": "設定済みのターゲットプロバイダー",
   "compactionRouting.providerWarningScoped": "この設定では、元モデルが {sources} に一致する圧縮リクエストだけが会話の全内容を要約のため {provider} へ送信します。一致しないリクエストは元のモデルを使います。",
-  "compactionRouting.comboWarningScoped": "この設定では、元モデルが {sources} に一致する圧縮リクエストだけが会話の全内容を要約のためコンボ {combo} へ送信します。一致しないリクエストは元のモデルを使います。コンボはルーティング戦略に従ってターゲット（{providers}）のいずれかを選びますが、再試行可能な失敗の後には同じ会話全内容のリクエストを別のターゲットで再試行するため、ターゲットのうち 1 つ以上が会話を受け取る可能性があります。",
+  "compactionRouting.comboWarningScoped": "この設定では、元モデルが {sources} に一致する圧縮リクエストだけが会話の全内容を要約のためコンボ {combo} へ送信します。一致しないリクエストは元のモデルを使います。コンボはルーティング戦略に従ってターゲット（{providers}）のいずれかを選びますが、再試行可能な失敗の後には同じ会話全内容のリクエストを別のターゲットで再試行する可能性があるため、ターゲットのうち 1 つ以上が会話を受け取る可能性があります。",
   "compactionRouting.loadFailed": "圧縮設定を読み込めませんでした。",
   "compactionRouting.saved": "圧縮設定を保存しました。",
   "compactionRouting.saveFailed": "保存できませんでした。変更内容は保持されています。再試行してください。",

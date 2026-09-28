@@ -258,6 +258,29 @@ test("the scoped combo disclosure covers retry to multiple targets", async () =>
   expect(comboNote).toContain("one or more target providers");
 });
 
+test("Japanese scoped disclosure describes retry as a possibility", async () => {
+  win.localStorage.setItem("ocx-lang", "ja");
+  setting = { model: "combo/compact", sourceModels: ["gateway/*"] };
+  await render();
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(note).toContain("gateway/*");
+  expect(note).toContain("別のターゲットで再試行する可能性があるため");
+  expect(note).not.toContain("別のターゲットで再試行するため");
+});
+
+for (const scoped of [false, true]) {
+  test(`Russian ${scoped ? "scoped" : "unscoped"} disclosure identifies targets as conversation recipients`, async () => {
+    win.localStorage.setItem("ocx-lang", "ru");
+    setting = { model: "combo/compact", ...(scoped ? { sourceModels: ["gateway/*"] } : {}) };
+    await render();
+    const note = container.querySelector('[role="note"]')?.textContent ?? "";
+    expect(note).toContain("combo/compact");
+    if (scoped) expect(note).toContain("gateway/*");
+    expect(note).toContain("одна или несколько целей могут получить полное содержимое разговора");
+    expect(note).not.toContain("разговор может получить");
+  });
+}
+
 test("failed save retains the draft and allows retry", async () => {
   await render();
   await choose("model", "gateway/cheap");
