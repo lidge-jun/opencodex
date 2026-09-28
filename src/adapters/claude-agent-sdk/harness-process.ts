@@ -45,11 +45,13 @@
  *
  * One `close` is not even the parent's own: taking this turn's side of the pipes back is what makes
  * Node emit it for a child whose stdio a descendant inherited, so the event can arrive for a process
- * that died with a tree this ladder could not reach. Returning the capacity there would hand out a
- * slot for a descendant that is still using the working directory. A child the ladder hands to the
- * quarantine as an unresolved tree therefore keeps its lease past that `close`, and only the
- * platform's answer that no member of the group is left - `kill(-pid, 0)` on POSIX, nothing at all
- * on Windows - hands it back.
+ * that died with a tree this ladder could not reach - or for one the ladder never saw die at all.
+ * Returning the capacity there would hand out a slot for a descendant that is still using the working
+ * directory. A child whose tree call was refused therefore keeps its lease past that `close`, and
+ * only the platform's answer that no member of the group is left - `kill(-pid, 0)` on POSIX, nothing
+ * at all on Windows - hands it back. The reason on the quarantine entry keeps naming what the ladder
+ * saw of the direct parent (`running`, `pipes-held`, `unresolved-tree`); the lease is the part that
+ * speaks for the tree.
  */
 import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions as NodeSpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -423,10 +425,11 @@ class HarnessChild implements SpawnedProcess {
   }
 
   /**
-   * The ladder's verdict for this child was "unresolved tree": the direct process is gone and the
-   * tree behind it could not be signalled. Ownership is latched before the local pipes are reclaimed,
-   * because reclaiming them is itself what makes Node emit the `close` that would otherwise hand the
-   * capacity to a descendant that is still there.
+   * The ladder could not deliver the tree call for this child, so what stands behind it is unproven -
+   * whether the direct process was already gone at the deadline or is only the one that goes away
+   * later. Ownership is latched before the local pipes are reclaimed, because reclaiming them is
+   * itself what makes Node emit the `close` that would otherwise hand the capacity to a descendant
+   * that is still there.
    */
   markTreeOwnershipUnsettled(): void {
     this.treeOwnershipUnsettled = true;
@@ -732,11 +735,14 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
             signalFailed: child.signalFailed,
           },
         }));
-      // The verdict is latched before the pipes go back, because reclaiming them is itself what makes
+      // Ownership is latched before the pipes go back, because reclaiming them is itself what makes
       // Node emit the `close` for a child whose stdio a descendant inherited. A `close` that arrives
-      // that way must not return the capacity of a tree this ladder never reached.
+      // that way must not return the capacity of a tree this ladder never reached - and "never
+      // reached" is the tree call being refused, not the label on the direct parent. A child that
+      // shrugged off every signal is still `running` at the deadline with exactly the same refused
+      // tree behind it, and the `close` that arrives later proves only that the parent is gone.
       for (const item of settlement) {
-        if (item.entry.reason === "unresolved-tree") item.child.markTreeOwnershipUnsettled();
+        if (item.child.treeUnreachable) item.child.markTreeOwnershipUnsettled();
       }
       for (const child of live) if (!child.closed) child.reclaimPipes();
       const unresolved: HarnessUnresolvedChild[] = settlement.map(item => item.entry);

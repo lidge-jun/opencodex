@@ -268,9 +268,12 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
   // turn must not delete its scratch cwd or answer the client underneath a live process. The two
   // things the SDK's own spawn did for the child that a custom spawner has to keep - the stderr pump
   // and the real exit - are in `./harness-process.ts`.
-  // Sweep the quarantine once per turn. A survivor from an earlier turn is observed here and, when
-  // it has closed, hands its bounded cleanup lease back; a turn that cannot be observed any more is
-  // dropped with a warning there. No timer of its own, and no cost while the quarantine is empty.
+  // Sweep the quarantine once per turn. A survivor from an earlier turn is observed here: one that
+  // closed - and whose tree the ladder could reach - hands its bounded cleanup lease back, while one
+  // whose tree call was refused keeps both its entry and its lease until the platform reports the
+  // group empty. The age bound only names such a survivor, once; it does not drop it or give its
+  // capacity away, because a process that has not been shown to be gone is not capacity this turn may
+  // hand out again. No timer of its own, and no cost while the quarantine is empty.
   reapHarnessQuarantine();
 
   const harness = createHarnessProcessSupervisor({

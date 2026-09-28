@@ -847,8 +847,10 @@ function fakeHarnessChild(options: {
   /** A launcher/descendant inherited the harness's stdio: the process ends, `close` never arrives. */
   exitWithoutClose?: boolean;
   /**
-   * The same inherited pipe, seen from the other side: the process ends, `close` is withheld, and it
-   * is the turn's own pipe reclamation that produces it - so the event reports stdio, not the tree.
+   * The same inherited pipe, seen from the other side: `close` is withheld and it is the turn's own
+   * pipe reclamation that produces it - the event reports stdio, not the tree. With
+   * `terminatesOn: "never"` it also covers the child that ignored every signal, where the
+   * reclamation is when it dies and its exit and its close arrive together.
    */
   closeOnPipeReclaim?: boolean;
   /** The runtime refuses the signal: `kill()` reports that nothing was delivered. */
@@ -868,6 +870,29 @@ function fakeHarnessChild(options: {
   const signals: string[] = [];
   let closed = false;
   let ended = false;
+  let exited = false;
+  /**
+   * The inherited pipe, seen from the other side: nothing this child does on its own releases
+   * `close`, and it is the turn taking its own side of the streams back that produces it. A child
+   * that ignored every signal only goes away then, so its exit and its close arrive together.
+   */
+  const onPipeReclaim = (): void => {
+    if (closed) return;
+    closed = true;
+    if (!exited) {
+      exited = true;
+      child.exitCode = 0;
+      child.signalCode = "SIGKILL";
+      child.emit("exit", null, "SIGKILL");
+    }
+    child.emit("close", null, "SIGKILL");
+    options.onEnd?.();
+  };
+  if (options.closeOnPipeReclaim === true) {
+    child.stdout.once("close", onPipeReclaim);
+    child.stdin.once("close", onPipeReclaim);
+    child.stderr?.once("close", onPipeReclaim);
+  }
   child.kill = (signal?: string) => {
     signals.push(signal ?? "SIGTERM");
     if (options.refuseSignals === true) return false;
@@ -881,20 +906,11 @@ function fakeHarnessChild(options: {
         if (options.stderr !== undefined) child.stderr.emit("data", Buffer.from(options.stderr));
         child.exitCode = 0;
         child.signalCode = ending;
+        exited = true;
         child.emit("exit", null, ending);
-        if (options.closeOnPipeReclaim === true) {
-          // Nothing this child does on its own releases `close`; the descendant holds the write end.
-          const finish = (): void => {
-            if (closed) return;
-            closed = true;
-            child.emit("close", null, ending);
-            options.onEnd?.();
-          };
-          child.stdout.once("close", finish);
-          child.stdin.once("close", finish);
-          child.stderr?.once("close", finish);
-          return;
-        }
+        // With an inherited pipe the `close` is not this child's to send: it comes with the
+        // reclamation above, and for a child that ignored every signal that is also when it dies.
+        if (options.closeOnPipeReclaim === true) return;
         if (options.exitWithoutClose !== true) {
           closed = true;
           child.emit("close", null, ending);
@@ -1092,10 +1108,14 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
     expect(harnessTeardownMetrics().active).toBe(0);
   });
 
-  test("a quarantined survivor that closes later hands its cleanup lease back", async () => {
+  test("a quarantined survivor whose tree was reached hands its cleanup lease back when it closes", async () => {
+    // The tree was delivered here: the ladder reached the group every time it asked, so the direct
+    // child's later `close` is the whole answer and the capacity comes back with it. Where the tree
+    // call is refused instead, the entry's label still follows the direct parent and the lease stays
+    // with the tree - that is the case below.
     const harness = fakeHarnessChild({ terminatesOn: "never" });
 
-    const outcome = await supervisorFor(harness).terminate();
+    const outcome = await supervisorFor(harness, { killProcessTree: () => true }).terminate();
     expect(outcome.allExited).toBe(false);
     expect(harnessTeardownMetrics().active).toBe(1);
 
@@ -1104,6 +1124,40 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
     // behind in the account.
     harness.child.emit("exit", 0, "SIGKILL");
     harness.child.emit("close", 0, "SIGKILL");
+    expect(reapHarnessQuarantine()).toBe(0);
+    expect(harnessQuarantineSnapshot()).toEqual([]);
+    expect(harnessTeardownMetrics().active).toBe(0);
+  });
+
+  test("a survivor the tree signal never reached keeps its lease when it closes later", async () => {
+    // The ladder's label is about the direct parent; the lease is about the tree. This child ignored
+    // every signal, so it is still `running` at the deadline - with the same refused tree call
+    // behind it as an already-exited one - and the reclamation that follows is where it finally
+    // dies. Its `close` therefore proves only that the parent is gone, while a descendant that
+    // inherited the pipes may still be alive, so the capacity stays until the platform can disprove
+    // the group.
+    let descendantAlive = true;
+    setHarnessTreeProbeForTests(() => descendantAlive);
+    const harness = fakeHarnessChild({ terminatesOn: "never", closeOnPipeReclaim: true });
+
+    const outcome = await supervisorFor(harness, { killProcessTree: () => false }).terminate();
+
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "running", signalFailed: false }],
+      quarantined: 1,
+    });
+    await Bun.sleep(10);
+    // The close arrived with the reclamation, and the lease did not go with it.
+    expect(harness.closed()).toBe(true);
+    expect(harnessTeardownMetrics().active).toBe(1);
+    expect(reapHarnessQuarantine()).toBe(1);
+    // Still named as the running child the ladder saw, because that is the part it could see.
+    expect(harnessQuarantineSnapshot()).toMatchObject([{ pid: 4711, reason: "running" }]);
+    expect(harnessTeardownMetrics().active).toBe(1);
+
+    descendantAlive = false;
     expect(reapHarnessQuarantine()).toBe(0);
     expect(harnessQuarantineSnapshot()).toEqual([]);
     expect(harnessTeardownMetrics().active).toBe(0);
