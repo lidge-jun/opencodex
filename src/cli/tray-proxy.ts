@@ -261,6 +261,8 @@ async function startRestartedProxy(
   io: ProxyRestartIo,
   waitBetweenAttempts: () => Promise<void>,
   recoveringLiveRestart: boolean,
+  /** The restarted proxy's identity; recovery success must be a different process. */
+  previous?: ProxyRestartLive,
 ): Promise<ProxyRestartResult> {
   let originalError: unknown;
   for (let attempt = 0; attempt < RESTART_START_ATTEMPTS; attempt++) {
@@ -293,6 +295,12 @@ async function startRestartedProxy(
     const attested = recheck.status === "live"
       && recheck.live.pid !== null
       && recheck.live.source === "runtime";
+    // Recovery after a live restart: the old PID coming back is not a replacement this
+    // command started. It is serving, so never start another over it, and never call it
+    // success either.
+    if (attested && previous && !isProxyReplacement(previous, recheck.live)) {
+      return { ok: false, phase: "replacement" };
+    }
     if (attested && outcome.error !== undefined) return { ok: false, phase: "start", error: originalError };
     if (attested) return { ok: true, mode: "started" };
     if (outcome.launch === "unknown" || recheck.status !== "absent") {
@@ -364,7 +372,12 @@ export async function runProxyRestart(io: ProxyRestartIo): Promise<ProxyRestartR
   } catch (error) {
     return { ok: false, phase: "replacement", error };
   }
-  if (again.status === "absent") return startRestartedProxy(io, waitBetweenAttempts, true);
+  if (again.status === "absent") {
+    // Only an ACCEPTED restart earns a recovery start. After an uncertain request the old
+    // proxy may merely be mid-restart and reappear; starting one here could race it.
+    if (!request.accepted) return { ok: false, phase: "request", error: request.error };
+    return startRestartedProxy(io, waitBetweenAttempts, true, previous);
+  }
   if (again.status === "live" && isProxyReplacement(previous, again.live)) {
     return { ok: true, mode: "restarted", live: again.live };
   }

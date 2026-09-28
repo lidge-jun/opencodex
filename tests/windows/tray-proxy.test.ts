@@ -329,6 +329,65 @@ describe("tray proxy coordinator", () => {
     expect(calls).toEqual(["request", "wait", "start"]);
   });
 
+  test("an uncertain request never earns a recovery start after an absent observation", async () => {
+    const calls: string[] = [];
+    const error = new Error("response connection closed");
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    let observations = 0;
+    const result = await runProxyRestart({
+      findLive: async () => {
+        observations += 1;
+        return observations === 1 ? { status: "live", live: previous } : { status: "absent" };
+      },
+      startWhenStopped: async () => { calls.push("start"); return { status: "started" }; },
+      requestInPlaceRestart: async () => { calls.push("request"); return { accepted: false, uncertain: true, error }; },
+      waitForReplacement: async () => { calls.push("wait"); return null; },
+      waitBetweenAttempts: async () => {},
+    });
+    expect(result).toEqual({ ok: false, phase: "request", error });
+    expect(calls).toEqual(["request", "wait"]);
+  });
+
+  test("recovery never reports success when the old pid reappears after a refused start", async () => {
+    const calls: string[] = [];
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    let observations = 0;
+    const result = await runProxyRestart({
+      findLive: async () => {
+        observations += 1;
+        // Discovery sees the target, the post-replacement re-observation sees nothing, and
+        // after the refused recovery start the ORIGINAL pid is serving again.
+        if (observations === 1) return { status: "live", live: previous };
+        if (observations === 2) return { status: "absent" };
+        return { status: "live", live: previous };
+      },
+      startWhenStopped: async () => { calls.push("start"); return { status: "failed", launch: "never" }; },
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      waitBetweenAttempts: async () => {},
+    });
+    expect(result).toEqual({ ok: false, phase: "replacement" });
+    expect(calls).toEqual(["start"]);
+  });
+
+  test("a recovery recheck that finds a different pid still attests the replacement", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    let observations = 0;
+    const result = await runProxyRestart({
+      findLive: async () => {
+        observations += 1;
+        if (observations === 1) return { status: "live", live: previous };
+        if (observations === 2) return { status: "absent" };
+        return { status: "live", live: { pid: 20, port: 10100, source: "runtime" } };
+      },
+      startWhenStopped: async () => ({ status: "failed", launch: "exited" }),
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      waitBetweenAttempts: async () => {},
+    });
+    expect(result).toEqual({ ok: true, mode: "started" });
+  });
+
   test("a replacement that lands past the deadline still proves success", async () => {
     const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
     const late: ProxyRestartLive = { pid: 20, port: 10100, source: "runtime" };
