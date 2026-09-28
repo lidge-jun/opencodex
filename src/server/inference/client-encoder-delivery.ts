@@ -165,6 +165,8 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
         enforceDeclaredToolNames: false,
         translatorBudget,
         recordBufferedDelivery: false,
+        // The client never receives this body, and its Chat/Messages wire has no envelope field.
+        omitHiddenReasoningEnvelope: true,
       });
     } catch {
       return undefined;

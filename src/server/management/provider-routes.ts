@@ -1298,7 +1298,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!submittedFastEnabled && liveFastEnabled !== undefined) prov.fastEnabled = liveFastEnabled;
     // The form sends none of the compatibility settings either (#5563). Read the live row rather
     // than `existing`, like the alias overlays below: a PATCH that saved one of them while DNS
-    // validation awaited must not be undone. Nothing is carried to a new destination.
+    // validation awaited must not be undone. Only the hideRawReasoning display policy follows the
+    // provider to a new destination; the upstream compatibility settings do not.
     carryProviderCompatFields(prov, config.providers[name], overwriteSample);
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When

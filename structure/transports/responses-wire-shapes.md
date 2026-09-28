@@ -558,8 +558,10 @@ route still sends the suppressed text to the client inside the txt-only `ocxr1` 
 (`encrypted_content`, base64 JSON, echoed back for replay), while the direct Chat and Messages
 encoders emit no envelope at all (the Chat wire has no field for one, and the Messages encoder
 emits no thinking block for a signature-less close), leaving replay to the server-side cache the
-delivery's terminal fold fills. A fallback route without the option shows raw reasoning again. A
-native passthrough route relays the upstream's own frames and ignores the option.
+delivery's terminal fold fills. That fold builds no `ocxr1` envelope (`omitHiddenReasoningEnvelope`),
+so a block that fit the live stream cannot overflow the translator budget there and skip the cache
+write. A fallback route without the option shows raw reasoning again. A native passthrough route
+relays the upstream's own frames and ignores the option.
 
 ## Codex App visualization references
 

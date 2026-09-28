@@ -104,6 +104,13 @@ function buildResponseJSONWithBudget(
     translatorBudget?: TranslatorBudget;
     /** Conversation identity for the reasoning replay cache (issue #950). */
     replayCacheScope?: OcxReasoningReplayScopeRef;
+    /**
+     * Fold-only callers whose body never reaches the client (direct client encoders): hidden raw
+     * reasoning is still handed to the replay cache, but no client-bound `ocxr1` envelope is
+     * materialized. Encoding reserves roughly ten times the text against the translator budget,
+     * so a block that fit live delivery could otherwise overflow here and lose the cache write.
+     */
+    omitHiddenReasoningEnvelope?: boolean;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
@@ -287,6 +294,11 @@ function buildResponseJSONWithBudget(
     if (!rawText) return;
     rawReasoningForNextToolCall = rawText;
     if (options?.hideThinkingSummary === true || options?.hideRawReasoning === true) {
+      if (options?.omitHiddenReasoningEnvelope === true) {
+        budget?.releaseRetained(currentRawReasoning.bytes, { kind: "reasoning" });
+        currentRawReasoning = emptyChunks();
+        return;
+      }
       // Same contract as the streaming path: no visible reasoning, txt-only envelope round-trip.
       pushOutput({
         type: "reasoning", id: `rs_${uuid()}`, summary: [],

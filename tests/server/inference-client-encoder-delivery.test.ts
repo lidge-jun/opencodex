@@ -225,6 +225,43 @@ describe("deliverClientEncodedResponse", () => {
     expect(peekReasoningForCall("call_direct_hidden", scope)).toBe("chain of thought");
   });
 
+  test("a hidden block that fits live delivery still reaches the replay cache under a tight budget", async () => {
+    // The fold used to build a client-bound ocxr1 envelope before the cache write. Envelope
+    // encoding reserves about ten times the text, so a block that fit the live stream overflowed
+    // only there; the delivery then reported success without writing the replay cache.
+    const scope: OcxReasoningReplayScopeRef = {
+      clientThreadId: "direct-hidden-tight-budget",
+      current: {
+        providerName: "routed",
+        providerDestinationIdentity: "destination:provider",
+        adapterName: "openai-chat",
+        modelId: "model",
+        credentialIdentity: "key:test",
+      },
+    };
+    const thought = "thought ".repeat(1_250);
+    const hidden: AdapterEvent[] = [
+      { type: "reasoning_raw_delta", text: thought },
+      { type: "tool_call_start", id: "call_direct_hidden_tight", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"a.txt\"}" },
+      { type: "tool_call_end" },
+      { type: "done", usage },
+    ];
+    const run = delivery(true, { model: "m", provider: "p" });
+    const response = await deliverClientEncodedResponse({
+      ...run.input,
+      translatorBudget: createTestTranslatorBudget({ maxTurnBytes: 60_000 }),
+      adapterName: "openai-chat",
+      events: replay(hidden),
+      fold: { hideRawReasoning: true, replayCacheScope: scope },
+    });
+    const wire = await response.text();
+    expect(wire).not.toContain("thought");
+    expect(wire).toContain("read_file");
+    expect(peekReasoningForCall("call_direct_hidden_tight", scope)).toBe(thought);
+    expect(run.completed).toHaveLength(1);
+  });
+
 });
 
 // The routed-adapter branch assembles the encoder's fold itself. Direct MCP recovery reaches the
