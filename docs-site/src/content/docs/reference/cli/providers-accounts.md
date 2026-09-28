@@ -156,8 +156,11 @@ window. The block releases automatically, with the switch still on, once every b
 reports a fresh reading below 98% (a 0% reset counts); the next 98% observation blocks again.
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
-While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
-invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
+While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
+If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
+schedule; a longer `Retry-After` also delays profile and token preparation. Only a fresh valid reading
+can lift the block. A quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
+a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
 its primary window explicitly lasts **at least 24 hours** and secondary/tertiary windows are explicitly `null`

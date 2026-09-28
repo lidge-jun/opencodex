@@ -1,6 +1,6 @@
 # Codex Home
 
-Quota activation restores deadlines from OpenCodex settings; its retry backoff remains process-local. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](providers/openai-tiers.md#public-provider-contract).
+Quota activation restores deadlines from OpenCodex settings; its retry backoff remains process-local. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 

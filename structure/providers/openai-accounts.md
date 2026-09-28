@@ -1,6 +1,6 @@
 # OpenAI Account Identity And Pool Operations
 
-How OpenAI accounts are migrated, identified, and rotated once the account modes in Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](../providers/openai-tiers.md#public-provider-contract).
+How OpenAI accounts are migrated, identified, and rotated once the account modes in
 [OpenAI provider account modes](openai-tiers.md) are configured: wire identity, store concurrency,
 pool plan exclusions and ordering, quota observations, and account-bound thread and file
 retention.

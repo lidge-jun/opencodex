@@ -1,6 +1,6 @@
 # Config Surface
 
-Quota activation reuses the existing next-reset fields without adding a polling configuration key. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](providers/openai-tiers.md#public-provider-contract).
+Quota activation reuses the existing next-reset fields without adding a polling configuration key. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
 Native function-result injection follows [the separate opt-in control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 

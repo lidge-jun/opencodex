@@ -1,6 +1,6 @@
 # GUI And Management API
 
-Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](providers/openai-tiers.md#public-provider-contract).
+Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
 The companion settings contract in `src/companion/` persists menu-bar and widget display
 preferences, while `src/server/management/companion-routes.ts` exposes those settings and the
