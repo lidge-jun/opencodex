@@ -11,7 +11,7 @@ cd devlog/_plan/260928_remote_thread_provider_policy/probes
 python -m unittest -v test_native_policy test_probe test_loopback_bridge
 ```
 
-**Executed: 61 tests, 0 failures.**
+**Inventory: 61 tests across three suites.**
 
 - 23 tests specify the proposed native policy: opt-out, trusted-origin scoping,
   explicit arrays, null semantics, parent/ancestor exceptions, immutable policy,
@@ -23,11 +23,15 @@ python -m unittest -v test_native_policy test_probe test_loopback_bridge
   unrelated HTTP, and fixture endpoint restrictions.
 
 The 23 + 29 offline tests use the Python standard library only. The 9 socket tests
-need aiohttp already installed; no production dependency manifest is changed.
+need aiohttp; no production dependency manifest is changed.
 
-Hosted CI runs the same command for every devlog/**/probes directory it finds
-(.github/workflows/devlog-probes.yml): the offline unit tests always run, and
-the aiohttp socket tests run when aiohttp is present on the runner image.
+Author-local execution on 2026-09-28 covered the 52 standard-library tests
+(test_native_policy + test_probe); the socket suite was not part of that recorded
+run. Hosted exact-head execution is authoritative for the remaining 9: the
+devlog-probes workflow added by this PR installs aiohttp deterministically (the
+step fails the job if install fails) and discovers every devlog/**/probes
+directory. On head 787ef30698 the hosted unittest job ran all 61 tests with 0
+failures.
 
 ```sh
 python -m unittest -v test_native_policy test_probe
@@ -49,6 +53,7 @@ schema compatibility or actual mobile results.
   substitute for required repository gates; the PR must remain draft.
 - Production multi-segment relay support or management/security review.
 
-The PR adds only this research unit, not a runtime fix. No workflow, executable
-configuration, release artifact, or native storage is changed. Required exact-head
-CI and independent review remain outstanding even if these probes pass.
+The PR adds this research unit plus one workflow that runs it: devlog-probes.yml
+is a new CI lane, so the executable contract now executes on exact head rather
+than only locally. No executable configuration, release artifact, or native
+storage is changed. Independent review remains outstanding even with green CI.

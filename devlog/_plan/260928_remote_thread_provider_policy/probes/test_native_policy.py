@@ -63,6 +63,30 @@ class NativePolicyTests(unittest.TestCase):
         ):
             with self.subTest(relation=relation), self.assertRaises(ValueError):
                 self.resolve(**relation)
+        # Python's UUID() tolerates hyphen shapes Rust Uuid::parse_str rejects:
+        # shifted hyphens, a bare 32-hex blob inside braces, an uppercased URN, and
+        # a braced simple string all stay invalid no matter the provider shape.
+        malformed = (
+            "000-00000-0000-4000-8000-0000000000aa",
+            "{000000000000400080000000000000aa}",
+            "URN:UUID:00000000-0000-4000-8000-0000000000aa",
+            "{000000000000-4000-8000-0000000000aa}",
+        )
+        for key in ("parent_thread_id", "ancestor_thread_id"):
+            for bad in malformed:
+                for requested in (None, ("openai",)):
+                    with self.subTest(key=key, bad=bad, requested=requested), self.assertRaises(ValueError):
+                        self.resolve(**{key: bad}, requested=requested)
+        # The four shapes upstream accepts stay valid for both relations.
+        for key in ("parent_thread_id", "ancestor_thread_id"):
+            for good in (
+                "00000000-0000-4000-8000-0000000000aa",
+                "000000000000400080000000000000aa",
+                "{00000000-0000-4000-8000-0000000000aa}",
+                "urn:uuid:00000000-0000-4000-8000-0000000000aa",
+            ):
+                with self.subTest(key=key, good=good):
+                    self.assertIsNone(self.resolve(**{key: good}))
         with self.assertRaises(ValueError):
             self.resolve(
                 parent_thread_id="00000000-0000-4000-8000-0000000000aa",

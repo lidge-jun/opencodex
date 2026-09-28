@@ -10,6 +10,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from uuid import UUID
+import re
+
+# Rust's Uuid::parse_str accepts exactly four textual shapes - hyphenated, simple,
+# braced-hyphenated and the urn:uuid prefix. Python's UUID() is looser: it tolerates
+# arbitrary hyphen placement inside a 32-hex payload, so wrapper/hyphen variants
+# must be rejected by shape before parsing instead of leaning on the constructor.
+_UUID_ACCEPTED_SHAPES = re.compile(
+    r"(?:"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|[0-9a-fA-F]{32}"
+    r"|\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
+    r"|urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r")\Z"
+)
 
 
 class ConnectionOrigin(Enum):
@@ -30,6 +44,8 @@ def _validate_ids(value: tuple[str, ...], label: str) -> None:
 
 def _validate_thread_id(value: str, label: str) -> None:
     """Upstream parses ThreadId as a UUID; a non-UUID string must not widen the list."""
+    if not isinstance(value, str) or not _UUID_ACCEPTED_SHAPES.match(value):
+        raise ValueError(f"{label} must be a UUID thread id")
     try:
         UUID(value)
     except (ValueError, AttributeError, TypeError):
