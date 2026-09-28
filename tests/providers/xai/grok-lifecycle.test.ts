@@ -175,8 +175,10 @@ describe("Grok fence lifecycle wiring", () => {
     expect(restartCase).toContain("await deps.handleProxyRestart(deps.handleRestartStartWhenStopped)");
     const trayRestart = sliceFn(CLI_SOURCE, "async function handleTrayProxyRestart(", "async function restoreSharedClientStateAfterStop(");
     const restartHelper = sliceFn(CLI_SOURCE, "async function handleProxyRestart(", "async function handleTrayProxyRestart(");
-    expect(trayRestart).toContain("await handleProxyRestart(() => handleTrayProxyStart(false))");
+    expect(trayRestart).toContain("await handleProxyRestart(async () => (await handleTrayProxyStart(false))");
     expect(restartHelper).toContain("requestBoundSystemRestart(previous, deadlineAt)");
+    expect(restartHelper).toContain("recheckAfterFailedStart: () => recheckRestartFailedStart(");
+    expect(CLI_SOURCE).toContain("forceStart: recoveringLiveRestart");
   });
 
   test("a stopped scheduler is verified across the respawn window before stop succeeds", () => {

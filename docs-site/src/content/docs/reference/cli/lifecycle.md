@@ -94,6 +94,8 @@ When a proxy is running, ask that exact attested PID and port to restart in plac
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
 separate stop/start. If no proxy is running, the command falls back to the normal `ensure` start.
+If an accepted restart loses its replacement, the command attempts a bounded recovery start even
+when Codex autostart is disabled, and reports failure if no proxy starts.
 When the proxy starts its own replacement (no background service supervises it) after the drain
 finished normally, a replacement that exits before it answers is started again up to twice. What
 the replacement prints goes to `~/.opencodex/restart-handoff.log`, which stays near 256 KiB: a

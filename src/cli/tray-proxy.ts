@@ -67,7 +67,7 @@ export interface ProxyRestartDiscoveryIo {
 
 export interface ProxyRestartIo {
   findLive: () => Promise<ProxyRestartDiscovery>;
-  startWhenStopped: () => ProxyRestartStartOutcome | Promise<ProxyRestartStartOutcome>;
+  startWhenStopped: (recoveringLiveRestart: boolean) => ProxyRestartStartOutcome | Promise<ProxyRestartStartOutcome>;
   requestInPlaceRestart: (
     previous: ProxyRestartLive,
   ) => ProxyRestartRequestOutcome | Promise<ProxyRestartRequestOutcome>;
@@ -81,6 +81,8 @@ export interface ProxyRestartIo {
    * `uncertain` forever and the crash-recovery path could never run.
    */
   reobserveAfterReplacement?: (previous: ProxyRestartLive) => Promise<ProxyRestartDiscovery>;
+  /** A failed recovery start must recheck under a fresh window after the shared deadline. */
+  recheckAfterFailedStart?: () => Promise<ProxyRestartDiscovery>;
 }
 
 /**
@@ -132,6 +134,14 @@ export function reobserveRestartReplacement(
   });
   const end = Date.now() + windowMs;
   return pollReplacementDeparture(() => observe(end), previous, () => Date.now() + 750 < end, () => Bun.sleep(250));
+}
+
+/** Production recovery recheck: the original restart deadline may already be spent. */
+export function recheckRestartFailedStart(
+  observe: (end: number) => Promise<ProxyRestartDiscovery>,
+): Promise<ProxyRestartDiscovery> {
+  const end = Date.now() + 5_000;
+  return observe(end);
 }
 
 /**
@@ -250,17 +260,19 @@ const RESTART_DISCOVERY_ATTEMPTS = 3;
 async function startRestartedProxy(
   io: ProxyRestartIo,
   waitBetweenAttempts: () => Promise<void>,
+  recoveringLiveRestart: boolean,
 ): Promise<ProxyRestartResult> {
   let originalError: unknown;
   for (let attempt = 0; attempt < RESTART_START_ATTEMPTS; attempt++) {
     let outcome: ProxyRestartStartOutcome;
     try {
-      outcome = await io.startWhenStopped();
+      outcome = await io.startWhenStopped(recoveringLiveRestart);
     } catch (error) {
       // An unstructured exception can have happened after launch.
       outcome = { status: "failed", launch: "unknown", error };
     }
-    if (outcome.status === "skipped") return { ok: true, mode: "skipped" };
+    if (outcome.status === "skipped") return recoveringLiveRestart
+      ? { ok: false, phase: "replacement" } : { ok: true, mode: "skipped" };
     if (outcome.status === "started") return { ok: true, mode: "started" };
     if (attempt === 0) originalError = outcome.error;
     // Beat first: a child that was just launched may still be binding, and post-health
@@ -269,7 +281,7 @@ async function startRestartedProxy(
     await waitBetweenAttempts();
     let recheck: ProxyRestartDiscovery;
     try {
-      recheck = await io.findLive();
+      recheck = await (io.recheckAfterFailedStart?.() ?? io.findLive());
     } catch {
       return { ok: false, phase: "start", error: originalError };
     }
@@ -310,7 +322,7 @@ export async function runProxyRestart(io: ProxyRestartIo): Promise<ProxyRestartR
   }
 
   if (discovery.status === "absent") {
-    return startRestartedProxy(io, waitBetweenAttempts);
+    return startRestartedProxy(io, waitBetweenAttempts, false);
   }
 
   const previous = discovery.live;
@@ -352,7 +364,7 @@ export async function runProxyRestart(io: ProxyRestartIo): Promise<ProxyRestartR
   } catch (error) {
     return { ok: false, phase: "replacement", error };
   }
-  if (again.status === "absent") return startRestartedProxy(io, waitBetweenAttempts);
+  if (again.status === "absent") return startRestartedProxy(io, waitBetweenAttempts, true);
   if (again.status === "live" && isProxyReplacement(previous, again.live)) {
     return { ok: true, mode: "restarted", live: again.live };
   }

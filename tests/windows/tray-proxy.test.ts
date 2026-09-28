@@ -126,6 +126,35 @@ describe("tray proxy coordinator", () => {
     expect(calls).toEqual(["start"]);
   });
 
+  test("accepted live restart recovers with autostart disabled", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    const forced: boolean[] = [];
+    const result = await runProxyRestart({
+      findLive: async () => ({ status: "live", live: previous }),
+      startWhenStopped: async recoveringLiveRestart => {
+        forced.push(recoveringLiveRestart);
+        return recoveringLiveRestart ? { status: "started" } : { status: "skipped" };
+      },
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      reobserveAfterReplacement: async () => ({ status: "absent" }),
+    });
+    expect(result).toEqual({ ok: true, mode: "started" });
+    expect(forced).toEqual([true]);
+  });
+
+  test("a skipped recovery cannot report a vanished proxy as success", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    const result = await runProxyRestart({
+      findLive: async () => ({ status: "live", live: previous }),
+      startWhenStopped: async () => ({ status: "skipped" }),
+      requestInPlaceRestart: async () => ({ accepted: true }),
+      waitForReplacement: async () => null,
+      reobserveAfterReplacement: async () => ({ status: "absent" }),
+    });
+    expect(result).toEqual({ ok: false, phase: "replacement" });
+  });
+
   test("a start that fails transiently succeeds without re-running the command", async () => {
     const calls: string[] = [];
     let attempts = 0;

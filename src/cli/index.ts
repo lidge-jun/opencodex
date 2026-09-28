@@ -74,7 +74,7 @@ import { parseStartOptions, StartArgsError } from "./start-args";
 
 import {
   discoverStableProxyForRestart,
-  reobserveRestartReplacement,
+  recheckRestartFailedStart, reobserveRestartReplacement,
   restartStartOutcome,
   waitForProxyReplacement,
   runProxyRestart,
@@ -744,13 +744,13 @@ function detachedStartEnvironment(): NodeJS.ProcessEnv {
   return withProcessRuntimeProvenance(env);
 }
 
-async function handleEnsure(options: { existingIsSuccess?: boolean; onSpawn?: (child: ReturnType<typeof spawn>) => void } = {}): Promise<boolean> {
+async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?: boolean; onSpawn?: (child: ReturnType<typeof spawn>) => void } = {}): Promise<boolean> {
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
   if (!owner.live && !(await markCrossHomeSibling())) reconcileStartupJournal();
   // A later ensure can find this home's sibling alive; the other port still owns shared clients.
   if (owner.live) await markLiveHomeSibling(owner.live);
   const config = loadConfig();
-  if (!codexAutoStartEnabled(config)) {
+  if (!options.forceStart && !codexAutoStartEnabled(config)) {
     console.log("Codex autostart is disabled.");
     return false;
   }
@@ -889,9 +889,8 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
     console.error("❌ Proxy was not running and the fallback start did not become healthy.");
   }
 }
-
 async function handleProxyRestart(
-  startWhenStopped: () => Promise<ProxyRestartStartOutcome>,
+  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
   const result = await runProxyRestart({
@@ -908,27 +907,28 @@ async function handleProxyRestart(
         waitBetweenChecks: () => Bun.sleep(250),
         expired: () => Date.now() >= end,
       })),
+    recheckAfterFailedStart: () => recheckRestartFailedStart(end => discoverStableProxyForRestart({
+      findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
+    })),
   });
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;
 }
-
 async function handleTrayProxyRestart(): Promise<void> {
   // A service start has no child handle here; its failed result is ambiguous.
   await handleProxyRestart(async () => (await handleTrayProxyStart(false))
     ? { status: "started" }
     : { status: "failed", launch: "unknown" });
 }
-
-async function handleRestartStartWhenStopped(): Promise<ProxyRestartStartOutcome> {
-  if (!codexAutoStartEnabled(loadConfig())) {
+async function handleRestartStartWhenStopped(recoveringLiveRestart = false): Promise<ProxyRestartStartOutcome> {
+  if (!recoveringLiveRestart && !codexAutoStartEnabled(loadConfig())) {
     console.log("Codex autostart is disabled; no proxy was started.");
     return { status: "skipped" };
   }
   let child: ReturnType<typeof spawn> | null = null;
   try {
-    const started = await handleEnsure({ existingIsSuccess: false, onSpawn: spawned => { child = spawned; } });
+    const started = await handleEnsure({ existingIsSuccess: false, forceStart: recoveringLiveRestart, onSpawn: spawned => { child = spawned; } });
     return restartStartOutcome(started, child);
   } catch (error) {
     return restartStartOutcome(false, child, error);
