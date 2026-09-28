@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
-import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { DEVIN_CLI_CREDENTIALS_ENV } from "../../src/oauth/devin/cli-import";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -11,12 +12,14 @@ import { createTempHome } from "../helpers/temp-home";
 const DEAD = "devin-session-token$synthetic-dead";
 const LIVE = "devin-session-token$synthetic-live";
 const ROTATED = "devin-session-token$synthetic-rotated";
+const DEAD_OTHER = "devin-session-token$synthetic-dead-other";
 const originalFetch = globalThis.fetch;
 
 // GetUserJwt stand-in: the identity a key mints, keyed by the key inside the protobuf body.
 let mintedIdentity: Record<string, { auth_uid?: string; sub?: string; email?: string } | undefined> = {};
 let mintCalls = 0;
 let mintFailure: (() => Response) | undefined;
+let holdMint: (() => Promise<void>) | undefined;
 function fakeUserJwt(payload: object): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
   return `${part({ alg: "HS256", typ: "JWT" })}.${part({ ...payload, exp: 9_999_999_999 })}.c2lnbmF0dXJl`;
@@ -25,6 +28,7 @@ const mintFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit
   const url = String(input instanceof Request ? input.url : input);
   if (!url.endsWith("/exa.auth_pb.AuthService/GetUserJwt")) return originalFetch(input, init);
   mintCalls++;
+  await holdMint?.();
   if (mintFailure) return mintFailure();
   const body = Buffer.from(init?.body as Uint8Array).toString("latin1");
   const key = Object.keys(mintedIdentity).find(candidate => body.includes(candidate));
@@ -84,6 +88,7 @@ beforeEach(() => {
   mintedIdentity = { [ROTATED]: { auth_uid: "uid-rotated", email: "rotated@example.com" } };
   mintCalls = 0;
   mintFailure = undefined;
+  holdMint = undefined;
   globalThis.fetch = mintFetch;
   previousCliPath = process.env[DEVIN_CLI_CREDENTIALS_ENV];
   // Never let a test read the developer's real CLI credential.
@@ -296,6 +301,51 @@ test("a credential file caught mid-write does not flag the account", async () =>
   writeCliFile(ROTATED);
   expect(await (await run()).text()).toContain("served by rotated");
   expect(cliAccount()?.credential.access).toBe(ROTATED);
+});
+
+test("concurrent identity-less CLI slots cannot both adopt one rotated key", async () => {
+  await saveCliImport(DEAD);
+  const first = await getValidAccessTokenSnapshot("devin");
+  await saveCliImport(DEAD_OTHER);
+  const second = await getValidAccessTokenSnapshot("devin");
+  expect(first.accountId).not.toBe(second.accountId);
+  writeCliFile(ROTATED);
+  const bothMinted = Promise.withResolvers<void>();
+  const releaseMint = Promise.withResolvers<void>();
+  holdMint = async () => {
+    if (mintCalls === 2) bothMinted.resolve();
+    await releaseMint.promise;
+  };
+  const refreshes = Promise.allSettled([
+    forceRefreshOAuthAccessSnapshot(first), forceRefreshOAuthAccessSnapshot(second),
+  ]);
+  await bothMinted.promise;
+  releaseMint.resolve();
+  const outcomes = await refreshes;
+  const rows = getAccountSet("devin")!.accounts;
+  expect(outcomes.filter(outcome => outcome.status === "fulfilled")).toHaveLength(1);
+  expect(rows.filter(row => row.credential.access === ROTATED)).toHaveLength(1);
+  expect(rows.every(row => row.needsReauth !== true)).toBe(true);
+});
+
+test.each([false, true])("an account paused during 401 refresh returns 403 (stream=%s)", async stream => {
+  await saveCliImport(DEAD);
+  const accountId = cliAccount()!.id;
+  writeCliFile(ROTATED);
+  const mintStarted = Promise.withResolvers<void>();
+  const releaseMint = Promise.withResolvers<void>();
+  holdMint = async () => { mintStarted.resolve(); await releaseMint.promise; };
+  const responsePromise = run(stream);
+  await mintStarted.promise;
+  await setAccountPaused("devin", accountId, true);
+  releaseMint.resolve();
+  const response = await responsePromise;
+  const body = await response.json() as { error: { type: string; message: string } };
+  expect(response.status).toBe(403);
+  expect(body.error.type).toBe("permission_error");
+  expect(body.error.message).toContain("OAuth account is paused");
+  expect(sentKeys).toEqual([DEAD]);
+  expect(cliAccount()?.needsReauth).not.toBe(true);
 });
 
 test("a slot recorded from the key's `sub` claim still matches the minted identity", async () => {

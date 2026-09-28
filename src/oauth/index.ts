@@ -30,6 +30,7 @@ import {
   type OAuthCredentialWriteReceipt,
   type OAuthRefreshIntent,
   type OAuthRefreshIntentCleanupPending,
+  type AuthStore,
 } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
@@ -38,7 +39,7 @@ import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, Re
 import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
-import { loginDevin, refreshDevinToken } from "./devin";
+import { assertDevinCliAdoptionOwnership, loginDevin, refreshDevinToken } from "./devin";
 import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
@@ -1059,10 +1060,13 @@ export async function refreshGenericAccountWithLock(
     }
     const generation = credentialGeneration(stored);
     try {
-      const fresh = merged(await def.refresh(stored.refresh, deps.signal, stored, accountId), stored);
+      const refreshed = await def.refresh(stored.refresh, deps.signal, stored, accountId);
+      const fresh = merged(refreshed, stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
         expectedGeneration: generation,
         afterPrePersistRead: deps.afterPrePersistRead,
+        ...(provider === "devin" ? { assertOwnership: (store: AuthStore) =>
+          assertDevinCliAdoptionOwnership(store, provider, accountId, refreshed) } : {}),
       });
       if (outcome.superseded) {
         if (outcome.stored.expires > Date.now() + REFRESH_SKEW_MS) return outcome.stored.access;

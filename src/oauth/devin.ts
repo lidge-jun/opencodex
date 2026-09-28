@@ -20,7 +20,7 @@ import { registerUser } from "./devin/register-user";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./devin/api-base";
 import { readDevinCliCredentialOutcome } from "./devin/cli-import";
 import { CloudAuthError, mintUserJwt } from "../adapters/devin/cloud-direct/auth";
-import { getCredential, listAccounts } from "./store";
+import { getCredential, listAccounts, type AuthStore } from "./store";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES } from "./index";
 
 export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
@@ -298,6 +298,30 @@ class DevinIdentityProbeUnavailableError extends Error {
 const normalizedEmail = (value: string | undefined): string | undefined =>
   value?.trim().toLowerCase() || undefined;
 
+const devinMintedIdentities = new WeakMap<OAuthCredentials, ReadonlySet<string>>();
+
+/** Recheck the minted identity and key against the locked, freshly read store. */
+export function assertDevinCliAdoptionOwnership(
+  store: AuthStore,
+  provider: string,
+  accountId: string,
+  credential: OAuthCredentials,
+): void {
+  const mintedIds = devinMintedIdentities.get(credential);
+  if (!mintedIds) return;
+  const email = normalizedEmail(credential.email);
+  for (const slot of [provider, ...devinAliasCredentialSlots(provider)]) {
+    for (const row of store[slot]?.accounts ?? []) {
+      if (slot === provider && row.id === accountId) continue;
+      if (row.credential.access === credential.access
+        || (row.credential.accountId !== undefined && mintedIds.has(row.credential.accountId))
+        || (email !== undefined && normalizedEmail(row.credential.email) === email)) {
+        throw new DevinIdentityProbeUnavailableError();
+      }
+    }
+  }
+}
+
 async function rereadDevinCliCredential(
   stored: OAuthCredentials,
   signal: AbortSignal | undefined,
@@ -333,7 +357,9 @@ async function rereadDevinCliCredential(
   const storedEmail = normalizedEmail(stored.email);
   if (storedEmail?.includes("@") && storedEmail !== normalizedEmail(email)) return undefined;
   if (devinIdentityOwnedElsewhere(stored, currentAccountId, mintedIds, normalizedEmail(email))) return undefined;
-  return { ...credentialsFromApiKey(outcome.file.apiKey, apiBaseUrl, "local-cli"), accountId: authUid, ...(email ? { email } : {}) };
+  const adopted = { ...credentialsFromApiKey(outcome.file.apiKey, apiBaseUrl, "local-cli"), accountId: authUid, ...(email ? { email } : {}) };
+  devinMintedIdentities.set(adopted, mintedIds);
+  return adopted;
 }
 
 /**

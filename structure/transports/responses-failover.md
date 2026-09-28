@@ -248,19 +248,9 @@ the failure on the current target.
 
 ## runTurn pre-output 401 replay
 
-`src/server/responses/run-turn-execution.ts` runs the `adapter-dispatch.ts` OAuth 401 replay on the
-runTurn first-event preflight for `isOAuth401ReplayProvider` routes (Devin is the runTurn member): a
-structured 401 before output or a replay-unsafe heartbeat force-refreshes the sent credential once
-per request under an `auth-recovery` hop and replays the turn. A terminal refresh has already marked
-the account needsReauth; the turn moves to a surviving stored account via
-`tryAlternateAfterTerminalRefresh`, else the 401 carries the login instruction. Devin quota
-`permission_denied` maps to 429 and plain `permission_denied` to 403, so neither refreshes.
-By design a single upstream 401 on an `oauth`-source Devin account marks it needsReauth: Cognition has
-no refresh endpoint and there is no confirming probe. A `local-cli` account instead re-reads the CLI
-file and adopts a different key only if its host passes `validateDevinApiBaseUrl`, the key mints a
-user_jwt (its auth_uid/email are the identity; the session token has none), that identity does not
-contradict the slot's, and no other slot owns the key or identity; the adopted identity is recorded. An unreadable or half-written file, or a mint failing other than 401/403, fails the refresh unflagged.
-Test: `tests/responses/responses-devin-401-replay.test.ts`.
+`src/server/responses/run-turn-execution.ts` handles a structured pre-output 401 for `isOAuth401ReplayProvider` runTurn routes with one generation-fenced forced refresh and an `auth-recovery` hop. A terminal refresh may admit a surviving account; otherwise the client gets the login instruction. Devin quota `permission_denied` (429) and plain permission denial (403) do not trigger this path.
+An `oauth`-source Devin key rejected with 401 needs reauthentication because Cognition has no refresh endpoint. A `local-cli` slot can adopt a changed CLI key after host and bounded identity validation; [OAuth/Devin ownership](../providers-and-adapters.md) defines the locked store check across aliases. Unreadable files and transient probes leave the account unflagged. A pause during refresh returns 403 without retry or reauth. Kiro's terminal alternate requires `OAuthLoginRequiredError`; transient refresh failures do not enter it.
+Tests: `tests/responses/responses-devin-401-replay.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`.
 
 ## Optional client transport hints
 
@@ -602,14 +592,5 @@ provider cannot establish the original serving identity and remains portable.
 
 ## Anthropic Fast downgrade recovery
 
-The `anthropic` OAuth and `anthropic-apikey` registry entries use native `anthropic-speed` FastWire
-only for `claude-opus-5-5`, `claude-opus-5` and `claude-opus-4-8`; there is no provider-wide Fast
-fallback. In the main adapter dispatch loop, a fast refusal naming fast mode or the `speed` parameter
-(400 or 429), or a 429 with a fast-pool remaining header of zero, may use one shared-budget repair
-permit for a standard-speed resend. The resend charges the root workflow send counter once without a
-second request-budget charge. The request retains the drop decision through later rebuilds and records
-`anthropic-fast-downgrade`, cause `parameter-rejected`, and a `downgraded` / `response-declined` tier
-outcome. A spent budget leaves the original refusal intact; generic 429 and 529 responses keep their
-ordinary handling. This repair precedes same-target 429 waiting and credential rotation. Continuation
-and sidecar owners do not use this repair. Coverage: `tests/routing/fastwire-policy.test.ts` and
-`tests/responses/responses-anthropic-fast-downgrade.test.ts`.
+The `anthropic` OAuth and `anthropic-apikey` registry entries use native `anthropic-speed` FastWire only for `claude-opus-5-5`, `claude-opus-5` and `claude-opus-4-8`; there is no provider-wide Fast fallback. In the main adapter dispatch loop, a fast refusal naming fast mode or the `speed` parameter (400 or 429), or a 429 with a fast-pool remaining header of zero, may use one shared-budget repair permit for a standard-speed resend.
+The resend charges the root workflow send counter once without a second request-budget charge. The request retains the drop decision through later rebuilds and records `anthropic-fast-downgrade`, cause `parameter-rejected`, and a `downgraded` / `response-declined` tier outcome. A spent budget leaves the original refusal intact; generic 429 and 529 responses keep their ordinary handling. This repair precedes same-target 429 waiting and credential rotation. Continuation and sidecar owners do not use this repair. Coverage: `tests/routing/fastwire-policy.test.ts` and `tests/responses/responses-anthropic-fast-downgrade.test.ts`.

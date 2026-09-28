@@ -556,8 +556,12 @@ configuration that names the old id is rewritten at startup.
   stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
   blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
   encoding.
-- Devin/Cognition API keys do not refresh. Run `ocx login devin` again when the key expires or is
-  revoked.
+- Devin/Cognition API keys have no refresh endpoint. If Cognition rejects a stored key with 401,
+  OpenCodex marks that account for reauthentication and can use another signed-in account for
+  the turn. Run `ocx login devin` again for a revoked browser-login key. A CLI-imported account
+  can follow a later `devin auth login` key rotation when the CLI host and account identity
+  validate; if the CLI file is temporarily unreadable or the identity check is unavailable,
+  retry after it recovers. A paused account stays paused during this recovery and returns 403.
 - Only the credential is local when the CLI import path is used. The turn itself goes to
   Cognition either way, so the import and browser login paths differ in nothing but where the
   credential came from. Install the CLI with

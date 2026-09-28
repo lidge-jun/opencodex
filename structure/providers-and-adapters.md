@@ -91,6 +91,11 @@ proactive refresh, per-account quota probes (`accountQuotaProbeSkip` in
 Muse key-mint quota read, and xAI/Gemini web-search sidecar eligibility. The stored credential
 remains available for resume, while requests with no unpaused account fail with 403 rather than
 as a login failure.
+Devin's local-CLI forced refresh validates the CLI tenant host before probing its key with a
+bounded `GetUserJwt` call. It adopts a changed key only when the minted identity matches the
+stored slot and the key and identity are unowned across Devin and alias accounts at the locked
+store write. The generation check still protects concurrent edits. A losing adoption or
+unreadable CLI file leaves the account unflagged; a paused account returns 403.
 The account actually sent supplies the generation fence; a rotated bearer always travels
 with its own profile ARN and region. Reactive rotation follows the stored two-account
 quorum, while refusal-aware first admission follows the proactive preference setting.

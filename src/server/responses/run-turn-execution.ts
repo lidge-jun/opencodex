@@ -27,7 +27,7 @@ import {
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
-import { publicOAuthAuthenticationErrorMessage, type OAuthAccessSnapshot } from "../../oauth/index";
+import { OAuthAccountPausedError, publicOAuthAuthenticationErrorMessage, type OAuthAccessSnapshot } from "../../oauth/index";
 import { tryAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
@@ -396,6 +396,7 @@ export async function executeResponsesRunTurn(
     // selected; the turn then moves to a surviving stored account, or, with none, the client
     // gets the login instruction instead of an opaque upstream 401.
     let oauth401ReplayAttempted = false;
+    let pausedAuthRecovery = false;
     const recoverRunTurnAdapterOnPreflight401 = async (
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
@@ -409,6 +410,12 @@ export async function executeResponsesRunTurn(
         try {
           admitted = await applyFailoverSnapshot(await refreshResolvedOAuthSelection(sent));
         } catch (err) {
+          if (err instanceof OAuthAccountPausedError) {
+            pausedAuthRecovery = true;
+            Object.assign(error, { status: 403, errorType: "permission_error", message: publicOAuthAuthenticationErrorMessage(err) });
+            hop.permit?.release();
+            return false;
+          }
           // Not only OAuthLoginRequiredError: a concurrent request that already flagged this
           // account and moved the selection makes this refresh fail as "selection changed". The
           // helper still requires the sent generation to be flagged needsReauth, so it is safe.
@@ -658,6 +665,14 @@ export async function executeResponsesRunTurn(
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
+        if (pausedAuthRecovery) {
+          cancelResponseCompletion();
+          runTurnAbort.abort();
+          queue.close();
+          cleanupRunTurnAbort();
+          releaseSearchProbeLease();
+          return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(new OAuthAccountPausedError()));
+        }
       }
       if (grokDevinPreflight) {
         const preflight = await preflightAdapterEvents(eventSource, undefined, {
@@ -788,6 +803,14 @@ export async function executeResponsesRunTurn(
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
+      if (pausedAuthRecovery) {
+        cancelResponseCompletion();
+        runTurnAbort.abort();
+        queue.close();
+        cleanupRunTurnAbort();
+        releaseSearchProbeLease();
+        return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(new OAuthAccountPausedError()));
+      }
     }
     if (grokDevinPreflight) {
       const preflight = await preflightAdapterEvents(
