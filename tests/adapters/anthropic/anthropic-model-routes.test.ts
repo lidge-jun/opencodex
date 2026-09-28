@@ -97,13 +97,18 @@ test("matched route excludes active outsider before an upstream send", async () 
   expect(["synthetic-access-1", "synthetic-access-2"].some(token => sends[0]!.includes(token))).toBe(true);
 });
 
-test("empty matched route returns named local error and never sends; explicit fallback widens", async () => {
+// An operator may name a route after an account ID; the data-plane client must never see it.
+const ACCOUNT_LIKE_ROUTE = "0123456789abcdef0123456789abcdef";
+
+test("empty matched route answers locally without the route name and never sends; explicit fallback widens", async () => {
   const ids = await seed();
   const cfg = config(ids, () => answer());
-  cfg.anthropicAccountPool!.routes = [{ name: "missing", match: "claude-*", accounts: ["removed-account"] }];
+  cfg.anthropicAccountPool!.routes = [{ name: ACCOUNT_LIKE_ROUTE, match: "claude-*", accounts: ["removed-account"] }];
   const denied = await post(cfg);
   expect(denied.status).toBe(401);
-  expect(await denied.text()).toContain("missing");
+  const deniedBody = await denied.text();
+  expect(deniedBody).toContain("this model route");
+  expect(deniedBody).not.toContain(ACCOUNT_LIKE_ROUTE);
   expect(sends).toHaveLength(0);
   cfg.anthropicAccountPool!.routes[0]!.fallback = true;
   const allowed = await post(cfg);
@@ -142,13 +147,16 @@ test("routed 429 without an alternate retains upstream refusal and scoped cooldo
   const cfg = config(ids, () => Response.json({ type: "error", error: { type: "rate_limit_error", message: "limited" } },
     { status: 429, headers: { "retry-after": "30" } }));
   cfg.anthropicAccountPool!.routes![0]!.accounts = [ids[1]!];
+  cfg.anthropicAccountPool!.routes![0]!.name = ACCOUNT_LIKE_ROUTE;
   const first = await post(cfg);
   expect(first.status).toBe(429);
   expect(sends).toHaveLength(1);
   const second = await post(cfg);
   expect(second.status).toBe(429);
   expect(second.headers.get("retry-after")).not.toBeNull();
-  expect(await second.text()).toContain("sonnet");
+  const cooledBody = await second.text();
+  expect(cooledBody).toContain("this model route");
+  expect(cooledBody).not.toContain(ACCOUNT_LIKE_ROUTE);
   expect(sends).toHaveLength(1);
 });
 

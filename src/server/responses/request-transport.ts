@@ -558,16 +558,18 @@ export async function prepareResponsesTransport(
         anthropicRouteDecision = routeResult.decision;
         const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision);
         if (!selection.accountId) {
+          // Route names are operator labels and may resemble account IDs; keep them in the proxy log only.
+          if (anthropicRouteDecision) console.warn(`[anthropic-pool] route:${anthropicRouteDecision.name} ${selection.reason}; answering locally`);
           if (selection.reason === "all-cooled") {
             const retryAfterSec = getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision);
             return formatErrorResponse(
               429,
               "rate_limit_error",
-              anthropicRouteDecision ? `Anthropic route ${anthropicRouteDecision.name} is temporarily rate-limited` : "All Anthropic OAuth accounts are temporarily rate-limited",
+              anthropicRouteDecision ? "Anthropic OAuth accounts for this model route are temporarily rate-limited" : "All Anthropic OAuth accounts are temporarily rate-limited",
               retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
             );
           }
-          return formatErrorResponse(401, "authentication_error", anthropicRouteDecision ? `No eligible Anthropic OAuth account for route ${anthropicRouteDecision.name}` : "No eligible Anthropic OAuth account available");
+          return formatErrorResponse(401, "authentication_error", anthropicRouteDecision ? "No eligible Anthropic OAuth account for this model route" : "No eligible Anthropic OAuth account available");
         }
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(selection.accountId), true, selection.reason);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
