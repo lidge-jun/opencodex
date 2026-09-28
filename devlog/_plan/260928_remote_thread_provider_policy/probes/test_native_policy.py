@@ -51,6 +51,15 @@ class NativePolicyTests(unittest.TestCase):
         for policy in (RemoteListPolicy(), RemoteListPolicy(("opencodex",))):
             self.assertIsNone(self.resolve(ancestor_thread_id="fixture-ancestor", policy=policy))
 
+    def test_related_thread_ids_follow_native_validation(self):
+        # Upstream thread_list_response_inner rejects malformed ids and rejects
+        # parent+ancestor together; a malformed id must not silently widen the list.
+        for relation in ({"parent_thread_id": ""}, {"ancestor_thread_id": "  "}):
+            with self.subTest(relation=relation), self.assertRaises(ValueError):
+                self.resolve(**relation)
+        with self.assertRaises(ValueError):
+            self.resolve(parent_thread_id="p", ancestor_thread_id="a")
+
     def test_explicit_filter_still_wins_for_related_queries(self):
         for relation in ({"parent_thread_id": "p"}, {"ancestor_thread_id": "a"}):
             self.assertEqual(self.resolve(requested=("other",), policy=RemoteListPolicy(()), **relation), ("other",))

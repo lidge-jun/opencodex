@@ -57,6 +57,14 @@ def resolve_provider_filter(
     if not isinstance(origin, ConnectionOrigin):
         raise ValueError("origin must be supplied by the trusted connection context")
     _validate_ids((default_provider,), "default_provider")
+    for label, tid in (
+        ("parent_thread_id", parent_thread_id),
+        ("ancestor_thread_id", ancestor_thread_id),
+    ):
+        if tid is not None and not tid.strip():
+            raise ValueError(f"{label} must be a non-empty thread id")
+    if parent_thread_id is not None and ancestor_thread_id is not None:
+        raise ValueError("parent_thread_id and ancestor_thread_id are mutually exclusive")
     if requested is not None:
         # Preserve every typed client array, including duplicate/empty ids.
         # Native Vec<String> accepts them; this proposal must not add rejection.
