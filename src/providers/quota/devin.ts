@@ -259,9 +259,9 @@ export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseU
     });
     if (!response.ok) {
       void response.body?.cancel().catch(() => undefined);
-      return response.status === 401 || response.status === 403
-        ? TERMINAL_QUOTA_FAILURE
-        : null;
+      // Only 401 proves the key itself is refused. A 403 can scope this one RPC away from a
+      // key that still serves chat, so it keeps the last-good reading like other failures.
+      return response.status === 401 ? TERMINAL_QUOTA_FAILURE : null;
     }
     const body = await readBoundedResponseBytes(response, {
       maxBytes: QUOTA_RESPONSE_MAX_BYTES,

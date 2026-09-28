@@ -210,12 +210,11 @@ describe("fetchDevinQuota transport", () => {
     expect(([...iterFields(metadata)].find(f => f.num === 3)?.value as Buffer).toString()).toBe(KEY);
   });
 
-  test("only 401/403 are terminal; other 4xx, 5xx and network faults keep last-good", async () => {
-    for (const status of [401, 403]) {
-      globalThis.fetch = (async () => new Response("unauthenticated: " + KEY, { status })) as unknown as typeof fetch;
-      expect(await fetchDevinQuota("devin", KEY, undefined)).toBe(TERMINAL_QUOTA_FAILURE);
-    }
-    for (const status of [400, 404, 408, 409, 422, 429, 499, 503]) {
+  test("only 401 is terminal; 403, other 4xx, 5xx and network faults keep last-good", async () => {
+    globalThis.fetch = (async () => new Response("unauthenticated: " + KEY, { status: 401 })) as unknown as typeof fetch;
+    expect(await fetchDevinQuota("devin", KEY, undefined)).toBe(TERMINAL_QUOTA_FAILURE);
+    // A 403 can forbid this one RPC for a key that still serves chat.
+    for (const status of [400, 403, 404, 408, 409, 422, 429, 499, 503]) {
       globalThis.fetch = (async () => new Response("", { status })) as unknown as typeof fetch;
       expect(await fetchDevinQuota("devin", KEY, undefined)).toBeNull();
     }

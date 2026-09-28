@@ -366,8 +366,8 @@ is redirected or fails, shows `unavailable`.
 
 Devin rows come from Cognition's `GetUserStatus` for that account's own key, sent only to its
 allowlisted api-server host. They show the dated daily and weekly windows the plan exposes, and a
-monthly credit window only on a credit-billed plan with both prompt balance fields reported; an
-unlimited or incomplete balance shows no credit window. Only a rejected credential (401/403)
+monthly credit window only on a credit-billed plan that reports a credit balance; an unlimited
+balance, or a status with no balance at all, shows no credit window. Only a rejected key (401)
 clears a cached reading; other probe failures retain the last reading.
 
 ```text
