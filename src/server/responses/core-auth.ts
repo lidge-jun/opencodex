@@ -90,6 +90,7 @@ export function codexRouteCredentialDomainHeaders(
   // caller credential. Bearer admission is substituted or stripped below.
   const routeMayChangeCredentialDomain = options.comboAttempt === true
     || route.routeKind === "policy"
+    || route.credentialDomainRewrite === true
     || credentialDomainWasRewritten;
   if (routeMayChangeCredentialDomain && options.admission?.source !== "bearer") {
     const scoped = new Headers(req.headers);

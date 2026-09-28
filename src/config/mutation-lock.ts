@@ -34,8 +34,7 @@ export class ConfigMutationLockError extends Error {
   }
 }
 
-function configMutationDatabasePath(): string {
-  const dir = getConfigDir();
+function configMutationDatabasePath(dir: string = getConfigDir()): string {
   // First statement on purpose: a rejected mutation must leave nothing behind, not a
   // freshly created/chmod'd directory or database. See src/lib/test-home-guard.ts.
   assertNotRealHomeUnderTest(dir);
@@ -102,7 +101,7 @@ let configMutationDatabase: Database | null = null;
  *
  * Reentrancy is limited to the current synchronous call stack; never return a Promise from `fn`.
  */
-export function withConfigMutationLockSync<T>(fn: () => T): T {
+export function withConfigMutationLockSync<T>(fn: () => T, dir?: string): T {
   if (configMutationLockDepth > 0) {
     configMutationLockDepth += 1;
     try {
@@ -111,7 +110,7 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
       configMutationLockDepth -= 1;
     }
   }
-  const path = configMutationDatabasePath();
+  const path = configMutationDatabasePath(dir);
   let database: Database | undefined;
   let transactionOpen = false;
   try {

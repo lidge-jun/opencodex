@@ -168,6 +168,46 @@ function installAntigravityFetchMock(
 }
 
 describe("Google Antigravity OAuth 429 retry and multi-account budget (#5880)", () => {
+  test("an observed caller abort before a validation refusal sends no sibling request", async () => {
+    await seedAntigravityAccounts(2);
+    const cfg = antigravityConfig();
+    saveConfig(cfg);
+    const abort = new AbortController();
+    let sends = 0;
+    installAntigravityFetchMock(() => {
+      sends += 1;
+      abort.abort();
+      return new Response(JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "validate",
+        details: [{ reason: "VALIDATION_REQUIRED" }] } }), { status: 403 });
+    });
+    const response = await handleResponses(createResponsesRequest(), cfg,
+      { model: "gemini-3.8-flash", provider: "google-antigravity" }, { abortSignal: abort.signal });
+    expect(sends).toBe(1);
+    await response.text();
+  });
+
+  test("a spent caller send budget keeps a classified 403 and sends no sibling request", async () => {
+    const accounts = await seedAntigravityAccounts(2);
+    const cfg = antigravityConfig();
+    saveConfig(cfg);
+    const observedSends: Array<{ auth: string; project: string }> = [];
+    installAntigravityFetchMock(({ auth, project }) => {
+      observedSends.push({ auth, project });
+      return new Response(JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "validate",
+        details: [{ reason: "VALIDATION_REQUIRED" }] } }), { status: 403 });
+    });
+    const sendBudget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
+    const response = await handleResponses(createResponsesRequest(), cfg,
+      { model: "gemini-3.8-flash", provider: "google-antigravity" }, { sendBudget });
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain("Antigravity account validation required");
+    expect(observedSends).toEqual([{ auth: accounts[0]!.auth, project: accounts[0]!.project }]);
+    expect(sendBudget.used).toBe(1);
+  });
+
   test.each([4, 5])("%i accounts each receive three transient sends before terminal 429", async accountCount => {
     const accounts = await seedAntigravityAccounts(accountCount);
     const cfg = antigravityConfig();

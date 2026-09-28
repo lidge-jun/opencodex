@@ -317,7 +317,7 @@ const STOP_RESOLVE = {
 
 const TRACKED_STOP_TARGET = () => ({ pid: 42, port: 10100, hostname: "" });
 const BOUND_STOP_MANAGER = () => ({ kind: "bound" as const, pid: 42,
-  managerPid: 7, backend: "launchd" as const });
+  managerPid: 7, backend: "launchd" as const, childNeedsSeparateStop: false as const });
 
 describe("approval-bound stop", () => {
   test("mismatched evidence refuses before manager or proxy stop", async () => {

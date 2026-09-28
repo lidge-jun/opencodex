@@ -180,7 +180,8 @@ export function supportsPerAccountQuota(provider: string): boolean {
 }
 
 export function explicitAccountReader(provider: string): boolean {
-  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code";
+  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
+    || provider === "devin";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -479,6 +480,9 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
     target.adapter, target.baseUrl, target.authMode, target.disabled === true,
+    // Only credentials that carry their own endpoint (Devin tenants) extend the identity, so
+    // every other provider's existing cache keys stay valid.
+    ...(provider === "devin" && credential.apiBaseUrl ? [credential.apiBaseUrl] : []),
   ])).digest("hex");
 }
 
@@ -486,6 +490,7 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (config.disabled === true || config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
-  // These readers use fixed canonical billing origins, never config.baseUrl.
-  return provider === "xai" || provider === "cursor";
+  // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
+  // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
+  return provider === "xai" || provider === "cursor" || provider === "devin";
 }

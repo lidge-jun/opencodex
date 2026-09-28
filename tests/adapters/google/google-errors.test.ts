@@ -7,7 +7,34 @@ import {
   safeVertexHttpErrorMessage,
   ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX,
 } from "../../../src/adapters/google-errors";
-import { classifyError } from "../../../src/lib/errors";
+import { adapterFailureFromMessage, classifyError } from "../../../src/lib/errors";
+
+describe("Google input token overflow", () => {
+  for (const [label, format] of [["Antigravity", safeAntigravityHttpErrorMessage], ["Vertex", safeVertexHttpErrorMessage]] as const) {
+    test.each([
+      "The input token count exceeds the maximum number of tokens allowed 1048576.",
+      "The input token count (1,100,000) exceeds the maximum number of tokens allowed (1048576).",
+      "The input token count\nexceeds the maximum number of tokens allowed 1048576.",
+    ])(`${label} preserves context overflow through the adapter error envelope: %s`, detail => {
+      const message = format(400, JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT", message: detail } }));
+      expect(classifyError(400, "invalid_request_error", message).code).toBe("context_length_exceeded");
+      expect(adapterFailureFromMessage(message)).toMatchObject({
+        httpStatus: 400, error: { type: "invalid_request_error", code: "context_length_exceeded", message },
+      });
+    });
+  }
+  test("output limits and protected statuses do not become input overflow", () => {
+    const output = safeAntigravityHttpErrorMessage(400, "The output token count exceeds the maximum number of tokens allowed 65536.");
+    expect(adapterFailureFromMessage(output).error.code).not.toBe("context_length_exceeded");
+    const detail = "The input token count exceeds the maximum number of tokens allowed 1048576.";
+    for (const [status, upstreamStatus, type] of [[401, "UNAUTHENTICATED", "authentication_error"],
+      [403, "PERMISSION_DENIED", "permission_error"], [429, "RESOURCE_EXHAUSTED", "rate_limit_error"]] as const) {
+      const message = safeAntigravityHttpErrorMessage(status, JSON.stringify({ error: { code: status, status: upstreamStatus, message: detail } }));
+      expect(classifyError(status, type, detail).type).toBe(type);
+      expect(adapterFailureFromMessage(message).error.code).not.toBe("context_length_exceeded");
+    }
+  });
+});
 
 describe("Antigravity validation classification", () => {
   const validated = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "Validate this account",

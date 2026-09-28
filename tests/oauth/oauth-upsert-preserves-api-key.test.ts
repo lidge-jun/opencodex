@@ -76,6 +76,16 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("key");
   });
 
+  test("keeps Copilot context tiers across an OAuth upsert without sharing the old map", () => {
+    const config = configWithKey("github-copilot", "openai-chat", "https://api.githubcopilot.com");
+    const tiers = { "gpt-5.6-luna": "long_context" } as const;
+    config.providers["github-copilot"]!.modelContextTiers = { ...tiers };
+    const before = config.providers["github-copilot"]!.modelContextTiers;
+    upsertOAuthProvider(config, "github-copilot");
+    expect(config.providers["github-copilot"]!.modelContextTiers).toEqual(tiers);
+    expect(config.providers["github-copilot"]!.modelContextTiers).not.toBe(before);
+  });
+
   test("carries user-configured modelCosts across a re-login upsert", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     const costs = { "grok-4": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };

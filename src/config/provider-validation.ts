@@ -383,6 +383,19 @@ function capabilityRecord(value: unknown): value is Record<string, unknown> {
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
+/** Strict per-model context-tier values; PATCH accepts null to clear the entire map. */
+export function contextTierRecordConfigError(value: unknown, allowClear = false): string | null {
+  if (value === undefined || (allowClear && value === null)) return null;
+  if (!capabilityRecord(value)) return "modelContextTiers must be a plain object";
+  if (Object.keys(value).length > MODEL_DISCOVERY_MAX_MODELS) return "modelContextTiers has too many models";
+  for (const [id, tier] of Object.entries(value)) {
+    if (!isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id))
+      return "modelContextTiers keys must be exact non-reserved model ids";
+    if (tier !== "default" && tier !== "long_context") return "modelContextTiers values must be default or long_context";
+  }
+  return null;
+}
+
 /** Strict writes; only PATCH may carry deletion tombstones. Model IDs are exact. */
 export function modelCapabilitiesConfigError(value: unknown, allowTombstones = false): string | null {
   if (value === undefined || (allowTombstones && value === null)) return null;

@@ -19,7 +19,8 @@ import { DEFAULT_REGION, type WindsurfRegion } from "./devin/types";
 import { registerUser } from "./devin/register-user";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./devin/api-base";
 import { readDevinCliCredentialOutcome } from "./devin/cli-import";
-import { getCredential, listAccounts } from "./store";
+import { CloudAuthError, mintUserJwt } from "../adapters/devin/cloud-direct/auth";
+import { getCredential, listAccounts, type AuthStore } from "./store";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES } from "./index";
 
 export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
@@ -263,14 +264,143 @@ export async function loginDevin(
   return loginDevinBrowser(ctrl, DEFAULT_REGION);
 }
 
+/**
+ * A CLI-imported account follows the CLI: after `devin auth login` rewrites the
+ * credential file, the copy stored at import time is stale while the file holds
+ * a live key. The session JWT carries no expiry, so the upstream 401 is the only
+ * signal, and this re-read runs only on that forced refresh.
+ *
+ * Adoption fails closed on identity. The session token carries only a
+ * session_id, so the file key's account is established by minting a user_jwt
+ * with it (GetUserJwt answers with auth_uid and email). A key Cognition refuses
+ * (401/403) or whose token lacks auth_uid is refused; a mint that fails for any
+ * other reason throws a non-terminal error, so the account is not flagged and
+ * the next 401 retries. The minted identity must then
+ * not contradict the slot's recorded accountId or email, and no other stored
+ * account may own the key or that identity.
+ *
+ * A CLI-imported slot has no bound identity. It cannot adopt a changed key;
+ * explicit `ocx login devin` is required after its first rotation.
+ */
+/** An identity probe must not hold the per-account refresh lock for the mint's full 30s. */
+const DEVIN_IDENTITY_MINT_TIMEOUT_MS = 5_000;
+
+/** Neither a live key nor a dead one: the refresh must fail without flagging the account. */
+class DevinIdentityProbeUnavailableError extends Error {
+  constructor() {
+    super("Could not confirm the Devin CLI session identity right now; retry shortly.");
+    this.name = "DevinIdentityProbeUnavailableError";
+  }
+}
+
+const normalizedEmail = (value: string | undefined): string | undefined =>
+  value?.trim().toLowerCase() || undefined;
+
+const devinMintedIdentities = new WeakMap<OAuthCredentials, ReadonlySet<string>>();
+
+/** Recheck the minted identity and key against the locked, freshly read store. */
+export function assertDevinCliAdoptionOwnership(
+  store: AuthStore,
+  provider: string,
+  accountId: string,
+  credential: OAuthCredentials,
+): void {
+  const mintedIds = devinMintedIdentities.get(credential);
+  if (!mintedIds) return;
+  const email = normalizedEmail(credential.email);
+  for (const slot of [provider, ...devinAliasCredentialSlots(provider)]) {
+    for (const row of store[slot]?.accounts ?? []) {
+      // A legacy alias can still hold the same account id during rekey.
+      if (row.id === accountId) continue;
+      if (row.credential.access === credential.access
+        || (row.credential.accountId !== undefined && mintedIds.has(row.credential.accountId))
+        || (email !== undefined && normalizedEmail(row.credential.email) === email)) {
+        throw new DevinIdentityProbeUnavailableError();
+      }
+    }
+  }
+}
+
+async function rereadDevinCliCredential(
+  stored: OAuthCredentials,
+  signal: AbortSignal | undefined,
+  currentAccountId: string | undefined,
+): Promise<OAuthCredentials | undefined> {
+  const outcome = readDevinCliCredentialOutcome();
+  // A file that exists but cannot be read or parsed may be mid-write by `devin auth login`
+  // or briefly locked; like a failed identity mint, that says nothing about the key.
+  if (outcome.kind === "unreadable" || outcome.kind === "incomplete") throw new DevinIdentityProbeUnavailableError();
+  if (outcome.kind !== "ok" || outcome.file.apiKey === stored.access) return undefined;
+  // Without a stored identity, the CLI file may now belong to another user.
+  if (!stored.accountId && !normalizedEmail(stored.email)?.includes("@")) return undefined;
+  const apiBaseUrl = validateDevinApiBaseUrl(outcome.file.apiServerUrl);
+  if (apiBaseUrl === undefined) return undefined;
+  // A detached alias rekey can already hold this account's new key. Only a
+  // different account's key is a conflict; the locked write checks again.
+  for (const slot of ["devin", ...devinAliasCredentialSlots("devin")]) {
+    if (listAccounts(slot).some(({ id, credential }) =>
+      id !== currentAccountId && credential.access === outcome.file.apiKey)) return undefined;
+  }
+  let minted: Record<string, unknown> | undefined;
+  try {
+    const timeout = AbortSignal.timeout(DEVIN_IDENTITY_MINT_TIMEOUT_MS);
+    const probeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    minted = decodeJwtPayload((await mintUserJwt(outcome.file.apiKey, apiBaseUrl, probeSignal)).jwt);
+  } catch (error) {
+    // Only Cognition refusing the key is evidence the file holds no live session. A timeout,
+    // DNS failure, 5xx or 429 says nothing about the key; flagging the account on one would
+    // strand it, because a needsReauth slot is never refreshed again.
+    if (error instanceof CloudAuthError && (error.status === 401 || error.status === 403)) return undefined;
+    throw new DevinIdentityProbeUnavailableError();
+  }
+  const authUid = typeof minted?.auth_uid === "string" && minted.auth_uid ? minted.auth_uid : undefined;
+  if (authUid === undefined) return undefined;
+  // identityFromApiKey records `sub ?? auth_uid`, so a stored id may be either claim.
+  const mintedIds = new Set([authUid, ...(typeof minted?.sub === "string" && minted.sub ? [minted.sub] : [])]);
+  const rawEmail = typeof minted?.email === "string" ? minted.email.trim() : "";
+  const email = rawEmail || undefined;
+  if (stored.accountId && !mintedIds.has(stored.accountId)) return undefined;
+  const storedEmail = normalizedEmail(stored.email);
+  if (storedEmail?.includes("@") && storedEmail !== normalizedEmail(email)) return undefined;
+  if (devinIdentityOwnedElsewhere(stored, currentAccountId, mintedIds, normalizedEmail(email))) return undefined;
+  const adopted = { ...credentialsFromApiKey(outcome.file.apiKey, apiBaseUrl, "local-cli"), accountId: authUid, ...(email ? { email } : {}) };
+  devinMintedIdentities.set(adopted, mintedIds);
+  return adopted;
+}
+
+/**
+ * Every stored Devin row except the one being refreshed, across the alias-linked slots
+ * (the active row `getCredential` reads is one of these). Rows are skipped by id; only a
+ * caller that cannot name the row falls back to matching its key.
+ */
+function devinIdentityOwnedElsewhere(
+  stored: OAuthCredentials,
+  currentAccountId: string | undefined,
+  mintedIds: ReadonlySet<string>,
+  email: string | undefined,
+): boolean {
+  for (const slot of ["devin", ...devinAliasCredentialSlots("devin")]) {
+    for (const { id, credential } of listAccounts(slot)) {
+      if (currentAccountId !== undefined ? id === currentAccountId : credential.access === stored.access) continue;
+      if (credential.accountId !== undefined && mintedIds.has(credential.accountId)) return true;
+      if (email && normalizedEmail(credential.email) === email) return true;
+    }
+  }
+  return false;
+}
+
 export async function refreshDevinToken(
   _refreshToken: string,
-  _signal?: AbortSignal,
-  _credential?: OAuthCredentials,
+  signal?: AbortSignal,
+  credential?: OAuthCredentials,
+  accountId?: string,
 ): Promise<OAuthCredentials> {
+  const reread = credential?.source === "local-cli"
+    ? await rereadDevinCliCredential(credential, signal, accountId) : undefined;
+  if (reread) return reread;
   // Cognition has no refresh endpoint. Extending the stored expiry here is what
   // the carried implementation did, and it makes a revoked key look valid
-  // forever. Throwing lets the request path mark the account needsReauth the
-  // first time a forced refresh happens.
+  // forever. Throwing on the upstream-401 forced refresh is what marks the
+  // account needsReauth.
   throw new Error("invalid_grant: Devin API keys do not refresh. Run ocx login devin again.");
 }

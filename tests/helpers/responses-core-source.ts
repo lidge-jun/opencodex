@@ -48,6 +48,7 @@ export const RESPONSES_CORE_MODULES = [
   "completion-policy.ts",
   "run-turn-execution.ts",
   "adapter-dispatch.ts",
+  "antigravity-validation-refusal.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
   "policy-refusal.ts",

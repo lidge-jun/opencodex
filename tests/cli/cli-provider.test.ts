@@ -694,12 +694,13 @@ describe("ocx provider add --sync", () => {
 test("provider add --force preserves all explicit model capability axes", () => {
   const declarations = { ModelA: { inputModalities: ["text"], contextTier: "long_context", video: { processing: "agentic" } }, modela: { inputModalities: ["text", "image"] } };
   const { dir } = freshConfig({ defaultProvider: "caps", providers: { caps: {
-    adapter: "openai-chat", baseUrl: "https://example.test/v1", modelCapabilities: declarations,
+    adapter: "openai-chat", baseUrl: "https://example.test/v1", modelCapabilities: declarations, modelContextTiers: { ModelA: "long_context" },
   } } });
   try {
     const result = runCli(["provider", "add", "caps", "--adapter", "openai-chat", "--base-url", "https://example.test/v1", "--force", "--json"], { OPENCODEX_HOME: dir });
     expect(result.status, result.stderr).toBe(0);
     expect(readConfig(dir).providers.caps.modelCapabilities).toEqual(declarations);
+    expect(readConfig(dir).providers.caps.modelContextTiers).toEqual({ ModelA: "long_context" });
   } finally { removeTreeWithRetry(dir); }
 });
 

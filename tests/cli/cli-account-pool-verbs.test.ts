@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky } from "../../src/cli/account-extended";
+import { cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky, cmdRoutes } from "../../src/cli/account-extended";
 import type { AccountDeps } from "../../src/cli/account-api";
 
 /**
@@ -534,5 +534,32 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     } finally { out.restore(); }
     expect(calls).toHaveLength(0);
     expect(out.errors.join("\n")).toContain("API-key provider");
+  });
+});
+
+
+describe("ocx account routes anthropic", () => {
+  test("reads, writes and clears through unified settings", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "ocx-route-cli-"));
+    const file = join(dir, "routes.json");
+    const routes = [{ name: "sonnet", match: "claude-*", accounts: ["id"] }];
+    writeFileSync(file, JSON.stringify(routes));
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      const d = deps(() => ({ json: { provider: "anthropic", routes } }), calls);
+      expect(await cmdRoutes(["anthropic"], d)).toBe(0);
+      expect(await cmdRoutes(["anthropic", "--file", file], d)).toBe(0);
+      expect(await cmdRoutes(["anthropic", "--clear"], d)).toBe(0);
+      expect(calls.map(c => c.method)).toEqual(["GET", "PUT", "PUT"]);
+      expect(calls[1]?.body).toEqual({ provider: "anthropic", routes });
+      expect(calls[2]?.body).toEqual({ provider: "anthropic", routes: null });
+      writeFileSync(file, "not-json");
+      expect(await cmdRoutes(["anthropic", "--file", file], d)).toBe(1);
+      expect(calls).toHaveLength(3);
+    } finally { out.restore(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

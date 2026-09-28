@@ -128,9 +128,10 @@ pub async fn load(
             let value = if let Some(sources) = sources {
                 let selected = sources
                     .into_iter()
-                    .filter(|source| match settings.as_ref() {
-                        None => true,
-                        Some(s) => !snapshot::hidden(s, &source.name),
+                    .filter(|source| {
+                        settings
+                            .as_ref()
+                            .is_none_or(|s| !snapshot::hidden(s, &source.name))
                     })
                     .collect();
                 Some(json!(load_providers(&proxy, selected).await))

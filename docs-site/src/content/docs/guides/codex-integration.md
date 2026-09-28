@@ -490,6 +490,13 @@ carry it — so Codex Desktop voice uses its native endpoint rather than the pro
 
 ### Emergency compaction model (opt-in)
 
+When OpenCodeX translates remote compaction for providers such as Google, it replaces images
+from earlier turns with short reopening notes if a later explicit final answer exists. Existing
+analysis and file references stay in the summary input; images after the last final answer stay
+available for unresolved work. Commentary-only and unphased histories are preserved. This affects
+only the compaction request, not stored attachments or ordinary model requests. It reduces repeated
+vision input but does not guarantee that a long text history fits the provider's context limit.
+
 `compactionRecovery` leaves the initial compaction on the conversation's selected route. It
 permits one emergency attempt only after a supported, pre-output compaction failure. It is
 separate from `compactionRouting`, which chooses another model before compaction starts, and
@@ -515,9 +522,15 @@ change sign-in, the conversation's ordinary model, Codex's provider ID, or the d
 
 Recovery does not replay after cancellation, semantic output, tool side effects, an exhausted
 send budget, or an authentication, admission or policy refusal. Generic `400` errors do not
-enable fallback. The separately opted-in Devin `invalid_argument` case applies only to an
-identified compaction failure from that adapter. The emergency attempt shares the original
-request's send budget and never starts a second recovery attempt.
+enable fallback. Devin answers an oversized history with an opaque pre-output
+`invalid_argument`; when the request's estimated size is at or near the model's input window,
+the adapter reports it as `context_length_exceeded` instead, so Codex compacts on an ordinary
+turn and a failed compaction qualifies as a context overflow without any Devin-specific option.
+The estimate uses tool descriptions after Cognition sanitization and truncation, matching the
+request sent upstream. A smaller request that gets the same code stays a plain `400`. The
+separately opted-in `allowDevinInvalidArgument` case covers only those remaining `invalid_argument` failures, and
+only on an identified compaction request. The emergency attempt shares the original request's
+send budget and never starts a second recovery attempt.
 
 Native encrypted compaction is outside this recovery path: its original error is retained.
 There is no automatic local truncation mode. A response being accepted is not proof that a
@@ -910,6 +923,15 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
 ## Routed models during Codex reserve mode
+
+Codex Pool can optionally protect stored pool accounts at a selected 5-hour or weekly usage
+threshold. The Desktop/main account keeps its separate 98% hard lock.
+Set `codexPool.lowQuotaProtection` in configuration to pause accounts, record a log-and-API
+alert, or both; see [routing configuration](/reference/configuration/routing/#codex-pool-low-quota-protection).
+A pause takes effect for the next selection immediately, while saving it to disk is deferred.
+Check this server’s authenticated `GET /api/codex-auth/low-quota-events` history for `logged`
+alerts or save failures. Manual resume remains in force for the current quota episode. The
+default alert reaches only the log and API; it does not produce a desktop or OS notification.
 
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make

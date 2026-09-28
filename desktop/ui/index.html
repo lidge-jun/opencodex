@@ -68,7 +68,7 @@
       #consentTarget { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--raised); font-size: 12px; }
       #consentTarget dt { color: var(--muted); }
       #consentTarget dd { margin: 0; font-family: var(--font-code); overflow-wrap: anywhere; }
-      #consentNote { color: var(--muted); font-size: 12px !important; }
+#consentNote, #consentVersions { color: var(--muted); font-size: 12px !important; }
       code { font-family: var(--font-code); font-size: .92em; }
       .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
       button { border: 1px solid transparent; border-radius: 999px; padding: 7px 16px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; transition: background .15s, border-color .15s, opacity .15s; }
@@ -123,6 +123,7 @@
           <dt>Current owner</dt><dd id="consentOwner"></dd>
         </dl>
         <p id="consentNote">Taking over stops that runtime, starts the runtime bundled with this app, and records this app as the owner. A CLI <code>ocx service start</code> then refuses; a plain <code>ocx start</code> from a terminal is not blocked yet.</p>
+        <p id="consentVersions" hidden></p>
         <div class="actions">
           <button id="takeOver" type="button">Take over</button>
           <button id="stayGuest" class="secondary" type="button">Stay a guest</button>
@@ -200,6 +201,7 @@ const consent = document.querySelector("#consent");
 const consentPort = document.querySelector("#consentPort");
 const consentHome = document.querySelector("#consentHome");
 const consentOwner = document.querySelector("#consentOwner");
+const consentVersions = document.querySelector("#consentVersions");
 const takeOver = document.querySelector("#takeOver");
 const stayGuest = document.querySelector("#stayGuest");
 const surface = document.querySelector("main");
@@ -263,6 +265,8 @@ function apply(progress) {
     consentPort.textContent = progress.consent.port;
     consentHome.textContent = progress.consent.home;
     consentOwner.textContent = progress.consent.owner;
+    consentVersions.hidden = !progress.consent.versionNote;
+    consentVersions.textContent = progress.consent.versionNote || "";
     takeOver.disabled = false;
     stayGuest.disabled = false;
   }

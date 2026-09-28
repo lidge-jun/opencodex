@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
+import { serviceChildOwnershipDecisionForClassifiedChild } from "../../src/service/service-child-ownership";
+import type { ServiceOwnershipResolution } from "../../src/service/state";
 import {
   bindAndPublishStartOwnership,
   StartOwnershipRollbackUncertainError,
@@ -40,6 +44,40 @@ function fixture(options: {
 }
 
 describe("start ownership publication", () => {
+  test("a desktop claim committed after the early check prevents listener and record publication", async () => {
+    let ownership: ServiceOwnershipResolution = { kind: "none", revision: 0 };
+    const resolve = () => ownership;
+    expect(serviceChildOwnershipDecisionForClassifiedChild(true, resolve)).toEqual({ kind: "proceed" });
+    const events: string[] = [];
+    await expect(bindAndPublishStartOwnership({
+      acquireLease: () => {
+        // The desktop commits while the child is between its early check and lease.
+        ownership = { kind: "owned", ownership: { owner: "desktop", installId: "app", consentGeneration: 1 }, revision: 1 };
+        events.push("lease");
+        return { release: () => { events.push("release"); } };
+      },
+      bind: async () => {
+        const decision = serviceChildOwnershipDecisionForClassifiedChild(true, resolve);
+        if (decision.kind === "stay-out") throw new Error(decision.refusal);
+        events.push("listener-bound");
+        return {};
+      },
+      writePid: () => { events.push("pid"); },
+      writeRuntime: () => { events.push("runtime"); },
+      stopBound: () => { events.push("stop"); },
+      removeRuntime: () => { events.push("remove-runtime"); },
+      removePid: () => { events.push("remove-pid"); },
+    })).rejects.toThrow(/desktop app owns the runtime/);
+    expect(events).toEqual(["lease", "release"]);
+  });
+  test("the service-child owner is rechecked inside the lease-held bind before port choice", () => {
+    const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
+    const bind = cli.slice(cli.indexOf("bind: async () => {", cli.indexOf("bindAndPublishStartOwnership({")));
+    const recheck = bind.indexOf("serviceChildOwnershipDecisionForClassifiedChild(");
+    expect(recheck).toBeGreaterThan(-1);
+    expect(recheck).toBeLessThan(bind.indexOf("chooseListenPort("));
+    expect(recheck).toBeLessThan(bind.indexOf("startServer("));
+  });
   test("success releases only after bind and both records", async () => {
     const { events, deps } = fixture();
     await bindAndPublishStartOwnership(deps);

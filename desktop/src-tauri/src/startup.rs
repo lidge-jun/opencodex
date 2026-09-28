@@ -261,6 +261,10 @@ pub struct ConsentPrompt {
     pub home: String,
     pub owner: String,
     pub blocked: Option<String>,
+    /// The version-skew warning when the listening runtime and the bundled CLI differ;
+    /// the panel renders it so an upgrade, or a downgrade the proxy-newer rule did not
+    /// already keep unoffered, is a decision made with the versions visible.
+    pub version_note: Option<String>,
 }
 
 impl Progress {
@@ -878,7 +882,7 @@ async fn run(app: &AppHandle, started: Instant) {
             let mode = app
                 .try_state::<Startup>()
                 .map_or(Mode::Launch, |startup| startup.mode());
-            match attach_plan(consent, &answer.takeover, mode) {
+            match attach_plan(consent, answer, mode) {
                 AttachPlan::Guest(detail) => {
                     attach_as_guest(
                         app,
@@ -919,6 +923,7 @@ async fn run(app: &AppHandle, started: Instant) {
                         home: target.home.display().to_string(),
                         owner: ownership::owner_label(&answer.ownership),
                         blocked: None,
+                        version_note: consent_version_note(answer),
                     });
                     emit(app, progress, None);
                     // The user may take any time; the budget exists to bound the machinery, not
@@ -939,8 +944,13 @@ async fn run(app: &AppHandle, started: Instant) {
                             &proxy,
                             endpoint,
                             deadline,
-                            "a runtime was already listening and taking it over was declined, so this app is a guest on it"
-                                .to_owned(),
+                            format!(
+                                "a runtime was already listening and taking it over was declined, so this app is a guest on it{}",
+                                answer
+                                    .skew_warning()
+                                    .map(|warning| format!(" ({warning})"))
+                                    .unwrap_or_default()
+                            ),
                         )
                         .await;
                         return;
@@ -1113,30 +1123,71 @@ enum AttachPlan {
     Ask,
 }
 
-fn attach_plan(
-    consent: ownership::Consent,
-    takeover: &resolve::Takeover,
-    mode: Mode,
-) -> AttachPlan {
+fn attach_plan(consent: ownership::Consent, answer: &resolve::Resolved, mode: Mode) -> AttachPlan {
+    // The wire warning is the same sentence the CLI prints; it is appended verbatim so
+    // this surface and `ocx status` never describe the same mismatch differently.
+    let skew_note = || {
+        answer
+            .skew_warning()
+            .map(|warning| format!(" ({warning})"))
+            .unwrap_or_default()
+    };
     match consent {
-        ownership::Consent::Held => AttachPlan::Guest(
-            "a runtime was already listening and this installation already owns it".to_owned(),
-        ),
-        ownership::Consent::Refuse => AttachPlan::Guest(
-            "a runtime was already listening; its recorded owner could not be read, so this app is a guest on it and asked nothing".to_owned(),
-        ),
-        ownership::Consent::AskFirstTime | ownership::Consent::AskAgain => match takeover {
+        ownership::Consent::Held => AttachPlan::Guest(format!(
+            "a runtime was already listening and this installation already owns it{}",
+            skew_note()
+        )),
+        ownership::Consent::Refuse => AttachPlan::Guest(format!(
+            "a runtime was already listening; its recorded owner could not be read, so this app is a guest on it and asked nothing{}",
+            skew_note()
+        )),
+        ownership::Consent::AskFirstTime | ownership::Consent::AskAgain => match &answer.takeover {
             resolve::Takeover::Blocked { reason, detail } => AttachPlan::Guest(format!(
-                "a runtime was already listening, but taking it over is not available ({reason}: {detail}), so this app is a guest on it"
+                "a runtime was already listening, but taking it over is not available ({reason}: {detail}), so this app is a guest on it{}",
+                skew_note()
             )),
+            // A supported takeover still goes unoffered when the listening runtime is
+            // NEWER than the bundled one: approving it would stop the newer runtime and
+            // start the older bundle, a downgrade nobody asked for. Guest keeps serving
+            // and the note says why no prompt appeared.
+            resolve::Takeover::Supported { .. }
+                if answer.runtime_relation() == resolve::VersionRelation::ProxyNewer =>
+            {
+                AttachPlan::Guest(format!(
+                    "a runtime was already listening and runs a newer OpenCodex than this app bundles ({}, this app {}), so taking it over would downgrade it; this app is a guest on it and asked nothing{}",
+                    answer
+                        .liveness
+                        .version
+                        .as_deref()
+                        .unwrap_or("an unknown version"),
+                    answer.cli_version,
+                    skew_note()
+                ))
+            }
             // A recovery runs with nobody watching; a prompt would surface a window the person
             // never asked for, over a runtime that is serving. It stays a guest instead.
             resolve::Takeover::Supported { .. } if mode == Mode::Recover => AttachPlan::Guest(
-                "a runtime was already listening when this app came back for its own, so the recovery attached as a guest and asked nothing".to_owned(),
+                format!(
+                    "a runtime was already listening when this app came back for its own, so the recovery attached as a guest and asked nothing{}",
+                    skew_note()
+                ),
             ),
             resolve::Takeover::Supported { .. } => AttachPlan::Ask,
         },
     }
+}
+
+/// What the consent panel shows about versions. The skew warning comes first; when the
+/// versions could not be compared at all (fake, empty or unorderable version strings) the
+/// panel still gets one honest line instead of silently asking for a takeover.
+fn consent_version_note(answer: &resolve::Resolved) -> Option<String> {
+    answer.skew_warning().map(str::to_owned).or_else(|| {
+        matches!(
+            answer.runtime_relation(),
+            resolve::VersionRelation::Unknown | resolve::VersionRelation::Incomparable,
+        )
+        .then(|| "the listening runtime's version could not be compared".to_owned())
+    })
 }
 
 /// Report, bind and finish as a guest on the runtime that answered.
@@ -1762,15 +1813,17 @@ fn elapsed(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_still_current, attach_plan, claim_after_silence, keeps_update_page,
-        loads_dashboard_on_ready, navigate_once, return_ready_dashboard, shows_window,
-        stop_after_approval, unavailable, waits_on_child, AttachPlan, ConsentState, Expiry,
-        LaunchOrigin, Mode, Phase, Progress, Startup, AUTOSTART_FLAG, CHILD_START_GRACE, DEADLINE,
-        PHASES, POLL,
+        approval_still_current, attach_plan, claim_after_silence, consent_version_note,
+        keeps_update_page, loads_dashboard_on_ready, navigate_once, return_ready_dashboard,
+        shows_window, stop_after_approval, unavailable, waits_on_child, AttachPlan, ConsentState,
+        Expiry, LaunchOrigin, Mode, Phase, Progress, Startup, AUTOSTART_FLAG, CHILD_START_GRACE,
+        DEADLINE, PHASES, POLL,
     };
     use crate::claim::ClaimResult;
     use crate::ownership::{Claim, Consent, Owner, Recorded};
-    use crate::resolve::{Liveness, Port, Resolution, Resolved, Status, Takeover};
+    use crate::resolve::{
+        Liveness, Port, Resolution, Resolved, Status, Takeover, VersionRelation, VersionSkew,
+    };
     use crate::runtime_stop::{self, StopResult};
     use crate::tray_availability::TrayAvailability;
     use std::cell::Cell;
@@ -1792,7 +1845,7 @@ mod tests {
         }
     }
 
-    fn approved_answer() -> Resolved {
+    fn answer_for(takeover: Takeover) -> Resolved {
         Resolved {
             schema: "ocx-resolve/1".to_owned(),
             cli_version: "2.61.0".to_owned(),
@@ -1817,8 +1870,26 @@ mod tests {
                 },
                 revision: 7,
             },
-            takeover: supported(),
+            takeover,
+            version_skew: None,
         }
+    }
+
+    fn approved_answer() -> Resolved {
+        answer_for(supported())
+    }
+
+    fn skewed_answer(relation: VersionRelation, warning: &str) -> Resolved {
+        let mut answer = approved_answer();
+        answer.liveness.version = Some("2.62.0".to_owned());
+        answer.version_skew = Some(VersionSkew {
+            cli_version: "2.61.0".to_owned(),
+            proxy_version: Some("2.62.0".to_owned()),
+            skewed: true,
+            relation,
+            warning: Some(warning.to_owned()),
+        });
+        answer
     }
 
     #[test]
@@ -1953,20 +2024,136 @@ mod tests {
     fn an_ask_only_arises_when_the_takeover_can_be_taken() {
         // Held and Refuse never ask, whatever the CLI reported about compatibility.
         assert!(matches!(
-            attach_plan(Consent::Held, &supported(), Mode::Launch),
+            attach_plan(Consent::Held, &answer_for(supported()), Mode::Launch),
             AttachPlan::Guest(_)
         ));
         assert!(matches!(
-            attach_plan(Consent::Refuse, &supported(), Mode::Launch),
+            attach_plan(Consent::Refuse, &answer_for(supported()), Mode::Launch),
             AttachPlan::Guest(_)
         ));
         assert!(matches!(
-            attach_plan(Consent::AskFirstTime, &supported(), Mode::Launch),
+            attach_plan(
+                Consent::AskFirstTime,
+                &answer_for(supported()),
+                Mode::Launch
+            ),
             AttachPlan::Ask
         ));
-        match attach_plan(Consent::AskAgain, &blocked(), Mode::Launch) {
+        match attach_plan(Consent::AskAgain, &answer_for(blocked()), Mode::Launch) {
             AttachPlan::Guest(detail) => {
                 assert!(detail.contains("managing-cli-unsupported: path uses 2.59.0"))
+            }
+            AttachPlan::Ask => panic!("a blocked takeover is not an offer"),
+        }
+    }
+
+    #[test]
+    fn a_newer_runtime_is_never_offered_a_downgrade() {
+        // A takeover replaces what listens with the bundled runtime; offering it against a
+        // NEWER listener is an approval prompt for a downgrade.
+        for consent in [Consent::AskFirstTime, Consent::AskAgain] {
+            match attach_plan(
+                consent,
+                &skewed_answer(VersionRelation::ProxyNewer, "skew"),
+                Mode::Launch,
+            ) {
+                AttachPlan::Guest(detail) => {
+                    assert!(detail.contains("newer OpenCodex"));
+                    assert!(detail.contains("downgrade"));
+                    assert!(detail.contains("2.62.0"));
+                    assert!(detail.contains(" (skew)"));
+                }
+                AttachPlan::Ask => panic!("a newer runtime must not be offered a downgrade"),
+            }
+        }
+        // Recover mode already stays a guest; the proxy-newer rule keeps it so.
+        match attach_plan(
+            Consent::AskFirstTime,
+            &skewed_answer(VersionRelation::ProxyNewer, "skew"),
+            Mode::Recover,
+        ) {
+            AttachPlan::Guest(detail) => {
+                assert!(detail.contains("downgrade"));
+                assert!(detail.contains(" (skew)"));
+            }
+            AttachPlan::Ask => panic!("a recovery must not prompt"),
+        }
+    }
+
+    #[test]
+    fn the_consent_note_reports_an_uncomparable_version() {
+        // A fake or missing version yields no skew warning, but the consent panel must not
+        // ask for a takeover with the version row silently empty.
+        let mut answer = approved_answer();
+        answer.version_skew = Some(VersionSkew {
+            cli_version: "2.61.0".to_owned(),
+            proxy_version: None,
+            skewed: false,
+            relation: VersionRelation::Incomparable,
+            warning: None,
+        });
+        assert_eq!(
+            consent_version_note(&answer).as_deref(),
+            Some("the listening runtime's version could not be compared")
+        );
+        // A comparable version without a warning needs no extra line.
+        answer.version_skew = Some(VersionSkew {
+            cli_version: "2.61.0".to_owned(),
+            proxy_version: Some("2.61.0".to_owned()),
+            skewed: false,
+            relation: VersionRelation::Match,
+            warning: None,
+        });
+        assert_eq!(consent_version_note(&answer), None);
+        // A real warning always wins over the fallback.
+        let warned = skewed_answer(VersionRelation::CliNewer, "CLI 2.61.0 does not match");
+        assert_eq!(
+            consent_version_note(&warned).as_deref(),
+            Some("CLI 2.61.0 does not match")
+        );
+    }
+
+    #[test]
+    fn an_older_runtime_still_asks_with_the_skew_visible() {
+        // The same supported takeover stays offerable when it upgrades the listener; the
+        // warning is what the consent panel shows.
+        let answer = skewed_answer(VersionRelation::CliNewer, "CLI 2.61.0 does not match");
+        assert!(matches!(
+            attach_plan(Consent::AskFirstTime, &answer, Mode::Launch),
+            AttachPlan::Ask
+        ));
+        assert_eq!(answer.skew_warning(), Some("CLI 2.61.0 does not match"));
+    }
+
+    #[test]
+    fn guest_details_carry_the_skew_warning() {
+        // Held and Refuse stay guests either way, but the phase detail must name the
+        // mismatch instead of hiding it in the proxy's own log.
+        let answer = skewed_answer(
+            VersionRelation::ProxyNewer,
+            "CLI 2.61.0 does not match the running proxy 2.62.0",
+        );
+        match attach_plan(Consent::Held, &answer, Mode::Launch) {
+            AttachPlan::Guest(detail) => {
+                assert!(detail.contains("does not match the running proxy"))
+            }
+            AttachPlan::Ask => panic!("held consent never asks"),
+        }
+        match attach_plan(
+            Consent::AskAgain,
+            &{
+                let mut blocked_answer = skewed_answer(
+                    VersionRelation::ProxyNewer,
+                    "CLI 2.61.0 does not match the running proxy 2.62.0",
+                );
+                blocked_answer.takeover = blocked();
+                blocked_answer
+            },
+            Mode::Launch,
+        ) {
+            AttachPlan::Guest(detail) => {
+                assert!(detail.contains("managing-cli-unsupported"));
+                assert!(detail.contains("does not match the running proxy"));
             }
             AttachPlan::Ask => panic!("a blocked takeover is not an offer"),
         }
@@ -1976,13 +2163,13 @@ mod tests {
     fn a_recovery_never_asks_and_attaches_as_a_guest() {
         // Nobody is looking at a recovery: a prompt would show a window nobody asked for.
         for consent in [Consent::AskFirstTime, Consent::AskAgain] {
-            match attach_plan(consent, &supported(), Mode::Recover) {
+            match attach_plan(consent, &answer_for(supported()), Mode::Recover) {
                 AttachPlan::Guest(detail) => assert!(detail.contains("guest")),
                 AttachPlan::Ask => panic!("a recovery must not prompt"),
             }
             // A launch still asks.
             assert!(matches!(
-                attach_plan(consent, &supported(), Mode::Launch),
+                attach_plan(consent, &answer_for(supported()), Mode::Launch),
                 AttachPlan::Ask
             ));
         }

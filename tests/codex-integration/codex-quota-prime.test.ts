@@ -169,6 +169,27 @@ describe("primeCodexPoolQuotas", () => {
     }
   });
 
+  test("failed main priming keeps shared-claim retries on the ordinary quota key", async () => {
+    seedMainAccount();
+    const config = makeConfig();
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    try {
+      globalThis.fetch = (async input => {
+        if (!String(input).includes("/backend-api/wham/usage")) throw new Error("unexpected request");
+        calls++;
+        return new Response(null, { status: 503 });
+      }) as typeof fetch;
+      await primeCodexPoolQuotas(config, "startup");
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "pre-route");
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "pre-route");
+      expect(calls).toBe(1);
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test("live failback refreshes inactive quota every five minutes, including after failures", async () => {
     const config = makeConfig({ codexAccountPriorityFailback: true });
     seedPoolAccount(config, "p1");

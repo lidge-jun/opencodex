@@ -105,6 +105,15 @@ Routing and catalog visibility are separate controls:
   switching it on restores that selection. A remembered selection never applies a limit while disabled.
   Sending `{ "setAll": true }` without `value` enables all configured providers at the current
   global value and replaces their remembered selections.
+- A GitHub Copilot model that supports the upstream long-context tier can opt in with
+  `providers.github-copilot.modelContextTiers.<model> = "long_context"` or
+  `ocx provider edit github-copilot --model-context-tier <model>=long_context`.
+  The tier sends `contextTier: "long_context"` on Copilot Chat and Responses requests.
+  It raises the advertised window only when that exact model has a known per-model window
+  in `modelContextWindows` (for example, `1000000`); an unknown model keeps its live window.
+  An explicit per-model window wins, then the existing provider cap applies.
+  The `"default"` tier retains normal live context metadata.
+  The dashboard control is planned separately.
 
 ```json
 {

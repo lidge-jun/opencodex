@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDevinAdapter, resolveDevinMaxInputTokensForTests } from "../../src/adapters/devin";
+import { createDevinAdapter } from "../../src/adapters/devin";
 import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -95,7 +95,7 @@ describe("session invalidation is scoped to one account", () => {
 });
 
 
-describe("catalog-backed input ceilings on the cached chat path", () => {
+describe("one catalog read serves the cached chat path", () => {
   const apiKey = "ocx-devin-context-fixture";
   const host = "https://server.codeium.com";
   const previousHome = process.env.OPENCODEX_HOME;
@@ -139,11 +139,12 @@ describe("catalog-backed input ceilings on the cached chat path", () => {
     event => { events.push(event); });
     return events;
   }
-  function expectWire(window: number, uid = "swe-2-high"): void {
+  function expectWire(uid = "swe-2-high"): void {
     expect(requests).toHaveLength(1);
     const outer = fields(requests[0]!);
     const completion = fields(outer.get(8)!.value as Buffer);
-    expect(completion.get(3)!.value).toBe(BigInt(window));
+    // #3 is max_newlines, fixed; no context window reaches it.
+    expect(completion.get(3)!.value).toBe(128_000n);
     expect(completion.get(2)!.value).toBe(64n);
     expect((outer.get(21)!.value as Buffer).toString()).toBe(uid);
     // A context fix must not remove prompt caching or replace the chosen model.
@@ -182,54 +183,29 @@ describe("catalog-backed input ceilings on the cached chat path", () => {
     removeTreeWithRetry(home);
   });
 
-  test.each([262_000, 1_000_000])("forwards the account's %i input ceiling, not 128k", async window => {
+  test.each([262_000, 1_000_000])("a seeded catalog (window %i) serves the turn without a refetch", async window => {
     seed([{ uid: "swe-2-high", window }]);
     const events = await run();
     expect(events.some(event => event.type === "error")).toBe(false);
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
     expect(events.at(-1)?.type).toBe("done");
-    expectWire(window);
+    expectWire();
     expect(urls).toHaveLength(1); // Seeded metadata stays cached through preflight.
   });
 
-  test.each([
-    [{ contextWindow: 80_000 }, 80_000],
-    [{ modelContextWindows: { "swe-2": 90_000 } }, 90_000],
-    [{ modelContextWindows: { "swe-2-high": 100_000, "swe-2": 180_000 } }, 100_000],
-    [{ modelContextWindows: { "swe-2": 1_000_000 } }, 262_000],
-    [{ modelMaxInputTokens: { "swe-2": 70_000 }, contextWindow: 90_000 }, 70_000],
-    [{ modelContextWindows: { "SWE.2": 110_000 } }, 110_000],
-  ] as Array<[Partial<OcxProviderConfig>, number]>)("preserves smaller configured hints %j", async (provider, expected) => {
-    seed([{ uid: "swe-2-high", window: 262_000 }]);
-    await run("swe-2-high", provider);
-    expectWire(expected);
-  });
-
-  test.each(["gpt-5-6-sol-high", "gpt-5-6-sol-high-1m"])("uses exact variant evidence for %s", async uid => {
+  test.each(["gpt-5-6-sol-high", "gpt-5-6-sol-high-1m"])("sends the exact variant %s", async uid => {
     seed([
       { uid: "gpt-5-6-sol-high", window: 200_000 },
       { uid: "gpt-5-6-sol-high-1m", window: 1_000_000 },
     ]);
     await run(uid);
-    expectWire(uid.endsWith("-1m") ? 1_000_000 : 200_000, uid);
+    expectWire(uid);
   });
 
-  test("looks up the final effort UID rather than the originally requested variant", async () => {
+  test("resolves the final effort UID rather than the originally requested variant", async () => {
     seed([{ uid: "swe-2-medium", window: 240_000 }, { uid: "swe-2-high", window: 262_000 }]);
     await run("devin/swe-2-high", {}, { reasoning: "medium" });
-    expectWire(240_000, "swe-2-medium");
-  });
-
-  test.each([undefined, 0])("keeps 128k when the exact row has no positive window (%p)", async window => {
-    seed([{ uid: "swe-2-high", window }, { uid: "swe-2-max", window: 1_000_000 }]);
-    await run();
-    expectWire(128_000);
-  });
-
-  test("falls back to the operator's input hint when discovery is unavailable", async () => {
-    await run("swe-2-high", { modelMaxInputTokens: { "swe-2": 60_000 } });
-    expectWire(60_000);
-    expect(urls.filter(url => url.endsWith("/GetChatMessage"))).toHaveLength(1);
+    expectWire("swe-2-medium");
   });
 
   test("a failed catalog lookup is not retried within the turn", async () => {
@@ -241,11 +217,6 @@ describe("catalog-backed input ceilings on the cached chat path", () => {
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
     expect(urls.filter(url => !url.endsWith("/GetChatMessage"))).toHaveLength(1);
     expect(urls.filter(url => url.endsWith("/GetChatMessage"))).toHaveLength(1);
-  });
-
-  test("keeps the encoder default without discovery or a configured hint", async () => {
-    await run();
-    expectWire(128_000);
   });
 
   test.each([true, false])("retains disabled/unlisted preflight rejection (%p)", async disabled => {
@@ -261,19 +232,5 @@ describe("catalog-backed input ceilings on the cached chat path", () => {
     const events = await run("swe-2-high", {}, {}, controller.signal);
     expect(events).toContainEqual({ type: "error", message: "client closed request", status: 499, retryable: false });
     expect(urls).toHaveLength(0);
-  });
-});
-
-describe("Devin input ceiling validation", () => {
-  test.each([NaN, Infinity, -Infinity, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])("ignores invalid numeric metadata %p", invalid => {
-    const provider = { adapter: "devin", contextWindow: invalid, modelMaxInputTokens: { "swe-2": invalid } };
-    expect(resolveDevinMaxInputTokensForTests(provider, "swe-2-high", invalid)).toBeUndefined();
-    expect(resolveDevinMaxInputTokensForTests(provider, "swe-2-high", 262_000)).toBe(262_000);
-  });
-
-  test("does not borrow another variant's input limit", () => {
-    expect(resolveDevinMaxInputTokensForTests({
-      adapter: "devin", modelContextWindows: { "swe-2-max": 1_000_000 },
-    }, "swe-2-high")).toBeUndefined();
   });
 });

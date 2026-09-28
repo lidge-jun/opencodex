@@ -1,9 +1,18 @@
 import { IconExternal, IconKey } from "../icons";
 import { useT } from "../i18n/shared";
+import { Trans } from "../i18n/provider";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { ProviderPayloadForm } from "../provider-payload";
 import { AddProviderField } from "./add-provider-modal-field";
 import { baseUrlForChoice } from "../base-url-choice";
+import { isSubscriptionCliProvider, SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE } from "../provider-workspace/subscription-cli";
+
+const FORM_ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"];
+
+/** The preset's own adapter stays selectable; otherwise the select shows the first option instead. */
+function adapterOptions(current: string): string[] {
+  return current && !FORM_ADAPTERS.includes(current) ? [current, ...FORM_ADAPTERS] : FORM_ADAPTERS;
+}
 
 export function AddProviderFormPane({
   preset,
@@ -39,6 +48,7 @@ export function AddProviderFormPane({
   onBack: () => void;
 }) {
   const t = useT();
+  const subscriptionCli = isSubscriptionCliProvider(form);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -67,7 +77,7 @@ export function AddProviderFormPane({
       {!isReservedForward && <>
         <AddProviderField label={t("modal.adapter")}>
           <select className="input" value={form.adapter} onChange={e => onFormChange({ ...form, adapter: e.target.value })}>
-            {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
+            {adapterOptions(form.adapter).map(a => <option key={a} value={a}>{a}</option>)}
           </select>
         </AddProviderField>
         {preset.baseUrlChoices && preset.baseUrlChoices.length > 0 ? (
@@ -128,6 +138,15 @@ export function AddProviderFormPane({
       ) : form.authMode === "local" ? (
         <div className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
           {t("modal.localHint")}
+        </div>
+      ) : subscriptionCli ? (
+        // Replaces both the key field and the green free box: this row bills a subscription
+        // through the signed-in CLI, and a key typed here would never be read.
+        <div role="note" data-subscription-cli-warning="" className="text-label leading-relaxed" style={{ color: "var(--amber)", background: "var(--amber-soft)", border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>
+          <strong>{t("modal.subscriptionCliTitle")}</strong>
+          <div style={{ marginTop: 4 }}>
+            <Trans k="modal.subscriptionCliWarning" cmd="claude -p" vars={{ apiProvider: SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE }} />
+          </div>
         </div>
       ) : preset.keyOptional ? (
         <div className="text-label leading-relaxed" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "10px 12px" }}>

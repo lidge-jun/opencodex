@@ -3,6 +3,7 @@ import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { omitEarlierCompactionImages } from "../../responses/compaction-images";
 import {
   shouldResolveOpenAiVisionSidecar,
   resolveOpenAiVisionModel,
@@ -51,6 +52,7 @@ export async function prepareResponsesSidecarAuth(
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
   const routedCompaction = parsed._compactionRequest === true
     && (!isCanonicalOpenAiForwardProvider(route.provider) || parsed._portableCompaction === true);
+  if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
   // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search

@@ -59,6 +59,7 @@ import {
 } from "../service/ownership-compatibility";
 import { observeManagingClis } from "../service/managing-cli";
 import { SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION } from "../service/install-state-contract.mjs";
+import { computeVersionSkew, type VersionSkew } from "./version-skew";
 
 /** Wire version of the resolve document. Bump only on an incompatible shape change. */
 export const RESOLVE_SCHEMA = "ocx-resolve/1";
@@ -114,6 +115,14 @@ export interface ResolveJson {
    * member of `ServiceTakeoverCompatibility`'s union.
    */
   takeover: ResolveTakeover;
+  /**
+   * The bundled CLI's version compared against the live proxy's, present only when
+   * something is live. A shell reads `relation` to decide whether attaching or a
+   * takeover moves versions: `"proxy-newer"` means this CLI's bundled runtime would
+   * DOWNGRADE the listener, which the desktop uses to stay a guest instead of offering
+   * takeover. Additive within ocx-resolve/1; older shells ignore it and read as unknown.
+   */
+  versionSkew?: VersionSkew;
 }
 
 export type ResolveTakeover =
@@ -192,6 +201,9 @@ export function buildResolveJson(
     liveness: livenessJson(live),
     ownership,
     takeover,
+    // A proven absence has nothing to skew against; the field is omitted there rather
+    // than emitted as an "unknown" row, matching the liveness identity fields.
+    ...(live ? { versionSkew: computeVersionSkew(cliVersion, live.version) } : {}),
   };
 }
 
@@ -221,6 +233,12 @@ function reportHuman(json: ResolveJson, stdout: { log: (s: string) => void }): v
       ? "Takeover: supported"
       : `Takeover: blocked (${json.takeover.reason}: ${json.takeover.detail})`,
   );
+  // The skew warning is the same sentence `ocx status` and `doctor` surface; an
+  // operator comparing a live proxy against this CLI gets it here too instead of
+  // discovering the mismatch only inside the desktop shell.
+  if (json.versionSkew?.warning) {
+    stdout.log(`Version skew: ${json.versionSkew.warning}`);
+  }
 }
 
 /**
