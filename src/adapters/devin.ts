@@ -59,7 +59,7 @@ const DEVIN_CLIENT_CLOSED_MESSAGE = "client closed request";
 const HELD_REASONING_HEARTBEAT_MS = 15_000;
 /** Once either limit is crossed, forward the signed attempt and disable fallback. */
 const HELD_REASONING_MAX_EVENTS = 1_024;
-const HELD_REASONING_MAX_TEXT_BYTES = 1024 * 1024;
+const HELD_REASONING_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type DevinUsageEvent = Extract<CloudChatEvent, { kind: "usage" }>;
 
@@ -787,7 +787,7 @@ export function createDevinAdapter(
           // added to every usage frame of the retry (frames are cumulative per request).
           let refusedUsage: Extract<CloudChatEvent, { kind: "usage" }> | undefined;
           let visible = false;
-          let heldTextBytes = 0;
+          let heldPayloadBytes = 0;
           // The iterator may pause before a trailer. A timer feeds the bridge during that
           // pause without starting another upstream read or marking replay unsafe.
           const heartbeatTimer = setInterval(() => {
@@ -808,8 +808,9 @@ export function createDevinAdapter(
               }
               held.push(event);
               if (event.kind === "usage") refusedUsage = event;
-              if (event.kind === "reasoning") heldTextBytes += event.text.length * 2;
-              if (held.length > HELD_REASONING_MAX_EVENTS || heldTextBytes > HELD_REASONING_MAX_TEXT_BYTES) {
+              if (event.kind === "reasoning") heldPayloadBytes += event.text.length * 2;
+              if (event.kind === "reasoning_signature") heldPayloadBytes += event.signature.length * 2;
+              if (held.length > HELD_REASONING_MAX_EVENTS || heldPayloadBytes > HELD_REASONING_MAX_PAYLOAD_BYTES) {
                 visible = true;
                 clearInterval(heartbeatTimer);
                 yield* held.splice(0);
