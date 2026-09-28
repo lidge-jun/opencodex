@@ -28,7 +28,7 @@ the [source-owned credential contract](codex-home.md#orca-source-owned-account-i
 
 ## Config surface
 
-`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged.
+`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. `src/config/schema/blocked-model-redirects.ts` applies the same read-degrade/write-reject boundary to malformed `blockedModelRedirects` maps. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged.
 
 `skills.catalog_refresh` in the proxy JSON configuration accepts `per_session` (the runtime default when absent) or `per_turn`. The former retains received skills instructions for a conversation; the latter passes through the current catalog. This is separate from Codex's `skills.include_instructions` TOML switch and does not change the live dashboard probe. See the [Responses snapshot contract](transports/responses.md#responses-httpsse).
 

@@ -3,6 +3,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
 import { parseAnthropicModelRoutes } from "../oauth/anthropic-model-routes";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -104,6 +105,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
+  if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -622,7 +624,8 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     const parsed = parseAnthropicModelRoutes(routeValue);
     if (!parsed.ok) return { ok: false, error: `schema_invalid: anthropicAccountPool.routes: ${parsed.error}` };
   }
-  const boundaryError = compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
+  const boundaryError = blockedModelRedirectsError(value)
+    ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)

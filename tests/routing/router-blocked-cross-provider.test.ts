@@ -19,6 +19,7 @@ function config(redirects: Record<string, string>): OcxConfig {
       google: {
         adapter: "openai-chat",
         baseUrl: "https://example.test/v1",
+        apiKey: "test-key",
         models: ["g1", "g2", "g3", "g4"],
         modelAliases: { g1: "quick" },
       },
@@ -75,6 +76,33 @@ describe("blocked-model redirect compatibility and provider changes", () => {
   test("an explicit qualified cross-provider key takes precedence over a bare legacy mapping", () => {
     const routed = routeModel(config({ "openai/m1": "google/g2", m1: "m2" }), "fast");
     expect(routed).toMatchObject({ providerName: "google", modelId: "g2", routeReason: "blocked-model-redirect" });
+  });
+
+  test("missing destination key keeps the source provider; local auth can redirect", () => {
+    const missing = config({ m1: "google/g1" });
+    delete missing.providers.google!.apiKey;
+    expect(routeModel(missing, "openai/m1")).toMatchObject({
+      providerName: "openai", modelId: "google/g1", routeReason: "blocked-model-redirect",
+    });
+    missing.providers.google!.authMode = "local";
+    missing.providers.google!.baseUrl = "http://localhost:11434/v1";
+    expect(routeModel(missing, "openai/m1")).toMatchObject({ providerName: "google", modelId: "g1" });
+  });
+
+  test("policy rejects a redirected destination outside its candidate list or hard requirements", () => {
+    const configured: OcxConfig = {
+      port: 10100,
+      defaultProvider: "source",
+      blockedModelRedirects: { m1: "remote/r1" },
+      providers: {
+        source: { adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authMode: "local", models: ["m1"] },
+        remote: { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "test-key", models: ["r1"] },
+      },
+      routingProfiles: { safe: { candidates: [{ provider: "source", model: "m1" }], require: { localOnly: true } } },
+    };
+    expect(() => routeModel(configured, "policy/safe")).toThrow(/No eligible candidates/);
+    configured.routingProfiles!.safe!.candidates.push({ provider: "remote", model: "r1" });
+    expect(() => routeModel(configured, "policy/safe")).toThrow(/No eligible candidates/);
   });
 
   test("detects cross-provider cycles", () => {

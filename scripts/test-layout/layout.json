@@ -613,6 +613,7 @@
     "compatibility-provider-equivalence.test.ts": "routing",
     "compatibility-version.test.ts": "ci-workflows",
     "config-account-thresholds.test.ts": "config",
+    "config-blocked-model-redirects.test.ts": "config",
     "config-catalog-auto-refresh.test.ts": "config",
     "config-commandcode-claude-pin.test.ts": "config",
     "config-load-degrade.test.ts": "config",

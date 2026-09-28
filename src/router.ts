@@ -567,7 +567,20 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
   const slash = value.indexOf("/");
   if (slash <= 0) return undefined;
   const targetProvider = value.slice(0, slash);
-  return targetProvider !== providerName && hasOwnProvider(config.providers, targetProvider) ? value : undefined;
+  if (targetProvider === providerName || !hasOwnProvider(config.providers, targetProvider)) return undefined;
+  const configured = config.providers[targetProvider];
+  if (configured.disabled === true) return undefined;
+  try {
+    const effective = routedProviderConfig(targetProvider, configured);
+    const registry = providerMatchesRegistryTransportWithStaticGuards(targetProvider, configured)
+      ? PROVIDER_REGISTRY.find(entry => entry.id === targetProvider)
+      : undefined;
+    const authMode = effective.authMode ?? registry?.authKind ?? "key";
+    return authMode !== "key" || effective.keyOptional === true || Boolean(effective.apiKey?.trim())
+      ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isBareOpenAiFamilyModel(modelId: string): boolean {
@@ -700,6 +713,11 @@ function routeModelInternal(
     const selected = evaluation.candidates[evaluation.selectedIndex]!;
     const concrete = `${selected.provider}/${selected.model}`;
     const routed = routeModelInternal(config, concrete, true, undefined, false, preview, redirectState);
+    if (routed.credentialDomainRewrite && !evaluation.candidates.some(candidate =>
+      candidate.provider === routed.providerName && candidate.model === routed.modelId && candidate.eligible
+    )) {
+      throw new NoEligiblePolicyCandidateError(policyId, evaluation.trace);
+    }
     return {
       ...routed,
       routeKind: "policy" as const,
