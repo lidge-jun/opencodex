@@ -128,7 +128,12 @@ exits the supervisor's stand-down code on a foreign or unknown answer: `42` insi
 marker-protocol Windows wrapper, `0` elsewhere — the legacy `ERRORLEVEL NEQ 0` loop reads
 `0` as a clean stop; systemd's `on-failure` and launchd's `SuccessfulExit=false`
 keepalive do not restart it. The launchd plist restarts on an unsuccessful exit or signal,
-including the exit-1 supervised restart handoff described below. Existing launchd jobs retain
+including the exit-1 supervised restart handoff described below. A handled SIGTERM, SIGINT or
+SIGHUP would otherwise end in a clean exit and be left down, so the launchd-managed job (macOS
+with `OCX_SERVICE_MANAGED=1`) exits `128 + signal` from both the server and client-runtime
+signal shutdowns (`src/lib/handled-signal-exit.ts`); every other run keeps exit 0.
+`launchctl bootout` and `ocx service stop` unload the job first, so that cannot resurrect a
+deliberate stop. Existing launchd jobs retain
 their old keepalive definition until `ocx service repair` rewrites and reloads the changed plist.
 New WinSW XML stamps `OCX_SERVICE_MANAGED=1`; parent command-line inference applies only to
 legacy registrations whose XML lacks that marker. Bare `OCX_SERVICE=1`
@@ -138,7 +143,10 @@ this install's wrapper script, launcher or WinSW host as a complete token in any
 and an unreadable parent command line is no evidence and proceeds. POSIX keeps the
 explicit-marker path: a companion reparented to init can look service-spawned, and
 `systemd --user` children are not init's, so a ppid check would refuse some companions
-while still missing user units. `detachedStartEnvironment` strips `OCX_SERVICE` and both
+while still missing user units. Known limits: a legacy POSIX registration written before the
+marker, and a Windows child whose parent command line cannot be read, are not classified as
+supervised, so until `ocx service repair` rewrites their definition they can still start
+over a desktop claim. `detachedStartEnvironment` strips `OCX_SERVICE` and both
 supervisor markers before spawning ensure/tray children, because a marker inherited from the
 service child's own environment would otherwise answer the gate as a managed job.
 

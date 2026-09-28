@@ -7,6 +7,7 @@ import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimeP
 import { installCrashGuards } from "../lib/crash-guard";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
+import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import {
   DESKTOP_RESTART_EXIT_CODE,
   DESKTOP_SUPERVISED_ENV,
@@ -314,7 +315,7 @@ export async function startClientRuntime(
   options.afterPublish?.();
 
   let shuttingDown = false;
-  const shutdown = () => {
+  const shutdown = (signal?: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
     void (async () => {
@@ -330,7 +331,8 @@ export async function startClientRuntime(
         console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         cleanup();
-        process.exit(0);
+        // launchd relaunches only unsuccessful exits; an external signal must still count.
+        process.exit(handledSignalExitCode(signal));
       }
     })();
   };

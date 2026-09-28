@@ -158,6 +158,7 @@ import { initializeNodeLauncherContext } from "./launcher-context";
 import { restoreSharedClientStateAfterStop } from "./stop-restore";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
+import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
@@ -659,7 +660,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // this window as the same Ctrl-C (one graceful drain); a deliberate later press
   // escalates to an immediate force-exit ("gradual kill").
   const FORCE_AFTER_MS = 500;
-  const shutdown = () => {
+  const shutdown = (signal?: NodeJS.Signals) => {
     const now = Date.now();
     if (shuttingDown) {
       if (now - shutdownStartedAt < FORCE_AFTER_MS) return; // near-simultaneous duplicate — ignore
@@ -677,7 +678,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
       } finally {
         const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
-        process.exit(restored && shutdownSucceeded ? 0 : 1);
+        process.exit(restored && shutdownSucceeded ? handledSignalExitCode(signal) : 1);
       }
     })();
   };
