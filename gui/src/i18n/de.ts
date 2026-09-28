@@ -1456,7 +1456,7 @@ export const de: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "Kein Standard verfügbar",
   "integrations.droidReasoning.noModels": "Keine exportierten Modelle verfügbar.",
   "integrations.droidReasoning.modelDefault": "Standard-Reasoning-Aufwand für {model}",
-  "integrations.droidReasoning.unsupportedTitle": "Einige gespeicherte Standards werden nicht mehr unterstützt. Entferne sie ausdrücklich.",
+  "integrations.droidReasoning.unsupportedTitle": "Einige gespeicherte Standards werden nicht mehr unterstützt. Entferne sie; speichere und prüfe anschließend die Änderungen, um sie anzuwenden.",
   "integrations.droidReasoning.unsupportedEffort": "Nicht unterstützter Aufwand: {effort}",
   "integrations.droidReasoning.clear": "Standard entfernen",
   "integrations.droidReasoning.saveReview": "Änderungen speichern / prüfen",

@@ -1991,7 +1991,7 @@ export const tr: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "Kullanılabilir varsayılan yok",
   "integrations.droidReasoning.noModels": "Dışa aktarılmış model yok.",
   "integrations.droidReasoning.modelDefault": "{model} için varsayılan akıl yürütme düzeyi",
-  "integrations.droidReasoning.unsupportedTitle": "Kaydedilmiş bazı varsayılanlar artık desteklenmiyor. Bunları açıkça temizleyin.",
+  "integrations.droidReasoning.unsupportedTitle": "Kaydedilmiş bazı varsayılanlar artık desteklenmiyor. Bunları temizleyin, ardından uygulamak için değişiklikleri kaydedip inceleyin.",
   "integrations.droidReasoning.unsupportedEffort": "Desteklenmeyen düzey: {effort}",
   "integrations.droidReasoning.clear": "Varsayılanı temizle",
   "integrations.droidReasoning.saveReview": "Değişiklikleri kaydet / incele",

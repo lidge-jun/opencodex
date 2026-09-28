@@ -1492,7 +1492,7 @@ export const ko: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "사용 가능한 기본값 없음",
   "integrations.droidReasoning.noModels": "내보낸 모델이 없습니다.",
   "integrations.droidReasoning.modelDefault": "{model}의 기본 추론 강도",
-  "integrations.droidReasoning.unsupportedTitle": "저장된 기본값 중 일부가 더 이상 지원되지 않습니다. 명시적으로 지워 주세요.",
+  "integrations.droidReasoning.unsupportedTitle": "저장된 기본값 중 일부가 더 이상 지원되지 않습니다. 지운 다음 변경 사항을 저장 / 검토해야 적용됩니다.",
   "integrations.droidReasoning.unsupportedEffort": "지원하지 않는 강도: {effort}",
   "integrations.droidReasoning.clear": "기본값 지우기",
   "integrations.droidReasoning.saveReview": "변경 사항 저장 / 검토",

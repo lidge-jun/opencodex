@@ -561,13 +561,18 @@ custom models remain yours.
 
 Open **Integrations → Factory Droid** (`/#integrations/droid`) to set a reasoning
 default for each connected model. Choose from the model's supported efforts,
-review the changes, then confirm. **No default** clears that model's setting.
+review the changes, then confirm. **No default** clears that model's draft setting;
+use **Save / review changes** and confirm to apply the removal.
 Models without a declared effort list show that no default is available.
 
 The default applies only when Droid omits an effort from its request. An explicit
 request effort takes precedence over this default; existing OpenCodex pins and
 caps still apply. Droid may continue to display **Dynamic** even when OpenCodex
-applies the configured default. Other clients' requests are unaffected.
+applies the configured default. Requests without the Droid default header are
+unaffected; the header is a request preference, not proof of client identity.
+
+A saved default that the routed model no longer supports is ignored for requests.
+Clear it in the panel, then review and confirm the change to remove it from Droid.
 
 Refresh preserves defaults for models that remain connected. Disable removes
 the defaults with the managed model rows, and Undo restores the saved rows and

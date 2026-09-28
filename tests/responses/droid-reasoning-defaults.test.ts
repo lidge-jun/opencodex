@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { effortRowId } from "../../src/server/effort-row";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
@@ -42,7 +43,8 @@ async function send(
   lane: "native" | "translated",
   headers: Record<string, string>,
   extraBody: Record<string, unknown> = {},
-  policy: { pin?: string; cap?: string } = {},
+  policy: { pin?: string; cap?: string; modelEfforts?: string[]; omitProviderLadder?: boolean; syntheticEffortRows?: boolean } = {},
+  requestModel = "mock/model",
 ) {
   releaseSpendHome ??= acquireOwnedSpendHome();
   const mock = upstream();
@@ -52,18 +54,20 @@ async function send(
     apiKey: "fixture",
     allowPrivateNetwork: true,
     ...(policy.pin ? { modelPinnedReasoningEfforts: { model: policy.pin } } : {}),
-    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
+    ...(!policy.omitProviderLadder ? { reasoningEfforts: ["none", "minimal", "low", "medium", "high"] } : {}),
+    ...(policy.modelEfforts ? { modelReasoningEfforts: { model: policy.modelEfforts } } : {}),
   };
   const config = {
     defaultProvider: "mock",
     providers: { mock: provider },
+    ...(policy.syntheticEffortRows ? { cursorEffortRows: true } : {}),
     ...(policy.cap ? { effortCap: policy.cap } : {}),
   } as OcxConfig;
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({
-      model: "mock/model",
+      model: requestModel,
       stream: false,
       messages: [{ role: "user", content: "hello" }],
       ...(lane === "translated" ? { store: true } : {}),
@@ -122,6 +126,30 @@ for (const lane of ["native", "translated"] as const) {
     expect(sent.body.reasoning_effort ?? (sent.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("low");
   });
 
+  test(`${lane} Chat uses the export fallback ladder when no ladder is configured`, async () => {
+    const sent = await send(lane, { "x-opencodex-droid-default-effort": "high" }, {}, { omitProviderLadder: true });
+    expect(sent.body.reasoning_effort ?? (sent.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("high");
+  });
+
+  test(`${lane} Chat respects an empty per-model ladder`, async () => {
+    const sent = await send(lane, { "x-opencodex-droid-default-effort": "high" }, {}, { omitProviderLadder: true, modelEfforts: [] });
+    expect(Object.hasOwn(sent.body, "reasoning_effort")).toBe(false);
+    expect(Object.hasOwn(sent.body, "reasoning")).toBe(false);
+  });
+
+  test(`${lane} Chat ignores a Droid default outside the resolved namespaced model ladder`, async () => {
+    const sent = await send(lane, { "x-opencodex-droid-default-effort": "high" }, {}, { modelEfforts: ["low"] });
+    expect(Object.hasOwn(sent.body, "reasoning_effort")).toBe(false);
+    expect(Object.hasOwn(sent.body, "reasoning")).toBe(false);
+  });
+
+  test(`${lane} Chat preserves an explicit effort even when outside the model ladder`, async () => {
+    const extra = { reasoning_effort: "high" };
+    const baseline = await send(lane, {}, extra, { modelEfforts: ["low"] });
+    const withHeader = await send(lane, { "x-opencodex-droid-default-effort": "low" }, extra, { modelEfforts: ["low"] });
+    expect(withHeader.body).toEqual(baseline.body);
+  });
+
   test(`${lane} Chat applies a qualifying low effort cap after the Droid high default`, async () => {
     const tools = [
       { type: "function", function: { name: "spawn_agent", parameters: { type: "object", properties: {} } } },
@@ -131,3 +159,15 @@ for (const lane of ["native", "translated"] as const) {
     expect(sent.body.reasoning_effort ?? (sent.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("low");
   });
 }
+
+test("Chat synthetic low effort row takes precedence over the Droid high default", async () => {
+  const rowId = effortRowId("mock/model", "low");
+  const sent = await send(
+    "translated",
+    { "x-opencodex-droid-default-effort": "high" },
+    {},
+    { omitProviderLadder: true, syntheticEffortRows: true },
+    rowId,
+  );
+  expect(sent.body.reasoning?.effort ?? sent.body.reasoning_effort).toBe("low");
+});

@@ -2783,7 +2783,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "沒有可用的預設值",
   "integrations.droidReasoning.noModels": "沒有可匯出的模型。",
   "integrations.droidReasoning.modelDefault": "{model} 的預設推理強度",
-  "integrations.droidReasoning.unsupportedTitle": "部分已儲存的預設值已不再支援，請明確清除。",
+  "integrations.droidReasoning.unsupportedTitle": "部分已儲存的預設值已不再支援。清除後，請儲存 / 檢查變更以套用。",
   "integrations.droidReasoning.unsupportedEffort": "不支援的強度：{effort}",
   "integrations.droidReasoning.clear": "清除預設值",
   "integrations.droidReasoning.saveReview": "儲存 / 檢查變更",

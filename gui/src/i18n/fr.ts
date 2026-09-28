@@ -1978,7 +1978,7 @@ export const fr: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "Aucune valeur par défaut disponible",
   "integrations.droidReasoning.noModels": "Aucun modèle exporté n’est disponible.",
   "integrations.droidReasoning.modelDefault": "Niveau de raisonnement par défaut pour {model}",
-  "integrations.droidReasoning.unsupportedTitle": "Certaines valeurs enregistrées ne sont plus prises en charge. Supprimez-les explicitement.",
+  "integrations.droidReasoning.unsupportedTitle": "Certaines valeurs enregistrées ne sont plus prises en charge. Supprimez-les, puis enregistrez / vérifiez les changements pour les appliquer.",
   "integrations.droidReasoning.unsupportedEffort": "Niveau non pris en charge : {effort}",
   "integrations.droidReasoning.clear": "Supprimer la valeur",
   "integrations.droidReasoning.saveReview": "Enregistrer / vérifier les changements",

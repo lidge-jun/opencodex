@@ -1961,7 +1961,7 @@ export const vi: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "Không có mức mặc định khả dụng",
   "integrations.droidReasoning.noModels": "Không có mô hình nào được xuất.",
   "integrations.droidReasoning.modelDefault": "Mức suy luận mặc định cho {model}",
-  "integrations.droidReasoning.unsupportedTitle": "Một số mức mặc định đã lưu không còn được hỗ trợ. Hãy xóa chúng một cách rõ ràng.",
+  "integrations.droidReasoning.unsupportedTitle": "Một số mức mặc định đã lưu không còn được hỗ trợ. Hãy xóa chúng, sau đó lưu / xem lại thay đổi để áp dụng.",
   "integrations.droidReasoning.unsupportedEffort": "Mức không được hỗ trợ: {effort}",
   "integrations.droidReasoning.clear": "Xóa mặc định",
   "integrations.droidReasoning.saveReview": "Lưu / xem lại thay đổi",

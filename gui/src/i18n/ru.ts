@@ -1972,7 +1972,7 @@ export const ru: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "Нет доступного значения по умолчанию",
   "integrations.droidReasoning.noModels": "Нет доступных экспортированных моделей.",
   "integrations.droidReasoning.modelDefault": "Уровень рассуждений по умолчанию для {model}",
-  "integrations.droidReasoning.unsupportedTitle": "Некоторые сохранённые значения больше не поддерживаются. Удалите их явно.",
+  "integrations.droidReasoning.unsupportedTitle": "Некоторые сохранённые значения больше не поддерживаются. Удалите их, затем сохраните / проверьте изменения, чтобы применить их.",
   "integrations.droidReasoning.unsupportedEffort": "Неподдерживаемый уровень: {effort}",
   "integrations.droidReasoning.clear": "Удалить значение",
   "integrations.droidReasoning.saveReview": "Сохранить / проверить изменения",

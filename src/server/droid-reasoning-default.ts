@@ -1,11 +1,22 @@
-import { isDeclaredReasoningEffort } from "../reasoning-effort";
+import { CODEX_REASONING_LEVELS, configuredReasoningEfforts, isDeclaredReasoningEffort } from "../reasoning-effort";
+import type { OcxProviderConfig } from "../types";
 
 export { DROID_DEFAULT_EFFORT_HEADER } from "../clients/config-export/contracts";
 
 type ChatRequestBody = Record<string, unknown>;
 
-export function applyDroidReasoningDefault(body: ChatRequestBody, header: string | null): void {
+export function applyDroidReasoningDefault(
+  body: ChatRequestBody,
+  header: string | null,
+  provider: OcxProviderConfig,
+  modelId: string,
+): void {
   if (!header || !isDeclaredReasoningEffort(header)) return;
+  // The routed catalog uses the canonical full ladder when no configured or metadata ladder
+  // exists. An explicit empty model ladder remains authoritative and does not take this fallback.
+  const supportedEfforts = configuredReasoningEfforts(provider, modelId)
+    ?? CODEX_REASONING_LEVELS.map(level => level.effort);
+  if (!supportedEfforts.includes(header)) return;
   if (Object.hasOwn(body, "reasoning_effort")) return;
   const reasoning = body.reasoning;
   if (reasoning !== null && typeof reasoning === "object" && !Array.isArray(reasoning)

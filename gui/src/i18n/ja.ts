@@ -1881,7 +1881,7 @@ export const ja: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "設定可能な既定値はありません",
   "integrations.droidReasoning.noModels": "エクスポートされたモデルはありません。",
   "integrations.droidReasoning.modelDefault": "{model} の推論レベルの既定値",
-  "integrations.droidReasoning.unsupportedTitle": "一部の保存済み既定値はサポートされなくなりました。明示的に削除してください。",
+  "integrations.droidReasoning.unsupportedTitle": "一部の保存済み既定値はサポートされなくなりました。削除した後、変更を保存 / 確認して適用してください。",
   "integrations.droidReasoning.unsupportedEffort": "未サポートのレベル: {effort}",
   "integrations.droidReasoning.clear": "既定値を削除",
   "integrations.droidReasoning.saveReview": "変更を保存 / 確認",

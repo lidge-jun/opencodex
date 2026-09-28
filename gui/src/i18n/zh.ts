@@ -1473,7 +1473,7 @@ export const zh: Record<TKey, string> = {
   "integrations.droidReasoning.noEfforts": "没有可用的默认值",
   "integrations.droidReasoning.noModels": "没有可导出的模型。",
   "integrations.droidReasoning.modelDefault": "{model} 的默认推理强度",
-  "integrations.droidReasoning.unsupportedTitle": "部分已保存的默认值已不再受支持，请明确清除。",
+  "integrations.droidReasoning.unsupportedTitle": "部分已保存的默认值已不再受支持。清除后，请保存 / 检查更改以应用。",
   "integrations.droidReasoning.unsupportedEffort": "不支持的强度：{effort}",
   "integrations.droidReasoning.clear": "清除默认值",
   "integrations.droidReasoning.saveReview": "保存 / 检查更改",

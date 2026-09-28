@@ -143,7 +143,6 @@ async function handleChatCompletionsWithBudget(
     // forwards this body as-is, so both must observe the same parts. A body with no
     // foreign image part is returned by reference and stays byte-identical.
     chatBody = normalizeChatImageParts(rawBody);
-    applyDroidReasoningDefault(chatBody, req.headers.get(DROID_DEFAULT_EFFORT_HEADER));
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
@@ -195,6 +194,14 @@ async function handleChatCompletionsWithBudget(
       getOrAllocateRequestSessionLane(req),
       routedProvider,
     );
+    if (!effortRow) {
+      applyDroidReasoningDefault(
+        chatBody,
+        req.headers.get(DROID_DEFAULT_EFFORT_HEADER),
+        route.provider,
+        route.modelId,
+      );
+    }
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
