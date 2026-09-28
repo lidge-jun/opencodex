@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
-import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { getAccountSet, replaceProviderAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { DEVIN_CLI_CREDENTIALS_ENV } from "../../src/oauth/devin/cli-import";
@@ -207,6 +207,36 @@ test("a CLI-imported account adopts the key a later `devin auth login` wrote", a
   expect(row?.credential.expires).toBe(Number.MAX_SAFE_INTEGER);
 });
 
+test("a legacy alias copy of the same account does not block CLI key rotation", async () => {
+  await saveCliImport(DEAD);
+  const current = cliAccount()!;
+  await replaceProviderAccountSet("devin-cli", {
+    activeAccountId: current.id,
+    accounts: [{ ...current, credential: {
+      ...current.credential, accountId: "uid-rotated", email: "rotated@example.com",
+    } }],
+  });
+  writeCliFile(ROTATED);
+
+  expect(await (await run()).text()).toContain("served by rotated");
+  expect(cliAccount()?.credential.access).toBe(ROTATED);
+  expect(getAccountSet("devin-cli")?.accounts[0]?.credential.access).toBe(DEAD);
+  expect(cliAccount()?.needsReauth).not.toBe(true);
+});
+
+test("a distinct legacy alias account still blocks an owned CLI identity", async () => {
+  await saveCredential("devin-cli", {
+    access: LIVE, refresh: LIVE, expires: Number.MAX_SAFE_INTEGER,
+    accountId: "uid-rotated", source: "oauth", apiBaseUrl: "https://server.codeium.com",
+  });
+  await saveCliImport(DEAD);
+  writeCliFile(ROTATED);
+
+  await (await run()).text();
+  expect(cliAccount()?.credential.access).toBe(DEAD);
+  expect(cliAccount()?.needsReauth).toBe(true);
+});
+
 test.each([
   ["unchanged", () => writeCliFile(DEAD)],
   ["missing", () => {}],
@@ -346,6 +376,7 @@ test.each([false, true])("an account paused during 401 refresh returns 403 (stre
   expect(body.error.message).toContain("OAuth account is paused");
   expect(sentKeys).toEqual([DEAD]);
   expect(cliAccount()?.needsReauth).not.toBe(true);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
 });
 
 test("a slot recorded from the key's `sub` claim still matches the minted identity", async () => {

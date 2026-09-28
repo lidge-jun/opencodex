@@ -312,7 +312,8 @@ export function assertDevinCliAdoptionOwnership(
   const email = normalizedEmail(credential.email);
   for (const slot of [provider, ...devinAliasCredentialSlots(provider)]) {
     for (const row of store[slot]?.accounts ?? []) {
-      if (slot === provider && row.id === accountId) continue;
+      // A legacy alias can still hold the same account id during rekey.
+      if (row.id === accountId) continue;
       if (row.credential.access === credential.access
         || (row.credential.accountId !== undefined && mintedIds.has(row.credential.accountId))
         || (email !== undefined && normalizedEmail(row.credential.email) === email)) {
