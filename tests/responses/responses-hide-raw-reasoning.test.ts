@@ -152,4 +152,29 @@ describe("hideRawReasoning provider option", () => {
       expect(parsed.options.hideThinkingSummary).not.toBe(true);
     }
   });
+
+  test("a fallback renormalizing the same request clears a flag the first route set", async () => {
+    const config = {
+      port: 0,
+      defaultProvider: "quiet",
+      providers: { quiet: provider({ hideRawReasoning: true }), loud: provider() },
+    } as unknown as OcxConfig;
+    const parsed = parseRequest({ model: "quiet/reasoner", input: [], reasoning: { effort: "high" } });
+    const normalize = async (providerName: string) => {
+      const route = routeModel(config, `${providerName}/reasoner`);
+      await applyFinalRouteRequestNormalization({
+        parsed,
+        route,
+        config,
+        req: new Request("http://localhost/v1/responses"),
+        logCtx: { model: parsed.modelId, provider: route.providerName },
+        inboundWire: "responses",
+      });
+    };
+    await normalize("quiet");
+    expect(parsed.options.hideRawReasoning).toBe(true);
+    // One parsed request object carries across a fallback; the flag must follow the new route.
+    await normalize("loud");
+    expect(parsed.options.hideRawReasoning).toBe(false);
+  });
 });
