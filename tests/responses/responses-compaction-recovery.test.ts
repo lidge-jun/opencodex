@@ -97,6 +97,30 @@ afterEach(() => {
 });
 
 describe("routed compaction emergency integration", () => {
+  test.each(["v1", "v2", "normal"])("historical image projection is compact-only (%s)", async mode => {
+    sourceEvents = [{ type: "text_delta", text: "Preserve chart total 42 and source references." }, { type: "done" }];
+    const oldImage = "data:image/png;base64,OLD_FIXTURE";
+    const pendingImage = "data:image/png;base64,PENDING_FIXTURE";
+    const payload = { ...body(false, mode === "v2"), input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Source /fixtures/chart.png" }, { type: "input_image", image_url: oldImage }] },
+      { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Chart total: 42." }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Pending image /fixtures/new.png" }, { type: "input_image", image_url: pendingImage }] },
+      ...(mode === "v2" ? [{ type: "compaction_trigger" }] : []),
+    ] };
+    const response = mode === "v1"
+      ? await handleResponsesCompact(request(payload, "responses/compact"), settings(), { model: "", provider: "" })
+      : await handleResponses(request(payload), settings(), { model: "", provider: "" });
+    expect(response.ok).toBe(true);
+    await response.text();
+    expect(calls).toHaveLength(1);
+    const sent = JSON.stringify(calls[0]!.parsed.context.messages);
+    expect(sent.includes(oldImage)).toBe(mode === "normal");
+    expect(sent).toContain(pendingImage);
+    expect(sent).toContain("Chart total: 42.");
+    expect(sent).toContain("Source /fixtures/chart.png");
+    expect(JSON.stringify(calls[0]!.parsed._rawBody)).toContain(oldImage);
+  });
+
   test("source success and ordinary requests never use the emergency model", async () => {
     sourceEvents = [{ type: "text_delta", text: "Source summary" }, { type: "done" }];
     for (const compact of [true, false]) {

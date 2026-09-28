@@ -11,6 +11,7 @@ import { contextRelayActivated } from "../../codex/context-compat";
 import { recordContextSessionOwner } from "../../codex/context-owner";
 import { resolveContextPrincipal } from "../auth-cors";
 import { COMPACT_PROMPT } from "../../responses/compaction";
+import { omitEarlierCompactionImages } from "../../responses/compaction-images";
 import type { RoutedNamespaceToolAliases } from "../../responses/namespace-tool-compat";
 import type { MuseToolNameAliases } from "../../responses/muse-tool-name-alias";
 import type { AdapterRequest } from "../../adapters/base";
@@ -100,7 +101,10 @@ export function createResponsesEffects(
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       delete (parsed._rawBody as Record<string, unknown>).text;
     }
-    parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
+    parsed.context.messages = [
+      ...omitEarlierCompactionImages(parsed.context.messages),
+      { role: "user", content: COMPACT_PROMPT, timestamp: Date.now() },
+    ];
   }
 
   let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();
