@@ -16,10 +16,9 @@ export default function DroidReasoningDefaultsPanel({
   onReview: () => void;
 }) {
   const t = useT();
-  const modelById = new Map(reasoning.models.map(model => [model.model, model]));
+  const effortsByModel = new Map(reasoning.models.map(model => [model.model, new Set(model.efforts)]));
   const unsupported = Object.entries(defaults).filter(([modelId, effort]) => {
-    const model = modelById.get(modelId);
-    return !model || !model.efforts.includes(effort);
+    return !effortsByModel.get(modelId)?.has(effort);
   });
 
   const setDefault = (model: string, effort: string) => {
