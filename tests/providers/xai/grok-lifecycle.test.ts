@@ -373,7 +373,9 @@ describe("Grok fence lifecycle wiring", () => {
     expect(startFn).toContain("if (!restored.success)");
     expect(startFn).toContain("cleanupSucceeded = false");
     expect(startFn).toContain("Native Codex restore failed during shutdown");
-    expect(startFn).toContain("process.exit(restored && shutdownSucceeded ? 0 : 1)");
+    // A clean signal shutdown exits 0, except the launchd-managed job, which exits 128+signal
+    // so its failure-only KeepAlive still relaunches it (src/lib/handled-signal-exit.ts).
+    expect(startFn).toContain("process.exit(restored && shutdownSucceeded ? handledSignalExitCode(signal) : 1)");
   });
 });
 
