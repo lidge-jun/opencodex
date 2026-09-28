@@ -102,6 +102,18 @@ describe("service child ownership gate", () => {
     });
   });
 
+  test("a lookalike before the real path still finds the wrapper token", () => {
+    const deps = {
+      platform: "win32" as const,
+      parentPid: () => 4242,
+      processCommandLine: () =>
+        'C:\\Windows\\System32\\cmd.exe /c C:\\cfg\\opencodex-service.cmd.bak "C:\\cfg\\opencodex-service.cmd"',
+      serviceHostPaths: () => ["C:\\cfg\\opencodex-service.cmd"],
+    };
+    const decision = serviceChildOwnershipDecision({ OCX_SERVICE: "1" }, () => owned("desktop"), deps);
+    expect(decision.kind).toBe("stay-out");
+  });
+
   test("an unreadable parent command line cannot refuse a marker-less child", () => {
     const deps = {
       platform: "win32" as const,
@@ -118,6 +130,12 @@ describe("service child ownership gate", () => {
     for (const env of [
       { OCX_SERVICE_MANAGED: "1", OCX_SERVICE: "1" },
       { OCX_WINDOWS_WRAPPER_PROTOCOL: "1", OCX_SERVICE: "1" },
+      // A stray marker without OCX_SERVICE still reads as supervised: after
+      // detachedStartEnvironment strips all three, a marker-only process should
+      // not exist — and if it somehow does, refusing under a foreign owner is
+      // the conservative answer.
+      { OCX_SERVICE_MANAGED: "1" },
+      { OCX_WINDOWS_WRAPPER_PROTOCOL: "1" },
     ]) {
       const decision = serviceChildOwnershipDecision(env, () => owned("desktop"));
       expect(decision.kind).toBe("stay-out");

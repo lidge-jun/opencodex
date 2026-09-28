@@ -657,8 +657,11 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(owner).not.toContain("reconcileJournal(");
     expect(start.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
     expect(start.indexOf("markCrossHomeSibling()")).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
-    expect(slice("function detachedStartEnvironment(", "async function handleEnsure("))
-      .toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
+    const detached = slice("function detachedStartEnvironment(", "async function handleEnsure(");
+    expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
+    expect(detached).toContain("delete env.OCX_SERVICE;");
+    expect(detached).toContain("delete env[SERVICE_MANAGED_ENV];");
+    expect(detached).toContain("delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];");
     expect(cliSource).toContain("env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),");
     // Every other detached `ocx start` is an ordinary owner too: the client auto-starts and the
     // updater's restart. A stray marker would mark them before any probe.

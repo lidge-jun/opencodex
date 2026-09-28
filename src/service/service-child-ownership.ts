@@ -49,12 +49,18 @@ function commandLineRunsServiceHost(
   const upper = commandLine.toLowerCase();
   for (const serviceHostPath of serviceHostPaths) {
     const needle = serviceHostPath.toLowerCase();
-    const at = upper.indexOf(needle);
-    if (at < 0) continue;
-    const before = at === 0 ? " " : commandLine[at - 1];
-    const end = at + needle.length;
-    const after = end >= commandLine.length ? " " : commandLine[end];
-    if (/[\s"']/.test(before) && /[\s"']/.test(after)) return true;
+    let from = 0;
+    while (from < commandLine.length) {
+      const at = upper.indexOf(needle, from);
+      if (at < 0) break;
+      // Boundary characters are read from the lowered copy so a case-mapping
+      // that changes length can never shift the token check off by a code unit.
+      const before = at === 0 ? " " : upper[at - 1];
+      const end = at + needle.length;
+      const after = end >= upper.length ? " " : upper[end];
+      if (/[\s"']/.test(before) && /[\s"']/.test(after)) return true;
+      from = at + 1;
+    }
   }
   return false;
 }
