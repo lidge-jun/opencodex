@@ -58,6 +58,22 @@ describe("Devin reasoning continuation across turns", () => {
     expect(wire.get(18)).toBe("sealed");
   });
 
+  test("a signature separated from its text by a call is not paired", () => {
+    const history = mapOcxMessagesToDevin(parseRequest({
+      model: "devin/swe-2",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "go" }] },
+        { type: "reasoning", id: "rs_text", summary: [{ type: "summary_text", text: "earlier thought" }] },
+        { type: "function_call", call_id: "call_1", name: "get_time", arguments: "{}" },
+        { type: "reasoning", id: "rs_unrelated", summary: [], encrypted_content: encodeReasoningEnvelope({ sig: encodeDevinSignature(SEALED, "sealed") }) },
+        { type: "function_call_output", call_id: "call_1", output: "12:00" },
+      ],
+    }));
+    const assistant = history.find(m => m.role === "assistant");
+    expect(assistant?.thinking).toBe("earlier thought");
+    expect(assistant?.signature).toBeUndefined();
+  });
+
   test("a signature-only turn is replayed instead of dropped", () => {
     const openaiSig = '[{"id":"rs_1","encrypted_content":"opaque"}]';
     const history = mapOcxMessagesToDevin(parseRequest({

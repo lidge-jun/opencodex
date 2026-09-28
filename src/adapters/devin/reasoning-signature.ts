@@ -63,8 +63,14 @@ export function devinAssistantReasoning(
   let stored: string | undefined;
   if (textBlocks.length === 1 && isProviderIssuedThinkingSignature(textBlocks[0]!.signature)) {
     stored = textBlocks[0]!.signature;
-  } else if (textBlocks.length <= 1 && signatureOnly.length === 1) {
+  } else if (textBlocks.length === 0 && signatureOnly.length === 1) {
     stored = signatureOnly[0]!.signature;
+  } else if (textBlocks.length === 1 && signatureOnly.length === 1) {
+    // Only the late trailer shape attests this text. The Responses parser can
+    // fold reasoning around a call into one assistant message, so counting
+    // blocks without checking their position can attach an unrelated signature.
+    const textIndex = message.content.indexOf(textBlocks[0]!);
+    if (message.content[textIndex + 1] === signatureOnly[0]) stored = signatureOnly[0]!.signature;
   }
   let decoded = stored ? decodeDevinSignature(stored) : undefined;
   if (decoded && withholdAnthropic && signatureTypeFor(decoded, modelId) === "anthropic") decoded = undefined;
