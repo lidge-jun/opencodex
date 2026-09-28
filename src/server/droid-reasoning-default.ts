@@ -12,8 +12,6 @@ export function applyDroidReasoningDefault(
   modelId: string,
 ): void {
   if (!header || !isDeclaredReasoningEffort(header)) return;
-  // The routed catalog uses the canonical full ladder when no configured or metadata ladder
-  // exists. An explicit empty model ladder remains authoritative and does not take this fallback.
   const supportedEfforts = configuredReasoningEfforts(provider, modelId)
     ?? CODEX_REASONING_LEVELS.map(level => level.effort);
   if (!supportedEfforts.includes(header)) return;
