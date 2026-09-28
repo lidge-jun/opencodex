@@ -3,6 +3,9 @@ import { Window } from "happy-dom";
 import { promptForAdminToken } from "../src/admin-token-dialog";
 import { setActiveLocale } from "../src/i18n/shared";
 
+const SCOPE = "https://dashboard.example|same-origin";
+const SCOPED_KEY = "opencodex.remembered-admin-token:https://dashboard.example|same-origin";
+
 const globals = ["document", "window", "navigator", "localStorage", "HTMLElement"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -29,7 +32,7 @@ afterEach(() => {
 });
 
 test("renders stable password-manager-compatible sign-in fields", async () => {
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog");
   const form = dialog?.querySelector<HTMLFormElement>("form");
   const username = form?.elements.namedItem("username") as HTMLInputElement | null;
@@ -63,7 +66,7 @@ test("cancel resolves null and restores the previous focus target", async () => 
   document.body.append(focusTarget);
   focusTarget.focus();
 
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog");
   dialog!.dispatchEvent(new testWindow.Event("cancel", { cancelable: true }));
 
@@ -77,7 +80,7 @@ test("keeps the dialog open for whitespace and rejected tokens until one is acce
   const pending = promptForAdminToken(async (token) => {
     attempts.push(token);
     return token === "valid-token" ? "accepted" : "rejected";
-  });
+  }, SCOPE);
   void pending.then(() => {
     settled = true;
   });
@@ -110,7 +113,7 @@ test("keeps the dialog open for whitespace and rejected tokens until one is acce
 });
 
 test("checked remember box persists the accepted token for standalone sign-in", async () => {
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const password = form.elements.namedItem("password") as HTMLInputElement;
@@ -122,13 +125,13 @@ test("checked remember box persists the accepted token for standalone sign-in", 
   form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
 
   expect(await pending).toBe("stored-token");
-  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("stored-token");
+  expect(localStorage.getItem(SCOPED_KEY)).toBe("stored-token");
 });
 
 test("unchecked remember box clears any stale remembered token", async () => {
-  localStorage.setItem("opencodex.remembered-admin-token", "stale-token");
+  localStorage.setItem(SCOPED_KEY, "stale-token");
 
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const password = form.elements.namedItem("password") as HTMLInputElement;
@@ -140,11 +143,11 @@ test("unchecked remember box clears any stale remembered token", async () => {
   form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
 
   expect(await pending).toBe("fresh-token");
-  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+  expect(localStorage.getItem(SCOPED_KEY)).toBeNull();
 });
 
 test("remember checkbox has a form control name for consistency", async () => {
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const remember = form.elements.namedItem("remember") as HTMLInputElement;
@@ -160,7 +163,7 @@ test("uses the active UI locale instead of re-detecting browser storage", async 
   localStorage.setItem("ocx-lang", "en");
   setActiveLocale("ko");
 
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const username = form.elements.namedItem("username") as HTMLInputElement;
@@ -181,7 +184,7 @@ test("uses the active UI locale instead of re-detecting browser storage", async 
  * "hidden" and "empty" cannot drift apart.
  */
 test("the validation alert is hidden and empty until a token is actually rejected", async () => {
-  const pending = promptForAdminToken(async () => "rejected");
+  const pending = promptForAdminToken(async () => "rejected", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const alert = dialog.querySelector<HTMLElement>('[role="alert"]')!;
@@ -229,7 +232,7 @@ test("notice display rules are scoped so a hidden notice cannot paint", async ()
 
 /* #3353 — a bare password box explained nothing. */
 test("the dialog explains the credential and links the setup guide", async () => {
-  const pending = promptForAdminToken(async () => "accepted");
+  const pending = promptForAdminToken(async () => "accepted", SCOPE);
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
 
   const link = dialog.querySelector<HTMLAnchorElement>('a[target="_blank"]')!;

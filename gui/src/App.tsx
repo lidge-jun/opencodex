@@ -32,7 +32,7 @@ import { hostOs, isDesktopShell, isExternalLink, openDesktopUpdatePage } from ".
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
 import { watchMacTitlebarMetrics, windowChromeHandlers } from "./lib/window-chrome";
-import { clearRememberedAdminToken, getRememberedAdminToken, REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT } from "./admin-token-dialog";
+import { clearAllRememberedAdminTokens, hasAnyRememberedAdminToken, REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT } from "./admin-token-dialog";
 
 type Theme = "light" | "dark" | "system";
 
@@ -143,7 +143,7 @@ export default function App() {
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
   const [remoteWorkspaceAvailableState, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
-  const [rememberedAdminTokenPresent, setRememberedAdminTokenPresent] = useState(() => Boolean(getRememberedAdminToken()));
+  const [rememberedAdminTokenPresent, setRememberedAdminTokenPresent] = useState(() => hasAnyRememberedAdminToken());
   /*
    * Results from the two sidebar orbs used to be `alert()`, which the app's webview draws
    * nowhere, so a refused stop and a completed one looked identical: nothing happened.
@@ -168,7 +168,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const syncRememberedAdminToken = () => setRememberedAdminTokenPresent(Boolean(getRememberedAdminToken()));
+    const syncRememberedAdminToken = () => setRememberedAdminTokenPresent(hasAnyRememberedAdminToken());
     window.addEventListener(REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT, syncRememberedAdminToken);
     window.addEventListener("storage", syncRememberedAdminToken);
     return () => {
@@ -372,7 +372,7 @@ export default function App() {
   };
 
   const handleForgetRememberedAdminToken = () => {
-    clearRememberedAdminToken();
+    clearAllRememberedAdminTokens();
     setRememberedAdminTokenPresent(false);
   };
 

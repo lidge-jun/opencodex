@@ -4,6 +4,7 @@ import { configureApiTargets, fetchAudioUpload, installApiAuthFetch, installApiS
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
+const STANDALONE_SCOPE_KEY = "opencodex.remembered-admin-token:http://localhost|same-origin";
 const globals = ["document", "window", "navigator", "sessionStorage", "localStorage", "fetch"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -136,7 +137,7 @@ test("prompted API tokens stay memory-only and are not written to sessionStorage
 
 test("remembered token is verified and used silently without prompting", async () => {
   declareManagementAuthRequired();
-  localStorage.setItem("opencodex.remembered-admin-token", "remembered-token");
+  localStorage.setItem(STANDALONE_SCOPE_KEY, "remembered-token");
   let promptCalls = 0;
   window.prompt = () => { promptCalls += 1; return "prompt-token"; };
 
@@ -153,12 +154,12 @@ test("remembered token is verified and used silently without prompting", async (
   expect(res.status).toBe(200);
   expect(promptCalls).toBe(0);
   expect(seenTokens).toContain("remembered-token");
-  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("remembered-token");
+  expect(localStorage.getItem(STANDALONE_SCOPE_KEY)).toBe("remembered-token");
 });
 
 test("rejected remembered token is cleared and the prompt takes over", async () => {
   declareManagementAuthRequired();
-  localStorage.setItem("opencodex.remembered-admin-token", "stale-token");
+  localStorage.setItem(STANDALONE_SCOPE_KEY, "stale-token");
   let promptCalls = 0;
   window.prompt = () => { promptCalls += 1; return "fresh-token"; };
 
@@ -172,12 +173,12 @@ test("rejected remembered token is cleared and the prompt takes over", async () 
   const res = await fetch("/api/config");
   expect(res.status).toBe(200);
   expect(promptCalls).toBe(1);
-  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+  expect(localStorage.getItem(STANDALONE_SCOPE_KEY)).toBeNull();
 });
 
 test("unavailable remembered token survives a transient server error", async () => {
   declareManagementAuthRequired();
-  localStorage.setItem("opencodex.remembered-admin-token", "good-token");
+  localStorage.setItem(STANDALONE_SCOPE_KEY, "good-token");
   let promptCalls = 0;
   window.prompt = () => { promptCalls += 1; return null; };
 
@@ -194,12 +195,12 @@ test("unavailable remembered token survives a transient server error", async () 
 
   await fetch("/api/config");
   expect(promptCalls).toBe(1); // fell through to prompt
-  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("good-token"); // NOT cleared
+  expect(localStorage.getItem(STANDALONE_SCOPE_KEY)).toBe("good-token"); // NOT cleared
 });
 
 test("remembered token that caused the current 401 is cleared immediately", async () => {
   declareManagementAuthRequired();
-  localStorage.setItem("opencodex.remembered-admin-token", "revoked-token");
+  localStorage.setItem(STANDALONE_SCOPE_KEY, "revoked-token");
   let promptCalls = 0;
   window.prompt = () => { promptCalls += 1; return "fresh-token"; };
 
@@ -213,7 +214,102 @@ test("remembered token that caused the current 401 is cleared immediately", asyn
   const res = await fetch("/api/config");
   expect(res.status).toBe(200);
   expect(promptCalls).toBe(1);
-  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+  expect(localStorage.getItem(STANDALONE_SCOPE_KEY)).toBeNull();
+});
+
+test("a legacy unscoped remembered token is never sent or migrated", async () => {
+  declareManagementAuthRequired();
+  localStorage.setItem("opencodex.remembered-admin-token", "legacy-unscoped-token");
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return null; };
+
+  const seenTokens: Array<string | null> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seenTokens.push(new Headers(init?.headers).get("X-OpenCodex-API-Key"));
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  await fetch("/api/config");
+  expect(promptCalls).toBe(1); // prompted instead of reusing the unscoped value
+  expect(seenTokens).not.toContain("legacy-unscoped-token");
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("legacy-unscoped-token"); // untouched, unread
+  expect(Object.keys(localStorage).some(key => key.startsWith("opencodex.remembered-admin-token:"))).toBe(false); // not migrated
+});
+
+test("a hub remembered token never reaches the machine plane over direct transport", async () => {
+  declareManagementAuthRequired();
+  localStorage.setItem("opencodex.remembered-admin-token:https://hub.example.test|direct", "hub-token");
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return null; };
+
+  const seen: Array<{ url: string; token: string | null }> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    seen.push({ url: url.href, token });
+    if (url.origin === "https://hub.example.test" && token === "hub-token") return new Response("{}", { status: 200 });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+  const status: MachineStatusV1 = {
+    mode: "client", connected: true, machineBase: "http://localhost",
+    sharedBase: "https://hub.example.test", sharedServerOrigin: "https://hub.example.test",
+    managementTransport: "direct", apiKeyId: "client-key-a", protocolVersion: 1,
+    connectedAt: "2026-09-28T00:00:00Z",
+  };
+  configureApiTargets(targetsFromMachineStatus("", status));
+
+  const hub = await fetch("https://hub.example.test/api/config");
+  expect(hub.status).toBe(200); // positive control: the hub credential still works on the hub
+  const machine = await fetch("/api/machine/status");
+  expect(machine.status).toBe(401);
+  expect(promptCalls).toBe(1); // machine plane prompted instead of borrowing the hub credential
+  expect(seen.some(request => request.token === "hub-token")).toBe(true);
+  for (const request of seen) {
+    if (request.token === "hub-token") expect(request.url.startsWith("https://hub.example.test/")).toBe(true);
+  }
+});
+
+test("relay transport keeps machine and hub remembered tokens confined to their planes", async () => {
+  declareManagementAuthRequired();
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return null; };
+
+  const seen: Array<{ path: string; token: string | null }> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    const token = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    seen.push({ path: url.pathname, token });
+    if (url.pathname.startsWith("/api/machine/hub-relay/") && token === "hub-relay-token") return new Response("{}", { status: 200 });
+    if (token === "machine-token") return new Response("{}", { status: 200 });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+  const relayStatus: MachineStatusV1 = {
+    mode: "client", connected: true, machineBase: "http://localhost",
+    sharedBase: "http://localhost/api/machine/hub-relay", sharedServerOrigin: "https://hub.example.test",
+    managementTransport: "relay", apiKeyId: "client-key-a", protocolVersion: 1,
+    connectedAt: "2026-09-28T00:00:00Z",
+  };
+  configureApiTargets(targetsFromMachineStatus("", relayStatus));
+
+  localStorage.setItem("opencodex.remembered-admin-token:https://hub.example.test|relay", "hub-relay-token");
+  const hub = await fetch("/api/machine/hub-relay/api/config");
+  expect(hub.status).toBe(200);
+  expect(promptCalls).toBe(0);
+
+  localStorage.setItem("opencodex.remembered-admin-token:http://localhost|same-origin", "machine-token");
+  const machine = await fetch("/api/machine/status");
+  expect(machine.status).toBe(200);
+  expect(promptCalls).toBe(0);
+
+  for (const request of seen) {
+    if (request.token === "machine-token") expect(request.path.startsWith("/api/machine/hub-relay/")).toBe(false);
+    if (request.token === "hub-relay-token") expect(request.path.startsWith("/api/machine/hub-relay/")).toBe(true);
+  }
+  expect(seen.some(request => request.token === "machine-token")).toBe(true);
+  expect(seen.some(request => request.token === "hub-relay-token")).toBe(true);
 });
 
 test("validates prompted tokens with a safe read before retrying the failed request", async () => {

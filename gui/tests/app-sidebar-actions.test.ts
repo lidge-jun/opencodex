@@ -72,7 +72,7 @@ test("remembered admin tokens can be forgotten from both chrome surfaces", () =>
     expect(surface).toContain("connection.forgetRememberedAdminToken");
     expect(surface).toContain("IconTrash");
   }
-  expect(src).toContain("clearRememberedAdminToken()");
+  expect(src).toContain("clearAllRememberedAdminTokens()");
 });
 
 test("forget remains reachable after remote logout", () => {

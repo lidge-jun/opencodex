@@ -7,7 +7,7 @@ const ADMIN_TOKEN_DOCS_URL = "https://opencodex.me/guides/web-dashboard/#finding
 export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
 export type AdminTokenVerifier = (token: string) => Promise<AdminTokenValidation>;
 
-const REMEMBERED_ADMIN_TOKEN_KEY = "opencodex.remembered-admin-token";
+const REMEMBERED_ADMIN_TOKEN_KEY_PREFIX = "opencodex.remembered-admin-token";
 export const REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT = "opencodex-remembered-admin-token-changed";
 
 function notifyRememberedAdminTokenChanged(): void {
@@ -20,12 +20,50 @@ function notifyRememberedAdminTokenChanged(): void {
  * password AutoFill or save. Readable by any script on this origin; the
  * dashboard bundles no third-party scripts.
  */
-export function getRememberedAdminToken(): string | null {
-  try { return localStorage.getItem(REMEMBERED_ADMIN_TOKEN_KEY); } catch { return null; }
+/**
+ * Canonical identity of a management target: the server the credential belongs to,
+ * plus the transport it was submitted over. A token remembered for one target is
+ * never read while resolving another, so it can never be transmitted to a different
+ * server (the #4649 credential-storage review).
+ */
+export function rememberedAdminTokenScope(target: { serverOrigin: string; transport: string }): string {
+  return `${target.serverOrigin}|${target.transport}`;
 }
 
-export function clearRememberedAdminToken(): void {
-  try { localStorage.removeItem(REMEMBERED_ADMIN_TOKEN_KEY); } catch { /* storage may be disabled */ }
+export function rememberedAdminTokenKey(scope: string): string {
+  return `${REMEMBERED_ADMIN_TOKEN_KEY_PREFIX}:${scope}`;
+}
+
+// The legacy unscoped key (exactly REMEMBERED_ADMIN_TOKEN_KEY_PREFIX) is never read
+// or migrated: an upgrade must not silently re-target a credential the user saved
+// before targets were distinguished. "Forget remembered admin token" removes it.
+export function getRememberedAdminToken(scope: string): string | null {
+  try { return localStorage.getItem(rememberedAdminTokenKey(scope)); } catch { return null; }
+}
+
+export function clearRememberedAdminToken(scope: string): void {
+  try { localStorage.removeItem(rememberedAdminTokenKey(scope)); } catch { /* storage may be disabled */ }
+  notifyRememberedAdminTokenChanged();
+}
+
+export function hasAnyRememberedAdminToken(): boolean {
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      if (localStorage.key(i)?.startsWith(REMEMBERED_ADMIN_TOKEN_KEY_PREFIX)) return true;
+    }
+  } catch { /* storage may be disabled */ }
+  return false;
+}
+
+export function clearAllRememberedAdminTokens(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(REMEMBERED_ADMIN_TOKEN_KEY_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch { /* storage may be disabled */ }
   notifyRememberedAdminTokenChanged();
 }
 
@@ -37,6 +75,7 @@ export function clearRememberedAdminToken(): void {
  */
 export function promptForAdminToken(
   verifyToken: AdminTokenVerifier,
+  scope: string,
   locale: Locale = getActiveLocale(),
 ): Promise<string | null> {
   const messages = DICTS[locale];
@@ -121,7 +160,7 @@ export function promptForAdminToken(
     remember.id = `${ADMIN_TOKEN_DIALOG_ID}-remember`;
     remember.name = "remember";
     remember.type = "checkbox";
-    if (getRememberedAdminToken()) remember.checked = true;
+    if (getRememberedAdminToken(scope)) remember.checked = true;
     rememberField.append(remember, document.createTextNode(messages["auth.adminTokenRemember"]));
 
     const validationError = document.createElement("div");
@@ -181,10 +220,10 @@ export function promptForAdminToken(
         if (settled) return;
         if (result === "accepted") {
           if (remember.checked) {
-            try { localStorage.setItem(REMEMBERED_ADMIN_TOKEN_KEY, token); } catch { /* storage may be disabled */ }
+            try { localStorage.setItem(rememberedAdminTokenKey(scope), token); } catch { /* storage may be disabled */ }
             notifyRememberedAdminTokenChanged();
           } else {
-            clearRememberedAdminToken();
+            clearRememberedAdminToken(scope);
           }
           finish(token);
           return;
