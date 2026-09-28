@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { routeModel } from "../../src/router";
+import { codexRouteCredentialDomainHeaders } from "../../src/server/responses/core-auth";
+import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
 import type { OcxConfig } from "../../src/types";
 
 function config(redirects: Record<string, string>): OcxConfig {
@@ -31,6 +33,7 @@ describe("blocked-model redirect compatibility and provider changes", () => {
     expect(routed.modelId).toBe("m2");
     expect(routed.routeReason).toBe("blocked-model-redirect");
     expect(routed.routeDecision?.selected.model).toBe("m2");
+    expect(routed.credentialDomainRewrite).toBeUndefined();
   });
 
   test("legacy slash target remains a raw upstream model when its prefix is not a configured provider", () => {
@@ -50,6 +53,23 @@ describe("blocked-model redirect compatibility and provider changes", () => {
     expect(routed).toMatchObject({ providerName: "google", modelId: "g1", routeReason: "blocked-model-redirect" });
     expect(routed.routeDecision?.selected).toMatchObject({ provider: "google", model: "g1", reason: "blocked-model-redirect" });
     expect(routed.routeDecision?.requestedModel).toBe("openai/m1");
+    expect(routed.credentialDomainRewrite).toBe(true);
+  });
+
+  test("a cross-provider redirect strips caller credentials meant for the source route", () => {
+    const req = new Request("http://127.0.0.1/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer source-route-token", "chatgpt-account-id": "acct-source", "x-extra": "kept" },
+    });
+    const options = { admission: { kind: "environment", source: "dedicated" } } as HandleResponsesOptions;
+    const redirected = routeModel(config({ m1: "google/g1" }), "openai/m1");
+    const scoped = codexRouteCredentialDomainHeaders(req, redirected, options, false);
+    expect(scoped.get("authorization")).toBeNull();
+    expect(scoped.get("chatgpt-account-id")).toBeNull();
+    expect(scoped.get("x-extra")).toBe("kept");
+    const legacy = routeModel(config({ m1: "m2" }), "openai/m1");
+    expect(codexRouteCredentialDomainHeaders(req, legacy, options, false).get("authorization"))
+      .toBe("Bearer source-route-token");
   });
 
   test("an explicit qualified cross-provider key takes precedence over a bare legacy mapping", () => {

@@ -81,7 +81,8 @@ A target explicitly naming a **different configured provider** (for example,
 other qualified keys have no effect. Cross-provider redirects can chain through resolved aliases,
 with one shared five-edge limit and cycle detection. A pinned account selector never leaves its
 account: a cross-provider target fails closed, whether its key is bare or account-qualified.
-The destination uses its own credentials and quota, and never inherits source account fields.
+The destination uses its own credentials and quota, and never inherits source account fields;
+a caller `Authorization` header addressed to the source route is stripped, as for combo and policy routes.
 Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
 ```json

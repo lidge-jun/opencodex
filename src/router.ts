@@ -89,6 +89,12 @@ export interface RouteResult {
   combo?: ComboPick;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /**
+   * Set when a blocked-model redirect moved the request to a different
+   * provider. Caller credentials addressed to the source route must not follow
+   * it, exactly as for combo and policy routes.
+   */
+  credentialDomainRewrite?: true;
 }
 
 export function captureRouteStaticPolicy(
@@ -598,7 +604,7 @@ function routeResult(
     redirectState.visited.add(source);
     redirectState.edges += 1;
     const targetRoute = routeModelInternal(config, crossTarget, true, undefined, false, false, redirectState);
-    return { ...targetRoute, routeReason: "blocked-model-redirect" };
+    return { ...targetRoute, routeReason: "blocked-model-redirect", credentialDomainRewrite: true };
   }
   // Existing bare mappings remain one post-resolution, same-provider substitution.
   const redirected = bare;
