@@ -683,7 +683,9 @@ describe("acceptsPickerAuthority", () => {
     // SAN + serverAuth would let the trust anchor itself terminate an off-host handshake.
     ["a subjectAltName for an off-host name", [...standardProfile(), extension([0x55, 0x1d, 0x11], false, seq(dnsName("example.com")))]],
     ["a serverAuth extended key usage", [...standardProfile(), extension([0x55, 0x1d, 0x25], false, seq(oid(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01)))]],
-    ["a critical key identifier", [...standardProfile(), extension([0x55, 0x1d, 0x0e], true, octet(Buffer.alloc(20)))]],
+    // Swapping the emitted non-critical SKID for a critical one keeps a single SKID, so the
+    // refusal must come from the criticality mismatch, not from a duplicate-OID rejection.
+    ["a critical key identifier", [...standardProfile().slice(0, 2), extension([0x55, 0x1d, 0x0e], true, octet(Buffer.alloc(20))), pickerNameConstraints()]],
   ])("rejects a signed root with %s", (_name, extensions) => {
     expect(acceptsPickerAuthority(forgeAuthority(extensions))).toBe(false);
   });
