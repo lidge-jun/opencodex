@@ -19,6 +19,29 @@ const stopped: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const stop of stopped.splice(0)) await stop(); resetOptionalShutdownHooksForTests(); });
 
 describe("bounded compatibility usage controller", () => {
+  for (const [label, replacement] of [
+    ["available", { ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } }],
+    ["protected", { ...usage, spend_control: { reached: true } }],
+  ] as const) test(`${label} usage ends the trial and later exhaustion cannot silently rearm it`, async () => {
+    const ctl = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000);
+    await ctl.rewriteJson(frame(), exchange); expect((await ctl.activate(consent)).accepted).toBe(true);
+    expect(await ctl.rewriteJson(frame(replacement), exchange)).toBeNull();
+    expect(ctl.snapshot().mode).toBe("observe"); expect(ctl.snapshot().outputs).toBe(0);
+    expect(await ctl.rewriteJson(frame(), exchange)).toBeNull();
+    expect(ctl.snapshot().mode).toBe("observe");
+    expect((await ctl.activate(consent)).accepted).toBe(true);
+  });
+  test("recovery supersedes an exhausted response waiting for its build check", async () => {
+    let waiting = false, entered!: () => void, release!: (value: boolean) => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const ctl = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000, 180000,
+      () => waiting ? (entered(), new Promise<boolean>(resolve => { release = resolve; })) : true);
+    await ctl.rewriteJson(frame(), exchange); await ctl.activate(consent);
+    waiting = true; const pending = ctl.rewriteJson(frame(), exchange); await started;
+    await ctl.rewriteJson(frame({ ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } }), exchange);
+    release(true); expect(await pending).toBeNull(); expect(ctl.snapshot().mode).toBe("observe");
+    expect(ctl.snapshot().outputs).toBe(0);
+  });
   test("returning to observation supersedes activation during its asynchronous context check", async () => {
     let release!: (value: boolean) => void, entered!: () => void;
     const waiting = new Promise<void>(resolve => { entered = resolve; });

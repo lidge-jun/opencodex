@@ -748,6 +748,10 @@ at the response layer. It changes two account-UI gate flags, not usage percentag
 spending restrictions or server limits. The usage response does not identify the selected model:
 this trial cannot promise an effect limited to external models. An accepted activation or produced
 response does not prove the app accepted the new snapshot or enabled its composer.
+An available or protected original usage record returns the controller to Observe and
+invalidates pending corrections. Later exhaustion requires another explicit Apply request.
+Changed root TOML or configured model/provider/fallback routing invalidates the runtime's
+observation context until stop/start; reverting those settings does not reactivate it.
 
 Observe disarms correction and refreshes only validated usage streams. Stop closes this runtime's
 listeners and connections; the PAC includes `DIRECT` fallback. The certificate stays installed for

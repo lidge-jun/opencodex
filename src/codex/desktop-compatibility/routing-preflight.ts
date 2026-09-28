@@ -1,8 +1,22 @@
 import { lstatSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { OcxConfig } from "../../types";
 import { nativeCompatibilityOwner, type NativeCompatibilityOwner } from "./routing-binding";
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+// These are routing inputs, not proof of a conversation's final provider. Their
+// changes revoke the observed context even if the loopback URL stays the same.
+const ROUTING_KEYS = ["providers", "defaultProvider", "defaultModelAliases", "customModels", "combos", "routingProfiles",
+  "subagentModelFallback", "subagentModelFallbackByModel", "injectionModel", "compactionRouting", "compactionRecovery",
+  "blockedModelRedirects", "shadowCallIntercept", "protocols"] as const satisfies readonly (keyof OcxConfig)[];
+function routingDigest(text: string, owner: NativeCompatibilityOwner): string {
+  const projection = Object.fromEntries(ROUTING_KEYS.map(key => [key, owner.config[key]]));
+  const serialized = JSON.stringify([owner.port, owner.loopbackPort, projection], (_key, value) =>
+    record(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+  if (Buffer.byteLength(serialized) > 1048576) throw new Error("Routing snapshot too large");
+  return createHash("sha256").update(text).update("\0").update(serialized).digest("hex");
+}
 /** Validates the effective root/profile routing only; it does not prove a thread's selected provider. */
 export function matchesNativeCompatibilityRouting(text: string, owner: NativeCompatibilityOwner | null): boolean {
   if (!owner || owner.config.codexDesktopAuthless === true || owner.config.runtimeRole === "client") return false;
@@ -26,13 +40,20 @@ export function matchesNativeCompatibilityRouting(text: string, owner: NativeCom
 }
 export function createNativeRoutingVerifier(codexHome: string, readOwner = nativeCompatibilityOwner) {
   const path = join(codexHome, "config.toml");
+  let baseline: string | undefined, invalidated = false;
   return () => {
+    if (invalidated) return false;
     try {
       // Process-level overrides could put the app on another transport despite its TOML.
-      if (["CODEX_API_BASE_URL", "CODEX_APP_SERVER_WS_URL", "CODEX_ELECTRON_USER_DATA_PATH", "ELECTRON_RUN_AS_NODE"].some(key => process.env[key]?.trim())) return false;
+      if (["CODEX_API_BASE_URL", "CODEX_APP_SERVER_WS_URL", "CODEX_ELECTRON_USER_DATA_PATH", "ELECTRON_RUN_AS_NODE"].some(key => process.env[key]?.trim())) { invalidated = true; return false; }
       const stat = lstatSync(path);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576) return false;
-      return matchesNativeCompatibilityRouting(readFileSync(path, "utf8"), readOwner());
-    } catch { return false; }
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576) { invalidated = true; return false; }
+      const text = readFileSync(path, "utf8"), owner = readOwner();
+      if (!owner || !matchesNativeCompatibilityRouting(text, owner)) { invalidated = true; return false; }
+      const current = routingDigest(text, owner);
+      if (baseline !== undefined && current !== baseline) { invalidated = true; return false; }
+      baseline ??= current;
+      return true;
+    } catch { invalidated = true; return false; }
   };
 }

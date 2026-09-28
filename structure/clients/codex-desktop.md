@@ -110,6 +110,9 @@ If both publication and temporary-file cleanup fail, the cleanup-required error 
 three-minute, explicitly confirmed account-UI trial after a fresh supported exhaustion
 snapshot. They cannot assert selected-provider isolation. Two usage gate booleans may
 change; quota windows, credits, spending limits and other responses remain original.
+An original available or protected usage record disarms Apply and advances its generation.
+Later exhaustion does not resume that trial; it requires another explicit activation.
+Pending response checks from the previous generation cannot emit a correction after recovery.
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
@@ -121,6 +124,10 @@ Response production is reported separately from app-cache or UI confirmation.
 unregisters only its matching owner. `routing-preflight.ts` verifies bounded native root
 TOML and any selected root profile against those ports, rejecting foreign providers,
 remote destinations, authless mode, unknown profiles and process-level app overrides.
+The verifier binds the root TOML, actual listener ports and the configured provider/model/fallback
+routing inputs to its first valid observation. A change or failed check invalidates that runtime
+even if the old settings return; stop/start creates a fresh observation context. Unrelated
+OpenCodex preferences and object-key order do not invalidate the routing snapshot.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
 Each record that would be corrected checks routing and the assessed installed build asynchronously,
 then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares

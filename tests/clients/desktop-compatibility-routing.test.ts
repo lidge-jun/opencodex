@@ -37,3 +37,34 @@ test("read-only verifier rereads changed config and owner detach cannot clear a 
   } finally { detachSecond(); }
   expect(nativeCompatibilityOwner()).toBeNull();
 });
+
+test("model and fallback edits revoke routing until a new observation context is created", () => {
+  const changes = [
+    { defaultProvider: "openai" }, { subagentModelFallback: ["openai/gpt-6-luna"] },
+    { subagentModelFallbackByModel: { "external/model": ["openai/gpt-6-luna"] } },
+    { compactionRecovery: { enabled: true, model: "openai/gpt-6-luna" } },
+    { blockedModelRedirects: { "external/model": "openai/gpt-6-luna" } },
+    { providers: { external: { baseUrl: "https://changed.example.test/v1" } } },
+    { combos: {} }, { routingProfiles: {} },
+  ];
+  const root = mkdtempSync(join(tmpdir(), "ocx-desktop-route-change-")); roots.push(root);
+  writeFileSync(join(root, "config.toml"), text);
+  for (const change of changes) {
+    const live = { ...owner, config: { ...owner.config } };
+    const verify = createNativeRoutingVerifier(root, () => live); expect(verify()).toBe(true);
+    Object.assign(live.config, change); expect(verify()).toBe(false);
+    live.config = { ...owner.config }; expect(verify()).toBe(false);
+    expect(createNativeRoutingVerifier(root, () => live)()).toBe(true);
+  }
+});
+
+test("root model edits revoke context but unrelated preference and object order do not", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-desktop-route-baseline-")); roots.push(root);
+  const path = join(root, "config.toml"); writeFileSync(path, text);
+  const live = { ...owner, config: { ...owner.config, blockedModelRedirects: { a: "external/a", b: "external/b" } } };
+  const verify = createNativeRoutingVerifier(root, () => live); expect(verify()).toBe(true);
+  live.config.blockedModelRedirects = { b: "external/b", a: "external/a" };
+  Object.assign(live.config, { desktopCompatibility: { startOnProxyStart: true } }); expect(verify()).toBe(true);
+  writeFileSync(path, text + 'model = "external/other"\n'); expect(verify()).toBe(false);
+  writeFileSync(path, text); expect(verify()).toBe(false);
+});

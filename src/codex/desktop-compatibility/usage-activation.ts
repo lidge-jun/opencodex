@@ -21,7 +21,14 @@ export class UsageActivation {
   }
   observe(binding:string,kind:Observation) {
     if(binding!==this.binding)return false;
-    this.latest={kind,at:this.clock()};return true;
+    this.latest={kind,at:this.clock()};
+    // A recovered or protected account must not silently re-enter a previous trial
+    // if a later snapshot becomes exhausted again. A new trial requires consent.
+    if(this.mode==='apply'&&kind!=='exhausted'){
+      this.mode='observe';this.phase=kind==='available'?'usage-recovered':'protected-observation';
+      this.startedAt=null;this.outputs=0;++this.generation;
+    }
+    return true;
   }
   private async reset(phase:string) {
     this.mode='observe';this.phase=phase;this.startedAt=null;this.outputs=0;++this.generation;

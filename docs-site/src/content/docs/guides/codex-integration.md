@@ -914,6 +914,10 @@ that every Codex build or exhausted-account state can recover its composer.
    Actual usage, credits, spending restrictions and server limits remain unchanged. A produced
    response alone does not establish that the composer recovered.
 
+An original response showing available usage or a protected state ends the trial immediately.
+If eligible exhaustion appears again, another explicit trial is required; the earlier consent
+does not silently reactivate correction.
+
 **Return to observation** disarms correction. **Stop service** closes its connections and leaves
 the certificate for reuse; active connections may be interrupted. For renewal or trust removal,
 stop the service and close Codex first. Renewal prepares a new untrusted certificate; review the
@@ -944,6 +948,11 @@ an idle trial to observation. Original responses and other app traffic continue 
 Native login-file replacement or token rotation also invalidates the trial, even when the
 same account returns. Stop and start observation to bind the current login before another
 explicit trial; old responses cannot authorize the replacement session.
+Changes to the root Codex config, provider configuration, model aliases, routing profiles,
+fallback or compaction routes also invalidate the observation context. Restoring the previous
+settings does not restore its consent: stop and start observation, then confirm a new trial
+when eligible. This detects changes to those configured routes, not which model a conversation
+actually selects; an unchanged mixed-provider configuration is not proof of provider isolation.
 
 After certificate preparation and a successful manual start, enable **Resume observation when
 OpenCodex starts** in the same panel. The optional OpenCodex configuration
