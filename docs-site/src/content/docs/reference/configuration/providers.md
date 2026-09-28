@@ -955,9 +955,12 @@ That sibling request keeps the adapter's ordinary transient retries, and every p
 against the request's existing send budget. A transient refresh failure keeps the sanitized authentication error.
 Paused, reauthentication-required and cooling accounts are skipped;
 the failed credential gets a 60-second in-process cooldown only while its generation is current.
+The same main dispatch may also switch once on a 403 when Google's bounded error normalization
+finds a complete structured `VALIDATION_REQUIRED` reason. The 401 and 403 paths share one sibling
+attempt per request; an unrelated or incomplete 403 keeps its original error. A rejected sibling,
+cancellation or exhausted send budget does not cause another upstream send.
 Continuations, native Responses passthrough, image and web-search sidecars, and output already sent
-to the client do not use this 401 rotation. A structured validation-required 403 receives a clearer
-error message but does not rotate accounts.
+to the client do not use this rotation.
 
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter
 events rather than an HTTP status, and the standalone Antigravity image endpoint has its own
