@@ -15,7 +15,8 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 
 ### Codex Pool low-quota protection
 
-`codexPool.lowQuotaProtection` is optional. Its full shape is:
+`codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main
+account keeps its separate 98% hard lock. The optional shape is:
 
 ```json
 {"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true},"windows":{"short":true,"weekly":true}}}}
@@ -25,15 +26,17 @@ Absence or `enabled: false` disables it. `threshold` is a finite inclusive perce
 through 100. An enabled policy needs at least one true action and one true window. A selected
 5-hour or weekly window triggers at `usage >= threshold`; either selected window is enough.
 Only fresh accepted observations qualify: there is no extra polling, and credits-only,
-cached, expired, monthly, custom-window-only, or raw out-of-range usage observations are ignored for this policy; display bars may still clamp invalid upstream percentages. This policy is
-independent of proactive account switching and the main-account 98% hard lock.
+cached, expired, monthly, custom-window-only, and raw out-of-range usage observations are ignored
+for this policy. Display bars may still clamp invalid upstream percentages. The policy is independent
+of proactive account switching.
 
 With `pause`, the account leaves Pool selection in memory before the next request. The server
 coalesces a config save after the observation turn and retries failed saves for a bounded time.
-Normal shutdown waits briefly for pending saves. A failed save is visible in the event history;
-a restart before a successful save cannot preserve the pause. In-flight requests keep their
-captured account. Manual resume suppresses repause across all currently high windows for that account until a
-below-threshold reading or a new reset boundary re-arms a window. A reset never resumes an account automatically.
+Normal shutdown waits briefly for pending saves. A timed-out save that is already running remains
+`pending` until it actually succeeds or fails; a queued save is cancelled. A failed save is visible
+in the event history. A restart before a successful save cannot preserve the pause. In-flight requests keep their
+captured account. Manual resume suppresses repause across all currently high windows for that
+account until a below-threshold reading or a new reset boundary re-arms a window. A reset never resumes an account automatically.
 
 With `notify`, the server writes a local log line with window and percentage but no account id
 and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only

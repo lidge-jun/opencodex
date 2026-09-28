@@ -8,6 +8,7 @@ import { observeCodexLowQuota, registerLowQuotaObserver } from "../../src/codex/
 import { createLowQuotaEventLedger } from "../../src/codex/low-quota-events";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../../src/codex/low-quota-protection";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
@@ -204,6 +205,16 @@ describe("low quota protection", () => {
     }
   });
 
+  test("main-account observations never enter pool low-quota protection", () => {
+    const config = configWith(protection({ actions: { pause: true, notify: true } }));
+    let writes = 0;
+    const registration = register(config, { persist: () => { writes++; } });
+    observeCodexLowQuota(MAIN_CODEX_ACCOUNT_ID, { shortPercent: 95, weeklyPercent: 95 });
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    expect(registration.listEvents()).toEqual([]);
+    expect(writes).toBe(0);
+  });
+
   test("rejects unknown low-quota policy, action, and window keys", () => {
     const policy = protection();
     expect(validateConfigCandidate(configWith(policy)).ok).toBe(true);
@@ -346,11 +357,28 @@ describe("low quota protection", () => {
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
     await registration.flush();
     expect(writes).toBe(1);
-    expect(registration.listEvents(1)[0]?.status).toBe("failed");
+    expect(registration.listEvents(1)[0]?.status).toBe("pending");
     resolveSave?.();
+    const deadline = Date.now() + 1_000;
+    while (registration.listEvents(1)[0]?.status !== "succeeded" && Date.now() < deadline) {
+      await Bun.sleep(1);
+    }
+    expect(registration.listEvents(1)[0]?.status).toBe("succeeded");
+    expect(registration.listEvents(100).filter(event => event.status === "cancelled")).toHaveLength(0);
     observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 90 });
     await new Promise(resolve => setTimeout(resolve, 300));
     expect(writes).toBe(1);
+  });
+
+  test("closing before the queued save starts cancels it without a config write", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    let writes = 0;
+    const registration = register(config, { persist: () => { writes++; } });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    registration();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(writes).toBe(0);
+    expect(registration.listEvents(1)[0]?.status).toBe("cancelled");
   });
 
   test("a failed deferred save retries and publishes durable status", async () => {
@@ -367,7 +395,7 @@ describe("low quota protection", () => {
     await registration.flush();
     expect(writes).toBe(2);
     expect(registration.listEvents(100).map(event => event.status)).toContain("failed");
-    expect(registration.listEvents(1)[0]?.status).toBe("delivered");
+    expect(registration.listEvents(1)[0]?.status).toBe("succeeded");
   });
 
   test("fan-out isolates throwing observers and independent server configs", async () => {
@@ -396,7 +424,7 @@ describe("low quota protection", () => {
     const ledger = createLowQuotaEventLedger();
     for (let i = 0; i < 120; i++) {
       ledger.publish({ accountId: `account-${i}`, window: "weekly", percentUsed: 80,
-        resetAt: null, timestamp: i, status: "delivered", delivery: "notice" });
+        resetAt: null, timestamp: i, status: "succeeded", delivery: "pause-save" });
     }
     const events = ledger.list(999);
     expect(events).toHaveLength(100);
@@ -413,7 +441,7 @@ describe("low quota protection", () => {
     expect(writes).toBe(0);
     await registration.flush();
     expect(writes).toBe(1);
-    expect(new Set(registration.listEvents(100).filter(event => event.status === "delivered")
+    expect(new Set(registration.listEvents(100).filter(event => event.status === "succeeded")
       .map(event => event.accountId))).toEqual(new Set([ACCOUNT_A, ACCOUNT_B]));
   });
 

@@ -683,7 +683,7 @@ manager. Its routes are:
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Read cached quota state by account | — |
-| `GET /api/codex-auth/low-quota-events?limit=20` | Read only this server’s last 0–100 low-quota log/notice and pause-save events (default 20); includes account id and status (`logged` for the default log-only alert; `delivered` for a successful injected notice sink or pause save) | 400 invalid limit; management authentication required |
+| `GET /api/codex-auth/low-quota-events?limit=20` | Read only this server’s last 0–100 low-quota log/notice and pause-save events (default 20); includes account id and status (`logged` for the default log-only alert; `delivered` for a successful injected notice sink; `succeeded` for a completed pause save) | 400 invalid limit; management authentication required |
 | `GET /api/codex-auth/reset-credits` | Inspect reset-credit eligibility for an account | 400 missing account id; upstream status passthrough; 500 lookup failure |
 | `POST /api/codex-auth/reset-credits/consume` | Consume an eligible reset credit. Optional `operationId` (UUIDv4) makes the redemption idempotent: the same id replays one durable outcome instead of spending a second credit. | 400 missing account id or invalid `operationId`; 409 `identity_mismatch` when the id belongs to another account; upstream status passthrough; 503 `server_busy`, `capacity`, or `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |

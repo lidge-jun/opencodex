@@ -324,7 +324,6 @@ export function setAccountQuotaFromParsed(
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
     if (!isMain && policyQuota) observeCodexLowQuota(accountId, policyQuota);
-    else if (mainWriter && policyQuota) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
 }

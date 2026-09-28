@@ -911,7 +911,8 @@ it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
 ## Routed models during Codex reserve mode
 
-Codex Pool can optionally protect accounts at a selected 5-hour or weekly usage threshold.
+Codex Pool can optionally protect stored pool accounts at a selected 5-hour or weekly usage
+threshold. The Desktop/main account keeps its separate 98% hard lock.
 Set `codexPool.lowQuotaProtection` in configuration to pause accounts, record a log-and-API
 alert, or both; see [routing configuration](/reference/configuration/routing/#codex-pool-low-quota-protection).
 A pause takes effect for the next selection immediately, while saving it to disk is deferred.

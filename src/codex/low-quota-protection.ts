@@ -1,5 +1,5 @@
 import type { OcxConfig } from "../types";
-import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "./account-id";
+import { isSelectableCodexPoolAccount } from "./account-id";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
 import { createLowQuotaEventLedger, type LowQuotaEvent } from "./low-quota-events";
 import { registerLowQuotaObserver } from "./low-quota-observer";
@@ -34,11 +34,14 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
   let attempts = 0;
   let retryDelay: number | undefined;
   let saveFlight: Promise<void> | null = null;
+  let activeSave: { events: Map<string, EventBase>; started: boolean; settled: boolean } | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   const pendingPauseEvents = new Map<string, EventBase>();
+  const pauseStatus = new WeakMap<EventBase, LowQuotaEvent["status"]>();
 
   function event(base: EventBase,
     delivery: LowQuotaEvent["delivery"], status: LowQuotaEvent["status"]): void {
+    if (delivery === "pause-save") pauseStatus.set(base, status);
     ledger.publish({ ...base, delivery, status, timestamp: Date.now() });
   }
   function cancelTimer(): void {
@@ -51,7 +54,9 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     saveTimer = setTimeout(() => {
       saveTimer = null;
       if (closed || ownerGeneration !== generation) {
-        for (const base of pendingPauseEvents.values()) event(base, "pause-save", "cancelled");
+        for (const base of pendingPauseEvents.values()) {
+          if (pauseStatus.get(base) === "pending") event(base, "pause-save", "cancelled");
+        }
         return;
       }
       void runSave();
@@ -64,36 +69,50 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     cancelTimer();
     const ownerGeneration = generation;
     const saving = new Map(pendingPauseEvents);
+    const flightState = { events: saving, started: false, settled: false };
+    activeSave = flightState;
     dirty = false;
     saveFlight = Promise.resolve().then(async () => {
       if (closed || ownerGeneration !== generation) {
-        for (const base of saving.values()) event(base, "pause-save", "cancelled");
         return;
       }
-      if (deps.persist) return deps.persist(config);
+      if (deps.persist) {
+        flightState.started = true;
+        return deps.persist(config);
+      }
       // Import only for an actual deferred save, then recheck ownership: an import
       // that resolves after a timed-out flush must not start a late config write.
       const { saveConfigPreservingClaudeCode } = await import("../config/live-reconcile");
       if (closed || ownerGeneration !== generation) {
-        for (const base of saving.values()) event(base, "pause-save", "cancelled");
         return;
       }
+      flightState.started = true;
       saveConfigPreservingClaudeCode(config);
     }).then(() => {
-      if (!closed && ownerGeneration === generation) {
+      flightState.settled = true;
+      if (flightState.started) {
         attempts = 0;
         for (const [key, base] of saving) {
-          event(base, "pause-save", isCodexAccountPaused(config, base.accountId) ? "delivered" : "cancelled");
+          event(base, "pause-save", isCodexAccountPaused(config, base.accountId) ? "succeeded" : "cancelled");
           if (pendingPauseEvents.get(key) === base) pendingPauseEvents.delete(key);
         }
       }
     }, () => {
+      flightState.settled = true;
+      if (flightState.started || !closed) {
+        for (const base of saving.values()) event(base, "pause-save", "failed");
+      }
+      if (flightState.started) {
+        for (const [key, base] of saving) {
+          if (pendingPauseEvents.get(key) === base && closed) pendingPauseEvents.delete(key);
+        }
+      }
       if (closed || ownerGeneration !== generation) return;
-      for (const base of saving.values()) event(base, "pause-save", "failed");
       console.warn("[codex-low-quota] pause persistence failed");
       dirty = true;
       retryDelay = RETRY_DELAYS_MS[attempts++];
     }).finally(() => {
+      if (activeSave === flightState) activeSave = null;
       saveFlight = null;
       if (dirty && !closed) {
         if (retryDelay !== undefined) scheduleSave(retryDelay);
@@ -108,8 +127,11 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     closed = true;
     generation++;
     cancelTimer();
-    if (dirty) for (const base of pendingPauseEvents.values()) event(base, "pause-save", "cancelled");
-    pendingPauseEvents.clear();
+    for (const [key, base] of pendingPauseEvents) {
+      if (activeSave?.started && activeSave.events.get(key) === base) continue;
+      if (pauseStatus.get(base) === "pending") event(base, "pause-save", "cancelled");
+      pendingPauseEvents.delete(key);
+    }
     for (const episode of episodes.values()) {
       if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
     }
@@ -129,13 +151,18 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
         flight.then(() => true),
         new Promise<false>(resolve => {
           timeout = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-          timeout.unref?.();
         }),
       ]);
       if (timeout) clearTimeout(timeout);
       if (!completed || Date.now() >= deadline) {
-        for (const base of pendingPauseEvents.values()) event(base, "pause-save", "failed");
-        console.warn("[codex-low-quota] pause persistence flush timed out");
+        const inFlight = activeSave;
+        const stillRunning = inFlight !== null && inFlight.started && !inFlight.settled;
+        if (inFlight && stillRunning) {
+          for (const base of inFlight.events.values()) event(base, "pause-save", "pending");
+        }
+        console.warn(stillRunning
+          ? "[codex-low-quota] pause persistence flush timed out; in-flight save remains pending"
+          : "[codex-low-quota] pause persistence flush reached its deadline");
         break;
       }
       if (attempts > RETRY_DELAYS_MS.length) break;
@@ -156,8 +183,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       policyKey = nextKey;
     }
     if (!policy?.enabled) return;
-    const liveIds = new Set([MAIN_CODEX_ACCOUNT_ID,
-      ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id)]);
+    const liveIds = new Set((config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id));
     for (const id of autoPausedAccounts) if (!liveIds.has(id)) autoPausedAccounts.delete(id);
     for (const [key, episode] of episodes) {
       if (liveIds.has(key.split("\u0000")[0]!)) continue;

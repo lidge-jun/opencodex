@@ -5,7 +5,7 @@ export type LowQuotaEvent = {
   percentUsed: number;
   resetAt: number | null;
   timestamp: number;
-  status: "pending" | "logged" | "delivered" | "failed" | "cancelled";
+  status: "pending" | "logged" | "delivered" | "succeeded" | "failed" | "cancelled";
   delivery: "notice" | "pause-save";
 };
 
