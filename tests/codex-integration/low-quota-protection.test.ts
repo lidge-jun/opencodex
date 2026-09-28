@@ -8,7 +8,10 @@ import { observeCodexLowQuota, registerLowQuotaObserver } from "../../src/codex/
 import { createLowQuotaEventLedger } from "../../src/codex/low-quota-events";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../../src/codex/low-quota-protection";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
-import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
+import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
+import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, setAccountQuotaFromParsed, updateAccountQuota } from "../../src/codex/quota";
 import type { CodexAccount } from "../../src/types/accounts";
 import type { CodexLowQuotaProtectionConfig, OcxConfig } from "../../src/types/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -158,7 +161,8 @@ describe("low quota protection", () => {
     expect(config.pausedCodexAccountIds).toBeUndefined();
     expect(persisted).toEqual([]);
     expect(notices).toEqual([]);
-    setAccountQuotaFromParsed(ACCOUNT_A, { weeklyPercent: 99 });
+    const accepted = { weeklyPercent: 99 };
+    setAccountQuotaFromParsed(ACCOUNT_A, accepted, undefined, undefined, accepted);
     await registration.flush();
     expect(persisted[0]?.pausedCodexAccountIds).toEqual([ACCOUNT_A]);
     expect(notices).toEqual([{ window: "weekly", percentUsed: 99, threshold: 80 }]);
@@ -240,6 +244,69 @@ describe("low quota protection", () => {
     setCodexAccountPaused(config, ACCOUNT_A, false);
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90, weeklyResetAt: firstReset + 60_000 });
     expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+  });
+
+  test("both active windows honor one manual resume until a new reset episode", () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    register(config, { persist: () => {} });
+    const reset = Date.now() + 60_000;
+    const high = { shortPercent: 90, shortResetAt: reset, weeklyPercent: 90, weeklyResetAt: reset };
+    observeCodexLowQuota(ACCOUNT_A, high);
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+    setCodexAccountPaused(config, ACCOUNT_A, false);
+    observeCodexLowQuota(ACCOUNT_A, high);
+    observeCodexLowQuota(ACCOUNT_A, { ...high, shortPercent: 95, weeklyPercent: 95 });
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    observeCodexLowQuota(ACCOUNT_A, { ...high, shortResetAt: reset + 60_000 });
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+  });
+
+  test("invalid raw WHAM usage stays display-only while valid usage pauses", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const generation = saveCodexAccountCredential(ACCOUNT_A, {
+      accessToken: "fixture-access", refreshToken: "fixture-refresh",
+      expiresAt: Date.now() + 60_000, chatgptAccountId: "fixture-chatgpt-account",
+    });
+    const publish = (usedPercent: number) => commitPoolQuotaResponse(
+      new Response(JSON.stringify({ rate_limit: { primary_window: {
+        used_percent: usedPercent, limit_window_seconds: 604_800,
+      } } }), { status: 200 }),
+      { accountId: ACCOUNT_A, existing: null, configuredPlan: "plus", generation,
+        writerGeneration: captureConfigGeneration() },
+    );
+    await publish(150);
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(100);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    await publish(90);
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+    await registration.flush();
+  });
+
+  test("invalid raw response-header usage stays display-only while valid usage pauses", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const headers = (usedPercent: number) => new Headers({
+      "x-codex-primary-used-percent": String(usedPercent),
+      "x-codex-primary-window-minutes": "10080",
+    });
+    applyAccountQuotaFromUpstreamHeaders(ACCOUNT_A, headers(150));
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(100);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    applyAccountQuotaFromUpstreamHeaders(ACCOUNT_A, headers(90));
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+    await registration.flush();
+  });
+
+  test("invalid raw legacy weekly usage stays display-only while valid usage pauses", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    updateAccountQuota(ACCOUNT_A, 150);
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(100);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    updateAccountQuota(ACCOUNT_A, 90);
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+    await registration.flush();
   });
 
   test("notice failure retries on a later observation and only then reports delivery", async () => {

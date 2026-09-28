@@ -277,7 +277,7 @@ function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean
   return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota);
 }
 /**
- * Publish parsed display quota and separately validated main-policy evidence after writer checks.
+ * Publish parsed display quota and separately validated policy evidence after writer checks.
  * A null policy observation retains only the matching main identity's previous evidence;
  * transient replacement markers are consumed during merging and never enter stored snapshots.
  */
@@ -286,7 +286,7 @@ export function setAccountQuotaFromParsed(
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
-  policyQuota: MainPolicyQuotaObservation | null = quota,
+  policyQuota: MainPolicyQuotaObservation | null = accountId === MAIN_CODEX_ACCOUNT_ID ? quota : null,
   historyEvidence?: QuotaObservationEvidence,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
@@ -323,7 +323,7 @@ export function setAccountQuotaFromParsed(
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
-    if (!isMain) observeCodexLowQuota(accountId, quota);
+    if (!isMain && policyQuota) observeCodexLowQuota(accountId, policyQuota);
     else if (mainWriter && policyQuota) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
@@ -653,7 +653,7 @@ export function updateAccountQuota(
   // otherwise bypass detection AND leave a stale baseline that corrupts the next real diff.
   // The credits-only path at setAccountQuotaFromParsed deliberately does not notify; this one
   // writes window percentages and deadlines, so it must.
-  if (accountId !== MAIN_CODEX_ACCOUNT_ID) observeCodexLowQuota(accountId, {
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && nextWeekly !== undefined && !isInvalidPolicyUsagePercent(weekly)) observeCodexLowQuota(accountId, {
     weeklyPercent: nextWeekly, weeklyResetAt: nextWeeklyResetAt,
   });
   notifyCodexQuotaSnapshot(accountId, quota);

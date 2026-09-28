@@ -25,6 +25,7 @@ const FLUSH_DEADLINE_MS = 500;
 /** Each server owns its own policy, episode state and deferred writer. */
 export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Dependencies = {}): LowQuotaRegistration {
   const episodes = new Map<string, Episode>();
+  const autoPausedAccounts = new Set<string>();
   const ledger = createLowQuotaEventLedger();
   let policyKey: string | undefined;
   let closed = false;
@@ -113,6 +114,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
     }
     dirty = false;
+    autoPausedAccounts.clear();
     unregister();
   }
   async function flush(): Promise<void> {
@@ -150,17 +152,22 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
         if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
       }
       episodes.clear();
+      autoPausedAccounts.clear();
       policyKey = nextKey;
     }
     if (!policy?.enabled) return;
     const liveIds = new Set([MAIN_CODEX_ACCOUNT_ID,
       ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id)]);
+    for (const id of autoPausedAccounts) if (!liveIds.has(id)) autoPausedAccounts.delete(id);
     for (const [key, episode] of episodes) {
       if (liveIds.has(key.split("\u0000")[0]!)) continue;
       if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
       episodes.delete(key);
     }
     if (!liveIds.has(accountId)) return;
+    // A manual resume ends this policy's active pause, but each already-high
+    // window keeps its episode marker until recovery or a new reset.
+    if (!isCodexAccountPaused(config, accountId)) autoPausedAccounts.delete(accountId);
     for (const window of ["short", "weekly"] as const) {
       if (!policy.windows[window]) continue;
       const percentUsed = quota[`${window}Percent`];
@@ -182,12 +189,16 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
         episodes.set(key, episode);
       }
       const base = { accountId, window, percentUsed, resetAt };
+      if (autoPausedAccounts.has(accountId) && isCodexAccountPaused(config, accountId)) {
+        episode.pausedByUs = true;
+      }
       if (dirty && attempts > RETRY_DELAYS_MS.length) {
         attempts = 0;
         scheduleSave();
       }
       if (policy.actions.pause && !isCodexAccountPaused(config, accountId) && !episode.pausedByUs) {
         setCodexAccountPaused(config, accountId, true);
+        autoPausedAccounts.add(accountId);
         episode.pausedByUs = true;
         pendingPauseEvents.set(key, base);
         dirty = true;

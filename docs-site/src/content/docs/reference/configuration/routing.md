@@ -25,15 +25,15 @@ Absence or `enabled: false` disables it. `threshold` is a finite inclusive perce
 through 100. An enabled policy needs at least one true action and one true window. A selected
 5-hour or weekly window triggers at `usage >= threshold`; either selected window is enough.
 Only fresh accepted observations qualify: there is no extra polling, and credits-only,
-cached, expired, monthly, or custom-window-only observations are ignored. This policy is
+cached, expired, monthly, custom-window-only, or raw out-of-range usage observations are ignored for this policy; display bars may still clamp invalid upstream percentages. This policy is
 independent of proactive account switching and the main-account 98% hard lock.
 
 With `pause`, the account leaves Pool selection in memory before the next request. The server
 coalesces a config save after the observation turn and retries failed saves for a bounded time.
 Normal shutdown waits briefly for pending saves. A failed save is visible in the event history;
 a restart before a successful save cannot preserve the pause. In-flight requests keep their
-captured account. Manual resume suppresses repause for that account/window episode until a
-below-threshold reading or a new reset boundary. A reset never resumes an account automatically.
+captured account. Manual resume suppresses repause across all currently high windows for that account until a
+below-threshold reading or a new reset boundary re-arms a window. A reset never resumes an account automatically.
 
 With `notify`, the server writes a local log line with window and percentage but no account id
 and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only
