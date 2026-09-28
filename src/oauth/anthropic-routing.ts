@@ -627,10 +627,14 @@ export function resolveAnthropicAccountForSession(
     const affined = sessionAffinity.get(key);
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
       const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
-      if (stillThere && eligible.includes(affined.accountId)) {
+      const stillUsable = stillThere && !isCooled(affined.accountId, now)
+        && isPoolCredentialUsable(affined.accountId, now);
+      if (stillUsable && eligible.includes(affined.accountId)) {
         return { accountId: affined.accountId, reason: "affinity", routePosition: decision?.position };
       }
-      sessionAffinity.delete(key);
+      // A model route may exclude a healthy binding only for this request. Keep it for
+      // another model; remove bindings only when the account itself became unusable.
+      if (!stillUsable) sessionAffinity.delete(key);
     }
   }
 
@@ -820,7 +824,14 @@ export function commitAnthropicSelectionRouting(
       if (picked !== accountId) seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
       notePoolRotationSuccess(POOL_KEY_ANTHROPIC, accountId, limit);
     }
-    bindAnthropicSessionAffinity(options.sessionKey, accountId);
+    const key = normalizeAffinityComponent(options.sessionKey);
+    const bound = key ? sessionAffinity.get(key) : undefined;
+    const eligibleAtCommit = options.routeDecision && bound ? getEligibleAnthropicAccounts() : [];
+    const preserveExcludedAffinity = options.routeDecision && bound && bound.accountId !== accountId
+      && Date.now() - bound.lastUsedAt <= AFFINITY_IDLE_TTL_MS
+      && eligibleAtCommit.includes(bound.accountId)
+      && !routeCandidates(eligibleAtCommit, options.routeDecision).includes(bound.accountId);
+    if (!preserveExcludedAffinity) bindAnthropicSessionAffinity(options.sessionKey, accountId);
   }
   if (manualPreference === undefined || (manualPreference?.accountId === expectedSelection.accountId
     && manualPreference.revision === expectedSelection.revision)) manualPreference = null;

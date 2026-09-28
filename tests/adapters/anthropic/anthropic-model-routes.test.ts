@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
-import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicPoolRetryAfterSeconds, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
+import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicPoolAccessSnapshot, getAnthropicPoolRetryAfterSeconds, promoteAnthropicActiveAccount, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
 import { parseAnthropicModelRoutes, resolveAnthropicModelRoute } from "../../../src/oauth/anthropic-model-routes";
-import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
+import { captureOAuthAccountSelection, getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
 import { clearResponseStateForTests } from "../../../src/responses/state";
 import { handleResponses } from "../../../src/server/responses";
@@ -235,6 +235,25 @@ test("an out-of-route affinity and manual active account cannot preempt the mode
   const sent = await post(cfg);
   expect(sent.status).toBe(200);
   expect(sends[0]).not.toContain("synthetic-access-0");
+});
+
+test("a routed pick preserves an excluded session affinity for a later unrouted model", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  bindAnthropicSessionAffinity("same-session", ids[0]!);
+  const route = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+  const expected = captureOAuthAccountSelection("anthropic");
+  const routed = resolveAnthropicAccountForSession("same-session", cfg, Date.now(), route);
+  expect(route.accounts).toContain(routed.accountId!);
+  expect(routed.accountId).not.toBe(ids[0]);
+  const snapshot = await getAnthropicPoolAccessSnapshot(routed.accountId!);
+  expect(await promoteAnthropicActiveAccount(routed.accountId!, expected, {
+    config: cfg, sessionKey: "same-session", reason: routed.reason,
+    routeDecision: route, expectedCredentialGeneration: snapshot.generation,
+  })).not.toBeNull();
+
+  const unrouted = resolveAnthropicAccountForSession("same-session", cfg);
+  expect(unrouted).toMatchObject({ accountId: ids[0], reason: "affinity" });
 });
 
 test("disabled routes do not change the historical active-account selection", async () => {
