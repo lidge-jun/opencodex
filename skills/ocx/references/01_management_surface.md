@@ -110,7 +110,7 @@ Drives no management route.
 
 JSON mode: `envelope`.
 
-- Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess ??unknown liveness never reads as absent.
+- Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess — unknown liveness never reads as absent.
 - Built for embedding shells (desktop app): the liveness budgets stay owned by src/server/proxy-liveness.ts.
 
 ### `ocx capabilities`
@@ -680,7 +680,7 @@ Rotate the connected client's data key against the hub, with commit and abort.
 JSON mode: `payload`.
 
 - Requires transient authority on stdin; the credential is never persisted or echoed.
-- A rotation left pending by a crash is resumed here ??startup and status stop rather than guess which key generation is live.
+- A rotation left pending by a crash is resumed here — startup and status stop rather than guess which key generation is live.
 
 ### `ocx provider keychain`
 
