@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { serviceChildOwnershipDecision, serviceChildStayOutExitCode } from "../../src/service/service-child-ownership";
+import {
+  serviceChildOwnershipDecision,
+  serviceChildStayOutExitCode,
+  serviceChildStayOutIfForeignOwner,
+  stripServiceSupervisionMarkers,
+} from "../../src/service/service-child-ownership";
 import type { ServiceOwnershipResolution } from "../../src/service/state";
 
 const owned = (owner: "cli" | "desktop"): ServiceOwnershipResolution => ({
@@ -164,5 +169,24 @@ describe("service child ownership gate", () => {
   test("the stay-out exit is the wrapper protocol code only inside the Windows wrapper", () => {
     expect(serviceChildStayOutExitCode({ OCX_SERVICE: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" })).toBe(42);
     expect(serviceChildStayOutExitCode({ OCX_SERVICE_MANAGED: "1", OCX_SERVICE: "1" })).toBe(0);
+  });
+
+  test("the start gate exits with the stay-out code only on a refusal", () => {
+    const exits: number[] = [];
+    const record = (code: number): never => {
+      exits.push(code);
+      throw new Error("exit " + code);
+    };
+    const env = { OCX_WINDOWS_WRAPPER_PROTOCOL: "1", OCX_SERVICE: "1" };
+    serviceChildStayOutIfForeignOwner(env, () => owned("cli"), {}, record);
+    expect(exits).toEqual([]);
+    expect(() => serviceChildStayOutIfForeignOwner(env, () => owned("desktop"), {}, record)).toThrow("exit 42");
+    expect(exits).toEqual([42]);
+  });
+
+  test("stripServiceSupervisionMarkers removes every supervision claim", () => {
+    const env = { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1", PATH: "keep" };
+    stripServiceSupervisionMarkers(env);
+    expect(env).toEqual({ PATH: "keep" });
   });
 });

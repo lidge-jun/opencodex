@@ -158,3 +158,34 @@ export function serviceChildOwnershipDecision(
 export function serviceChildStayOutExitCode(env: NodeJS.ProcessEnv = process.env): number {
   return serviceStayOutExitCode(env);
 }
+
+/**
+ * Every env marker that would make a detached child answer this gate as a
+ * supervised job it is not. The supervisor markers ride along whenever a service
+ * child spawns `ensure`/`tray` detaches, so they leave together with OCX_SERVICE
+ * ??the same set `detachedStartEnvironment` already stripped in part.
+ */
+export function stripServiceSupervisionMarkers(env: NodeJS.ProcessEnv): void {
+  delete env.OCX_SERVICE;
+  delete env[SERVICE_MANAGED_ENV];
+  delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];
+}
+
+/**
+ * The CLI `start` entry point asks the gate once and exits on a refusal. The
+ * answer lives in the process exit rather than a return value so the caller
+ * stays a single statement: `ocx service start` refuses this activation path
+ * already, but the managers below it spawn `start` directly. `exit` is injected
+ * for tests; production uses process.exit.
+ */
+export function serviceChildStayOutIfForeignOwner(
+  env: NodeJS.ProcessEnv,
+  resolve: typeof resolveServiceOwnership = resolveServiceOwnership,
+  deps: ServiceChildOwnershipDeps = {},
+  exit: (code: number) => never = (code) => process.exit(code),
+): void {
+  const decision = serviceChildOwnershipDecision(env, resolve, deps);
+  if (decision.kind !== "stay-out") return;
+  console.error("❌ " + decision.refusal);
+  exit(serviceChildStayOutExitCode(env));
+}
