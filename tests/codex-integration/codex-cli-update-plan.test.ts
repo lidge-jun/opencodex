@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import { scanCodexAppServerProcesses } from "../../src/codex/app-server-processes";
 import type { CodexCliInstallReport } from "../../src/codex/cli-install-provenance";
@@ -167,6 +167,20 @@ describe("Codex CLI update dry-run plan", () => {
     // Only the count crosses the boundary. Command lines carry paths and arguments.
     expect(JSON.stringify(plan)).not.toContain("secret");
     expect(JSON.stringify(plan)).not.toContain("4242");
+  });
+
+  test("a plain interactive Codex session blocks the plan, not just an app-server", async () => {
+    // The default session scan must see a TUI the app-server matcher deliberately
+    // rejects: a missed "codex" TUI is what half-wrote a managed install.
+    const plan = await createCodexCliUpdatePlan(planDeps({
+      scanProcesses: undefined,
+      processIo: {
+        platform: "linux",
+        listSnapshots: () => [{ pid: 9, commandLine: "codex" }],
+      },
+    }));
+    expect(plan.refusal).toBe("blocked_active_session");
+    expect(plan.session).toEqual({ state: "active", matches: 1 });
   });
 });
 
@@ -394,6 +408,46 @@ describe("registry configuration isolation", () => {
       const cwd = call.options.cwd as string;
       expect(cwd).not.toBe(process.cwd());
       expect(cwd.startsWith(tmpdir())).toBe(true);
+    }
+  });
+
+  // A bound PATH must still resolve a real npm: the marker prefix makes the value
+  // observably bound while the ambient entries appended after it keep npm reachable
+  // on Windows, where the resolver walks PATH on disk.
+  function markerBoundEnv(): NodeJS.ProcessEnv {
+    return {
+      PATH: "D:\\attested-marker" + delimiter + (process.env.PATH ?? ""),
+      PATHEXT: (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD") + ";.XYZ",
+    };
+  }
+
+  test("the bound launcher snapshot supplies npm's PATH and PATHEXT, not the ambient ones", () => {
+    const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+    const boundEnv = markerBoundEnv();
+    const target = resolveCodexCliUpdateTarget("latest", spawn, boundEnv);
+    expect(target.kind).toBe("resolved");
+    for (const call of calls) {
+      const env = call.options.env as NodeJS.ProcessEnv;
+      expect(env.PATH).toBe(boundEnv.PATH);
+      expect(env.PATHEXT).toBe(boundEnv.PATHEXT);
+    }
+  });
+
+  test("the plan resolves registry evidence through the attested launcher environment", async () => {
+    const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+    const boundEnv = markerBoundEnv();
+    const plan = await applicablePlan({
+      // Dropping the resolveTarget stub exercises the real resolver wiring: the
+      // provenance snapshot env must reach npm's spawn options.
+      resolveTarget: undefined,
+      inspectionDeps: { env: boundEnv },
+      spawnProcess: spawn,
+    });
+    expect(plan.targetVersion).toBe("1.4.2");
+    expect(calls.length).toBe(3);
+    for (const call of calls) {
+      const env = call.options.env as NodeJS.ProcessEnv;
+      expect(env.PATH).toBe(boundEnv.PATH);
     }
   });
 });

@@ -17,12 +17,14 @@ import {
   collectCodexAppServerCatalogStateForRequest,
   formatStaleCodexAppServerWarning,
   isCodexAppServerCommandLine,
+  isCodexSessionCommandLine,
   isWindowsCodexCandidateCommandLine,
   listCodexAppServerProcesses,
   listWindowsSnapshots,
   parseWindowsSnapshotOutput,
   resetCodexAppServerCatalogStateCache,
   restartCodexAppServers,
+  scanCodexSessionProcesses,
   STALE_CODEX_APP_SERVER_HINT,
   warnIfStaleCodexAppServersAfterStartupWrite,
   WINDOWS_CODEX_BASENAME_CANDIDATE_RE,
@@ -750,6 +752,58 @@ describe("Codex app-server process matching (#476)", () => {
     expect(fresh.warned).toBe(false);
     expect(unknown.warned).toBe(false);
     expect(errors).toEqual([]);
+  });
+});
+
+describe("Codex session process matching (#2811)", () => {
+  test("any live codex session counts, regardless of the subcommand", () => {
+    expect(isCodexSessionCommandLine("codex")).toBe(true);
+    expect(isCodexSessionCommandLine("codex resume --last")).toBe(true);
+    expect(isCodexSessionCommandLine("codex exec \"debug app-server behavior\"")).toBe(true);
+    // "--" ends option parsing, but the prompt after it is still a live TUI session.
+    expect(isCodexSessionCommandLine("codex -- app-server")).toBe(true);
+    expect(isCodexSessionCommandLine("codex login")).toBe(true);
+    expect(isCodexSessionCommandLine("/usr/local/bin/codex --profile prod")).toBe(true);
+    expect(isCodexSessionCommandLine("codex-x86_64-unknown-linux-musl")).toBe(true);
+    expect(isCodexSessionCommandLine("codex-code-mode-host --session 1")).toBe(true);
+  });
+
+  test("matches the npm wrapper pair and the shim backup sessions", () => {
+    expect(isCodexSessionCommandLine("node /usr/local/bin/codex")).toBe(true);
+    expect(isCodexSessionCommandLine("bun /usr/local/bin/codex exec hi")).toBe(true);
+    expect(isCodexSessionCommandLine("/home/ubuntu/.local/bin/codex.opencodex-real")).toBe(true);
+    // A snapshot that reports the executable separately still identifies the session.
+    expect(isCodexSessionCommandLine("codex resume --last", "/usr/local/bin/codex")).toBe(true);
+  });
+
+  test("codex-shaped names in arguments or unrelated binaries stay unmatched", () => {
+    expect(isCodexSessionCommandLine("node worker.js codex")).toBe(false);
+    expect(isCodexSessionCommandLine("bash -c codex")).toBe(false);
+    expect(isCodexSessionCommandLine("opencodex")).toBe(false);
+    expect(isCodexSessionCommandLine("codex-bridge serve")).toBe(false);
+    expect(isCodexSessionCommandLine("hermes-codex-x86_64-unknown-linux-gnu")).toBe(false);
+    expect(isCodexSessionCommandLine("")).toBe(false);
+  });
+
+  test("scanCodexSessionProcesses fails closed and dedupes", () => {
+    const unavailable = scanCodexSessionProcesses({
+      platform: "linux",
+      listSnapshots: () => { throw new Error("procfs unreadable"); },
+    });
+    expect(unavailable.kind).toBe("unavailable");
+    const scan = scanCodexSessionProcesses({
+      platform: "linux",
+      listSnapshots: () => [
+        { pid: 11, commandLine: "vim notes.txt" },
+        { pid: 12, commandLine: "codex" },
+        { pid: 12, commandLine: "codex" },
+        { pid: 13, commandLine: "codex app-server" },
+      ],
+    });
+    expect(scan.kind).toBe("observed");
+    if (scan.kind === "observed") {
+      expect(scan.processes.map(process => process.pid)).toEqual([12, 13]);
+    }
   });
 });
 

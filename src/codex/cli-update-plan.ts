@@ -13,7 +13,7 @@ import {
   type CodexCliInstallReport,
 } from "./cli-install-provenance";
 import {
-  scanCodexAppServerProcesses,
+  scanCodexSessionProcesses,
   type CodexAppServerProcessIo,
   type CodexAppServerProcessScan,
 } from "./app-server-processes";
@@ -32,8 +32,9 @@ import {
  *    is a digest over the evidence the decision rests on, so an approved change to any
  *    bound field produces a different id.
  *  - Nothing is terminated or restarted. A live Codex session refuses the plan; it is
- *    never signalled, killed or waited on. The plan itself is read-only: it resolves
- *    registry metadata and reads the process table, but installs nothing.
+ *    never signalled, killed or waited on. The plan installs nothing: it resolves
+ *    registry metadata and reads the process table under a temporary isolated npm
+ *    config directory that is removed afterwards, leaving no state behind.
  */
 
 export const CODEX_CLI_PACKAGE = "@openai/codex";
@@ -109,6 +110,7 @@ export interface CodexCliUpdatePlanDeps {
   readonly scanProcesses?: (io?: CodexAppServerProcessIo) => CodexAppServerProcessScan;
   readonly processIo?: CodexAppServerProcessIo;
   readonly resolveTarget?: (channel: CodexCliUpdateChannel) => CodexCliUpdateTarget;
+  readonly spawnProcess?: typeof spawnSync;
 }
 
 
@@ -176,8 +178,8 @@ interface NpmTarget {
   };
 }
 
-function npmTarget(args: readonly string[]): NpmTarget | null {
-  const invocation = npmInvocation(args);
+function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget | null {
+  const invocation = npmInvocation(args, process.platform, env ?? process.env);
   if (!invocation) return null;
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
 }
@@ -192,12 +194,33 @@ function npmTarget(args: readonly string[]): NpmTarget | null {
  * variables npm itself honors (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, any case)
  * and NODE_EXTRA_CA_CERTS, which npm's own Node runtime reads for TLS.
  */
-function codexCliUpdateNpmEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
   for (const key of Object.keys(env)) {
     if (key.toLowerCase().startsWith("npm_config_")) delete env[key];
   }
   return env;
+}
+
+/**
+ * Ambient environment with the executable-selection channels replaced by the proof-bound
+ * launcher snapshot. HOME, proxy variables and NODE_EXTRA_CA_CERTS stay ambient because npm
+ * itself needs them; PATH/PATHEXT are the channels a project dotenv could use to supply a
+ * fake npm, so they come only from the captured snapshot. A snapshot without PATH means no
+ * trusted PATH at all — an empty one fails the spawn closed rather than falling back.
+ */
+function codexCliUpdateBoundEnv(bound: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const merged = codexCliUpdateNpmEnv();
+  if (bound === undefined) return merged;
+  for (const key of Object.keys(merged)) {
+    const k = key.toLowerCase();
+    if (k === "path" || k === "pathext") delete merged[key];
+  }
+  for (const [key, value] of Object.entries(bound)) {
+    const k = key.toLowerCase();
+    if ((k === "path" || k === "pathext") && value !== undefined) merged[key] = value;
+  }
+  return merged;
 }
 
 interface NpmConfigIsolation {
@@ -218,14 +241,14 @@ interface NpmConfigIsolation {
  * and the env filter removes the env-var channel. What remains is exactly the pinned
  * --registry flag plus deliberately supported proxy/CA env.
  */
-function createNpmConfigIsolation(dir?: string): NpmConfigIsolation {
+function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): NpmConfigIsolation {
   const ownsRoot = dir === undefined;
   const root = dir ?? mkdtempSync(join(tmpdir(), "ocx-codex-cli-meta-"));
   try {
     writeFileSync(join(root, "package.json"), "{}\n");
     const npmrc = join(root, "ocx-update.npmrc");
     writeFileSync(npmrc, "");
-    return { dir: root, npmrc, env: codexCliUpdateNpmEnv() };
+    return { dir: root, npmrc, env: codexCliUpdateBoundEnv(boundEnv) };
   } catch (error) {
     // A mid-setup failure must not leak a directory this call created; a
     // caller-supplied directory stays the caller's responsibility.
@@ -245,7 +268,7 @@ function isolatedNpmArgs(args: readonly string[], isolation: NpmConfigIsolation)
 }
 
 function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolation): NpmTarget | null {
-  const target = npmTarget(isolatedNpmArgs(args, isolation));
+  const target = npmTarget(isolatedNpmArgs(args, isolation), isolation.env);
   if (!target) return null;
   return {
     bin: target.bin,
@@ -265,13 +288,15 @@ function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolatio
 export function resolveCodexCliUpdateTarget(
   channel: CodexCliUpdateChannel,
   spawn: typeof spawnSync = spawnSync,
+  /** Proof-bound launcher snapshot env; executable resolution reads only its PATH/PATHEXT. */
+  boundEnv?: NodeJS.ProcessEnv,
 ): CodexCliUpdateTarget {
   // The pinned registry and the isolation directory together are the boundary: the
   // version, the integrity token and the tarball URL all come from npmjs or the
   // target is unresolved — a redirected answer can never be the evidence.
   let isolation: NpmConfigIsolation;
   try {
-    isolation = createNpmConfigIsolation();
+    isolation = createNpmConfigIsolation(undefined, boundEnv);
   } catch {
     // Setup failures are a refusal lane like every other resolve failure, not an
     // exception escaping the dry-run.
@@ -365,7 +390,9 @@ function refusedPlan(
 const NOT_EVALUATED: CodexCliUpdateSession = Object.freeze({ state: "not-evaluated" as const, matches: null });
 
 /**
- * Build the dry-run plan. Reads only; nothing here writes, signals or installs.
+ * Build the dry-run plan. Installs nothing and leaves no state behind; registry
+ * evidence is gathered under a temporary isolated npm config directory that is
+ * removed afterwards.
  *
  * The refusal order is deliberate. Ownership and target questions are settled before the
  * process table is read, so a machine that can never be updated by this workflow does not
@@ -397,7 +424,13 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("installed_version_unverified", report, channel, null, NOT_EVALUATED);
   }
 
-  const resolveTarget = deps.resolveTarget ?? (ch => resolveCodexCliUpdateTarget(ch));
+  // The npm evidence channels are bound to the same environment snapshot the
+  // ownership inspection ran against: PATH/PATHEXT from the proof-bound launcher
+  // context, never the ambient ones a project dotenv could point at a fake npm.
+  // When the caller had no trusted snapshot, inspectionDeps.env is the fail-closed
+  // { PATH: "" } form, so this resolution cannot silently fall back to ambient.
+  const resolveTarget = deps.resolveTarget
+    ?? (ch => resolveCodexCliUpdateTarget(ch, deps.spawnProcess ?? spawnSync, deps.inspectionDeps?.env));
   const target = resolveTarget(channel);
   if (target.kind !== "resolved") {
     return refusedPlan("target_unresolved", report, channel, target, NOT_EVALUATED);
@@ -417,7 +450,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("target_not_newer", report, channel, target, NOT_EVALUATED);
   }
 
-  const scan = (deps.scanProcesses ?? scanCodexAppServerProcesses)(deps.processIo ?? {});
+  const scan = (deps.scanProcesses ?? scanCodexSessionProcesses)(deps.processIo ?? {});
   if (scan.kind !== "observed") {
     // An unreadable process table is not "no sessions". `listCodexAppServerProcesses`
     // maps that failure to an empty list because its kill contract must never signal a
