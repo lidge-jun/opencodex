@@ -263,6 +263,7 @@ describe("Codex CLI install provenance", () => {
       platform: process.platform,
       env: { CODEX_CLI_PATH: launcher, PATH: "" },
       selectionAttested: true,
+      selectedCommand: launcher,
       inspectShim: () => ({ status: "not-tracked" }),
     });
     expect(report).toMatchObject({
@@ -276,6 +277,23 @@ describe("Codex CLI install provenance", () => {
     });
     // The attestation flag changes only the caller's assertion; paths stay redacted.
     expect(JSON.stringify(report)).not.toContain(prefix);
+  });
+
+  test.skipIf(process.platform === "win32")("a resolver pick on another path clears the attestation", async () => {
+    const prefix = tempRoot("ocx-codex-resolver-mismatch-");
+    const { launcher } = createPosixNpmGlobal(prefix);
+    const report = await inspectCodexCliInstall({
+      platform: process.platform,
+      env: { CODEX_CLI_PATH: launcher, PATH: "" },
+      selectionAttested: true,
+      // The resolver would settle on a different executable, so the snapshot's
+      // installation must not become managed even though the caller asserts it.
+      selectedCommand: join(prefix, "elsewhere", "codex"),
+      inspectShim: () => ({ status: "not-tracked" }),
+    });
+    expect(report.selectionAttested).toBe(false);
+    expect(report.managed).toBe(false);
+    expect(report.reason).toBe("selection_unattested");
   });
 
   test.skipIf(process.platform === "win32")("attestation never rescues an install that is not manifest-owned", async () => {
@@ -295,6 +313,7 @@ describe("Codex CLI install provenance", () => {
       platform: process.platform,
       env: { CODEX_CLI_PATH: launcher, PATH: "" },
       selectionAttested: true,
+      selectedCommand: launcher,
       inspectShim: () => ({ status: "not-tracked" }),
     });
     // The selection is attested but the layout is not a global npm install, so

@@ -17,6 +17,11 @@ import {
   type CodexCliUpdatePlan,
   type CodexCliUpdatePlanDeps,
 } from "../codex/cli-update-plan";
+import {
+  resolveCodexRuntime,
+  type ResolveCodexRuntimeDeps,
+  type ResolveCodexRuntimeResult,
+} from "../codex/runtime";
 import { CliUsageError, isJsonOption, printData, runCliAction } from "./runtime-api";
 import { trustedNodeLauncherContext } from "./launcher-context";
 
@@ -38,7 +43,8 @@ export interface CodexCliUpdateCommandDeps {
     snapshot: CodexCliInstallationSnapshot,
   ) => Promise<CodexCliInstallationTargetDerivation>;
   readonly createPlan?: (deps: CodexCliUpdatePlanDeps) => Promise<CodexCliUpdatePlan>;
-  }
+  readonly resolveSelectedRuntime?: (deps: ResolveCodexRuntimeDeps) => ResolveCodexRuntimeResult;
+}
 
 function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
   return [
@@ -197,9 +203,30 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
  * evidence, not selected-runtime admission. A direct Bun or source launch has no such
  * proof, so nothing ambient or persisted is inspected at all.
  */
-function inspectionDeps(): CodexCliInstallProvenanceDeps {
+function inspectionDeps(commandDeps: CodexCliUpdateCommandDeps): CodexCliInstallProvenanceDeps {
   const trusted = trustedNodeLauncherContext()?.codexCliInspectionEnv;
   if (!trusted || trusted.managerRoots === null) return { env: { PATH: "" }, configDir: "." };
+  // Attestation also requires the runtime resolver to pick the snapshot's
+  // candidate. probeVersion: false keeps this read-only — no codex --version
+  // executes on a check/plan path — while still refusing attestation when the
+  // resolver would settle on a different executable.
+  let selectedCommand: string | null = null;
+  try {
+    const resolve = commandDeps.resolveSelectedRuntime ?? resolveCodexRuntime;
+    selectedCommand = resolve({
+      env: {
+        CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
+        PATH: trusted.path ?? undefined,
+        PATHEXT: trusted.pathExt ?? undefined,
+      },
+      configDir: trusted.configDir,
+      discoverAlternatives: false,
+      probeVersion: false,
+    }).runtime.command ?? null;
+  } catch {
+    // A resolver failure must not attest: fail closed with no selected command.
+    selectedCommand = null;
+  }
   return {
     env: {
       ...trusted.managerRoots,
@@ -208,10 +235,11 @@ function inspectionDeps(): CodexCliInstallProvenanceDeps {
       PATHEXT: trusted.pathExt ?? undefined,
     },
     configDir: trusted.configDir,
-    // The snapshot is proof-bound to the launcher, so a codexCliPath it carries is
-    // the runtime that was actually selected — the predicate that turns an
-    // npm-global report into a managed one.
+    // The snapshot is proof-bound to the launcher, but the report may only attest
+    // the environment candidate when the resolver picks the same canonical path —
+    // managed requires both.
     selectionAttested: true,
+    selectedCommand,
   };
 }
 
@@ -264,14 +292,14 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "check") {
-      const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(inspectionDeps());
+      const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(inspectionDeps(deps));
       printData(report, parsed.json, installSummary(report));
       return;
     }
     if (parsed.action === "plan") {
       const plan = await (deps.createPlan ?? createCodexCliUpdatePlan)({
         channel: parsed.channel,
-        inspectionDeps: inspectionDeps(),
+        inspectionDeps: inspectionDeps(deps),
         inspect: deps.inspectInstall,
       });
       printData(plan, parsed.json, planSummary(plan));

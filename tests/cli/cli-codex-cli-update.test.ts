@@ -16,6 +16,7 @@ const report: CodexCliInstallReport = {
   selectionAttested: false,
   versionEvidence: { kind: "unavailable" },
   provenance: "unknown", managed: false, reason: "candidate_unavailable", location: null,
+  installDigest: null,
   packageVersion: null,
   shim: { status: "not-tracked", backingKind: null }, evidence: [],
 };
@@ -267,6 +268,12 @@ describe("Codex CLI update CLI", () => {
           received = deps;
           return report;
         },
+        // The command asks the resolver which executable it would select; the
+        // inspector then requires it to match the attested candidate.
+        resolveSelectedRuntime: () => ({
+          runtime: { command: "C:\\managed\\codex.cmd", version: null, source: "environment" },
+          failures: [],
+        }),
       })).toBe(0);
       expect(received?.env).toEqual({
         FNM_DIR: "C:\\custom-manager",
@@ -275,6 +282,7 @@ describe("Codex CLI update CLI", () => {
         PATHEXT: ".CMD",
       });
       expect(received?.configDir).toBe("C:\\opencodex");
+      expect(received?.selectedCommand).toBe("C:\\managed\\codex.cmd");
     } finally {
       initializeNodeLauncherContext(["bun", "cli"], {});
     }

@@ -119,7 +119,16 @@ const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/=]+$/;
 
 /** The install argv this plan quotes for the operator to read, in argv form. */
 export function codexCliUpdateCommand(version: string): readonly string[] {
-  return Object.freeze(["npm", "install", "-g", `${CODEX_CLI_PACKAGE}@${version}`]);
+  // The displayed command must reproduce the artifact the plan bound: without the
+  // pinned registry the operator's npmrc could silently substitute another origin
+  // for the same package@version string.
+  return Object.freeze([
+    "npm",
+    "install",
+    "-g",
+    "--registry=" + CODEX_CLI_REGISTRY,
+    `${CODEX_CLI_PACKAGE}@${version}`,
+  ]);
 }
 
 /**
@@ -134,7 +143,7 @@ export function codexCliUpdatePlanId(bound: {
   readonly platform: NodeJS.Platform;
   readonly provenance: CodexCliInstallKind;
   readonly installedVersion: string;
-  readonly location: string | null;
+  readonly installDigest: string | null;
   readonly channel: CodexCliUpdateChannel;
   readonly targetVersion: string;
   readonly targetIntegrity: string;
@@ -147,7 +156,7 @@ export function codexCliUpdatePlanId(bound: {
     ["platform", bound.platform],
     ["provenance", bound.provenance],
     ["installedVersion", bound.installedVersion],
-    ["location", bound.location ?? ""],
+    ["installDigest", bound.installDigest ?? ""],
     ["channel", bound.channel],
     ["targetVersion", bound.targetVersion],
     ["targetIntegrity", bound.targetIntegrity],
@@ -210,11 +219,19 @@ interface NpmConfigIsolation {
  * --registry flag plus deliberately supported proxy/CA env.
  */
 function createNpmConfigIsolation(dir?: string): NpmConfigIsolation {
+  const ownsRoot = dir === undefined;
   const root = dir ?? mkdtempSync(join(tmpdir(), "ocx-codex-cli-meta-"));
-  writeFileSync(join(root, "package.json"), "{}\n");
-  const npmrc = join(root, "ocx-update.npmrc");
-  writeFileSync(npmrc, "");
-  return { dir: root, npmrc, env: codexCliUpdateNpmEnv() };
+  try {
+    writeFileSync(join(root, "package.json"), "{}\n");
+    const npmrc = join(root, "ocx-update.npmrc");
+    writeFileSync(npmrc, "");
+    return { dir: root, npmrc, env: codexCliUpdateNpmEnv() };
+  } catch (error) {
+    // A mid-setup failure must not leak a directory this call created; a
+    // caller-supplied directory stays the caller's responsibility.
+    if (ownsRoot) rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** Registry-pinned, config-isolated argv for one npm call. */
@@ -252,7 +269,14 @@ export function resolveCodexCliUpdateTarget(
   // The pinned registry and the isolation directory together are the boundary: the
   // version, the integrity token and the tarball URL all come from npmjs or the
   // target is unresolved — a redirected answer can never be the evidence.
-  const isolation = createNpmConfigIsolation();
+  let isolation: NpmConfigIsolation;
+  try {
+    isolation = createNpmConfigIsolation();
+  } catch {
+    // Setup failures are a refusal lane like every other resolve failure, not an
+    // exception escaping the dry-run.
+    return Object.freeze({ kind: "unresolved" as const, reason: "npm configuration isolation setup failed" });
+  }
   try {
     const runView = (field: string, spec: string): SpawnSyncReturns<string> | null => {
       const target = isolatedNpmTarget(["view", spec, field], isolation);
@@ -415,7 +439,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
       platform,
       provenance: report.provenance,
       installedVersion,
-      location: report.location,
+      installDigest: report.installDigest,
       channel,
       targetVersion: target.version,
       targetIntegrity: target.integrity,

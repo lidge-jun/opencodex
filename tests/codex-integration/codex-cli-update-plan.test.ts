@@ -35,6 +35,7 @@ const MANAGED: CodexCliInstallReport = Object.freeze({
   managed: true,
   reason: "managed_npm_global",
   location: "<npm-global>/@openai/codex",
+  installDigest: "a".repeat(64),
   packageVersion: "1.0.0",
   shim: { status: "not-tracked", backingKind: null },
   evidence: ["package_manifest", "global_npm_layout"],
@@ -75,7 +76,14 @@ describe("Codex CLI update dry-run plan", () => {
     expect(plan.installedVersion).toBe("1.0.0");
     expect(plan.session).toEqual({ state: "none", matches: 0 });
     // The dist-tag is resolved once and bound; the install can never widen back to it.
-    expect(plan.command).toEqual(["npm", "install", "-g", "@openai/codex@1.1.0"]);
+    // The quoted command pins the same registry the plan resolved its evidence
+    // from; a bare spec would let the operator's npmrc answer with a different
+    // artifact for the same version string.
+    expect(plan.command).toEqual([
+      "npm", "install", "-g",
+      "--registry=" + CODEX_CLI_REGISTRY,
+      "@openai/codex@1.1.0",
+    ]);
     expect(plan.planId).toMatch(/^[0-9a-f]{32}$/);
   });
 
@@ -169,7 +177,9 @@ describe("Codex CLI update plan identity", () => {
       { resolveTarget: () => ({ kind: "resolved", version: "1.2.0", integrity: "sha512-AAAA" }) },
       { resolveTarget: () => ({ kind: "resolved", version: "1.1.0", integrity: "sha512-BBBB" }) },
       { inspect: async () => report({ packageVersion: "1.0.1", candidateVersion: "1.0.1" }) },
-      { inspect: async () => report({ location: "<npm-global>/other/@openai/codex" }) },
+      // Two install roots sharing the redacted "<path>/codex" display location
+      // must still produce different plans.
+      { inspect: async () => report({ installDigest: "b".repeat(64) }) },
     ];
     for (const variant of variants) {
       const plan = await applicablePlan(variant);
@@ -188,17 +198,20 @@ describe("Codex CLI update plan identity", () => {
     expect(second.planId).toBe(first.planId);
   });
 
-  test("the id is a digest of the bound evidence, not a random handle", () => {
+  test("the id contains only the explicitly bound evidence", () => {
     const bound = {
       platform: "linux" as NodeJS.Platform,
       provenance: "npm-global" as const,
       installedVersion: "1.0.0",
-      location: "<npm-global>/@openai/codex",
+      installDigest: "a".repeat(64),
       channel: "latest" as const,
       targetVersion: "1.1.0",
       targetIntegrity: "sha512-AAAA",
     };
     expect(codexCliUpdatePlanId(bound)).toBe(codexCliUpdatePlanId(bound));
+    expect(codexCliUpdatePlanId(bound)).toMatch(/^[0-9a-f]{32}$/);
+    // A digest of the same evidence recomputed by a different build agrees.
+    expect(codexCliUpdatePlanId({ ...bound })).toBe(codexCliUpdatePlanId(bound));
   });
 });
 
