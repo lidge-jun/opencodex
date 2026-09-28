@@ -335,4 +335,13 @@ describe("low quota protection", () => {
     expect(new Set(listLowQuotaEvents(100).filter(event => event.status === "delivered")
       .map(event => event.accountId))).toEqual(new Set([ACCOUNT_A, ACCOUNT_B]));
   });
+
+  test("a manual resume before the deferred save is not reported as a durable pause", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    setCodexAccountPaused(config, ACCOUNT_A, false);
+    await registration.flush();
+    expect(listLowQuotaEvents(1)[0]).toMatchObject({ accountId: ACCOUNT_A, delivery: "pause-save", status: "cancelled" });
+  });
 });

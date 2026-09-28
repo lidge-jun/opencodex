@@ -72,7 +72,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       if (!closed && ownerGeneration === generation) {
         attempts = 0;
         for (const [key, base] of saving) {
-          event(base, "pause-save", "delivered");
+          event(base, "pause-save", isCodexAccountPaused(config, base.accountId) ? "delivered" : "cancelled");
           if (pendingPauseEvents.get(key) === base) pendingPauseEvents.delete(key);
         }
       }
@@ -132,11 +132,21 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     if (closed) return;
     const policy = config.codexPool?.lowQuotaProtection;
     const nextKey = JSON.stringify(policy);
-    if (policyKey !== nextKey) { episodes.clear(); policyKey = nextKey; }
+    if (policyKey !== nextKey) {
+      for (const episode of episodes.values()) {
+        if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
+      }
+      episodes.clear();
+      policyKey = nextKey;
+    }
     if (!policy?.enabled) return;
     const liveIds = new Set([MAIN_CODEX_ACCOUNT_ID,
       ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id)]);
-    for (const key of episodes.keys()) if (!liveIds.has(key.split("\u0000")[0]!)) episodes.delete(key);
+    for (const [key, episode] of episodes) {
+      if (liveIds.has(key.split("\u0000")[0]!)) continue;
+      if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
+      episodes.delete(key);
+    }
     if (!liveIds.has(accountId)) return;
     for (const window of ["short", "weekly"] as const) {
       if (!policy.windows[window]) continue;
