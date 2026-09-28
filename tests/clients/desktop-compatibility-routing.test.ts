@@ -94,3 +94,18 @@ test("root model edits revoke context but unrelated preference and object order 
   writeFileSync(path, text + 'model = "external/other"\n'); expect(verify()).toBe(false);
   writeFileSync(path, text); expect(verify()).toBe(false);
 });
+
+test("desktop MCP rewrites and TOML formatting preserve the observation while model edits still revoke it", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-desktop-mcp-refresh-")); roots.push(root);
+  const path = join(root, "config.toml");
+  writeFileSync(path, text + 'model = "external/model"\n[mcp_servers.desktop]\nurl = "http://127.0.0.1:21001/mcp"\n');
+  const verify = createNativeRoutingVerifier(root, () => owner);
+  expect(verify()).toBe(true);
+  const rewritten = '# Desktop rewrites its MCP endpoint after launch.\n' + text
+    + 'model = "external/model"\n[mcp_servers.desktop]\nurl = "http://127.0.0.1:21002/mcp"\n';
+  writeFileSync(path, rewritten); expect(verify()).toBe(true);
+  writeFileSync(path, text + 'model = "external/model"\n'); expect(verify()).toBe(true);
+  writeFileSync(path, rewritten.replace('model = "external/model"', 'model = "openai/model"'));
+  expect(verify()).toBe(false);
+  writeFileSync(path, rewritten); expect(verify()).toBe(false);
+});

@@ -941,6 +941,9 @@ Certificates are restricted to TLS server authentication. If status shows `renew
 stop the service and close Codex, then renew the older certificate before starting again.
 The native API URL must match the proxy's actual listener address and port. IPv4 and IPv6
 loopback addresses are not interchangeable here; ambiguous `localhost` aliases are refused.
+Codex's automatic MCP connection refresh and configuration formatting do not invalidate
+observation. Model, authentication, profile and routing changes still require a fresh
+observation context; the service does not silently adopt those changes during a trial.
 
 The service preserves its PAC address and local connection ports for reuse after a restart.
 With the same trusted certificate, an already configured app can reconnect through its cached

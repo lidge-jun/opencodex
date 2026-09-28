@@ -11,11 +11,16 @@ const ROUTING_KEYS = ["providers", "defaultProvider", "defaultModelAliases", "cu
   "subagentModelFallback", "subagentModelFallbackByModel", "injectionModel", "compactionRouting", "compactionRecovery",
   "blockedModelRedirects", "shadowCallIntercept", "protocols", "memoryModels"] as const satisfies readonly (keyof OcxConfig)[];
 function routingDigest(text: string, owner: NativeCompatibilityOwner): string {
+  const native = Bun.TOML.parse(text) as Record<string, unknown>;
+  // Desktop refreshes MCP endpoints after launch. Tool transport metadata and TOML
+  // formatting do not select the model transport. Keep all other (including unknown)
+  // native fields bound, rather than an allowlist that could miss a new routing key.
+  const { mcp_servers: _mcpServers, ...nativeContext } = native;
   const projection = Object.fromEntries(ROUTING_KEYS.map(key => [key, owner.config[key]]));
-  const serialized = JSON.stringify([owner.hostname, owner.port, owner.loopbackPort, projection], (_key, value) =>
+  const serialized = JSON.stringify([nativeContext, owner.hostname, owner.port, owner.loopbackPort, projection], (_key, value) =>
     record(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
   if (Buffer.byteLength(serialized) > 1048576) throw new Error("Routing snapshot too large");
-  return createHash("sha256").update(text).update("\0").update(serialized).digest("hex");
+  return createHash("sha256").update(serialized).digest("hex");
 }
 /** Validates the effective root/profile routing only; it does not prove a thread's selected provider. */
 export function matchesNativeCompatibilityRouting(text: string, owner: NativeCompatibilityOwner | null): boolean {

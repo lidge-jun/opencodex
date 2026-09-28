@@ -128,10 +128,12 @@ Response production is reported separately from app-cache or UI confirmation.
 unregisters only its matching owner. `routing-preflight.ts` verifies bounded native root
 TOML and any selected root profile against those ports, rejecting foreign providers,
 remote destinations, authless mode, unknown profiles and process-level app overrides.
-The verifier binds the root TOML, actual listener ports and the configured provider/model/fallback
+The verifier binds parsed root TOML values, actual listener ports and the configured provider/model/fallback
 routing inputs to its first valid observation. A change or failed check invalidates that runtime
 even if the old settings return; stop/start creates a fresh observation context. Unrelated
-OpenCodex preferences and object-key order do not invalidate the routing snapshot.
+OpenCodex preferences, TOML formatting, object-key order and the native root `mcp_servers`
+table do not invalidate the routing snapshot. Desktop refreshes that tool-transport table
+after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
 Each record that would be corrected checks routing and the assessed installed build asynchronously,
 then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares
