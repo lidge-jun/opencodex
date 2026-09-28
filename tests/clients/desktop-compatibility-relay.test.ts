@@ -8,6 +8,25 @@ import { forwardProxy } from "../helpers/desktop-egress-fixture";
 import { UsageRelayController } from "../../src/codex/desktop-compatibility/usage-controller";
 import { createUsageControlledFetch } from "../../src/codex/desktop-compatibility/usage-controlled-fetch";
 
+test("HTTP Host is case-insensitive while foreign hosts and ports cannot reach upstream", async () => {
+  const ca = createCertificateAuthority({ commonName: "host-fixture", validityDays: 1 });
+  let forwarded = 0;
+  const relay = await startDesktopRelay({ leaf: issueServerLeaf(ca, "host-fixture", ["chatgpt.com"]),
+    fetchImpl: (async input => { expect(String(input)).toBe("https://chatgpt.com/fixture"); forwarded++; return new Response("fixture"); }) as typeof fetch });
+  try {
+    for (const [host, status] of [["CHATGPT.COM", 200], ["ChatGPT.Com:443", 200], ["chatgpt.com:444", 421],
+      ["chatgpt.com.evil", 421], ["chatgpt.com.", 421]] as const) {
+      const actual = await new Promise<number | undefined>((resolve, reject) => {
+        const client = request({ hostname: "127.0.0.1", port: relay.port, servername: "chatgpt.com", ca: ca.certPem,
+          path: "/fixture", headers: { host } }, response => { response.resume(); response.once("end", () => resolve(response.statusCode)); response.once("error", reject); });
+        client.once("error", reject); client.setTimeout(5000, () => client.destroy(new Error("fixture timeout"))); client.end();
+      });
+      expect(actual).toBe(status);
+    }
+    expect(forwarded).toBe(2);
+  } finally { await relay.close(); }
+}, 10000);
+
 for (const route of ["direct", "http", "https", "socks5"] as const) test(`upgraded native app traffic preserves handshake and raw frames through ${route}`, async () => {
   const ca = createCertificateAuthority({ commonName: "relay-fixture", validityDays: 1 });
   const leaf = issueServerLeaf(ca, "relay-fixture", ["chatgpt.com"]);
@@ -38,7 +57,7 @@ for (const route of ["direct", "http", "https", "socks5"] as const) test(`upgrad
         if (end !== -1 && result.length >= end + 4 + frame.length) resolve(result);
       });
       client.once("secureConnect", () => {
-        client.write("GET /dictation/stream HTTP/1.1\r\nHost: chatgpt.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: Zml4dHVyZQ==\r\nSec-WebSocket-Protocol: fixture.v1\r\nCookie: fixture=session\r\n\r\n");
+        client.write("GET /dictation/stream HTTP/1.1\r\nHost: CHATGPT.COM\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: Zml4dHVyZQ==\r\nSec-WebSocket-Protocol: fixture.v1\r\nCookie: fixture=session\r\n\r\n");
         client.write(frame);
       });
     });

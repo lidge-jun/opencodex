@@ -94,6 +94,8 @@ Construction and status do not start listeners, load credentials or enroll trust
 loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
 identity, then creates only loopback TLS/CONNECT/PAC listeners. The currently assessed
 Windows package version is declared in the module. Unknown builds refuse activation.
+The assessed family/publisher, full package basename and App entry must also agree;
+matching the version prefix alone does not qualify a foreign package identity.
 HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
 described in the [transport inventory](../transports/inventory.md#native-desktop-proxy-egress).
 Invalid proxy routes refuse rather than falling back to direct egress.
@@ -104,6 +106,8 @@ is IPv4-only. Ambiguous localhost aliases cannot qualify, and listener identity 
 streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The
 upstream is fixed to chatgpt.com; request Host cannot select another destination. CONNECT
 allows only chatgpt.com:443. PAC has a certificate-relative deadline and `DIRECT` fallback.
+HTTP and upgraded requests accept the case-insensitive DNS spelling of that exact Host,
+with optional port443, while other hosts, ports and non-origin request targets remain refused.
 The package launcher uses only the runtime-owned PAC and never kills an existing app.
 
 `connection-store.ts` preserves the PAC nonce and two public loopback ports in a bounded,

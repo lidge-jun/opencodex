@@ -1,9 +1,21 @@
 import { expect, test } from "bun:test";
-import { createInstalledBuildProbe, DESKTOP_COMPATIBILITY_ASSESSED_VERSION } from "../../src/codex/desktop-compatibility/installed-build";
+import { createInstalledBuildProbe, DESKTOP_COMPATIBILITY_ASSESSED_VERSION, DESKTOP_COMPATIBILITY_ASSESSED_FAMILY } from "../../src/codex/desktop-compatibility/installed-build";
 import type { DesktopAppInstall } from "../../src/codex/desktop-app/types";
 
 const installed = (version = DESKTOP_COMPATIBILITY_ASSESSED_VERSION): DesktopAppInstall => ({
-  id: "OpenAI.Codex_fixture", root: `C:\\Program Files\\WindowsApps\\OpenAI.Codex_${version}_x64__fixture`, relaunch: "OpenAI.Codex_fixture!App",
+  id: DESKTOP_COMPATIBILITY_ASSESSED_FAMILY, root: `C:\\Program Files\\WindowsApps\\OpenAI.Codex_${version}_x64__2p2nqsd0c76g0`, relaunch: `${DESKTOP_COMPATIBILITY_ASSESSED_FAMILY}!App`,
+});
+
+test("matching version text cannot qualify a foreign package family, publisher or app entry", async () => {
+  const original = installed();
+  for (const candidate of [{ ...original, id: "Foreign.Codex_2p2nqsd0c76g0" },
+    { ...original, relaunch: `${original.id}!Other` },
+    { ...original, root: original.root.replace("__2p2nqsd0c76g0", "__foreign") },
+    { ...original, id: "OpenAI.Codex_foreign", relaunch: "OpenAI.Codex_foreign!App", root: original.root.replace("__2p2nqsd0c76g0", "__foreign") },
+    { ...original, root: original.root + "_extra" }]) {
+    const probe = createInstalledBuildProbe(async () => candidate);
+    expect(await probe.check()).toBe(false); await probe.close();
+  }
 });
 
 test("concurrent build checks share only the pending query and refresh after it settles", async () => {

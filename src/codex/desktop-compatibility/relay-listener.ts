@@ -20,7 +20,7 @@ export async function startDesktopRelay(options: DesktopRelayOptions) {
   const server = createServer({ cert: options.leaf.certPem, key: options.leaf.keyPem, ALPNProtocols: ["http/1.1"] });
   server.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
   const valid = (host: string | undefined, path: string | undefined) =>
-    (host === "chatgpt.com" || host === "chatgpt.com:443") && !!path && path.startsWith("/") && !path.startsWith("//");
+    (host?.toLowerCase() === "chatgpt.com" || host?.toLowerCase() === "chatgpt.com:443") && !!path && path.startsWith("/") && !path.startsWith("//");
   server.on("request", (req, res) => {
     if (!valid(req.headers.host, req.url)) { res.writeHead(421); res.end(); return; }
     const abort = new AbortController(); requests.add(abort);

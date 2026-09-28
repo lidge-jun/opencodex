@@ -6,6 +6,14 @@ import { parseWindowsDesktopPackage, WINDOWS_PACKAGE_DISCOVERY_SCRIPT } from "..
 import type { DesktopAppInstall } from "../desktop-app/types";
 
 export const DESKTOP_COMPATIBILITY_ASSESSED_VERSION = "26.924.2738.0";
+export const DESKTOP_COMPATIBILITY_ASSESSED_FAMILY = "OpenAI.Codex_2p2nqsd0c76g0";
+
+function matchesAssessedPackage(install: DesktopAppInstall): boolean {
+  const name = win32.basename(install.root);
+  const parts = /^OpenAI\.Codex_(\d+\.\d+\.\d+\.\d+)_(x64|arm64|x86|neutral)_([A-Za-z0-9.-]*)_([A-Za-z0-9]+)$/.exec(name);
+  return install.id === DESKTOP_COMPATIBILITY_ASSESSED_FAMILY && install.relaunch === `${install.id}!App`
+    && !!parts && parts[1] === DESKTOP_COMPATIBILITY_ASSESSED_VERSION && `OpenAI.Codex_${parts[4]}` === install.id;
+}
 
 /** Resolve only after the exact asynchronous child has closed, including abort/timeout. */
 function queryInstalledPackage(signal: AbortSignal): Promise<DesktopAppInstall | null> {
@@ -33,7 +41,7 @@ export function createInstalledBuildProbe(query: (signal: AbortSignal) => Promis
       const current = new AbortController(); controller = current;
       pending = Promise.resolve().then(() => current.signal.aborted ? null : query(current.signal))
         .then(install => !closed && !current.signal.aborted && !!install
-          && win32.basename(install.root).startsWith(`OpenAI.Codex_${DESKTOP_COMPATIBILITY_ASSESSED_VERSION}_`))
+          && matchesAssessedPackage(install))
         .catch(() => false).finally(() => { pending = null; controller = null; });
       return pending;
     },
