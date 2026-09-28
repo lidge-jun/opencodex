@@ -158,6 +158,10 @@ export async function runGuardedManagerStep(
     return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false };
   }
   const service = snapshot.manager.kind === "absent" ? "absent" : io.stopManager();
+  if (snapshot.manager.kind === "bound"
+    && service !== "stopped" && service !== "stopped-respawnable") {
+    return { service, effect: "manager-still-active", proxy: "unknown", handledByProxy: false };
+  }
   let handledByProxy = false;
   // A bound manager whose stop cascades to the child needs no signal: launchd and
   // systemd end the job's whole process tree. A bound Task Scheduler or WinSW

@@ -25,10 +25,11 @@
 import { execFileSync } from "node:child_process";
 
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
+import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
 import { statusWinswRaw, winswExePath, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import type { GuardedManagerStopped, GuardedManagerTarget } from "./guarded-manager-target";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
-import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
+import { probeWindowsSchedulerTask, querySchtasks, windowsWscript, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 
 /** Runtime table of one Win32 process; a null parent means the chain is unreadable. */
@@ -58,7 +59,8 @@ export interface WindowsGuardedManagerDeps {
   winTaskXml?: () => string;
   winTaskState?: () => WindowsTaskState;
   winService?: () => WindowsWinswServiceInfo | null;
-  winRegistrationOurs?: (xml: string) => boolean;
+  winRegistrationOurs?: (xml: string, expectedUserIds: readonly string[] | null) => boolean;
+  winTaskUserIds?: () => readonly string[] | null;
   winScriptPath?: () => string;
   winLauncherPath?: () => string;
   winWinswExePath?: () => string;
@@ -171,8 +173,27 @@ export function windowsWinswServiceInfo(serviceName = WINSW_SERVICE_ID): Windows
 }
 
 /** The two OpenCodex task shapes this stop may legitimately end. */
-export function windowsTaskRegistrationIsOurs(xml: string): boolean {
-  return windowsTaskRegistrationHealthy(xml) || windowsTaskRegistrationRefreshableLegacy(xml);
+export function windowsTaskRegistrationIsOurs(
+  xml: string,
+  expectedUserIds: readonly string[] | null,
+  launcher = windowsLauncherVbsPath(),
+): boolean {
+  if (expectedUserIds === null) return false;
+  return windowsTaskRegistrationHealthy(xml, windowsWscript(), launcher, expectedUserIds)
+    || windowsTaskRegistrationRefreshableLegacy(xml, windowsWscript(), launcher);
+}
+
+export function currentWindowsTaskUserIds(): readonly string[] | null {
+  try {
+    let identity = cachedCurrentWindowsIdentity();
+    if (!identity) {
+      resolveCurrentWindowsPrincipal(WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS);
+      identity = cachedCurrentWindowsIdentity();
+    }
+    return identity ? [identity.sid, identity.name] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -207,7 +228,9 @@ function resolveWindowsDeps(deps: WindowsGuardedManagerDeps, live: boolean): Res
     }),
     winTaskState: deps.winTaskState ?? (live ? () => windowsScheduledTaskState() : () => "unknown"),
     winService: deps.winService ?? (live ? () => windowsWinswServiceInfo() : () => null),
-    winRegistrationOurs: deps.winRegistrationOurs ?? windowsTaskRegistrationIsOurs,
+    winRegistrationOurs: deps.winRegistrationOurs ?? ((xml, expectedUserIds) =>
+      windowsTaskRegistrationIsOurs(xml, expectedUserIds, (deps.winLauncherPath ?? windowsLauncherVbsPath)())),
+    winTaskUserIds: deps.winTaskUserIds ?? (live ? currentWindowsTaskUserIds : () => null),
     winScriptPath: deps.winScriptPath ?? windowsServiceScriptPath,
     winLauncherPath: deps.winLauncherPath ?? windowsLauncherVbsPath,
     winWinswExePath: deps.winWinswExePath ?? winswExePath,
@@ -317,7 +340,7 @@ function inspectWindowsSchedulerManager(
       ? { kind: "absent" }
       : unknown("a surviving scheduler wrapper could not be tied to the registered task");
   }
-  if (!io.winRegistrationOurs(xml)) {
+  if (!io.winRegistrationOurs(xml, io.winTaskUserIds())) {
     return unknown("the registered task is not a recognized OpenCodex definition");
   }
   if (ancestors.length === 0) {

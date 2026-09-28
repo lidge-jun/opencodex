@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+
+import {
+  cachedCurrentWindowsIdentity,
+  resetWindowsPrincipalForTests,
+  setWindowsPrincipalRunnerForTests,
+} from "../../src/lib/windows-user-principal";
+import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
 
 import {
   inspectGuardedManagerTarget,
@@ -9,6 +16,7 @@ import type { GuardedStopSnapshot } from "../../src/cli/stop-approval";
 import {
   ancestorWrapperPids,
   commandLineHasPathToken,
+  currentWindowsTaskUserIds,
   isDescendantOf,
   observeWindowsGuardedManagerStopped,
   wrapperProcessesAlive,
@@ -178,6 +186,50 @@ describe("windows guarded manager target", () => {
   });
 });
 
+describe("guarded scheduler registration identity", () => {
+  const sid = "S-1-5-21-100-200-300-1001";
+  const xml = buildWindowsTaskXml(CMD, VBS, undefined, sid);
+  const inspect = () => inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+    win: {
+      winTaskXml: () => xml,
+      winRegistrationOurs: undefined,
+      winTaskUserIds: currentWindowsTaskUserIds,
+    },
+  }));
+
+  afterEach(() => {
+    setWindowsPrincipalRunnerForTests(null);
+    resetWindowsPrincipalForTests();
+  });
+
+  test("an empty identity cache resolves the current scoped task through the real validator", () => {
+    let lookups = 0;
+    setWindowsPrincipalRunnerForTests(() => {
+      lookups++;
+      return { success: true, exitCode: 0, timedOut: false,
+        stdout: `${sid}\nMACHINE\\me\n` };
+    });
+    expect(cachedCurrentWindowsIdentity()).toBeNull();
+    expect(inspect()).toMatchObject({ kind: "bound", backend: "scheduler", managerPid: 30 });
+    expect(lookups).toBe(1);
+  });
+
+  test("a timed out identity lookup cannot prove the task", () => {
+    setWindowsPrincipalRunnerForTests(() => ({
+      success: false, exitCode: null, timedOut: true, stdout: "",
+    }));
+    expect(inspect().kind).toBe("unknown");
+  });
+
+  test("a different effective account cannot prove the task", () => {
+    setWindowsPrincipalRunnerForTests(() => ({
+      success: true, exitCode: 0, timedOut: false,
+      stdout: "S-1-5-21-100-200-300-1002\nMACHINE\\other\n",
+    }));
+    expect(inspect().kind).toBe("unknown");
+  });
+});
+
 describe("windows guarded winsw manager", () => {
   const winswDeps = (overrides: Record<string, unknown> = {}) => schedulerDeps({
     scheduler: schedulerAbsent,
@@ -311,6 +363,24 @@ describe("guarded step signals a surviving approved process", () => {
     });
     expect(order).toEqual(["manager", "signal", "settle", "state"]);
     expect(step).toMatchObject({ effect: "stopped", handledByProxy: true });
+  });
+
+  test("failed or unknown Windows manager stop leaves the approved child untouched", async () => {
+    for (const service of ["failed", "state-unknown"] as const) {
+      const order: string[] = [];
+      const manager = { kind: "bound" as const, pid: 42, managerPid: 30,
+        backend: "scheduler" as const, childNeedsSeparateStop: true };
+      const step = await runGuardedManagerStep(snapshotFor(manager), {
+        revalidateManager: () => manager,
+        stopManager: () => { order.push("manager"); return service; },
+        signalApproved: async () => { order.push("signal"); return true; },
+        settle: async () => { order.push("settle"); return true; },
+        managerState: async () => { order.push("state"); return "active"; },
+      });
+      expect(order).toEqual(["manager"]);
+      expect(step).toMatchObject({ service, effect: "manager-still-active",
+        proxy: "unknown", handledByProxy: false });
+    }
   });
 
   test("launchd bound keeps the manager-cascade contract", async () => {
