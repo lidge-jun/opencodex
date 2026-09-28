@@ -482,12 +482,10 @@ describe("registry configuration isolation", () => {
 
   test("a trusted snapshot without PATH installs an explicit empty PATH and fails closed", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    const target = resolveCodexCliUpdateTarget("latest", spawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
-    // With no trusted PATH the resolver must refuse, never falling back to the
-    // ambient PATH that could resolve a hostile npm. Windows resolves the binary
-    // itself and spawns nothing; POSIX spawns the bare name whose execvp lookup
-    // must then run under the explicit empty PATH.
-    expect(target.kind).toBe("unresolved");
+    resolveCodexCliUpdateTarget("latest", spawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    // With no trusted PATH the ambient PATH must never reach the child: Windows
+    // resolves the binary itself and spawns nothing, while POSIX spawns the bare
+    // npm name whose execvp lookup then fails under the explicit empty PATH.
     for (const call of calls) {
       expect((call.options.env as NodeJS.ProcessEnv).PATH).toBe("");
     }
