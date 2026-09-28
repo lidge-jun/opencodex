@@ -14,10 +14,13 @@ Cross-platform CI on the candidate: run 36474965294 (workflow_dispatch). Same pr
    PR to `main`, merge commit. Dispatch `release.yml` on `main` with `version=2.70.0`, `tag=latest`,
    `dry-run=false`, `expected-sha=<main head>`.
 4. Verify npm `latest=2.70.0` and `preview=2.70.0-preview.20260929`, both GitHub releases with the
-   full asset set and prerelease flags, and `latest.json` at 2.70.0.
+   full asset set and prerelease flags, and `latest.json` at 2.70.0 with five signed platforms.
 5. Land the outcome on `dev`.
 
 Guards: each promotion SHA needs a successful push-event Cross-platform CI and Service lifecycle run
 before its release dispatch (release.yml gates on both). Verify the preview tree differs from the
 candidate only in the four version sources and the main tree equals the candidate. Do not weaken
 release preflight, exact-SHA or CI gates; a failing run is fixed through `dev` and re-promoted.
+
+If a release run fails after npm publication was acknowledged, re-dispatch with the same version and
+expected-sha plus `resume-after-npm-publish: true`; never republish.
