@@ -13,7 +13,9 @@ import { markSiblingStart, siblingOfLivePort } from "../codex/sibling-start";
 import { readClientConnectionState } from "../client/state";
 import { findManagedRegion, resolveGrokHome } from "../grok/inject";
 import { providerTableString } from "../codex/injected-marker";
-import { probePortOwner, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
+import { isLocalAttestationSecret } from "../lib/local-management-attestation";
+import { probePortOwner, proveLiveProxyOwnedByHome, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
+import type { RuntimePortState } from "../config/process-state";
 
 const MAX_HINT_BYTES = 256 * 1024;
 // Far above any real Grok config; discovery must not stall startup when Grok sync is off.
@@ -62,14 +64,21 @@ function loopbackPort(raw: string | null): number | null {
 /** Returns only a different process with an identity-checked /healthz response. */
 export async function findCrossHomeOwner(options: { homeDir?: string } = {}): Promise<number | null> {
   const candidates = new Set<number>();
+  let defaultRuntime: RuntimePortState | null = null;
   const defaultHome = join(options.homeDir ?? homedir(), ".opencodex");
   if (resolve(getConfigDir()) !== resolve(defaultHome)) {
     const raw = readBoundedRegularFile(join(defaultHome, "runtime-port.json"), MAX_HINT_BYTES);
     if (raw) {
       try {
         const record: unknown = JSON.parse(raw);
-        if (record && typeof record === "object" && validPort((record as { port?: unknown }).port)) {
-          candidates.add((record as { port: number }).port);
+        if (record && typeof record === "object") {
+          const state = record as Record<string, unknown>;
+          if (Number.isSafeInteger(state.pid) && Number(state.pid) > 0 && validPort(state.port)
+            && isLocalAttestationSecret(state.attestationSecret)
+            && (state.hostname === undefined || typeof state.hostname === "string")) {
+            defaultRuntime = state as RuntimePortState;
+            candidates.add(defaultRuntime.port);
+          }
         }
       } catch { /* stale or malformed hint */ }
     }
@@ -97,8 +106,15 @@ export async function findCrossHomeOwner(options: { homeDir?: string } = {}): Pr
   } catch { /* an absent or invalid client home is not owner evidence */ }
 
   for (const port of candidates) {
+    // A managed client URL is only a location hint. The default home's protected runtime
+    // record supplies the identity and proof key that make it ownership evidence.
+    if (!defaultRuntime || defaultRuntime.port !== port || defaultRuntime.pid === process.pid) continue;
     const owner = await probePortOwner(port, {}, START_OWNERSHIP_LIVENESS);
-    if (owner && Number.isSafeInteger(owner.pid) && owner.pid! > 0 && owner.pid !== process.pid) return port;
+    if (owner?.pid !== defaultRuntime.pid) continue;
+    if (await proveLiveProxyOwnedByHome(
+      { ...owner, port, source: "runtime" },
+      { readRuntimeFn: () => defaultRuntime },
+    )) return port;
   }
   return null;
 }

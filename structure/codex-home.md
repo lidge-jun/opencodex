@@ -155,7 +155,7 @@ A sibling instance is `ocx start --port <other>` while a live proxy serves the c
 lease only with its own `OPENCODEX_HOME`, and still shares this Codex home, `~/.claude`, `~/.grok` and
 the launchd domain with the live owner. `handleStart` marks the process through
 `src/codex/sibling-start.ts` before the server binds, and the mark is one-way for the process's
-lifetime. The cross-home check follows same-home discovery and precedes journal reconciliation. It reads the default home's runtime record only for a custom home, plus managed Grok and Codex loopback URLs. It accepts only an identity-checked positive PID different from this process; a sole custom-home start still syncs. The mark closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
+lifetime. The cross-home check follows same-home discovery and precedes journal reconciliation. It reads the default home's protected runtime record only for a custom home, plus managed Grok and Codex loopback URLs as location hints. It accepts a different process only when the listener's PID matches that record and a fresh `/healthz` challenge proves possession of its attestation secret; an unauthenticated listener at a stale managed destination is not an owner, and a sole custom-home start still syncs. The mark closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
 `sibling`, so startup sync, cache invalidation, Grok, the retained catalog writers and the native-main
 lifecycle stand down (the sibling runs the no-op lifecycle, so it never contends for the owner lease;
 its data-plane `auth.json` refresh still runs under the machine-wide exclusive claim). Owner-level
