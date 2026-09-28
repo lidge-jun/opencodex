@@ -632,7 +632,7 @@ const pickerConstraints = () => seq(
   tlv(0xa1, Buffer.concat([seq(tlv(0x87, Buffer.alloc(8))), seq(tlv(0x87, Buffer.alloc(32)))])),
 );
 
-/** Flips the keyUsage bits byte inside an emitted certificate (the gate does not verify signatures). */
+/** Flips the keyUsage bits byte inside an emitted certificate, leaving the signature stale. */
 function withKeyUsageBits(pem: string, bits: number): string {
   const raw = Buffer.from(pem.replace(/-----[A-Z ]+-----|\s/g, ""), "base64");
   const tbs = parts(der(raw, 0).body)[0]!;
@@ -652,6 +652,15 @@ function withKeyUsageBits(pem: string, bits: number): string {
 const pickable = (overrides: Parameters<typeof createCertificateAuthority>[0]) =>
   createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, ...overrides }).certPem;
 
+// The four extensions createCertificateAuthority emits, re-encoded here so a forged profile can
+// differ in one field while mintAuthorityWithExtensionsForTests keeps the signature valid.
+const pickerBasicConstraints = () => extension([0x55, 0x1d, 0x13], true, seq(tlv(0x01, Buffer.from([0xff])), tlv(0x02, Buffer.from([0]))));
+const pickerKeyUsage = (bits: number) => extension([0x55, 0x1d, 0x0f], true, tlv(0x03, Buffer.from([1, bits])));
+const pickerSubjectKeyId = () => extension([0x55, 0x1d, 0x0e], false, octet(Buffer.alloc(20)));
+const pickerNameConstraints = () => extension([0x55, 0x1d, 0x1e], true, pickerConstraints());
+const standardProfile = (keyUsageBits = 0x06): Buffer[] =>
+  [pickerBasicConstraints(), pickerKeyUsage(keyUsageBits), pickerSubjectKeyId(), pickerNameConstraints()];
+
 describe("acceptsPickerAuthority", () => {
   test("accepts exactly the authority profile this process issues", () => {
     expect(acceptsPickerAuthority(pickable({ permittedDnsNames: [PICKER_HOST] }))).toBe(true);
@@ -662,17 +671,28 @@ describe("acceptsPickerAuthority", () => {
     ["an extra permitted DNS subtree", { permittedDnsNames: [PICKER_HOST, "evil.example"] }],
     ["missing IP exclusions", { permittedDnsNames: [PICKER_HOST], excludeAllIpAddresses: false }],
     ["no name constraint at all", {}],
-    ["a non-critical name constraint", { additionalExtensions: [extension([0x55, 0x1d, 0x1e], false, pickerConstraints())] }],
-    ["a second nameConstraints extension", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x1e], true, pickerConstraints())] }],
-    // SAN + serverAuth would let the trust anchor itself terminate an off-host handshake.
-    ["a subjectAltName for an off-host name", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x11], false, seq(dnsName("example.com")))] }],
-    ["a serverAuth extended key usage", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x25], false, seq(oid(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01)))] }],
-    ["a critical key identifier", { permittedDnsNames: [PICKER_HOST], additionalExtensions: [extension([0x55, 0x1d, 0x0e], true, octet(Buffer.alloc(20)))] }],
   ])("rejects a root with %s", (_name, options) => {
     expect(acceptsPickerAuthority(pickable(options))).toBe(false);
   });
 
-  test("rejects a root whose key usage also grants digitalSignature", () => {
+  // These profiles cannot come from the issuer API; each is signed correctly, so a refusal can
+  // only come from the extension-profile comparison, not the signature check.
+  test.each<[string, Buffer[]]>([
+    ["a non-critical name constraint", [...standardProfile().slice(0, 3), extension([0x55, 0x1d, 0x1e], false, pickerConstraints())]],
+    ["a second nameConstraints extension", [...standardProfile(), extension([0x55, 0x1d, 0x1e], true, pickerConstraints())]],
+    // SAN + serverAuth would let the trust anchor itself terminate an off-host handshake.
+    ["a subjectAltName for an off-host name", [...standardProfile(), extension([0x55, 0x1d, 0x11], false, seq(dnsName("example.com")))]],
+    ["a serverAuth extended key usage", [...standardProfile(), extension([0x55, 0x1d, 0x25], false, seq(oid(0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01)))]],
+    ["a critical key identifier", [...standardProfile(), extension([0x55, 0x1d, 0x0e], true, octet(Buffer.alloc(20)))]],
+  ])("rejects a signed root with %s", (_name, extensions) => {
+    expect(acceptsPickerAuthority(forgeAuthority(extensions))).toBe(false);
+  });
+
+  test("rejects a signed root whose key usage also grants digitalSignature", () => {
+    expect(acceptsPickerAuthority(forgeAuthority(standardProfile(0x87)))).toBe(false);
+  });
+
+  test("rejects a root whose bytes no longer match its signature", () => {
     const forged = withKeyUsageBits(pickable({ permittedDnsNames: [PICKER_HOST] }), 0x87);
     expect(acceptsPickerAuthority(forged)).toBe(false);
   });

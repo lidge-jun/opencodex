@@ -198,9 +198,7 @@ export interface AuthorityOptions {
   permittedDnsNames?: readonly string[];
   /** With permittedDnsNames: also exclude every IP address (default true). */
   excludeAllIpAddresses?: boolean;
-  /** Extra DER-encoded Extension entries appended after the built-ins (e.g. for profile tests). */
-  additionalExtensions?: readonly Uint8Array[];
-}
+ }
 
 export function createCertificateAuthority(options: AuthorityOptions): LocalInterceptCa {
   const validityDays = options.validityDays ?? CA_VALIDITY_DAYS;
@@ -223,7 +221,6 @@ export function createCertificateAuthority(options: AuthorityOptions): LocalInte
       ...(options.permittedDnsNames?.length
         ? [extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames, options.excludeAllIpAddresses !== false))]
         : []),
-      ...(options.additionalExtensions ?? []),
     ],
   });
   return {
