@@ -569,9 +569,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
-    const context = exportContextOf(input);
-    const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home, context);
-    if (input.clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(paths.detectDir, context);
+    const paths = resolveStatePaths(input);
     installed = io.statKind(paths.detectDir) === "dir";
     if (input.clientId === "cline") io = createClineIO(io, paths.configPath, store);
     /*
@@ -685,12 +683,19 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   };
 }
 
+function resolveStatePaths(input: IntegrationStateInput): { configPath: string; detectDir: string } {
+  const context = exportContextOf(input);
+  const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home, context);
+  if (input.clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(paths.detectDir, context);
+  return paths;
+}
+
 export function readOwnedDroidReasoningDefaults(input: IntegrationStateInput): Record<string, string> {
   if (input.clientId !== "droid") return {};
   const store = input.store ?? createIntegrationStateStore();
   const io = input.io ?? store.io();
   try {
-    const paths = input.resolvedPaths ?? resolveIntegrationPaths("droid", input.env, input.home);
+    const paths = resolveStatePaths(input);
     const record = store.readRecords().droid;
     if (!record || record.clientId !== "droid" || record.configPath !== paths.configPath) return {};
     const effective = resolveIntegrationTarget({

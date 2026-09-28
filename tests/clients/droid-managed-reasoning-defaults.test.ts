@@ -105,6 +105,21 @@ describe("Droid managed reasoning defaults", () => {
     expect(settings(path).customModels[0]).toMatchObject({ extraHeaders: { [HEADER]: "low" } });
   });
 
+  test.each(["model", "endpoint"])("ambiguous legacy %s rows suppress defaults for resolved and unresolved paths", (collision) => {
+    const path = install();
+    expect(applyIntegration({ ...input(), droidReasoningDefaults: { "mock/chat": "high" } }).ok).toBe(true);
+    const detectDir = INTEGRATION_CLIENTS.droid.detectDir({}, home);
+    writeFileSync(join(detectDir, "config.json"), JSON.stringify({ custom_models: [{
+      display_name: "Personal",
+      model: collision === "model" ? "mock/chat" : "another/model",
+      base_url: collision === "endpoint" ? "http://localhost:10100/v1" : "http://localhost:11434/v1",
+    }] }));
+    for (const target of [input(), { ...input(), resolvedPaths: { configPath: path, detectDir } }]) {
+      expect(readIntegrationState(target).state).toBe("unsafe");
+      expect(readOwnedDroidReasoningDefaults(target)).toEqual({});
+    }
+  });
+
   test("foreign rows with a matching model name do not supply inherited defaults", () => {
     const path = install();
     const foreign = {

@@ -1470,7 +1470,7 @@ export const zh: Record<TKey, string> = {
   "integrations.droidReasoning.title": "默认推理强度",
   "integrations.droidReasoning.description": "仅当请求未指定推理强度时才使用默认值。停用 Factory Droid 会删除这些已保存的默认值。",
   "integrations.droidReasoning.noDefault": "无默认值",
-  "integrations.droidReasoning.noEfforts": "没有可用的默认值",
+  "integrations.droidReasoning.noEfforts": "没有可用的推理强度选项",
   "integrations.droidReasoning.noModels": "没有可导出的模型。",
   "integrations.droidReasoning.modelDefault": "{model} 的默认推理强度",
   "integrations.droidReasoning.unsupportedTitle": "部分已保存的默认值已不再受支持。清除后，请保存 / 检查更改以应用。",

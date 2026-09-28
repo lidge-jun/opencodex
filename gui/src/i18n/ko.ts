@@ -1489,7 +1489,7 @@ export const ko: Record<TKey, string> = {
   "integrations.droidReasoning.title": "기본 추론 강도",
   "integrations.droidReasoning.description": "요청에 추론 강도가 지정되지 않은 경우에만 기본값을 사용합니다. Factory Droid를 비활성화하면 저장된 기본값도 제거됩니다.",
   "integrations.droidReasoning.noDefault": "기본값 없음",
-  "integrations.droidReasoning.noEfforts": "사용 가능한 기본값 없음",
+  "integrations.droidReasoning.noEfforts": "사용 가능한 추론 강도 없음",
   "integrations.droidReasoning.noModels": "내보낸 모델이 없습니다.",
   "integrations.droidReasoning.modelDefault": "{model}의 기본 추론 강도",
   "integrations.droidReasoning.unsupportedTitle": "저장된 기본값 중 일부가 더 이상 지원되지 않습니다. 지운 다음 변경 사항을 저장 / 검토해야 적용됩니다.",

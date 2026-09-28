@@ -203,7 +203,7 @@ export default function FileIntegrationPage({
     reasoningDefaults = client === "droid" && operation !== "disable"
       ? (droidReasoningDraft?.scopeKey === scopeKey
         ? droidReasoningDraft.values
-        : status?.droidReasoning?.defaults) ?? {}
+        : undefined)
       : undefined,
   ) => {
     if (!status || pending || plannedMutation) return;

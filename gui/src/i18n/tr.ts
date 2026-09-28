@@ -1988,7 +1988,7 @@ export const tr: Record<TKey, string> = {
   "integrations.droidReasoning.title": "Varsayılan akıl yürütme düzeyi",
   "integrations.droidReasoning.description": "Varsayılan yalnızca istek akıl yürütme düzeyi belirtmediğinde kullanılır. Kaydedilmiş varsayılanları kaldırmak için Factory Droid'u devre dışı bırakın.",
   "integrations.droidReasoning.noDefault": "Varsayılan yok",
-  "integrations.droidReasoning.noEfforts": "Kullanılabilir varsayılan yok",
+  "integrations.droidReasoning.noEfforts": "Kullanılabilir akıl yürütme düzeyi seçeneği yok",
   "integrations.droidReasoning.noModels": "Dışa aktarılmış model yok.",
   "integrations.droidReasoning.modelDefault": "{model} için varsayılan akıl yürütme düzeyi",
   "integrations.droidReasoning.unsupportedTitle": "Kaydedilmiş bazı varsayılanlar artık desteklenmiyor. Bunları temizleyin, ardından uygulamak için değişiklikleri kaydedip inceleyin.",

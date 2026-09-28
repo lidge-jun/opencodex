@@ -2003,7 +2003,7 @@ export const en = {
   "integrations.droidReasoning.title": "Default reasoning effort",
   "integrations.droidReasoning.description": "A default is used only when a request omits its reasoning effort. Disable Factory Droid to remove these saved defaults.",
   "integrations.droidReasoning.noDefault": "No default",
-  "integrations.droidReasoning.noEfforts": "No default available",
+  "integrations.droidReasoning.noEfforts": "No reasoning-effort options available",
   "integrations.droidReasoning.noModels": "No exported models are available.",
   "integrations.droidReasoning.modelDefault": "Default reasoning effort for {model}",
   "integrations.droidReasoning.unsupportedTitle": "Some saved defaults are no longer supported. Clear them, then save / review changes to apply.",

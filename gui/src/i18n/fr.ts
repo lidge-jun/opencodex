@@ -1975,7 +1975,7 @@ export const fr: Record<TKey, string> = {
   "integrations.droidReasoning.title": "Niveau de raisonnement par défaut",
   "integrations.droidReasoning.description": "Le niveau par défaut s’applique uniquement si la requête ne précise aucun niveau de raisonnement. Désactivez Factory Droid pour supprimer ces valeurs enregistrées.",
   "integrations.droidReasoning.noDefault": "Aucune valeur par défaut",
-  "integrations.droidReasoning.noEfforts": "Aucune valeur par défaut disponible",
+  "integrations.droidReasoning.noEfforts": "Aucune option de niveau de raisonnement disponible",
   "integrations.droidReasoning.noModels": "Aucun modèle exporté n’est disponible.",
   "integrations.droidReasoning.modelDefault": "Niveau de raisonnement par défaut pour {model}",
   "integrations.droidReasoning.unsupportedTitle": "Certaines valeurs enregistrées ne sont plus prises en charge. Supprimez-les, puis enregistrez / vérifiez les changements pour les appliquer.",

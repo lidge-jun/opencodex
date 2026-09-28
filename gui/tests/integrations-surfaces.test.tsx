@@ -350,6 +350,42 @@ test("Droid reasoning defaults use one frozen snapshot for review and commit", a
   expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.textContent).toContain("low");
 });
 
+test("Droid refresh omits unsupported saved defaults while an explicit edit stays frozen through confirm", async () => {
+  stateResponse = () => json(status({
+    clientId: "droid",
+    state: "stale",
+    configPath: "/tmp/factory/settings.json",
+    droidReasoning: {
+      models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low"] }],
+      defaults: { "openai/gpt-test": "high" },
+    },
+  }));
+  await mountClient(true, "droid");
+
+  await act(async () => { buttonByText("Update")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+  const refreshPreview = requests.find(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(refreshPreview?.body).not.toHaveProperty("droidReasoningDefaults");
+
+  const dialog = container.querySelector("dialog[open]")!;
+  const close = Array.from(dialog.querySelectorAll("button")).find(button => button.textContent?.trim() === "Close") as HTMLButtonElement;
+  await act(async () => { close.click(); });
+
+  const selector = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+  await act(async () => { selector.click(); });
+  const low = Array.from(testWindow.document.querySelectorAll('[role="option"]')).find(option => option.textContent === "low") as HTMLButtonElement;
+  await act(async () => { low.click(); });
+  await act(async () => { buttonByText("Save / review changes")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+
+  const previews = requests.filter(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(previews[1]?.body).toMatchObject({ droidReasoningDefaults: { "openai/gpt-test": "low" } });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.disabled).toBe(true);
+  await confirmDialog("Apply");
+  const mutation = requests.find(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/droid"));
+  expect(mutation?.body).toMatchObject({ droidReasoningDefaults: { "openai/gpt-test": "low" } });
+});
+
 function buttons(): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll("button")) as unknown as HTMLButtonElement[];
 }

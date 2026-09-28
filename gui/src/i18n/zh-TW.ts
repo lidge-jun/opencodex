@@ -2780,7 +2780,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.droidReasoning.title": "預設推理強度",
   "integrations.droidReasoning.description": "只有在要求未指定推理強度時才會使用預設值。停用 Factory Droid 會移除這些已儲存的預設值。",
   "integrations.droidReasoning.noDefault": "無預設值",
-  "integrations.droidReasoning.noEfforts": "沒有可用的預設值",
+  "integrations.droidReasoning.noEfforts": "沒有可用的推理強度選項",
   "integrations.droidReasoning.noModels": "沒有可匯出的模型。",
   "integrations.droidReasoning.modelDefault": "{model} 的預設推理強度",
   "integrations.droidReasoning.unsupportedTitle": "部分已儲存的預設值已不再支援。清除後，請儲存 / 檢查變更以套用。",

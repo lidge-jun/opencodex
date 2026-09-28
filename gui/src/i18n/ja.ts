@@ -1878,7 +1878,7 @@ export const ja: Record<TKey, string> = {
   "integrations.droidReasoning.title": "推論レベルの既定値",
   "integrations.droidReasoning.description": "リクエストに推論レベルが指定されていない場合にのみ既定値が使われます。Factory Droid を無効にすると、保存済みの既定値も削除されます。",
   "integrations.droidReasoning.noDefault": "既定値なし",
-  "integrations.droidReasoning.noEfforts": "設定可能な既定値はありません",
+  "integrations.droidReasoning.noEfforts": "利用可能な推論強度の選択肢はありません",
   "integrations.droidReasoning.noModels": "エクスポートされたモデルはありません。",
   "integrations.droidReasoning.modelDefault": "{model} の推論レベルの既定値",
   "integrations.droidReasoning.unsupportedTitle": "一部の保存済み既定値はサポートされなくなりました。削除した後、変更を保存 / 確認して適用してください。",

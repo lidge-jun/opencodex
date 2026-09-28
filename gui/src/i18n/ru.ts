@@ -1969,7 +1969,7 @@ export const ru: Record<TKey, string> = {
   "integrations.droidReasoning.title": "Уровень рассуждений по умолчанию",
   "integrations.droidReasoning.description": "Значение по умолчанию применяется, только если запрос не задаёт уровень рассуждений. Отключите Factory Droid, чтобы удалить сохранённые значения.",
   "integrations.droidReasoning.noDefault": "Без значения по умолчанию",
-  "integrations.droidReasoning.noEfforts": "Нет доступного значения по умолчанию",
+  "integrations.droidReasoning.noEfforts": "Нет доступных вариантов уровня рассуждения",
   "integrations.droidReasoning.noModels": "Нет доступных экспортированных моделей.",
   "integrations.droidReasoning.modelDefault": "Уровень рассуждений по умолчанию для {model}",
   "integrations.droidReasoning.unsupportedTitle": "Некоторые сохранённые значения больше не поддерживаются. Удалите их, затем сохраните / проверьте изменения, чтобы применить их.",

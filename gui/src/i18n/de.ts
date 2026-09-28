@@ -1453,7 +1453,7 @@ export const de: Record<TKey, string> = {
   "integrations.droidReasoning.title": "Standard für Reasoning-Aufwand",
   "integrations.droidReasoning.description": "Der Standard gilt nur, wenn eine Anfrage keinen Reasoning-Aufwand angibt. Deaktiviere Factory Droid, um diese gespeicherten Standards zu entfernen.",
   "integrations.droidReasoning.noDefault": "Kein Standard",
-  "integrations.droidReasoning.noEfforts": "Kein Standard verfügbar",
+  "integrations.droidReasoning.noEfforts": "Keine Optionen für die Reasoning-Stärke verfügbar",
   "integrations.droidReasoning.noModels": "Keine exportierten Modelle verfügbar.",
   "integrations.droidReasoning.modelDefault": "Standard-Reasoning-Aufwand für {model}",
   "integrations.droidReasoning.unsupportedTitle": "Einige gespeicherte Standards werden nicht mehr unterstützt. Entferne sie; speichere und prüfe anschließend die Änderungen, um sie anzuwenden.",

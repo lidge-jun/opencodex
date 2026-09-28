@@ -1958,7 +1958,7 @@ export const vi: Record<TKey, string> = {
   "integrations.droidReasoning.title": "Mức suy luận mặc định",
   "integrations.droidReasoning.description": "Chỉ dùng mức mặc định khi yêu cầu không chỉ định mức suy luận. Tắt Factory Droid để xóa các mức mặc định đã lưu.",
   "integrations.droidReasoning.noDefault": "Không có mặc định",
-  "integrations.droidReasoning.noEfforts": "Không có mức mặc định khả dụng",
+  "integrations.droidReasoning.noEfforts": "Không có tùy chọn mức độ suy luận khả dụng",
   "integrations.droidReasoning.noModels": "Không có mô hình nào được xuất.",
   "integrations.droidReasoning.modelDefault": "Mức suy luận mặc định cho {model}",
   "integrations.droidReasoning.unsupportedTitle": "Một số mức mặc định đã lưu không còn được hỗ trợ. Hãy xóa chúng, sau đó lưu / xem lại thay đổi để áp dụng.",
