@@ -27,6 +27,15 @@ function config(redirects: Record<string, string>): OcxConfig {
   };
 }
 
+function keyedSourceConfig(redirects: Record<string, string>): OcxConfig {
+  const configured = config(redirects);
+  configured.defaultProvider = "source";
+  configured.providers.source = {
+    adapter: "openai-chat", baseUrl: "https://source.example.test/v1", apiKey: "test-key", models: ["m1", "m2", "m3", "m4"],
+  };
+  return configured;
+}
+
 describe("blocked-model redirect compatibility and provider changes", () => {
   test.each(["openai/m1", "m1", "fast"])("legacy bare mapping remains post-resolution for %s", selector => {
     const routed = routeModel(config({ m1: "m2", m2: "m3" }), selector);
@@ -126,20 +135,20 @@ describe("blocked-model redirect compatibility and provider changes", () => {
   });
 
   test("detects cross-provider cycles", () => {
-    const configured = config({ m1: "google/g1", g1: "openai/m1" });
-    expect(() => routeModel(configured, "openai/m1")).toThrow(/cycle detected/i);
+    const configured = keyedSourceConfig({ m1: "google/g1", g1: "source/m1" });
+    expect(() => routeModel(configured, "source/m1")).toThrow(/cycle detected/i);
   });
 
   test("allows five redirect edges across an alias boundary and rejects six", () => {
     const redirects = {
       m1: "google/quick", // quick resolves to g1 before the next edge.
-      g1: "openai/m2",
+      g1: "source/m2",
       m2: "google/g2",
-      g2: "openai/m3",
+      g2: "source/m3",
       m3: "google/g3",
     };
-    expect(routeModel(config(redirects), "openai/m1")).toMatchObject({ providerName: "google", modelId: "g3" });
-    expect(() => routeModel(config({ ...redirects, g3: "openai/m4" }), "openai/m1"))
+    expect(routeModel(keyedSourceConfig(redirects), "source/m1")).toMatchObject({ providerName: "google", modelId: "g3" });
+    expect(() => routeModel(keyedSourceConfig({ ...redirects, g3: "source/m4" }), "source/m1"))
       .toThrow(/maximum redirect depth \(5\)/i);
   });
 
