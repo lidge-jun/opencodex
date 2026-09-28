@@ -40,7 +40,7 @@ import {
 } from "../coding-agent/protocol";
 import { redactSecrets } from "../coding-agent/turn";
 import { buildChildEnv } from "./env";
-import { createHarnessProcessSupervisor, type HarnessSpawnFn } from "./harness-process";
+import { createHarnessProcessSupervisor, type HarnessSpawnFn, type HarnessTreeKillFn } from "./harness-process";
 import type { ClaudeCliProfile } from "./profiles";
 import { buildAgentSdkTurnOptions } from "./sdk-options";
 
@@ -84,6 +84,10 @@ export interface ClaudeAgentSdkDeps {
   killGraceMs?: number;
   /** Test seam for the owned harness process; the default uses `node:child_process`. */
   spawnHarnessProcess?: HarnessSpawnFn;
+  /** Platform seam for the harness tree terminator and its process group (tests). */
+  harnessPlatform?: NodeJS.Platform;
+  /** Test seam for the harness tree terminator; see `./harness-process.ts`. */
+  killHarnessProcessTree?: HarnessTreeKillFn;
   /** Creates the turn neutral working directory. Test seam; the default uses the system temp dir. */
   makeScratchDir?: () => Promise<string>;
   /** Removes that directory once the harness is gone. */
@@ -263,6 +267,8 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     reapTimeoutMs,
     ...(deps.killGraceMs !== undefined ? { killGraceMs: deps.killGraceMs } : {}),
     ...(deps.spawnHarnessProcess !== undefined ? { spawn: deps.spawnHarnessProcess } : {}),
+    ...(deps.harnessPlatform !== undefined ? { platform: deps.harnessPlatform } : {}),
+    ...(deps.killHarnessProcessTree !== undefined ? { killProcessTree: deps.killHarnessProcessTree } : {}),
   });
 
   const options = buildAgentSdkTurnOptions({
@@ -285,11 +291,20 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
       : {}),
   });
 
-  let terminalEmitted = false;
+  // A terminal frame is held here instead of being emitted where it is decided; the tail delivers the
+  // one this turn owes the client. That ordering is load-bearing, not stylistic: the bridge closes the
+  // response body on the terminal frame, and the body's EOF is what releases the global turn-admission
+  // lease. Delivered from inside the event loop, it would admit the next turn while this one's harness
+  // is still being reaped - the same leak the process ownership in `./harness-process.ts` exists to
+  // close, one layer up. Non-terminal frames are unaffected and still stream as they arrive.
+  let terminalDecided = false;
+  let pendingTerminal: AdapterEvent | undefined;
   const emitOnce = (event: AdapterEvent): void => {
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
-      if (terminalEmitted) return;
-      terminalEmitted = true;
+      if (terminalDecided) return;
+      terminalDecided = true;
+      pendingTerminal = event;
+      return;
     }
     emit(event);
   };
@@ -447,7 +462,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         }
         if (
           toolBridge?.requireToolCall === true
-          && !terminalEmitted
+          && !terminalDecided
           && event.type === "done"
           && event.stopReason !== "tool_use"
           && (state.completedToolCalls ?? 0) === 0
@@ -467,7 +482,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         }
         if (
           toolBridge
-          && !terminalEmitted
+          && !terminalDecided
           && event.type === "done"
           && (state.toolBlockStarts ?? 0) > 0
           && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
@@ -485,7 +500,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         }
         if (
           toolBridge
-          && !terminalEmitted
+          && !terminalDecided
           && event.type === "done"
           && (state.toolBlockStarts ?? 0) > 0
           && (state.completedToolCalls ?? 0) === (state.toolBlockStarts ?? 0)
@@ -500,7 +515,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
       if (failClosed) break;
       if (
         toolBridge
-        && !terminalEmitted
+        && !terminalDecided
         && state.sawMessageStop
         && (state.toolBlockStarts ?? 0) > 0
         && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
@@ -515,7 +530,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         });
         break;
       }
-      if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
+      if (toolBridge && !terminalDecided && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
         // The capture handler never answers, so the harness parks after message_stop. The completed
         // tool_use blocks ARE this turn's structured output: end the leg here, let the SDK abort the
         // process, and hand the call to the client, which executes it and continues the conversation.
@@ -528,7 +543,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         });
         break;
       }
-      if (terminalEmitted) break;
+      if (terminalDecided) break;
     }
   } catch (err) {
     streamError = err instanceof Error ? err.message : String(err);
@@ -546,23 +561,49 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
   // in-process MCP server), and the wait is bounded so a harness that ignores the abort cannot hold
   // the client's request open.
   abortController.abort();
+  // The SDK's teardown waits on its own clock - 2000 ms before it even schedules SIGTERM - while the
+  // completion the client sees is gated on the ladder below, which owns the child. Terminating here
+  // first keeps the guarantee this file exists for (no answer, and no admitted next turn, underneath
+  // a live harness) without billing the client for a clock that is not about the process: the SDK is
+  // left to unwind on a process that is already gone.
+  const sdkSettle = query?.return !== undefined
+    ? query.return(undefined).catch(() => undefined)
+    : Promise.resolve();
   let reapTimer: ReturnType<typeof setTimeout> | undefined;
-  if (query?.return) {
+  const settleSdk = async (): Promise<void> => {
     await Promise.race([
-      query.return(undefined).catch(() => undefined),
+      sdkSettle,
       new Promise<void>(resolve => { reapTimer = setTimeout(resolve, reapTimeoutMs); }),
     ]);
-  }
-  if (reapTimer) clearTimeout(reapTimer);
+    if (reapTimer !== undefined) clearTimeout(reapTimer);
+  };
   // The SDK's cleanup waited on its own bounded clock, not on the process: it schedules SIGTERM two
   // seconds out and SIGKILL five seconds after that, with both timers unref'd. The child is
-  // terminated here - bounded TERM, grace, KILL - and awaited through its real `close`, so the
-  // scratch cwd is removed and the request released only once the harness is confirmed gone.
-  await harness.terminate();
-  // The harness is gone; nothing of the operator is left in there.
-  await (deps.removeScratchDir ?? removeScratchDir)(scratchDir).catch(() => undefined);
+  // terminated here - bounded TERM, grace, KILL, and the process tree where the platform supports
+  // one - and the outcome says how far that got. `allExited` is the gate for the scratch cwd: a
+  // process that never exited may still be using it, and deleting it underneath one is exactly the
+  // premature cleanup this ownership exists to prevent.
+  const cleanup = await harness.terminate();
+  if (cleanup.allExited) {
+    // The harness is gone; nothing of the operator is left in there.
+    await (deps.removeScratchDir ?? removeScratchDir)(scratchDir).catch(() => undefined);
+  }
+  if (!cleanup.confirmed) {
+    // Never silently: an unresolved teardown is the one state a caller cannot see for itself.
+    console.warn(
+      "opencodex: claude-agent-sdk harness cleanup unconfirmed ("
+      + cleanup.unresolved
+        .map(entry => `${entry.pid ?? "?"}:${entry.reason}${entry.signalFailed ? ":signal-refused" : ""}`)
+        .join(", ")
+      + `); ${cleanup.allExited ? "the scratch cwd was released" : `leaving ${scratchDir} in place`}`,
+    );
+  }
 
-  if (terminalEmitted) return;
+  if (terminalDecided) {
+    if (pendingTerminal !== undefined) emit(pendingTerminal);
+    await settleSdk();
+    return;
+  }
   const harnessStderr = boundedStderr(stderrChunks);
   const stderr = redactSecrets(harnessStderr, profile.tokenEnv, apiKey);
   if (incoming.abortSignal?.aborted) {
@@ -603,4 +644,12 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
       retryable: false,
     });
   }
+  // The one terminal frame this turn owes the client, delivered only now that the harness behind it
+  // is gone. The bridge closes the response body on this frame and that EOF releases the global
+  // turn-admission lease, so a frame emitted earlier would let the next turn start while a
+  // TERM-resistant harness is still being reaped.
+  if (pendingTerminal !== undefined) emit(pendingTerminal);
+  // Bounded, and no longer on the client's clock: the SDK's generator unwinds on its own terms after
+  // the answer, and nothing of the turn is waiting on it but this line.
+  await settleSdk();
 }

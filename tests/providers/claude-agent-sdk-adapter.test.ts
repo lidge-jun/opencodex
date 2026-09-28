@@ -22,10 +22,13 @@ import {
 } from "../../src/adapters/claude-agent-sdk/sdk-bridge";
 import { baseScopedEnv } from "../../src/adapters/coding-agent/turn";
 import { CLAUDE_CLI_PROFILE, clearClaudeCliBinaryCache } from "../../src/adapters/claude-agent-sdk/profiles";
+import { createHarnessProcessSupervisor } from "../../src/adapters/claude-agent-sdk/harness-process";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
+import { bridgeToResponsesSSE } from "../../src/bridge";
+import { getActiveTurnCount, trackStreamLifetime, tryAdmitTurn } from "../../src/server/lifecycle";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import type { TranslatorBudget } from "../../src/lib/translator-budget";
 
@@ -168,6 +171,37 @@ async function run(
   const events: AdapterEvent[] = [];
   await adapter.runTurn!(request, incoming(signal, translatorBudget), event => events.push(event));
   return events;
+}
+
+/** A push-driven event source, the shape the streaming server hands the bridge. */
+function channel<T>() {
+  const items: T[] = [];
+  let wake: (() => void) | undefined;
+  let closed = false;
+  const knock = (): void => { const pending = wake; wake = undefined; pending?.(); };
+  return {
+    push(item: T): void { items.push(item); knock(); },
+    close(): void { closed = true; knock(); },
+    async *stream(): AsyncGenerator<T> {
+      while (true) {
+        while (items.length > 0) yield items.shift()!;
+        if (closed) return;
+        await new Promise<void>(resolve => { wake = resolve; });
+      }
+    },
+  };
+}
+
+async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+  }
+  return text;
 }
 
 describe("claude-agent-sdk is an official-harness provider, not a Messages relay", () => {
@@ -796,7 +830,16 @@ interface FakeHarnessChild extends EventEmitter {
   kill: (signal?: string) => boolean;
 }
 
-function fakeHarnessChild(options: { terminatesOn?: "SIGTERM" | "SIGKILL"; stderr?: string } = {}) {
+function fakeHarnessChild(options: {
+  terminatesOn?: "SIGTERM" | "SIGKILL" | "never";
+  stderr?: string;
+  /** A launcher/descendant inherited the harness's stdio: the process ends, `close` never arrives. */
+  exitWithoutClose?: boolean;
+  /** The runtime refuses the signal: `kill()` reports that nothing was delivered. */
+  refuseSignals?: boolean;
+  /** Runs when the child ends, so a test can pin the order of the teardown. */
+  onEnd?: () => void;
+} = {}) {
   const terminatesOn = options.terminatesOn ?? "SIGKILL";
   const child = new EventEmitter() as FakeHarnessChild;
   child.pid = 4711;
@@ -808,19 +851,26 @@ function fakeHarnessChild(options: { terminatesOn?: "SIGTERM" | "SIGKILL"; stder
   child.signalCode = null;
   const signals: string[] = [];
   let closed = false;
+  let ended = false;
   child.kill = (signal?: string) => {
     signals.push(signal ?? "SIGTERM");
+    if (options.refuseSignals === true) return false;
     // A stuck harness shrugs off SIGTERM; only the signal it does not survive ends it, and even then
     // the process reports that end asynchronously through `close`, which is what the turn must await.
-    if (signal === terminatesOn && !closed) {
+    if (terminatesOn !== "never" && signal === terminatesOn && !ended) {
+      ended = true;
       child.killed = true;
       const ending = signal ?? "SIGTERM";
       setTimeout(() => {
         if (options.stderr !== undefined) child.stderr.emit("data", Buffer.from(options.stderr));
-        closed = true;
+        child.exitCode = 0;
         child.signalCode = ending;
         child.emit("exit", null, ending);
-        child.emit("close", null, ending);
+        if (options.exitWithoutClose !== true) {
+          closed = true;
+          child.emit("close", null, ending);
+        }
+        options.onEnd?.();
       }, 3);
     }
     return true;
@@ -837,6 +887,8 @@ describe("claude-agent-sdk owns the harness process it starts", () => {
     const adapter = createClaudeAgentSdkAdapter(provider(), {
       loadSdk: async () => sdk.module,
       spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+      // A unit test never signals a real process group.
+      killHarnessProcessTree: () => false,
       killGraceMs: 20,
       reapTimeoutMs: 200,
       makeScratchDir: async () => "/tmp/ocx-owned-harness",
@@ -869,6 +921,8 @@ describe("claude-agent-sdk owns the harness process it starts", () => {
     const adapter = createClaudeAgentSdkAdapter(provider(), {
       loadSdk: async () => sdk.module,
       spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+      // A unit test never signals a real process group.
+      killHarnessProcessTree: () => false,
       killGraceMs: 20,
       reapTimeoutMs: 200,
       makeScratchDir: async () => "/tmp/ocx-owned-harness-stderr",
@@ -879,5 +933,143 @@ describe("claude-agent-sdk owns the harness process it starts", () => {
 
     expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "protocol_error", retryable: false });
     expect(String((events.at(-1) as { message: string }).message)).toContain("harness exploded before any frame");
+  });
+});
+
+/**
+ * What the ladder can and cannot establish about the process it owns.
+ *
+ * `close` is a claim about stdio as much as about the process: a launcher hands its pipes to a
+ * descendant, the harness ends, the pipe stays open and `close` is withheld for good. A ladder that
+ * watches only `close` then waits out its entire ceiling and reports a clean teardown for a process
+ * tree it never confirmed. These cases pin the difference: exit without a drain, a refused signal,
+ * and a child that never ends at all.
+ */
+describe("claude-agent-sdk reports the harness teardown it could not confirm", () => {
+  function supervisorFor(harness: ReturnType<typeof fakeHarnessChild>) {
+    const supervisor = createHarnessProcessSupervisor({
+      onStderr: () => undefined,
+      spawn: () => harness.child as unknown as ChildProcess,
+      killGraceMs: 10,
+      reapTimeoutMs: 20,
+      killProcessTree: () => false,
+    });
+    supervisor.spawn({ command: "claude", args: [], env: {}, signal: new AbortController().signal });
+    return supervisor;
+  }
+
+  test("an exit with an inherited pipe reclaims the stdio instead of calling the drain a clean exit", async () => {
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", exitWithoutClose: true });
+
+    const outcome = await supervisorFor(harness).terminate();
+
+    // The process is gone - that much `exit` carries - while `close` never arrives, so the pipes this
+    // turn owns are taken back rather than awaited, and the drain is reported as such.
+    expect(harness.child.exitCode).toBe(0);
+    expect(harness.child.stdout.destroyed).toBe(true);
+    expect(harness.child.stderr.destroyed).toBe(true);
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: true,
+      unresolved: [{ pid: 4711, reason: "pipes-held", signalFailed: false }],
+    });
+  });
+
+  test("a refused signal is reported rather than read as a dead process", async () => {
+    const harness = fakeHarnessChild({ terminatesOn: "never", refuseSignals: true });
+
+    const outcome = await supervisorFor(harness).terminate();
+
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "running", signalFailed: true }],
+    });
+  });
+
+  test("a harness that survives the whole ladder is named as still running", async () => {
+    const harness = fakeHarnessChild({ terminatesOn: "never" });
+
+    const outcome = await supervisorFor(harness).terminate();
+
+    expect(harness.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "running", signalFailed: false }],
+    });
+  });
+});
+
+describe("claude-agent-sdk does not answer the client underneath a live harness", () => {
+  test("an unresolved teardown keeps the scratch cwd and names it", async () => {
+    const harness = fakeHarnessChild({ terminatesOn: "never" });
+    const removed: string[] = [];
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]): void => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+      const adapter = createClaudeAgentSdkAdapter(provider(), {
+        loadSdk: async () => sdk.module,
+        spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+        killHarnessProcessTree: () => false,
+        killGraceMs: 10,
+        reapTimeoutMs: 20,
+        makeScratchDir: async () => "/tmp/ocx-unconfirmed-harness",
+        removeScratchDir: async dir => { removed.push(dir); },
+      });
+
+      const events = await run(adapter, parsed());
+
+      // The turn still answers - the ladder is teardown, not another failure path - but a cwd a
+      // survivor may still be using is left alone instead of deleted underneath it, and the leak is
+      // reported rather than rounded to a clean exit.
+      expect(events.at(-1)).toMatchObject({ type: "done" });
+      expect(removed).toEqual([]);
+      expect(warnings.join("\n")).toContain("leaving /tmp/ocx-unconfirmed-harness in place");
+      expect(warnings.join("\n")).toContain("4711:running");
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("the response body, and the admission it releases, waits for the owned harness", async () => {
+    // Deliberately not `await adapter.runTurn()`: the finding is about the streaming lifecycle. The
+    // bridge closes the response body on the terminal frame and the body's EOF releases the global
+    // turn-admission lease, so what has to hold is the ORDER - the harness reaped and its cwd released
+    // before the body ends, never after it.
+    const order: string[] = [];
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", onEnd: () => order.push("harness-gone") });
+    const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+      killHarnessProcessTree: () => false,
+      killGraceMs: 20,
+      reapTimeoutMs: 200,
+      makeScratchDir: async () => "/tmp/ocx-admission-order",
+      removeScratchDir: async () => { order.push("cwd-released"); },
+    });
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    const events = channel<AdapterEvent>();
+    const turn = adapter.runTurn!(parsed(), incoming(), event => events.push(event)).finally(() => events.close());
+    let harnessClosedAtBodyEnd: boolean | undefined;
+    const tracked = trackStreamLifetime(
+      bridgeToResponsesSSE(events.stream(), "claude-sonnet-5"),
+      new AbortController(),
+      () => { harnessClosedAtBodyEnd = harness.closed(); order.push("body-end"); },
+      lease!,
+    );
+
+    const body = await drainStream(tracked);
+    await turn;
+
+    expect(body).toContain("response.completed");
+    expect(harnessClosedAtBodyEnd).toBe(true);
+    expect(order).toEqual(["harness-gone", "cwd-released", "body-end"]);
+    // The lease the body carried is back, which is the moment the next turn may be admitted.
+    expect(getActiveTurnCount()).toBe(0);
   });
 });
