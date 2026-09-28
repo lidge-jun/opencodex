@@ -294,6 +294,42 @@ describe("main hard-lock background recovery", () => {
     await runMainAccountHardLockRecovery(config());
     expect(calls).toHaveLength(2);
   });
+  test("a replaced credential's delayed malformed body returns current cached info", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const authPath = join(home, "auth.json");
+    const replacement = JSON.parse(readFileSync(authPath, "utf8"));
+    replacement.tokens.access_token += "-rotated";
+    setMainAccountInfoCache({ email: null, plan: "plus", quota: { shortPercent: 99 }, ts: 1 });
+    let reads = 0;
+    globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+      expect(String(input)).toBe(whamUrl);
+      if (++reads > 1) return new Response(null, { status: 503 });
+      const response = Response.json({});
+      response.json = async () => {
+        started.resolve();
+        await finish.promise;
+        throw new SyntaxError("malformed fixture");
+      };
+      return response;
+    }, { preconnect: previousFetch.preconnect });
+    const pending = fetchMainAccountInfoAttempt(true, 0);
+    try {
+      await started.promise;
+      writeFileSync(authPath, JSON.stringify(replacement));
+      expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+      const info = structuredClone(getMainAccountInfoCache());
+      finish.resolve();
+      const result = await pending;
+      expect(result.info).toEqual(info);
+      expect(result.quotaRefresh).toBeUndefined();
+      expect(result.freshQuota).toBeUndefined();
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+  });
+
   for (const phase of ["request", "body"] as const) {
     test.each(["unchanged", "replaced", "restored"] as const)(`delayed ${phase} response respects %s same-account credentials`, async transition => {
       const started = deferred<void>();

@@ -370,6 +370,10 @@ export async function fetchMainAccountInfoWhileOwned(
     } catch (error) {
       const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh, paced);
       if (retried) return retried;
+      if (!credentialIsCurrent()) {
+        return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
+          credentialChecked: true, hasCredential: true };
+      }
       let status: CodexQuotaRefreshOutcome["status"] = "internal_error";
       if ((quotaPhase === "request" || quotaPhase === "body") && quotaSignal.aborted) status = "timeout";
       else if (quotaPhase === "request") status = "network_error";
