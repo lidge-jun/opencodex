@@ -161,7 +161,7 @@ export function serviceChildOwnershipDecisionForClassifiedChild(
  * Exit code a refused supervised child must use: the Windows wrapper reads 42 as
  * an intentional stay-out and stops the loop; every other exit is a crash it
  * restarts. Elsewhere the code is 0 — systemd only restarts on failure, and
- * launchd's throttled relaunch repeats a cheap state-file read, never a port bind.
+ * launchd's failure-only KeepAlive leaves an intentional exit-0 stand-down stopped.
  */
 export function serviceChildStayOutExitCode(env: NodeJS.ProcessEnv = process.env): number {
   return serviceStayOutExitCode(env);

@@ -157,6 +157,7 @@ import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { restoreSharedClientStateAfterStop } from "./stop-restore";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
+import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
@@ -450,8 +451,17 @@ async function handleStart(options: { block?: boolean } = {}) {
       + `Startup continues only for an independent OPENCODEX_HOME; one state directory has one spend-ledger writer.`,
     );
   }
-  if (!owner.live && !siblingStart) siblingStart = await markCrossHomeSibling();
-  if (!siblingStart) reconcileStartupJournal();
+  siblingStart = await recoverStartStateUnderOwnershipLease({
+    supervised: supervisedServiceChild,
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
+    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
+    recover: async () => {
+      if (!owner.live && !siblingStart) siblingStart = await markCrossHomeSibling();
+      if (!siblingStart) reconcileStartupJournal();
+      return siblingStart;
+    },
+  });
 
   const clientState = readClientConnectionState();
   if (clientState.kind === "invalid" || clientState.kind === "mismatched") {

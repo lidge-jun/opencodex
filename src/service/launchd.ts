@@ -72,7 +72,7 @@ export function buildPlist(
     <string>${plistString(command)}</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>EnvironmentVariables</key>
   <dict>
 ${envLines}

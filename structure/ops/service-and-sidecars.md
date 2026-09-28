@@ -115,7 +115,10 @@ The verbs are only reachable through `ocx service`, but the process managers spa
 ownership mutation lease held by `bindAndPublishStartOwnership`, before port selection or
 listener bind. The supervised-child classification is kept from the first check; the
 recorded owner is read fresh under the lease, so a desktop claim committed between checks
-cannot be overwritten by PID or runtime publication.
+cannot be overwritten by PID or runtime publication. Before either runtime branch,
+`recoverStartStateUnderOwnershipLease` (`src/cli/start-owner-fence.ts`) holds that same
+lease and rechecks the owner before cross-home sibling detection or startup journal recovery;
+an owner claim committed during the early probe cannot be followed by shared Codex writes.
 The connected-client branch, which returns into `startClientRuntime` before the server path,
 takes the same lease through `startClientRuntimeUnderOwnershipLease`
 (`src/cli/client-start-fence.ts`), rechecks there, and releases once the client runtime has
@@ -123,7 +126,12 @@ published its PID and runtime records (`afterPublish`). A child carrying
 `OCX_SERVICE_MANAGED` or `OCX_WINDOWS_WRAPPER_PROTOCOL` resolves the recorded owner and
 exits the supervisor's stand-down code on a foreign or unknown answer: `42` inside the
 marker-protocol Windows wrapper, `0` elsewhere — the legacy `ERRORLEVEL NEQ 0` loop reads
-`0` as a clean stop and systemd's `on-failure` does not restart it. Bare `OCX_SERVICE=1`
+`0` as a clean stop; systemd's `on-failure` and launchd's `SuccessfulExit=false`
+keepalive do not restart it. The launchd plist restarts on an unsuccessful exit or signal,
+including the exit-1 supervised restart handoff described below. Existing launchd jobs retain
+their old keepalive definition until `ocx service repair` rewrites and reloads the changed plist.
+New WinSW XML stamps `OCX_SERVICE_MANAGED=1`; parent command-line inference applies only to
+legacy registrations whose XML lacks that marker. Bare `OCX_SERVICE=1`
 is never the marker because `ocx claude` and `ocx opencode` companions carry it too; a
 marker-less Windows registration is still recognised by the parent's command line naming
 this install's wrapper script, launcher or WinSW host as a complete token in any position,
