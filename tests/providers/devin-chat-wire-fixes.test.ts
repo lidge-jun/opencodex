@@ -223,6 +223,14 @@ describe("oversized history classification", () => {
     expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(120_000) })).toBe(false);
   });
 
+  test("a malformed large schema near the window is classified as overflow", () => {
+    const tools = [{ name: "bad", description: "d", parameters: { unsupported: "x ".repeat(190_000) } }];
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(1), tools })).toBe(true);
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(1),
+      tools: [{ ...tools[0], parameters: { unsupported: "x ".repeat(20_000) } }],
+    })).toBe(false);
+  });
+
   test("dense JSON at the window is caught even though its characters per token are low", () => {
     // Measured live: 443k chars of this shape was 200,345 real tokens on swe-1-6.
     let json = "";
