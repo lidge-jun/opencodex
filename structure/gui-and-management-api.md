@@ -3,8 +3,9 @@
 `src/server/management/oauth-account-routes.ts` exposes Anthropic `routes` through both unified `/api/pool/settings` and legacy `/api/oauth/accounts/pool`. Omitted rules survive other setting writes, `null` clears them, and other pool kinds reject supplied rules. The unified DTO declares `routes` supported only for Anthropic and reports null otherwise. Config and management responses retain route names; request logs use only the rule’s 1-based `route:#<n>` position. `src/cli/account-extended.ts` reads, replaces and clears these rules with `ocx account routes anthropic`; the server validates content.
 
 The provider management API validates `modelContextTiers` as a strict per-model map,
-merges PATCH entries, and preserves omitted entries on full provider saves. The CLI
-uses that API for GitHub Copilot tier edits. The dashboard has no tier control yet.
+merges PATCH entries, and preserves omitted entries on full provider saves. POST re-reads
+the live tier map after destination validation under the config mutation lock, so a concurrent
+PATCH clear is not restored. The CLI uses that API for GitHub Copilot tier edits. The dashboard has no tier control yet.
 
 Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 

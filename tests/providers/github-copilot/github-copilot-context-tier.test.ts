@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../../src/adapters/openai-responses";
 import { applyProviderConfigHints } from "../../../src/codex/catalog/provider-fetch";
+import { applyGithubCopilotContextTier } from "../../../src/providers/github-copilot-context";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -33,8 +34,10 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
 }
 
 describe("GitHub Copilot context tiers", () => {
-  test("adds the selected tier to Responses requests", async () => {
-    const request = await createResponsesPassthroughAdapter(provider()).buildRequest(parsed(), { providerName: "github-copilot" });
+  test("adds the selected tier to Responses requests and overrides a caller value", async () => {
+    const input = parsed();
+    input._rawBody = { model: MODEL, input: "hello", contextTier: "default" };
+    const request = await createResponsesPassthroughAdapter(provider()).buildRequest(input, { providerName: "github-copilot" });
     expect(JSON.parse(request.body)).toMatchObject({ contextTier: "long_context" });
   });
 
@@ -67,31 +70,40 @@ describe("GitHub Copilot context tiers", () => {
     expect(JSON.parse(request.body)).not.toHaveProperty("contextTier");
   });
 
-  test("strips caller contextTier from non-Copilot Responses payloads", async () => {
-    const input = parsed();
-    input._rawBody = { model: MODEL, input: "hello", contextTier: "long_context" };
-    const request = await createResponsesPassthroughAdapter(provider()).buildRequest(input, { providerName: "openai" });
-    expect(JSON.parse(request.body)).not.toHaveProperty("contextTier");
-  });
+  test.each(["github-copilot", "other-openai-compatible"])(
+    "preserves caller contextTier without a configured tier on %s", async providerName => {
+      const input = parsed();
+      input._rawBody = { model: MODEL, input: "hello", contextTier: "caller-choice" };
+      expect(applyGithubCopilotContextTier(input._rawBody, provider({ modelContextTiers: undefined }), MODEL, providerName))
+        .toBe(input._rawBody);
+      const request = await createResponsesPassthroughAdapter(provider({ modelContextTiers: undefined }))
+        .buildRequest(input, { providerName });
+      expect(JSON.parse(request.body)).toHaveProperty("contextTier", "caller-choice");
+    },
+  );
 
-  test("raises long-context catalog metadata before applying the provider cap", () => {
-    const long = applyProviderConfigHints(
-      "github-copilot",
-      provider(),
-      { provider: "github-copilot", id: MODEL, contextWindow: 200_000 },
-      400_000,
-    );
-    expect(long.contextWindow).toBe(400_000);
-    expect(long.contextCap).toBe(400_000);
-    expect(long.contextCapped).toBe(true);
+  test("long_context needs exact model window evidence and still obeys both caps", () => {
+    const row = { provider: "github-copilot", id: MODEL, contextWindow: 200_000 };
+    const withoutEvidence = applyProviderConfigHints("github-copilot", provider(), row, 400_000);
+    expect(withoutEvidence.contextWindow).toBe(200_000);
+    expect(withoutEvidence.contextCapped).toBe(false);
 
-    const normal = applyProviderConfigHints(
-      "github-copilot",
-      provider({ modelContextTiers: { [MODEL]: "default" } }),
-      { provider: "github-copilot", id: MODEL, contextWindow: 200_000 },
-      400_000,
-    );
+    const supported = applyProviderConfigHints("github-copilot", provider({
+      modelContextWindows: { [MODEL]: 1_000_000 },
+    }), row, 400_000);
+    expect(supported.contextWindow).toBe(400_000);
+    expect(supported.contextCap).toBe(400_000);
+    expect(supported.contextCapped).toBe(true);
+
+    const narrowed = applyProviderConfigHints("github-copilot", provider({
+      modelContextWindows: { [MODEL]: 150_000 },
+    }), row, 400_000);
+    expect(narrowed.contextWindow).toBe(150_000);
+    expect(narrowed.contextCapped).toBe(false);
+
+    const normal = applyProviderConfigHints("github-copilot", provider({
+      modelContextTiers: { [MODEL]: "default" }, modelContextWindows: { [MODEL]: 1_000_000 },
+    }), row, 400_000);
     expect(normal.contextWindow).toBe(200_000);
-    expect(normal.contextCapped).toBe(false);
   });
 });
