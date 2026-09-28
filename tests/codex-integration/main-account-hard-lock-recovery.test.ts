@@ -264,6 +264,65 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
+  test.each([401, 403])("nonterminal HTTP %s retries on the next hard-lock sweep", async status => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const calls = fetchWith(async () => Response.json({}, { status }));
+    try {
+      await runMainAccountHardLockRecovery(config());
+      now += 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl, whamUrl]);
+      expect(isAccountNeedsReauth(MAIN)).toBe(false);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    } finally { clock.mockRestore(); }
+  });
+
+  test.each([401, 403])("terminal HTTP %s keeps reauth quarantine", async status => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const calls = fetchWith(async () => Response.json({ detail: { code: "invalid_workspace_selected" } }, { status }));
+    try {
+      await runMainAccountHardLockRecovery(config());
+      now += 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl]);
+      expect(isAccountNeedsReauth(MAIN)).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
+
+  test("a published post-reset quota clears an older same-credential failure", async () => {
+    const entered = deferred<void>();
+    const releaseBody = deferred<void>();
+    let reads = 0;
+    const calls: string[] = [];
+    globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+      calls.push(String(input));
+      expect(getNativeMainProfileRequestCount()).toBeGreaterThan(0);
+      if (++reads === 1) return new Response(new ReadableStream<Uint8Array>({
+        async start(controller) {
+          entered.resolve();
+          await releaseBody.promise;
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ plan_type: "plus", rate_limit: {
+            primary_window: { used_percent: 99, limit_window_seconds: 18_000, reset_at: 1 },
+          } })));
+          controller.close();
+        },
+      }), { headers: { "Content-Type": "application/json" } });
+      return reads === 2 ? new Response(null, { status: 503 }) : usage(0);
+    }, { preconnect: previousFetch.preconnect });
+    const first = fetchMainAccountInfoAttempt(true, 1, undefined, false, false, true, config());
+    try {
+      await entered.promise;
+      await fetchMainAccountInfoAttempt(true, 1, undefined, false, false, true, config());
+      releaseBody.resolve();
+      expect((await first).freshQuota?.shortPercent).toBe(99);
+      await fetchMainAccountInfo(true, config());
+      expect(calls).toEqual([whamUrl, whamUrl, whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { releaseBody.resolve(); await first; }
+  });
+
   test("successful but blocked recovery uses capped backoff without extending it on skipped ticks", async () => {
     let now = Date.now();
     const clock = spyOn(Date, "now").mockImplementation(() => now);

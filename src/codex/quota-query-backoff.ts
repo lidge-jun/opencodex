@@ -101,7 +101,14 @@ export async function fetchCodexUsage<T>(
     if (!attempt.inFlight) return;
     attempt.inFlight = false;
     if (attempts.get(key) === attempt) {
-      if (usable || response?.status === 401 || response?.status === 403) attempts.delete(key);
+      if (usable || response?.status === 401 || response?.status === 403) {
+        attempts.delete(key);
+        if (usable) {
+          sharedDeadlines.delete(pacingKey);
+          if (pacingKey !== key && attempts.get(pacingKey)?.inFlight === false)
+            attempts.delete(pacingKey);
+        }
+      }
       else {
         const at = now();
         const delay = schedule.recoveryProbe ? BASE_DELAY_MS : nextQuotaQueryDelay(previous?.delay);

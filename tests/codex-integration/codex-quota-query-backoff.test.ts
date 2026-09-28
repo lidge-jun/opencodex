@@ -160,6 +160,28 @@ test("a later short recovery failure preserves an earlier epoch Retry-After", as
   expect(calls).toBe(3);
 });
 
+test("a usable epoch success clears only its credential's shared failure deadline", async () => {
+  let calls = 0;
+  globalThis.fetch = Object.assign(async () => ++calls === 1 ? good()
+    : new Response("{}", { status: 503 }), { preconnect: originalFetch.preconnect });
+  const oldBase = "main:config:credential-1";
+  const newBase = "main:config:credential-2";
+  const success = await fetchCodexUsage(`${oldBase}:post-reset:1`, {}, undefined, { pacingKey: oldBase });
+  const oldFailure = await fetchCodexUsage(`${oldBase}:post-reset:2`, {}, undefined, { pacingKey: oldBase });
+  const newFailure = await fetchCodexUsage(newBase, {});
+  if (success?.kind !== "owner" || oldFailure?.kind !== "owner" || newFailure?.kind !== "owner")
+    throw new Error("distinct epochs and credentials must dispatch");
+  oldFailure.settle(false);
+  newFailure.settle(false);
+  expect(nextCodexUsageQueryAt(oldBase)).toBe(now + 300_000);
+  success.settle(true);
+  expect(nextCodexUsageQueryAt(oldBase)).toBeUndefined();
+  expect(nextCodexUsageQueryAt(newBase)).toBe(now + 300_000);
+  expect((await fetchCodexUsage(oldBase, {}))?.kind).toBe("owner");
+  expect(await fetchCodexUsage(newBase, {})).toBeNull();
+  expect(calls).toBe(4);
+});
+
 test("a full cache never evicts an active read", async () => {
   let finish!: (response: Response) => void;
   let calls = 0;

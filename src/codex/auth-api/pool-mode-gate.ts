@@ -134,10 +134,17 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
       const previousDelay = previous?.identity === identityGeneration && previous.credential === credential
         ? previous.delay : 0;
       if (result.quotaRefresh) {
-        const delay = nextQuotaQueryDelay(previousDelay || undefined);
-        mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
-          ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
-          : undefined;
+        const authStatus = result.quotaRefresh.status === "http_error"
+          ? result.quotaRefresh.httpStatus : undefined;
+        const transientAuth = (authStatus === 401 || authStatus === 403)
+          && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        if (transientAuth) mainHardLockRecoveryAttempt = undefined;
+        else {
+          const delay = nextQuotaQueryDelay(previousDelay || undefined);
+          mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
+            ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
+            : undefined;
+        }
       } else if (queryAfter > Date.now()) {
         mainHardLockRecoveryAttempt = { identity: identityGeneration, credential,
           delay: previousDelay, after: queryAfter };

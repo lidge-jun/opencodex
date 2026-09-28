@@ -25,8 +25,9 @@ receive its settled result; only a confirmed reset-credit consume selects the se
 proof epoch. Its failure deadline is also recorded for ordinary main reads under the same credential,
 so the epoch never bypasses pacing. Holding a native-main shared claim by itself does not bypass it.
 Outside Pool mode, main usage reads retain their independent forced-refresh behavior.
-A valid Retry-After can extend the delay under the existing bounded cooldown parser. Usable usage clears
-failure pacing; 401/403 retain the existing authentication recovery policy. Keys are scoped to
+A valid Retry-After can extend the delay under the existing bounded cooldown parser. Usable published
+usage, including a post-reset epoch result, clears failure pacing for the same credential only;
+401/403 retain the existing authentication recovery policy. Keys are scoped to
 configuration home, config generation and credential generation; no credentials are retained.
 Deferred calls publish neither fresh quota nor dispatch proof and do not advance quota timestamps.
 The bounded process-local failure cache resets on restart; active reads are never evicted to admit
@@ -333,6 +334,8 @@ the physical bearer is reconciled before checking the delay, and late results ca
 a replacement credential. A longer valid Retry-After from any main usage reader is checked for the
 current credential before the recovery worker takes a profile lease or prepares a token; a replacement
 credential has a separate key and may proceed immediately.
+Nonterminal 401/403 responses do not arm the successful-but-blocked recovery delay; the next
+sweep may retry, while terminal authentication failure keeps its reauth quarantine.
 Only fresh lower usage releases the lock; no inference or reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a
