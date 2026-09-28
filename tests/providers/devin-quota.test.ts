@@ -288,6 +288,42 @@ describe("Devin provider quota through the aggregator", () => {
     expect(JSON.stringify(result)).not.toContain(KEY);
   });
 
+  test("a legacy credential probes the configured EU tenant", async () => {
+    await saveCredential("devin", { access: KEY, refresh: KEY, expires: Number.MAX_SAFE_INTEGER });
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(new Uint8Array(quotaPlan()), { status: 200 });
+    }) as typeof fetch;
+    const euConfig = { ...config, providers: { devin: { ...config.providers.devin, baseUrl: "https://eu.windsurf.com/_route/api_server" } } };
+    const result = await fetchProviderQuotaReports(euConfig, true);
+    expect(result.reports[0]?.quota.weeklyPercent).toBe(16);
+    expect(urls).toEqual(["https://eu.windsurf.com/_route/api_server/exa.seat_management_pb.SeatManagementService/GetUserStatus"]);
+  });
+
+  test("a credential-owned tenant takes precedence over the configured base URL", async () => {
+    await saveCredential("devin", { access: KEY, refresh: KEY, expires: Number.MAX_SAFE_INTEGER, apiBaseUrl: "https://eu.windsurf.com/_route/api_server" });
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(new Uint8Array(quotaPlan()), { status: 200 });
+    }) as typeof fetch;
+    await fetchProviderQuotaReports(config, true);
+    expect(urls).toEqual(["https://eu.windsurf.com/_route/api_server/exa.seat_management_pb.SeatManagementService/GetUserStatus"]);
+  });
+
+  test("an unallowlisted configured host never receives a legacy credential key", async () => {
+    await saveCredential("devin", { access: KEY, refresh: KEY, expires: Number.MAX_SAFE_INTEGER });
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(new Uint8Array(quotaPlan()), { status: 200 });
+    }) as typeof fetch;
+    const unsafeConfig = { ...config, providers: { devin: { ...config.providers.devin, baseUrl: "https://attacker.example" } } };
+    await fetchProviderQuotaReports(unsafeConfig, true);
+    expect(urls).toEqual(["https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus"]);
+  });
+
   test("a rejected key publishes no row", async () => {
     await saveCredential("devin", { access: KEY, refresh: KEY, expires: Number.MAX_SAFE_INTEGER, apiBaseUrl: "https://server.codeium.com" });
     globalThis.fetch = (async () => new Response("", { status: 401 })) as unknown as typeof fetch;

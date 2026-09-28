@@ -364,10 +364,12 @@ configured `baseUrl`: a custom base URL is a routing choice for requests, not a 
 Google's accounting for a stored credential. An account without a project id, or one whose probe
 is redirected or fails, shows `unavailable`.
 
-Devin rows come from Cognition's `GetUserStatus` for that account's own key, sent only to its
-allowlisted api-server host. They show the dated daily and weekly windows the plan exposes, and a
-monthly credit window only on a credit-billed plan that reports a credit balance; an unlimited
-balance, or a status with no balance at all, shows no credit window. Only a rejected key (401)
+Devin rows come from Cognition's `GetUserStatus` for that account's own key, sent to its
+allowlisted api-server host. If an older credential has no host, the probe uses the configured
+provider base URL when allowlisted, or the US default. They show the dated daily and weekly
+windows the plan exposes, and a monthly credit window only on a credit-billed plan that reports
+a credit balance; an unlimited balance, or a status with no balance at all, shows no credit window.
+Only a rejected key (401)
 clears a cached reading; other probe failures retain the last reading.
 
 ```text

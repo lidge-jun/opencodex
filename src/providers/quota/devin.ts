@@ -21,7 +21,7 @@
  */
 import { buildMetadata } from "../../adapters/devin/cloud-direct/metadata";
 import { encodeMessage } from "../../adapters/devin/cloud-direct/wire";
-import { DEVIN_DEFAULT_API_SERVER, validateDevinApiBaseUrl } from "../../oauth/devin/api-base";
+import { resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { epochMillis, QUOTA_RESPONSE_MAX_BYTES, REQUEST_TIMEOUT_MS } from "../quota-wire";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
@@ -238,8 +238,9 @@ export function devinQuotaFromStatus(status: DevinUserStatus, now = Date.now()):
  * Probe one Devin account. `null` keeps the last-good row (transient failure);
  * `TERMINAL_QUOTA_FAILURE` means the credential or contract is rejected.
  */
-export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseUrl: string | undefined): Promise<ProviderQuotaProbeResult> {
-  const base = validateDevinApiBaseUrl(apiBaseUrl ?? DEVIN_DEFAULT_API_SERVER);
+export async function fetchDevinQuota(provider: string, apiKey: string, apiBaseUrl: string | undefined, configuredBaseUrl?: string): Promise<ProviderQuotaProbeResult> {
+  const base = validateDevinApiBaseUrl(apiBaseUrl)
+    ?? (configuredBaseUrl !== undefined || apiBaseUrl === undefined ? resolveDevinApiBaseUrl(configuredBaseUrl) : undefined);
   if (!base || !apiKey.trim()) return null;
   const metadata = buildMetadata({
     apiKey,
