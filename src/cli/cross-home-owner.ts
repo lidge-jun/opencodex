@@ -198,7 +198,8 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
   const queue = [...candidates];
   const probed = new Set<number>();
   for (const port of queue) {
-    if (!probed.add(port)) continue;
+    if (probed.has(port)) continue;
+    probed.add(port);
     const portRecords = records.get(port) ?? [];
     // The recorded hostnames are tried first; every remaining loopback family is a
     // candidate too, because IPv4 and IPv6 listeners on one port are independent.

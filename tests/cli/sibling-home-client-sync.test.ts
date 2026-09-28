@@ -517,3 +517,77 @@ test("publishing a runtime record registers the home for cross-home discovery", 
   writeRuntimePort({ pid: process.pid, port: 0 });
   expect(readOwnerRegistryHomes()).toContain(fx.ocx);
 });
+
+/**
+ * Shared start-to-shutdown acceptance for the ownership topologies that must veto
+ * shared-client writes: the managed Grok/Codex routing and the Claude roster keep
+ * their exact bytes across the secondary's whole lifecycle.
+ */
+async function secondaryStartPreservesBytes(
+  fx: ReturnType<typeof fixture>,
+  ownerPort: number,
+  expectedSiblingPort: number,
+): Promise<void> {
+  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
+  const secondaryPort = reservation.port;
+  reservation.stop(true);
+  const grokPath = join(fx.grok, "config.toml");
+  const codexPath = join(fx.codex, "config.toml");
+  const claudePath = join(fx.claude, "agents", "ocx-existing.md");
+  writeFileSync(grokPath, grokFence(ownerPort));
+  writeFileSync(codexPath, codexRouting(ownerPort));
+  writeFileSync(claudePath, "owned roster bytes\n");
+  const before = [grokPath, codexPath, claudePath].map(path => readFileSync(path));
+  writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
+    port: secondaryPort, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
+    checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
+    claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
+  }));
+  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
+    cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
+  });
+  children.push(child);
+  const runtime = await waitForRuntime(join(fx.ocx, "runtime-port.json"), child);
+  expect(runtime.siblingOfPort).toBe(expectedSiblingPort);
+  await waitForClientStartup(child);
+  expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
+  child.kill("SIGTERM");
+  await child.exited;
+  expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
+}
+
+test("a custom-home owner discovered through the registry vetoes shared writes end to end", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  const ownerPort = healthServer(ownerPid);
+  const homeA = join(fx.root, "homeA", ".opencodex");
+  mkdirSync(homeA, { recursive: true });
+  writeFileSync(join(homeA, "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port: ownerPort, attestationSecret: TEST_ATTESTATION_SECRET,
+  }));
+  registerOwnerRegistryHome(homeA);
+  await secondaryStartPreservesBytes(fx, ownerPort, ownerPort);
+}, 30_000);
+
+test("an unreadable listener on a managed port vetoes shared writes end to end", async () => {
+  const fx = fixture();
+  // HTTP 500 is neither a connection refusal nor an opencodex identity: the
+  // classification is unknown, so ownership is indeterminate and must fail closed.
+  const managed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("unreadable", { status: 500 }) });
+  servers.push(managed);
+  const ownerPort = managed.port;
+  await secondaryStartPreservesBytes(fx, ownerPort, ownerPort);
+}, 30_000);
+
+test("a live legacy record without an attestation secret vetoes shared writes end to end", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  const ownerPort = healthServer(ownerPid);
+  const homeA = join(fx.root, "homeA", ".opencodex");
+  mkdirSync(homeA, { recursive: true });
+  writeFileSync(join(homeA, "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port: ownerPort,
+  }));
+  registerOwnerRegistryHome(homeA);
+  await secondaryStartPreservesBytes(fx, ownerPort, ownerPort);
+}, 30_000);

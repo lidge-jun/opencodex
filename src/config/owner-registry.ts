@@ -14,10 +14,13 @@
  * can never grant ownership; it can only send the reader to a record that still has
  * to prove itself.
  *
- * The anchor is CODEX_HOME because that is the shared state this protects: the
- * managed Codex client config lives there, and a sibling exists to leave that write
- * alone. Entries are written atomically and never read back as truth - they only
- * nominate a home for the caller's own record + liveness verification.
+ * The anchor is the default OpenCodex home (~/.opencodex), an OpenCodex-owned
+ * namespace every runtime for this user can reach regardless of which
+ * OPENCODEX_HOME or CODEX_HOME it serves. Codex, Grok and Claude homes stay
+ * untouched: discovery metadata must not write into the client state it exists
+ * to protect, so OFF or foreign-owned client homes never see it. Entries are
+ * written atomically and never read back as truth - they only nominate a home
+ * for the caller's own record + liveness verification.
  */
 
 import { createHash } from "node:crypto";
@@ -26,19 +29,23 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
-import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 
 const REGISTRY_DIR_NAME = "ocx-homes";
 const REGISTRY_ENTRY_SUFFIX = ".json";
 const MAX_REGISTRY_ENTRIES = 64;
+// Directory listing itself is bounded so a cluttered folder cannot stall startup;
+// the 64-entry result cap applies AFTER validation so dead names cannot crowd out
+// live owners.
+const MAX_REGISTRY_LISTING = 4096;
 const MAX_ENTRY_BYTES = 4096;
 const HOME_KEY_LENGTH = 24;
 
 function registryBaseDir(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  // Without an env override the Codex client home defaults beside the user profile,
-  // the same location the managed config writers use.
-  return raw ? resolve(raw) : join(homedir(), ".codex");
+  // Always the default home, never the caller's OPENCODEX_HOME: the pointer must
+  // sit where every sibling runtime can find it no matter which custom home is
+  // serving.
+  return join(homedir(), ".opencodex");
 }
 
 /** The shared directory the registry lives under. */
@@ -57,7 +64,7 @@ function registryEntryPath(dir: string, home: string): string {
  */
 export function registerOwnerRegistryHome(home: string): void {
   try {
-    assertNotRealCodexHomeUnderTest(registryBaseDir());
+    assertNotRealHomeUnderTest(registryBaseDir());
     const dir = ownerRegistryDir();
     mkdirSync(dir, { recursive: true });
     atomicWriteFile(
@@ -79,12 +86,13 @@ export function readOwnerRegistryHomes(): string[] {
   try {
     names = readdirSync(dir)
       .filter(name => name.endsWith(REGISTRY_ENTRY_SUFFIX))
-      .slice(0, MAX_REGISTRY_ENTRIES);
+      .slice(0, MAX_REGISTRY_LISTING);
   } catch {
     return [];
   }
   const homes: string[] = [];
   for (const name of names) {
+    if (homes.length >= MAX_REGISTRY_ENTRIES) break;
     const path = join(dir, name);
     try {
       const stat = statSync(path);
