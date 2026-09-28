@@ -368,6 +368,7 @@ describe("devin adapter", () => {
     // a Claude row five times too small, a Grok row about half its real size,
     // and a GPT row rounded up past what the service accepts.
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5"]).toBe(1_000_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5-5"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["grok-4-5"]).toBe(500_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["gpt-5-6-sol"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["swe-2"]).toBe(262_000);

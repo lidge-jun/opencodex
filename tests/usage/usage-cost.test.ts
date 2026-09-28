@@ -169,6 +169,50 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
+  // Claude Sonnet 5.5 (2026-09-28): the Sonnet 5 tuple, 2 / 10 / 2.50 cache write / 0.20 cache hit.
+  // Live Anthropic discovery listed it before any row existed; published aggregator rows, Bedrock's
+  // 1.1x regional endpoints and the preemptive rows for providers that have not listed it yet.
+  test("claude-sonnet-5-5 resolves to the official Sonnet 5.5 price on every exposing surface", () => {
+    const COST4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
+    for (const provider of ["anthropic", "anthropic-apikey"]) {
+      expect(resolveMatchedPrice(provider, "claude-sonnet-5-5"), provider).toMatchObject({
+        modelId: "claude-sonnet-5-5",
+        cost4: COST4,
+        source: "jawcode",
+        jawcodeProvider: "anthropic",
+        status: "verified",
+      });
+    }
+    expect(resolveMatchedPrice("anthropic-pb51d9b", "claude-sonnet-5-5")?.cost4).toEqual(COST4);
+    expect(resolveMatchedPrice("anthropic-native", "claude-sonnet-5.5")?.cost4).toEqual(COST4);
+    expect(resolveMatchedPrice("cursor", "claude-sonnet-5-5")).toMatchObject({ cost4: COST4, source: "expected", status: "verified" });
+    for (const provider of ["devin", "devin-cli"]) {
+      expect(resolveMatchedPrice(provider, "claude-sonnet-5-5"), provider).toMatchObject({
+        cost4: COST4,
+        source: "expected",
+        status: "verified-derived",
+      });
+    }
+    for (const [provider, id] of [
+      ["openrouter", "anthropic/claude-sonnet-5.5"],
+      ["vercel-ai-gateway", "anthropic/claude-sonnet-5.5"],
+      ["kilo", "anthropic/claude-sonnet-5.5"],
+      ["github-copilot", "claude-sonnet-5-5"],
+      ["opencode-zen", "claude-sonnet-5-5"],
+      ["cloudflare-ai-gateway", "anthropic/claude-sonnet-5-5"],
+      ["amazon-bedrock", "global.anthropic.claude-sonnet-5-5"],
+    ] as const) {
+      expect(resolveMatchedPrice(provider, id)?.cost4, provider).toEqual(COST4);
+    }
+    expect(resolveMatchedPrice("amazon-bedrock", "us.anthropic.claude-sonnet-5-5")?.cost4)
+      .toEqual({ input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 });
+    // Providers without a runtime bundle of their own (Venice's snapshot row is not bundled, like its
+    // Opus 5.5 row), kiro and the live-only rosters follow the vendor row.
+    for (const [provider, id] of [["venice", "claude-sonnet-5-5"], ["kiro", "claude-sonnet-5.5"], ["command-code", "claude-sonnet-5-5"], ["opper", "claude-sonnet-5-5"]] as const) {
+      expect(resolveMatchedPrice(provider, id)?.cost4, provider).toEqual(COST4);
+    }
+  });
+
   // Claude Opus 5.5 (2026-09-22): 4 / 20 / 5.00 cache write, and a 0.05x cache-hit rate (0.20)
   // rather than the 0.1x Opus 5 uses. Live discovery listed the id before any price row existed,
   // so every surface below rendered a blank cost.
@@ -418,8 +462,8 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
-  test("16. shipped overlay membership: 143 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, OpenCode Go and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(143);
+  test("16. shipped overlay membership: 148 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, Sonnet 5.5, OpenCode Go and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(148);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -434,6 +478,11 @@ describe("resolveMatchedPrice", () => {
       "cursor/claude-opus-5-5",
       "devin/claude-opus-5-5",
       "devin-cli/claude-opus-5-5",
+      "anthropic/claude-sonnet-5-5",
+      "anthropic-apikey/claude-sonnet-5-5",
+      "cursor/claude-sonnet-5-5",
+      "devin/claude-sonnet-5-5",
+      "devin-cli/claude-sonnet-5-5",
       "openai/gpt-daybreak-blue-latest",
       "openai-apikey/daybreak-red-latest",
       "openai-apikey/daybreak-blue-latest",
