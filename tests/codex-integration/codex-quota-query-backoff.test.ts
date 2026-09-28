@@ -85,18 +85,40 @@ test("transport failures back off, success clears failures, and replacement cred
   expect(calls).toBe(5); // Successful query reset the exponential delay.
 });
 
-test("a late success cannot erase a newer failed dispatch's backoff", async () => {
+test("same-key dispatch stays single-flight until body validation; another key can proceed", async () => {
   let finish!: (response: Response) => void;
   let calls = 0;
   globalThis.fetch = Object.assign(async () => {
-    if (++calls === 1) return new Promise<Response>(resolve => { finish = resolve; });
-    return new Response("{}", { status: 503 });
+    calls++;
+    if (calls === 1) return new Promise<Response>(resolve => { finish = resolve; });
+    return good();
   }, { preconnect: originalFetch.preconnect });
   const first = fetchCodexUsage("race-fixture", {});
-  await fetchCodexUsage("race-fixture", {});
-  finish(good());
-  await first;
   expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
+  finish(good());
+  const read = await first;
+  expect(read?.response.ok).toBe(true);
+  expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
+  const other = await fetchCodexUsage("other-credential", {});
+  other?.settle(true);
+  expect(calls).toBe(2);
+  read?.settle(false); // An unusable 200 keeps failure pacing.
+  expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
+  now += 300_000;
+  (await fetchCodexUsage("race-fixture", {}))?.settle(true);
+  expect(calls).toBe(3);
+});
+
+test("malformed pool 200 keeps pacing until its due time", async () => {
+  let calls = 0;
+  globalThis.fetch = Object.assign(async () => {
+    calls++;
+    return calls === 1 ? Response.json({}) : good();
+  }, { preconnect: originalFetch.preconnect });
+  expect((await fetchPoolAccountQuota("backoff-pool", true)).freshQuota).toBeUndefined();
+  expect((await fetchPoolAccountQuota("backoff-pool", true)).quotaProbeSkipped).toBe(true);
+  now += 300_000;
+  expect((await fetchPoolAccountQuota("backoff-pool", true)).freshQuota).toBeDefined();
   expect(calls).toBe(2);
 });
 
@@ -114,17 +136,20 @@ test("oversized Retry-After is bounded by the existing 24-hour ceiling", async (
   expect(calls).toBe(2);
 });
 
-test("a late failure cannot reinstate backoff after a newer success", async () => {
+test("a full cache never evicts an active read", async () => {
   let finish!: (response: Response) => void;
   let calls = 0;
   globalThis.fetch = Object.assign(async () => {
-    if (++calls === 1) return new Promise<Response>(resolve => { finish = resolve; });
-    return good();
+    calls++;
+    if (calls === 1) return new Promise<Response>(resolve => { finish = resolve; });
+    if (calls === 258) return good();
+    return new Response("{}", { status: 503 });
   }, { preconnect: originalFetch.preconnect });
-  const first = fetchCodexUsage("late-failure", {});
-  await fetchCodexUsage("late-failure", {});
-  finish(new Response("{}", { status: 503 }));
-  await first;
-  expect(await fetchCodexUsage("late-failure", {})).not.toBeNull();
-  expect(calls).toBe(3);
+  const active = fetchCodexUsage("active", {});
+  for (let i = 0; i < 256; i++) await fetchCodexUsage(`key-${i}`, {});
+  expect(await fetchCodexUsage("active", {})).toBeNull();
+  finish(good());
+  (await active)?.settle(true);
+  expect((await fetchCodexUsage("active", {}))?.response.ok).toBe(true);
+  expect(calls).toBe(258);
 });

@@ -254,14 +254,17 @@ export async function recoverPoolQuotaFrom401(ctx: {
 
   const writerGeneration = captureConfigGeneration();
   const poolWriter = capturePoolQuotaWriter(accountId, refreshed);
-  const replay = await fetchCodexUsage(`pool:${accountId}:${writerGeneration}:${refreshed.generation}`, {
+  const replayRead = await fetchCodexUsage(`pool:${accountId}:${writerGeneration}:${refreshed.generation}`, {
     headers: {
       Authorization: `Bearer ${refreshed.accessToken}`,
       "ChatGPT-Account-Id": refreshed.chatgptAccountId,
     },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
   }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation));
-  if (!replay) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
+  if (!replayRead) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
+  let usableReplay = false;
+  try {
+  const replay = replayRead.response;
   if (!replay.ok) {
     if (replay.status === 401 && await isTerminalPoolAuthResponse(replay)) {
       // The refresh already settled this claim non-terminally, so the record alone would
@@ -276,6 +279,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
     accountId, existing, configuredPlan, generation: refreshed.generation, writerGeneration, poolWriter,
     mayPublish: ctx.quotaProbeEvidence.mayPublish,
   });
+  usableReplay = result.freshQuota !== undefined;
   return result.freshCredentialGeneration === refreshed.generation ? {
     ...result,
     resetRefreshLineage: {
@@ -284,6 +288,9 @@ export async function recoverPoolQuotaFrom401(ctx: {
       provenance: refreshed.provenance,
     },
   } : result;
+  } finally {
+    replayRead.settle(usableReplay);
+  }
 }
 
 /** Backoff after a refresh failure that proved nothing about the credential. */
@@ -362,16 +369,19 @@ export async function fetchFreshPoolAccountQuota(
 ): Promise<PoolQuotaResult> {
   const writerGeneration = captureConfigGeneration();
   let requestCredentialGeneration = readCodexAccountRecord(accountId)?.generation;
+  let usageRead: Awaited<ReturnType<typeof fetchCodexUsage>> = null;
+  let usableUsage = false;
   try {
     const { accessToken, chatgptAccountId, generation } = await getValidToken(accountId);
     const poolWriter = capturePoolQuotaWriter(accountId, { accessToken, chatgptAccountId, generation });
     requestCredentialGeneration = generation;
     onCredentialGeneration?.(generation);
-    const resp = await fetchCodexUsage(`pool:${accountId}:${writerGeneration}:${generation}`, {
+    usageRead = await fetchCodexUsage(`pool:${accountId}:${writerGeneration}:${generation}`, {
       headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
       signal: AbortSignal.timeout(8000),
     }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation));
-    if (!resp) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
+    if (!usageRead) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
+    const resp = usageRead.response;
     if (!resp.ok) {
       if (resp.status !== 401) {
         return withQuotaProbeEvidence(
@@ -398,6 +408,7 @@ export async function fetchFreshPoolAccountQuota(
       accountId, existing, configuredPlan, generation, writerGeneration, poolWriter,
       mayPublish: quotaProbeEvidence.mayPublish,
     });
+    usableUsage = committed.freshQuota !== undefined;
     return withQuotaProbeEvidence(committed, quotaProbeEvidence);
   } catch (e) {
     if (e instanceof CodexCredentialGenerationConflictError || e instanceof CodexCredentialRefreshLockTimeoutError
@@ -433,6 +444,8 @@ export async function fetchFreshPoolAccountQuota(
       { quota: existing ?? null, needsReauth: false, credentialGeneration: requestCredentialGeneration },
       quotaProbeEvidence,
     );
+  } finally {
+    usageRead?.settle(usableUsage);
   }
 }
 

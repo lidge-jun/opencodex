@@ -217,13 +217,16 @@ export async function fetchMainAccountInfoWhileOwned(
   const quotaSignal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
   let quotaPhase: "request" | "body" | "decode" | "publish" = "request";
   let quotaRefreshGeneration = captureMainAccountIdentityGeneration();
+  let usageRead: Awaited<ReturnType<typeof fetchCodexUsage>> = null;
+  let usableUsage = false;
   try {
     const dispatchSequence = nextQuotaDispatchSequence();
-    const resp = await fetchCodexUsage(`main:${writerGeneration}:${mainQuotaCredentialGeneration}`, {
+    usageRead = await fetchCodexUsage(`main:${writerGeneration}:${mainQuotaCredentialGeneration}`, {
       headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
       signal: quotaSignal,
     });
-    if (!resp) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+    if (!usageRead) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+    const resp = usageRead.response;
     quotaPhase = "publish";
     if (!resp.ok) {
       const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
@@ -302,6 +305,7 @@ export async function fetchMainAccountInfoWhileOwned(
       setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota);
     }
     publishQuotaDispatch(dispatchSequence);
+    usableUsage = quota !== null;
     return {
       info: result,
       quotaRefresh: { status: quota ? "ok" : "not_reported" },
@@ -329,5 +333,7 @@ export async function fetchMainAccountInfoWhileOwned(
       quotaRefresh: { status },
       quotaRefreshGeneration,
     };
+  } finally {
+    usageRead?.settle(usableUsage);
   }
 }

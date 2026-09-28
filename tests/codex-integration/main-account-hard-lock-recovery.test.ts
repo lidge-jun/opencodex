@@ -174,6 +174,41 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
+  test.each(["900", "999999999"])("Retry-After %s prevents recovery preparation before the deadline", async header => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const calls = fetchWith(async url => url === tokenUrl
+      ? Response.json({ access_token: bearer(), refresh_token: "fixture-rotated", expires_in: 86_400 })
+      : new Response("{}", { status: 429, headers: { "Retry-After": header } }));
+    try {
+      await runMainAccountHardLockRecovery(config());
+      const delay = header === "900" ? 900_000 : 86_400_000;
+      now += delay - 1;
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl]);
+      now++;
+      await runMainAccountHardLockRecovery(config());
+      expect(calls.filter(url => url === whamUrl)).toHaveLength(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  test("malformed main 200 keeps failed-read pacing", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let count = 0;
+    const calls = fetchWith(async () => ++count === 1 ? Response.json({}) : usage(0));
+    try {
+      await fetchMainAccountInfo(true);
+      await fetchMainAccountInfo(true);
+      expect(calls).toHaveLength(1);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+      now += 300_000;
+      await fetchMainAccountInfo(true);
+      expect(calls).toHaveLength(2);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { clock.mockRestore(); }
+  });
+
   test("successful but blocked recovery uses capped backoff without extending it on skipped ticks", async () => {
     let now = Date.now();
     const clock = spyOn(Date, "now").mockImplementation(() => now);

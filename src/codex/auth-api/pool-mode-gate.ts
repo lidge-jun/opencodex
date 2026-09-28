@@ -1,4 +1,4 @@
-import { nextQuotaQueryDelay } from "../quota-query-backoff";
+import { nextCodexUsageQueryAt, nextQuotaQueryDelay } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
 import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
@@ -82,7 +82,15 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
   if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
   // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted.
   if (status.resetAt !== undefined && status.resetAt > Date.now()) return;
+  // Reconcile the owned physical credential before skipping work for an older one.
+  reconcileMainCodexAccountRuntimeState();
+  const physical = readCodexTokens();
+  if (physical) observeMainQuotaCredential(physical.access_token, physical.account_id);
+  const identity = captureMainAccountIdentityGeneration();
+  const credential = getMainQuotaCredentialGeneration();
   const previous = mainHardLockRecoveryAttempt;
+  if (previous?.identity === identity && previous.credential === credential
+    && previous.after > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -115,8 +123,9 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
       && credential === getMainQuotaCredentialGeneration() && result.quotaRefresh) {
       const delay = nextQuotaQueryDelay(previous?.identity === identityGeneration
         && previous.credential === credential ? previous.delay : undefined);
+      const queryAfter = nextCodexUsageQueryAt(`main:${writerGeneration}:${credential}`) ?? 0;
       mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
-        ? { identity: identityGeneration, credential, delay, after: Date.now() + delay }
+        ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
         : undefined;
     }
   })().catch(() => {
