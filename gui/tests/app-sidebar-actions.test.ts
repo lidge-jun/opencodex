@@ -63,6 +63,30 @@ test("mobile orbs keep a 44px touch target", () => {
   expect(block).toContain("44px");
 });
 
+test("remembered admin tokens can be forgotten from both chrome surfaces", () => {
+  const mobile = src.slice(src.indexOf('className="mobile-topbar-actions"'), src.indexOf('className="mobile-topbar-actions"') + 2_000);
+  const sidebar = src.slice(src.indexOf('className="sidebar-action-orbs"'), src.indexOf('className="sidebar-action-orbs"') + 2_000);
+  for (const surface of [mobile, sidebar]) {
+    expect(surface).toContain("rememberedAdminTokenPresent");
+    expect(surface).toContain("handleForgetRememberedAdminToken");
+    expect(surface).toContain("connection.forgetRememberedAdminToken");
+    expect(surface).toContain("IconTrash");
+  }
+  expect(src).toContain("clearRememberedAdminToken()");
+});
+
+test("forget remains reachable after remote logout", () => {
+  // Logout is only rendered for a connected session. Forget must not be nested in
+  // that condition, otherwise logging out leaves a persisted credential with no UI
+  // path to remove it.
+  const mobile = src.slice(src.indexOf('className="mobile-topbar-actions"'), src.indexOf('className="mobile-topbar-actions"') + 2_000);
+  const logout = mobile.indexOf("targets.connected && sharedSessionReady");
+  const forget = mobile.indexOf("rememberedAdminTokenPresent");
+  expect(logout).toBeGreaterThan(-1);
+  expect(forget).toBeGreaterThan(logout);
+  expect(mobile.slice(logout, forget)).toContain(")}");
+});
+
 
 /**
  * Outcome-message and consent assertions. Kept here rather than in a second file so

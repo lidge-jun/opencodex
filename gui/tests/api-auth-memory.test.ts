@@ -185,7 +185,7 @@ test("unavailable remembered token survives a transient server error", async () 
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
     const url = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/");
-    if (url.pathname === "/api/settings" && key === "good-token") {
+    if (url.pathname === "/api/combos" && key === "good-token") {
       return new Response("overloaded", { status: 503 });
     }
     return new Response("unauthorized", { status: 401 });

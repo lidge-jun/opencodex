@@ -3509,6 +3509,7 @@ export const ru: Record<TKey, string> = {
   "connection.sessionLogout": "Выйти из удалённой сессии",
   "connection.sessionLoggingOut": "Выход из удалённой сессии…",
   "connection.sessionLogoutFailed": "Не удалось выйти из удалённой сессии. Текущая сессия сохранена.",
+  "connection.forgetRememberedAdminToken": "Удалить сохранённый токен администратора",
   "usage.source.connected": "Source: hub usage",
   "usage.source.local": "Source: local usage.jsonl",
   "usage.scope.label": "Usage scope",

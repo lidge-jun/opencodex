@@ -3509,6 +3509,7 @@ export const tr: Record<TKey, string> = {
   "connection.sessionLogout": "Uzak oturumdan çık",
   "connection.sessionLoggingOut": "Uzak oturumdan çıkılıyor…",
   "connection.sessionLogoutFailed": "Uzak oturumdan çıkılamadı. Mevcut oturum korundu.",
+  "connection.forgetRememberedAdminToken": "Kaydedilen yönetici belirtecini unut",
   "usage.source.connected": "Source: hub usage",
   "usage.source.local": "Source: local usage.jsonl",
   "usage.scope.label": "Usage scope",

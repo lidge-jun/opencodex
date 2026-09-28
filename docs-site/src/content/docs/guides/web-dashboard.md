@@ -31,9 +31,10 @@ the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
 `~/.opencodex/admin-api-token` file).
 
 When a remote dashboard needs that credential, it presents a standard password form so a browser
-password manager can offer to save and autofill it. The dashboard itself still keeps the token only
-in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
-the browser or password manager's decision.
+password manager can offer to save and autofill it. By default, the dashboard keeps the token only
+in memory. Selecting **Remember on this device** opts in to storing the full token as plaintext in
+`localStorage`. Any same-origin script and anyone with access to the device can read it, so do not
+enable it on a shared device. **Forget remembered admin token**, beside Logout, removes that value.
 
 ### Finding the admin token
 

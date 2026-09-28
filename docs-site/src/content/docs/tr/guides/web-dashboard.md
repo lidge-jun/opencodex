@@ -34,10 +34,10 @@ oluşturulan `~/.opencodex/admin-api-token` dosyası) gerektirir.
 
 Uzak bir kontrol panelinin bu kimlik bilgisine ihtiyacı olduğunda, bir tarayıcı
 şifre yöneticisinin onu kaydetmeyi ve otomatik doldurmayı teklif edebilmesi için
-standart bir şifre formu sunar. Kontrol panelinin kendisi belirteci yine de
-yalnızca bellekte tutar ve `localStorage` veya `sessionStorage`'a yazmaz;
-kaydedilip kaydedilmeyeceği tamamen tarayıcının veya şifre yöneticisinin
-kararıdır.
+standart bir şifre formu sunar. Varsayılan olarak kontrol paneli belirteci yalnızca bellekte tutar.
+**Bu cihazda hatırla** seçeneği, tam belirteci düz metin olarak `localStorage` içinde saklamayı kabul eder.
+Aynı origin'deki herhangi bir betik ve cihaza erişebilen herkes bunu okuyabilir; ortak cihazlarda etkinleştirmeyin.
+Çıkışın yanındaki **Kaydedilen yönetici belirtecini unut** bu değeri kaldırır.
 
 ## Kota özeti çubuğu
 
