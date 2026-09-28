@@ -171,6 +171,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
   resp: Response;
   quotaProbeEvidence: PoolQuotaProbeEvidence;
   onCredentialGeneration?: (generation: number) => void;
+  recoveryProbeNow?: number;
 }): Promise<PoolQuotaResult> {
   const { accountId, existing, configuredPlan, rejectedAccessToken, rejectedGeneration, resp } = ctx;
 
@@ -263,7 +264,8 @@ export async function recoverPoolQuotaFrom401(ctx: {
       "ChatGPT-Account-Id": refreshed.chatgptAccountId,
     },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
-  }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation));
+  }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation),
+  ctx.recoveryProbeNow === undefined ? undefined : { recoveryProbe: true, now: () => ctx.recoveryProbeNow! });
   if (!replayRead) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
   if (replayRead.kind === "joined") {
     if (!isCodexAccountGenerationLive(accountId, refreshed.generation)
@@ -385,6 +387,7 @@ export async function fetchFreshPoolAccountQuota(
   getValidToken: typeof getValidCodexToken = getValidCodexToken,
   quotaProbeEvidence: PoolQuotaProbeEvidence = {},
   afterDispatchSequence?: number,
+  recoveryProbeNow?: number,
 ): Promise<PoolQuotaResult> {
   const writerGeneration = captureConfigGeneration();
   let requestCredentialGeneration = readCodexAccountRecord(accountId)?.generation;
@@ -399,7 +402,8 @@ export async function fetchFreshPoolAccountQuota(
         `pool:${accountId}:${writerGeneration}:${generation}${afterDispatchSequence === undefined ? "" : `:post-reset:${afterDispatchSequence}`}`, {
         headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
         signal: AbortSignal.timeout(8000),
-      }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation));
+      }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation),
+      recoveryProbeNow === undefined ? undefined : { recoveryProbe: true, now: () => recoveryProbeNow });
       if (!admission) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
       if (admission.kind === "joined") return isCodexAccountGenerationLive(accountId, generation)
         && quotaProbeEvidence.mayPublish?.() !== false
@@ -426,6 +430,7 @@ export async function fetchFreshPoolAccountQuota(
           resp,
           quotaProbeEvidence,
           onCredentialGeneration,
+          recoveryProbeNow,
         });
         return withQuotaProbeEvidence(recovered, quotaProbeEvidence);
       }
@@ -483,6 +488,7 @@ export async function fetchPoolAccountQuota(
   getValidToken: typeof getValidCodexToken = getValidCodexToken,
   validatePending = false,
   afterDispatchSequence?: number,
+  recoveryProbeNow?: number,
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
   if (afterDispatchSequence === undefined && !forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL) {
@@ -531,6 +537,7 @@ export async function fetchPoolAccountQuota(
       mayPublish: () => state.superseded !== true,
     },
     afterDispatchSequence,
+    recoveryProbeNow,
   ).then(async result => {
     // A passive flight has consumed its validation decision. Remove it before
     // promise settlement queues other continuations, so a late explicit caller

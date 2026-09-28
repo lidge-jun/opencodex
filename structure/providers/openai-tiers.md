@@ -28,6 +28,8 @@ configuration home, config generation and credential generation; no credentials 
 Deferred calls publish neither fresh quota nor dispatch proof and do not advance quota timestamps.
 The bounded process-local failure cache resets on restart; active reads are never evicted to admit
 another key. Reserve and login probes are separate.
+The reset-derived cooldown recovery worker keeps its own five-minute claim interval and sweep clock;
+it can retry past ordinary failure pacing, but still honors an explicit WHAM `Retry-After` deadline.
 
 | Provider id | Product route | Credential owner | Account selection |
 | --- | --- | --- | --- |

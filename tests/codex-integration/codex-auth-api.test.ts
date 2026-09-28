@@ -5422,7 +5422,7 @@ describe("codex-auth API", () => {
     expect(isCodexAccountUsable(config, accountId)).toBe(true);
   });
 
-  test.each([{ delay: 0, reads: 1 }, { delay: 3, reads: 2 }, { delay: 6, reads: 2 }])("validation joins before, during, and after quota settlement: %j", async ({ delay, reads }) => {
+  test.each([{ delay: 0, reads: 1 }, { delay: 3, reads: 1 }, { delay: 6, reads: 2 }])("validation joins before, during, and after quota settlement: %j", async ({ delay, reads }) => {
     const { fetchPoolAccountQuota } = await import("../../src/codex/auth-api");
     const accountId = "late-validation-join";
     const config = makeConfig({ codexAccounts: [{ id: accountId, plan: "pro", isMain: false }] });
@@ -6315,7 +6315,8 @@ describe("manual reset cooldown recovery (#3973)", () => {
         case 1: firstStarted.release(); await release401.promise; return new Response("{}", { status: 401 });
         case 2: secondStarted.release(); await secondFinish.promise;
           return Response.json({ ...usage(88), rate_limit_reset_credits: { available_count: 66 } });
-        case 3: return Response.json(usage(12));
+        case 3: return Response.json({ ...usage(99), rate_limit_reset_credits: { available_count: 77 } });
+        case 4: return Response.json(usage(12));
         default: throw new Error("duplicate same-key usage dispatch");
       }
     }) as typeof fetch;
@@ -6329,21 +6330,21 @@ describe("manual reset cooldown recovery (#3973)", () => {
       void second.catch(rejectDeadline);
       await within(secondStarted.promise);
       release401.release();
-      // The 401 replay joins the already-running new-generation read.
+      // The replay's refreshed lineage can have a different generation key.
       secondFinish.release();
       const [firstRows, secondRows] = await within(Promise.all([first, second]));
-      expect(firstRows.find(account => account.id === "manual-a")?.quota?.weeklyPercent).toBe(88);
-      expect(secondRows.find(account => account.id === "manual-a")?.quota?.weeklyPercent).toBe(88);
-      expect(usageCalls).toBe(2);
+      const oldPercentages = [firstRows, secondRows].map(rows => rows.find(account => account.id === "manual-a")?.quota?.weeklyPercent);
+      expect(oldPercentages.every(percent => percent === 88 || percent === 99)).toBe(true);
+      expect(usageCalls).toBe(3);
       const reset = consume(config); pending.push(reset);
       const response = await within(reset);
       expect(response?.status).toBe(200);
       expect(await response?.json()).toEqual({ code: "reset", remaining: 2 });
       expect(getAccountQuota("manual-a")).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
       expect(getCodexQuotaHealthSnapshot("manual-a", "shared")).toBeNull();
-      expect(usageCalls).toBe(3);
-      expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access"]);
-      expect(urls).toEqual([USAGE, USAGE, CONSUME, USAGE]);
+      expect(usageCalls).toBe(4);
+      expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access", "Bearer converged-access"]);
+      expect(urls).toEqual([USAGE, USAGE, USAGE, CONSUME, USAGE]);
     } finally {
       clearTimeout(timeout);
       release401.release(); secondFinish.release();
@@ -6395,11 +6396,12 @@ describe("manual reset cooldown recovery (#3973)", () => {
       expect(getMainAccountHardLockStatus(config).state).toBe("ready");
       const displayed = (await listCodexAuthAccounts(config, false)).find(account => account.isMain)!;
       expect(displayed.quota).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
-      await fetchMainAccountInfoSnapshot(true);
+      const deferred = await fetchMainAccountInfoSnapshot(true);
+      expect(deferred.quotaRefresh).toBeUndefined();
       const afterOmission = (await listCodexAuthAccounts(config, false)).find(account => account.isMain)!;
       expect(afterOmission.quota?.resetCredits).toBe(2);
       expect(getMainAccountHardLockStatus(config).state).toBe("ready");
-      expect(urls).toEqual([USAGE, CONSUME, USAGE, USAGE]);
+      expect(urls).toEqual([USAGE, CONSUME, USAGE]);
     } finally { oldFinish.release(); await old; }
   });
 

@@ -10,7 +10,7 @@ export function nextQuotaQueryDelay(previous = BASE_DELAY_MS / 2): number {
   return Math.min(previous * 2, MAX_DELAY_MS);
 }
 
-type Attempt = { delay: number; after: number; inFlight: boolean; pending?: Promise<unknown>; resolve?: (result: unknown) => void };
+type Attempt = { delay: number; after: number; retryAfterUntil?: number; inFlight: boolean; pending?: Promise<unknown>; resolve?: (result: unknown) => void };
 // Keys contain configuration-home and caller-owned generation identifiers, never credentials.
 const attempts = new Map<string, Attempt>();
 const scopedKey = (key: string) => `${getConfigDir()}\0${key}`;
@@ -28,11 +28,19 @@ export interface CodexUsageOwner<T> {
 }
 export type CodexUsageRead<T> = CodexUsageOwner<T> | { kind: "joined"; result: T };
 
+export interface CodexUsageSchedule {
+  /** Recovery claims already have their own five-minute admission interval. */
+  recoveryProbe?: true;
+  /** The sweep's clock also drives its quota-query deadline. */
+  now?: () => number;
+}
+
 /** Shared by main, pool and 401-replay usage reads. Cache bypass does not bypass pacing. */
 export async function fetchCodexUsage<T>(
   key: string,
   init: RequestInit,
   onDispatch?: () => void,
+  schedule: CodexUsageSchedule = {},
 ): Promise<CodexUsageRead<T> | null> {
   key = scopedKey(key);
   const previous = attempts.get(key);
@@ -40,7 +48,10 @@ export async function fetchCodexUsage<T>(
     const result = (await previous.pending) as T | undefined;
     return result === undefined ? null : { kind: "joined", result };
   }
-  if (previous && previous.after > Date.now()) return null;
+  const now = schedule.now ?? Date.now;
+  if (previous && (schedule.recoveryProbe
+    ? (previous.retryAfterUntil ?? 0) > now()
+    : previous.after > now())) return null;
   if (!previous && attempts.size >= MAX_ENTRIES) {
     const evict = [...attempts].find(([, entry]) => !entry.inFlight)?.[0];
     if (!evict) return null;
@@ -57,10 +68,11 @@ export async function fetchCodexUsage<T>(
     if (attempts.get(key) === attempt) {
       if (usable || response?.status === 401 || response?.status === 403) attempts.delete(key);
       else {
-        const now = Date.now();
-        const delay = nextQuotaQueryDelay(previous?.delay);
-        attempts.set(key, { delay, after: now + Math.max(delay,
-          parseRetryAfterMs(response?.headers.get("retry-after"), now) ?? 0), inFlight: false });
+        const at = now();
+        const delay = schedule.recoveryProbe ? BASE_DELAY_MS : nextQuotaQueryDelay(previous?.delay);
+        const retryAfter = parseRetryAfterMs(response?.headers.get("retry-after"), at) ?? 0;
+        attempts.set(key, { delay, after: at + Math.max(delay, retryAfter),
+          ...(retryAfter > 0 ? { retryAfterUntil: at + retryAfter } : {}), inFlight: false });
       }
     }
     attempt.resolve?.(result);

@@ -53,7 +53,8 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
         return;
       }
       try {
-        const result = await fetchPoolAccountQuota(claim.accountId, true, account.plan);
+        const result = await fetchPoolAccountQuota(claim.accountId, true, account.plan,
+          undefined, false, undefined, now);
         // Defence in depth: independent scopes are already excluded at the claim site.
         // Generic WHAM must never clear Reserve even if claim selection changes.
         const recovered = (claim.scope === undefined || claim.scope === "shared")
