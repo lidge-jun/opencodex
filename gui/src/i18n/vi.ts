@@ -126,7 +126,6 @@ export const vi: Record<TKey, string> = {
   "dec.available": "Đích khả dụng",
   "dec.addHint": "Thêm đích này ở trang Nhà cung cấp để sử dụng.",
   "dec.capTitle": "Năng lực quyết định",
-  "dec.capSource": "Danh mục chế độ và ngân sách theo skill Sun-Season/jev-codex:",
   "dec.colMode": "Chế độ",
   "dec.colDelegates": "Giao cho mô hình quyết định",
   "dec.colKinds": "Kiểu câu hỏi",

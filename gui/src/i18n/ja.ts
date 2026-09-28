@@ -126,7 +126,6 @@ export const ja: Record<TKey, string> = {
   "dec.available": "利用可能な送信先",
   "dec.addHint": "プロバイダー画面でこの送信先を追加すると使用できます。",
   "dec.capTitle": "意思決定の能力",
-  "dec.capSource": "モード一覧と予算は Sun-Season/jev-codex スキル準拠：",
   "dec.colMode": "モード",
   "dec.colDelegates": "意思決定モデルに委任",
   "dec.colKinds": "質問タイプ",

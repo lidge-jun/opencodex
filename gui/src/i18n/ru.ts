@@ -126,7 +126,6 @@ export const ru: Record<TKey, string> = {
   "dec.available": "Доступные назначения",
   "dec.addHint": "Добавьте это назначение на странице Провайдеры, чтобы использовать его.",
   "dec.capTitle": "Возможности решений",
-  "dec.capSource": "Каталог режимов и бюджеты повторяют навык Sun-Season/jev-codex:",
   "dec.colMode": "Режим",
   "dec.colDelegates": "Передаётся модели решений",
   "dec.colKinds": "Типы вопросов",

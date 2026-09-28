@@ -128,7 +128,6 @@ export const en = {
   "dec.available": "Available destinations",
   "dec.addHint": "Add this destination on the Providers page to use it.",
   "dec.capTitle": "Decision capabilities",
-  "dec.capSource": "Job catalog and budgets mirror the Sun-Season/jev-codex skill:",
   "dec.colMode": "Mode",
   "dec.colDelegates": "Delegated to the decision model",
   "dec.colKinds": "Question kinds",

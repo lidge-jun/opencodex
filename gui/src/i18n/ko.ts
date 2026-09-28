@@ -126,7 +126,6 @@ export const ko: Record<TKey, string> = {
   "dec.available": "사용 가능한 대상",
   "dec.addHint": "Providers 페이지에서 이 대상을 추가하면 사용할 수 있습니다.",
   "dec.capTitle": "의사결정 능력",
-  "dec.capSource": "모드 목록과 예산은 Sun-Season/jev-codex 스킬 기준:",
   "dec.colMode": "모드",
   "dec.colDelegates": "의사결정 모델에 위임",
   "dec.colKinds": "질문 유형",

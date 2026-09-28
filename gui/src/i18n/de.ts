@@ -126,7 +126,6 @@ export const de: Record<TKey, string> = {
   "dec.available": "Verfügbare Ziele",
   "dec.addHint": "Füge dieses Ziel auf der Seite Anbieter hinzu, um es zu nutzen.",
   "dec.capTitle": "Entscheidungsfähigkeiten",
-  "dec.capSource": "Job-Katalog und Budgets entsprechen dem Sun-Season/jev-codex-Skill:",
   "dec.colMode": "Modus",
   "dec.colDelegates": "An das Entscheidungsmodell delegiert",
   "dec.colKinds": "Fragetypen",

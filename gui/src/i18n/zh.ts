@@ -126,7 +126,6 @@ export const zh: Record<TKey, string> = {
   "dec.available": "可添加的目的地",
   "dec.addHint": "在「提供商」页面添加该目的地后即可使用。",
   "dec.capTitle": "决策能力",
-  "dec.capSource": "模式清单与预算取自 Sun-Season/jev-codex 技能：",
   "dec.colMode": "模式",
   "dec.colDelegates": "交给决策模型",
   "dec.colKinds": "问题类型",

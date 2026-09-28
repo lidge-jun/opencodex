@@ -127,7 +127,6 @@ export const tr: Record<TKey, string> = {
   "dec.available": "Kullanılabilir hedefler",
   "dec.addHint": "Bu hedefi kullanmak için Sağlayıcılar sayfasından ekleyin.",
   "dec.capTitle": "Karar yetenekleri",
-  "dec.capSource": "Görev kataloğu ve bütçeler Sun-Season/jev-codex becerisini yansıtır:",
   "dec.colMode": "Kip",
   "dec.colDelegates": "Karar modeline devredilir",
   "dec.colKinds": "Soru türleri",

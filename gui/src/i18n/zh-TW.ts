@@ -119,7 +119,6 @@ export const zhTW: Record<TKey, string> = {
   "dec.available": "可新增的目的地",
   "dec.addHint": "在「供應商」頁面新增此目的地後即可使用。",
   "dec.capTitle": "決策能力",
-  "dec.capSource": "模式清單與預算取自 Sun-Season/jev-codex 技能：",
   "dec.colMode": "模式",
   "dec.colDelegates": "交給決策模型",
   "dec.colKinds": "問題類型",

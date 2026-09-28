@@ -82,7 +82,6 @@ const DECISION_MODES: Array<{ id: string; tkey: TKey; kinds: string; budget: str
 ];
 
 const DECISION_ADAPTER = "jev-decision";
-const SKILL_URL = "https://github.com/Sun-Season/jev-codex";
 /** Loopback or RFC1918 host: a decision service running on this machine or the local network. */
 const LOCAL_ENDPOINT = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)(?::\d+)?(?:\/|$)/i;
 
@@ -420,9 +419,6 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
           </tbody>
         </table>
       </div>
-      <p className="muted">
-        {t("dec.capSource")} <a href={SKILL_URL} target="_blank" rel="noreferrer">{SKILL_URL}</a>
-      </p>
     </>
   );
 }
