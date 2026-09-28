@@ -85,6 +85,7 @@ import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
+import { applyDroidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
 
 type Rec = Record<string, unknown>;
 
@@ -142,6 +143,7 @@ async function handleChatCompletionsWithBudget(
     // forwards this body as-is, so both must observe the same parts. A body with no
     // foreign image part is returned by reference and stays byte-identical.
     chatBody = normalizeChatImageParts(rawBody);
+    applyDroidReasoningDefault(chatBody, req.headers.get(DROID_DEFAULT_EFFORT_HEADER));
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;

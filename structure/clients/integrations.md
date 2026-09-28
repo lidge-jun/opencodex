@@ -63,6 +63,24 @@ compare and before taking a snapshot. Droid has no writer lock, so a competing
 settings file can still appear after this check and before the write.
 No Droid file is written by detection or on the proxy request path.
 
+### Droid reasoning defaults
+
+The Droid page stores a sparse model-to-effort map in its owned model rows through
+`extraHeaders.x-opencodex-droid-default-effort`. There is no separate proxy-wide
+default. The single-client status projects the owned defaults and the current
+export roster's declared effort choices into `droidReasoning`.
+
+Preview and apply accept optional `droidReasoningDefaults`. Omission preserves
+owned defaults; an empty map clears them. A supplied map is validated against the
+same roster used to build the contribution, and the contribution participates in
+the preview fingerprint and frozen mutation input. Refresh preserves defaults on
+retained models. Removing models uses the ordinary removal preview. Disable and
+restore remove or restore the rows and their defaults as one owned value.
+
+The request preference is interpreted before Chat route selection under the
+[inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
+It never authenticates a client or changes admission policy.
+
 ## Cursor installed capability reads
 
 `src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file

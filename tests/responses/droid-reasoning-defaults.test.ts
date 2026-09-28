@@ -1,0 +1,133 @@
+import { afterEach, expect, test } from "bun:test";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+const upstreamServers: Array<ReturnType<typeof Bun.serve>> = [];
+let releaseSpendHome: (() => void) | undefined;
+
+afterEach(() => {
+  for (const server of upstreamServers.splice(0)) server.stop(true);
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
+
+function upstream() {
+  const captured: Array<{ path: string; headers: Headers; body: Record<string, unknown> }> = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const body = await req.json() as Record<string, unknown>;
+      captured.push({ path: new URL(req.url).pathname, headers: new Headers(req.headers), body });
+      if (body.stream === true) {
+        return new Response([
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })}\n\n`,
+          "data: [DONE]\n\n",
+        ].join(""), { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({
+        id: "chatcmpl_mock",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    },
+  });
+  upstreamServers.push(server);
+  return { captured, baseUrl: `${server.url}v1` };
+}
+
+async function send(
+  lane: "native" | "translated",
+  headers: Record<string, string>,
+  extraBody: Record<string, unknown> = {},
+  policy: { pin?: string; cap?: string } = {},
+) {
+  releaseSpendHome ??= acquireOwnedSpendHome();
+  const mock = upstream();
+  const provider: OcxProviderConfig = {
+    adapter: "openai-chat",
+    baseUrl: mock.baseUrl,
+    apiKey: "fixture",
+    allowPrivateNetwork: true,
+    ...(policy.pin ? { modelPinnedReasoningEfforts: { model: policy.pin } } : {}),
+    reasoningEfforts: ["none", "minimal", "low", "medium", "high"],
+  };
+  const config = {
+    defaultProvider: "mock",
+    providers: { mock: provider },
+    ...(policy.cap ? { effortCap: policy.cap } : {}),
+  } as OcxConfig;
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({
+      model: "mock/model",
+      stream: false,
+      messages: [{ role: "user", content: "hello" }],
+      ...(lane === "translated" ? { store: true } : {}),
+      ...extraBody,
+    }),
+  }), config, { model: "", provider: "" });
+  await response.text();
+  expect(response.status).toBe(200);
+  expect(mock.captured).toHaveLength(1);
+  return mock.captured[0]!;
+}
+
+for (const lane of ["native", "translated"] as const) {
+  test(`${lane} Chat applies a Droid default before dispatch and consumes its header`, async () => {
+    const sent = await send(lane, { "x-opencodex-droid-default-effort": "high" });
+    expect(sent.body.reasoning_effort ?? (sent.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("high");
+    expect(sent.headers.has("x-opencodex-droid-default-effort")).toBe(false);
+    expect(sent.path).toBe("/v1/chat/completions");
+    expect(sent.body.stream).toBe(lane === "translated");
+  });
+
+  test(`${lane} Chat leaves explicit effort values and invalid defaults alone`, async () => {
+    const medium = await send(lane, { "x-opencodex-droid-default-effort": "high" }, { reasoning_effort: "medium" });
+    expect(medium.body.reasoning_effort ?? (medium.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("medium");
+    for (const explicit of [
+      { reasoning_effort: null },
+      { reasoning_effort: "not-a-canonical-effort" },
+      { reasoning: { effort: "low" } },
+    ]) {
+      const baseline = await send(lane, {}, explicit);
+      const withHeader = await send(lane, { "x-opencodex-droid-default-effort": "high" }, explicit);
+      expect(withHeader.body).toEqual(baseline.body);
+    }
+    const baselineNone = await send(lane, {}, { reasoning_effort: "none" });
+    const withHeaderNone = await send(lane, { "x-opencodex-droid-default-effort": "high" }, { reasoning_effort: "none" });
+    expect(withHeaderNone.body).toEqual(baselineNone.body);
+    const absent = await send(lane, { "x-opencodex-droid-default-effort": "not-valid" });
+    expect(Object.hasOwn(absent.body, "reasoning_effort")).toBe(false);
+    expect(Object.hasOwn(absent.body, "reasoning")).toBe(false);
+    const noHeader = await send(lane, {});
+    expect(Object.hasOwn(noHeader.body, "reasoning_effort")).toBe(false);
+    expect(Object.hasOwn(noHeader.body, "reasoning")).toBe(false);
+  });
+
+  test(`${lane} Chat accepts declared minimal and none defaults`, async () => {
+    for (const effort of ["minimal", "none"]) {
+      const explicit = await send(lane, {}, { reasoning_effort: effort });
+      const defaulted = await send(lane, { "x-opencodex-droid-default-effort": effort });
+      expect(defaulted.body).toEqual(explicit.body);
+      if (lane === "native") expect(defaulted.body.reasoning_effort).toBe(effort);
+    }
+  });
+
+  test(`${lane} Chat applies a low model pin after the Droid high default`, async () => {
+    const sent = await send(lane, { "x-opencodex-droid-default-effort": "high" }, {}, { pin: "low" });
+    expect(sent.body.reasoning_effort ?? (sent.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("low");
+  });
+
+  test(`${lane} Chat applies a qualifying low effort cap after the Droid high default`, async () => {
+    const tools = [
+      { type: "function", function: { name: "spawn_agent", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "send_message", parameters: { type: "object", properties: {} } } },
+    ];
+    const sent = await send(lane, { "x-opencodex-droid-default-effort": "high" }, { tools }, { cap: "low" });
+    expect(sent.body.reasoning_effort ?? (sent.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("low");
+  });
+}

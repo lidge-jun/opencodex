@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { setClientResourceData } from "../src/client-resource";
 
 /**
  * Mounted behavior for the Integrations surfaces.
@@ -237,7 +238,7 @@ afterEach(async () => {
 
 async function mountClient(
   active = true,
-  client: "hermes" | "dsh" | "kilo" = "hermes",
+  client: "hermes" | "dsh" | "kilo" | "droid" = "hermes",
 ): Promise<void> {
   const [{ createRoot }, { LanguageProvider }, { default: FileIntegrationPage }] = await Promise.all([
     import("react-dom/client"),
@@ -262,7 +263,7 @@ async function mountClient(
  * replays the first response and the new `stateResponse` has no effect. Rotating
  * the base is what makes a state sweep in a single test possible at all.
  */
-async function remountClient(client: "hermes" | "dsh" | "kilo" = "hermes"): Promise<void> {
+async function remountClient(client: "hermes" | "dsh" | "kilo" | "droid" = "hermes"): Promise<void> {
   if (root) {
     const current = root;
     await act(async () => { current.unmount(); });
@@ -291,6 +292,62 @@ test("the DSH surface uses localized ownership semantics and its own API route",
   expect(text).toContain("deepseek-official");
   expect(text).toContain("loopback");
   expect(requests.some(request => request.url.endsWith("/api/client-integrations/dsh"))).toBe(true);
+});
+
+test("Droid reasoning defaults use one frozen snapshot for review and commit", async () => {
+  let savedDefaults: Record<string, string> = {};
+  stateResponse = () => json(status({
+    clientId: "droid",
+    configPath: "/tmp/factory/settings.json",
+    droidReasoning: {
+      models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low", "high"] }],
+      defaults: savedDefaults,
+    },
+  }));
+  putResponse = request => {
+    savedDefaults = (request.body as { droidReasoningDefaults?: Record<string, string> }).droidReasoningDefaults ?? {};
+    return json({ ok: true, clientId: "droid", changed: true, state: "current", message: "saved" });
+  };
+  await mountClient(true, "droid");
+
+  expect(container.textContent).toContain("A default is used only when a request omits its reasoning effort");
+  expect(buttonByText("Save / review changes")?.disabled).toBe(false);
+  const selector = container.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+  await act(async () => { selector.click(); });
+  const high = Array.from(testWindow.document.querySelectorAll('[role="option"]')).find(option => option.textContent === "high") as HTMLButtonElement;
+  await act(async () => { high.click(); });
+  await act(async () => { buttonByText("Save / review changes")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+
+  const preview = requests.find(request => request.method === "POST" && request.url.endsWith("/api/client-integrations/preview"));
+  expect(preview?.body).toMatchObject({
+    clientId: "droid",
+    operation: "apply",
+    droidReasoningDefaults: { "openai/gpt-test": "high" },
+  });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.disabled).toBe(true);
+  await confirmDialog("Apply");
+
+  const mutation = requests.find(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/droid"));
+  expect(mutation?.body).toMatchObject({
+    enabled: true,
+    droidReasoningDefaults: { "openai/gpt-test": "high" },
+  });
+  expect(savedDefaults).toEqual({ "openai/gpt-test": "high" });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.disabled).toBe(false);
+
+  savedDefaults = { "openai/gpt-test": "low" };
+  await act(async () => {
+    setClientResourceData(`integration-state:${apiBase}:droid`, status({
+      clientId: "droid",
+      configPath: "/tmp/factory/settings.json",
+      droidReasoning: {
+        models: [{ model: "openai/gpt-test", label: "Test model", efforts: ["low", "high"] }],
+        defaults: savedDefaults,
+      },
+    }));
+  });
+  expect(container.querySelector<HTMLButtonElement>('[role="combobox"]')?.textContent).toContain("low");
 });
 
 function buttons(): HTMLButtonElement[] {

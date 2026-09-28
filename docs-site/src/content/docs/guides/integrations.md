@@ -559,6 +559,20 @@ Chat Completions endpoint. Choose a row from Droid's `/model` picker. Disable
 removes the managed rows; Undo restores the exact saved file. Other settings and
 custom models remain yours.
 
+Open **Integrations → Factory Droid** (`/#integrations/droid`) to set a reasoning
+default for each connected model. Choose from the model's supported efforts,
+review the changes, then confirm. **No default** clears that model's setting.
+Models without a declared effort list show that no default is available.
+
+The default applies only when Droid omits an effort from its request. An explicit
+request effort takes precedence over this default; existing OpenCodex pins and
+caps still apply. Droid may continue to display **Dynamic** even when OpenCodex
+applies the configured default. Other clients' requests are unaffected.
+
+Refresh preserves defaults for models that remain connected. Disable removes
+the defaults with the managed model rows, and Undo restores the saved rows and
+their defaults together.
+
 Models whose IDs or display names contain `,` or `]` are skipped because the
 managed selector cannot address them safely; export and managed settings show
 the same rows. A nonempty catalog with no addressable models is refused.

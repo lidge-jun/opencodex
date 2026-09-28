@@ -78,6 +78,20 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Chat Completions inbound native path
 
+### Droid request defaults
+
+`src/server/droid-reasoning-default.ts` reads the model-scoped
+`x-opencodex-droid-default-effort` preference at Chat ingress before native or
+translated routing. A canonical value fills `reasoning_effort` only when neither
+that property nor nested `reasoning.effort` is present. Even an explicit null or
+invalid value suppresses the default and retains the existing request semantics.
+Missing or invalid headers have no effect. Provider headers do not forward this
+internal preference. Existing pins and caps run afterward with their usual
+authority. The [Droid integration](../clients/integrations.md#droid-reasoning-defaults)
+owns the persisted per-model values.
+
+### Route selection
+
 `POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat
 Completions endpoint. Route selection reads the raw Chat body and the native request keeps that body
 as its wire source; a Responses projection is constructed only after the native route is declined

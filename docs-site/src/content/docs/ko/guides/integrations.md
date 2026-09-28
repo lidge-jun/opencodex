@@ -258,4 +258,17 @@ GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로�
 
 ## Factory Droid
 
+**연동 → Factory Droid** (`/#integrations/droid`)에서 연결된 모델별 추론 기본값을
+설정할 수 있습니다. 모델이 지원하는 effort를 선택하고 변경 내용을 검토한 뒤
+확인하세요. **기본값 없음**을 선택하면 해당 모델의 설정을 지웁니다. 지원 effort
+목록이 없는 모델에는 사용 가능한 기본값이 없다고 표시됩니다.
+
+이 값은 Droid 요청에 effort가 없을 때만 적용됩니다. 요청이 effort를 명시하면
+그 값을 사용하며, 기존 OpenCodex pin과 cap 정책은 계속 적용됩니다. OpenCodex가
+기본값을 적용하더라도 Droid에는 **Dynamic**으로 표시될 수 있습니다. 다른
+클라이언트의 요청에는 영향을 주지 않습니다.
+
+새로고침은 계속 연결된 모델의 기본값을 유지합니다. 연동을 해제하면 관리되는
+모델 행과 기본값이 함께 제거되며, 되돌리기는 저장된 행과 기본값을 함께 복원합니다.
+
 Factory Droid는 `~/.factory/settings.json`(Windows에서는 `%USERPROFILE%\.factory\settings.json`)을 사용합니다. `ocx integration client enable --client droid`로 명시적으로 활성화한 다음 `/model`에서 사용자 지정 모델을 선택하세요. 관리되는 항목에는 키가 없으며 루프백에서만 동작합니다. 비활성화하면 관리되는 항목이 제거되고, Undo는 저장된 원본 바이트를 복원합니다. 기존 `config.json`에 OpenCodex 항목이 있거나 `settings.local.json`이 `customModels`를 덮어쓰면 활성화 전에 충돌을 해결하세요. [Factory BYOK 문서](https://docs.factory.ai/model-independence/byok)를 참고하세요.

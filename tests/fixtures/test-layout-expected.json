@@ -1,4 +1,7 @@
 {
+  "droid-managed-reasoning-defaults.test.ts": "clients",
+  "management-droid-reasoning-defaults.test.ts": "server",
+  "droid-reasoning-defaults.test.ts": "responses",
   "link-relay-bound-transport.test.ts": "clients",
   "pnpm-command-isolation.test.ts": "update",
   "project-config-warning-snapshot.test.ts": "codex-integration",
