@@ -200,14 +200,21 @@ function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget 
  * NODE_OPTIONS injects code before the first npm line, NODE_PATH redirects module
  * resolution, and NODE_TLS_REJECT_UNAUTHORIZED would make the pinned-registry TLS
  * check void - each one reaches the evidence-producing process unless removed.
- * NODE_EXTRA_CA_CERTS survives because it is the supported TLS extension, not an
- * execution or trust bypass.
+ * NODE_V8_COVERAGE and NODE_REDIRECT_WARNINGS are dropped for the same reason in
+ * reverse: they are output paths, so ambient values would write Node artifacts to
+ * arbitrary external directories on exit. The surviving allowlist is only the
+ * proxy variables plus NODE_EXTRA_CA_CERTS, the supported TLS extension.
  */
 const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
   "node_options",
   "node_path",
   "node_tls_reject_unauthorized",
   "node_compile_cache",
+  // Output-path channels: ambient values would make the Node process write
+  // coverage JSON or warning output to an arbitrary external directory on exit,
+  // escaping the owned temp root regardless of the isolated --cache.
+  "node_v8_coverage",
+  "node_redirect_warnings",
 ]);
 
 function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

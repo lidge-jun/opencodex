@@ -456,9 +456,13 @@ describe("registry configuration isolation", () => {
     const priorOptions = process.env.NODE_OPTIONS;
     const priorPath = process.env.NODE_PATH;
     const priorTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    const priorCoverage = process.env.NODE_V8_COVERAGE;
+    const priorWarnings = process.env.NODE_REDIRECT_WARNINGS;
     process.env.NODE_OPTIONS = "--require=evil";
     process.env.NODE_PATH = "C:\\evil-modules";
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    process.env.NODE_V8_COVERAGE = "C:\\evil-coverage";
+    process.env.NODE_REDIRECT_WARNINGS = "C:\\evil-warnings.log";
     try {
       const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
       const target = resolveCodexCliUpdateTarget("latest", spawn);
@@ -469,6 +473,8 @@ describe("registry configuration isolation", () => {
         expect(lower.has("node_options")).toBe(false);
         expect(lower.has("node_path")).toBe(false);
         expect(lower.has("node_tls_reject_unauthorized")).toBe(false);
+        expect(lower.has("node_v8_coverage")).toBe(false);
+        expect(lower.has("node_redirect_warnings")).toBe(false);
       }
     } finally {
       if (priorOptions === undefined) delete process.env.NODE_OPTIONS;
@@ -477,6 +483,10 @@ describe("registry configuration isolation", () => {
       else process.env.NODE_PATH = priorPath;
       if (priorTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
       else process.env.NODE_TLS_REJECT_UNAUTHORIZED = priorTls;
+      if (priorCoverage === undefined) delete process.env.NODE_V8_COVERAGE;
+      else process.env.NODE_V8_COVERAGE = priorCoverage;
+      if (priorWarnings === undefined) delete process.env.NODE_REDIRECT_WARNINGS;
+      else process.env.NODE_REDIRECT_WARNINGS = priorWarnings;
     }
   });
 
@@ -489,6 +499,12 @@ describe("registry configuration isolation", () => {
     for (const call of calls) {
       expect((call.options.env as NodeJS.ProcessEnv).PATH).toBe("");
     }
+    // The fail-closed contract is the resolution outcome, not a stub answer: a
+    // spawn that honours the empty PATH fails and the target stays unresolved.
+    const enoent = { status: null as number | null, stdout: "", stderr: "spawnSync npm ENOENT", error: new Error("spawnSync npm ENOENT") };
+    const failingSpawn = (() => ({ ...enoent })) as never;
+    const refused = resolveCodexCliUpdateTarget("latest", failingSpawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    expect(refused.kind).toBe("unresolved");
   });
 
   test("npm cache and log state stay inside the owned temporary root", () => {
@@ -514,6 +530,7 @@ describe("registry configuration isolation", () => {
     const fakeHome = mkdtempSync(join(tmpdir(), "ocx-update-test-home-"));
     try {
       const calls: CapturedCall[] = [];
+      const ownedDuringRun: string[] = [];
       let realRan = false;
       const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
         const cwd = options.cwd as string;
@@ -525,29 +542,28 @@ describe("registry configuration isolation", () => {
         calls.push(call);
         const field = queriedField(call);
         if (realRan) return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
-        realRan = true;
         const env = { ...(options.env as NodeJS.ProcessEnv), HOME: fakeHome, USERPROFILE: fakeHome, npm_config_offline: "true" };
-        return spawnSync(bin, args, { ...options, env, timeout: 30_000, windowsHide: true, encoding: "utf8" });
+        const result = spawnSync(bin, args, { ...options, env, timeout: 30_000, windowsHide: true, encoding: "utf8" });
+        realRan = true;
+        // A spawn that never started (ENOENT, timeout kill) proves nothing; require
+        // a real process exit so the residue assertions actually bound npm's writes.
+        expect(result.error).toBeUndefined();
+        expect(result.status === 0 || result.status === 1).toBe(true);
+        // The owned root is still live here, so residue inside it is observable
+        // before the resolver's finally removes it.
+        for (const name of readdirSync(cwd)) ownedDuringRun.push(name);
+        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
       }) as never;
       resolveCodexCliUpdateTarget("latest", spawn);
       expect(realRan).toBe(true);
       const cwd = calls[0]!.options.cwd as string;
-      // Anything npm persisted must be inside the owned root; the ambient HOME must
-      // stay completely empty (no ~/.npm, no ~/.npmrc, no _logs).
-      const collect = (root: string, base: string, out: string[]): void => {
-        let names: string[];
-        try { names = readdirSync(root); } catch { return; }
-        for (const name of names) out.push(join(base, name));
-      };
-      const homeEntries: string[] = [];
-      collect(fakeHome, ".", homeEntries);
-      expect(homeEntries).toEqual([]);
-      const leaked: string[] = [];
-      collect(cwd, ".", leaked);
-      for (const entry of leaked) {
-        const normalized = entry.replace(/\\/g, "/");
-        expect(normalized.startsWith("./package.json") || normalized.startsWith("./ocx-update.npmrc") || normalized.startsWith("./npm-cache")).toBe(true);
+      // Anything npm persisted was inside the owned root and is removed with it;
+      // the disposable HOME stays completely empty (no ~/.npm, no ~/.npmrc, no _logs).
+      for (const name of ownedDuringRun) {
+        expect(["package.json", "ocx-update.npmrc", "npm-cache"].includes(name)).toBe(true);
       }
+      expect(existsSync(cwd)).toBe(false);
+      expect(readdirSync(fakeHome)).toEqual([]);
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });
     }
