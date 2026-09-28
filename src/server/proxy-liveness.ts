@@ -270,19 +270,35 @@ async function attestFencedIdentity(
   const secret: unknown = record ? Reflect.get(record, "attestationSecret") : undefined;
   if (!record || record.pid !== pid || record.port !== port || typeof secret !== "string") return false;
   const challenge = (io.createChallengeFn ?? createLocalAttestationChallenge)();
-  try {
-    const res = await fetchFn(url, {
-      headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
-    // The second answer must still be the same fenced (or by now healthy) process.
-    if (!isOpencodexHealthz(body) && !isPackageTreeFencedHealthz(body)) return false;
-    if (body?.pid !== pid) return false;
-    return verifyLocalAttestationProof(secret, challenge, pid, port, res.headers.get(LOCAL_ATTESTATION_PROOF_HEADER));
-  } catch {
-    return false;
+  // One proof failure is definitive and never retried; a transport failure only means
+  // the listener did not answer yet, so it gets the same bounded retry the identity
+  // probe uses ??"did not answer" is not "not ours" (#6198). The challenge is minted
+  // once: a retried attempt proves the same fresh nonce, not a replayed proof.
+  const sleepFn = io.sleepFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+  const nowFn = io.nowFn ?? Date.now;
+  const requestedAttempts = Math.trunc(io.attempts ?? 1);
+  const attempts = Number.isNaN(requestedAttempts)
+    ? 1
+    : Math.max(1, Math.min(requestedAttempts, 5));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const remainingMs = io.deadlineAt === undefined ? timeoutMs : Math.min(timeoutMs, io.deadlineAt - nowFn());
+    if (remainingMs <= 0) return false;
+    try {
+      const res = await fetchFn(url, {
+        headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
+        signal: AbortSignal.timeout(remainingMs),
+      });
+      const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
+      // The second answer must still be the same fenced (or by now healthy) process.
+      if (!isOpencodexHealthz(body) && !isPackageTreeFencedHealthz(body)) return false;
+      if (body?.pid !== pid) return false;
+      return verifyLocalAttestationProof(secret, challenge, pid, port, res.headers.get(LOCAL_ATTESTATION_PROOF_HEADER));
+    } catch {
+      if (attempt >= attempts) return false;
+      await sleepFn(100);
+    }
   }
+  return false;
 }
 
 /** A bounded version string safe to carry beyond the untrusted health response. */

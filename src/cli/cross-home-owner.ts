@@ -118,7 +118,7 @@ export async function findCrossHomeOwner(options: { homeDir?: string } = {}): Pr
       if (identity?.pid !== defaultRuntime.pid) continue;
       if (await proveLiveProxyOwnedByHome(
         { ...identity, hostname, port, source: "runtime" },
-        { readRuntimeFn: () => defaultRuntime },
+        { ...START_OWNERSHIP_LIVENESS, readRuntimeFn: () => defaultRuntime },
       )) return port;
     }
   }
