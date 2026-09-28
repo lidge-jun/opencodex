@@ -697,6 +697,23 @@ complete declared-tool call with no native counterpart is restored only after a 
 interrupted or filtered turns leave the markup as text. Create Provider-API keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
+For a provider using the native `command-code` adapter, `projectContext: "on"` opts into
+sending local project files in the `/alpha/generate` `memory`, `taste`, and `skills` fields.
+With `projectContext` unset or `"off"`, no project files (`AGENTS.md`, taste, or skills)
+are read or sent; the existing `config` metadata payload is unchanged.
+The roots are resolved from the **opencodex proxy process working directory**, not from a
+caller's remote workspace. The loader reads `AGENTS.md`, `.commandcode/taste/taste.md`,
+and `SKILL.md` files in immediate child directories of `.commandcode/skills`,
+`.agents/skills`, and `.pi/skills` under that working directory. Enabling the option sends
+the collected contents upstream to the configured Command Code endpoint. It is rejected
+for other adapters. Asynchronous path checks keep reads inside the resolved working
+directory, including when that directory is a filesystem root; only regular-file
+content is read. Skill-directory symlinks resolving inside that directory are allowed;
+those resolving outside are rejected. Every visited entry counts toward the scan budget; at
+most 16 skills are selected. File bytes, total skill bytes, and loading time are bounded;
+unreadable or missing files produce empty fields. Stable results are cached for 30 seconds;
+timeouts and filesystem-admission refusals are not cached, so a later request can retry.
+
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for
 one-click browser authorization or `ocx login orcarouter` to paste an existing API key. The PKCE
 flow starts a loopback listener first, sends a fresh S256 challenge and state to

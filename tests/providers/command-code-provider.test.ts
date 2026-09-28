@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth/store";
@@ -10,6 +10,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { budgetOwner } from "../helpers/send-budget-owner";
 import type { OcxConfig } from "../../src/types";
 import { commandCodeSessionId, createCommandCodeAdapter } from "../../src/adapters/command-code";
+import { projectContextCache } from "../../src/adapters/command-code-project-context";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../../src/oauth/command-code";
 import { buildModelsRequest, OAUTH_PROVIDERS, submitManualLoginCode } from "../../src/oauth";
 import { clearManualCodeSlot, loginState, waitForManualLoginCode } from "../../src/oauth/login-flow-state";
@@ -1328,5 +1329,35 @@ describe("Command Code provider", () => {
     };
     expect(commandCodeSessionId(unclassifiedCache)).not.toBe(commandCodeSessionId(unclassifiedCache));
     expect(commandCodeSessionId(parsed())).not.toBe(commandCodeSessionId(parsed()));
+  });
+  test("buildRequest sends exact local context only when projectContext is on", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-command-context-wire-"));
+    const cwdSpy = spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      writeFileSync(join(root, "AGENTS.md"), "wire memory", "utf8");
+      mkdirSync(join(root, ".commandcode", "taste"), { recursive: true });
+      writeFileSync(join(root, ".commandcode", "taste", "taste.md"), "wire taste", "utf8");
+      const skillDir = join(root, ".commandcode", "skills", "wire-skill");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, "SKILL.md"), "wire skill body", "utf8");
+      projectContextCache.clear();
+
+      for (const configured of [provider, { ...provider, projectContext: "off" as const }]) {
+        const body = JSON.parse((await createCommandCodeAdapter(configured).buildRequest(parsed())).body as string);
+        expect(body.memory).toBe("");
+        expect(body.taste).toBeNull();
+        expect(body.skills).toBeNull();
+        expect(projectContextCache.has(root)).toBe(false);
+      }
+
+      const body = JSON.parse((await createCommandCodeAdapter({ ...provider, projectContext: "on" }).buildRequest(parsed())).body as string);
+      expect(body.memory).toBe("wire memory");
+      expect(body.taste).toBe("wire taste");
+      expect(body.skills).toBe('<skills>\n  <skill name="wire-skill">wire skill body</skill>\n</skills>');
+    } finally {
+      cwdSpy.mockRestore();
+      projectContextCache.clear();
+      removeTreeWithRetry(root);
+    }
   });
 });

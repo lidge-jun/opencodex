@@ -162,7 +162,7 @@ rewrite rules and the routed-id settlement.
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |
 | `src/providers/registry/model-ids.ts` | Classifies every `ProviderRegistryEntry` field by what its KEYS mean for selector decoding, and derives the native model ids an entry names. The classification is exhaustive by construction: a new registry field fails typecheck until its keys are given a meaning, which is what stops an identity-bearing map from being silently left out of decoding. Imported directly rather than through the facade, which is at its file-size cap. |
 | `src/providers/derive.ts` | Enrichment from provider presets into user config. |
-| `src/providers/model-rename-fields.ts`, `src/providers/model-rename-migration.ts` | Classifies every provider config field for a declared model rename. Exact-model records, lists and nested request-pacing keys follow the replacement; an already saved replacement entry wins. Provider-wide settings, including response-tier authority, and credential fields are not model identities. |
+| `src/providers/model-rename-fields.ts`, `src/providers/model-rename-migration.ts` | Classifies every provider config field for a declared model rename. Exact-model records, lists and nested request-pacing keys follow the replacement; an already saved replacement entry wins. Provider-wide settings, including response-tier authority and project-context consent, and credential fields are not model identities. |
 | `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, provider-scoped hard wire pins (including Command Code's `claude-` prefix), aliases, and explicit false/empty values with field-level provenance. Provider derivation, routing, catalog hints, gather admission, and adapter selection consume its detached frozen result. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
 
 | `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. Meta Muse device authorization, polling, and key-mint JSON responses share the 64 KiB bounded-body ceiling and the request's deadline; oversized declared or streamed bodies are rejected before JSON parsing. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Command Code manual callback JSON remains opaque to the shared `code#state` parser and is state-validated by its provider parser. A raw Command Code paste with an explicit `#state` suffix must match the flow state on the direct prompt as well. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
@@ -248,6 +248,29 @@ narrow. Rows without a verified profile URL still record rejected efforts but sk
 An explicit `modelReasoningEffortsAuthoritative` model row overrides the shipped ladder; seeded
 rows without that flag do not. `tests/providers/command-code-efforts.test.ts` covers the measured
 rows and wire values; `tests/providers/command-code-provider.test.ts` covers operator overrides.
+
+The native Command Code adapter in `src/adapters/command-code.ts` gates its
+`/alpha/generate` project envelope on the provider's literal `projectContext: "on"`.
+Absent or `"off"` reads or sends no project files, keeps empty `memory`, `taste`,
+and `skills`, and leaves existing `config` metadata unchanged without invoking
+`src/adapters/command-code-project-context.ts`. The loader reads only the proxy process
+working directory's `AGENTS.md`, `.commandcode/taste/taste.md`, and immediate child
+`SKILL.md` files under `.commandcode/skills`, `.agents/skills`, and `.pi/skills`.
+Asynchronous path checks share one deadline and use relative-path containment even at
+filesystem roots. On macOS/Linux a nonblocking, no-follow open is followed by file-inode
+comparison and fresh canonical containment checks before and after reading; an intermediate
+directory replaced by an outside symlink cannot publish its file contents. Windows applies
+the path and identity checks as best effort. Every visited directory entry consumes the
+scan budget before filtering; at most 16 skills are selected. Individual files, aggregate skill reads, serialized XML, and the full
+skill-loading interval are bounded. The
+contents are sent to the configured Command Code endpoint when enabled, and missing or
+failed reads degrade to empty fields. A cwd-keyed single-flight shares cold or expired loads.
+Eight outstanding scan slots remain occupied until every dispatched filesystem operation
+settles, including after a caller timeout; a 64-operation global admission ceiling fails
+soft on further work. Timed-out or admission-degraded loads are not cached, so a later
+healthy request can retry; stable missing files still cache as empty. Symlinked skill
+directories pass through canonical confinement: inside-cwd targets load, outside targets
+do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
 
 ## TypeSafe JEV decision provider
 
