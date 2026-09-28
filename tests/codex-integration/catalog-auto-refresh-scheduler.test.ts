@@ -264,6 +264,7 @@ describe("catalog auto-refresh drift heal", () => {
     const desired = await import("../../src/codex/desired-state");
     const processState = await import("../../src/config/process-state");
     const inject = await import("../../src/codex/inject");
+    const admission = await import("../../src/codex/admission");
     writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
     const fixture = JSON.parse(readFileSync(getConfigPath(), "utf8")) as Record<string, unknown>;
     fixture.apiKeys = [{ key: "fixture-key", name: "fixture", createdAt: "2026-01-01T00:00:00.000Z" }];
@@ -288,6 +289,7 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" } as never),
       spyOn(inject, "injectCodexConfig").mockImplementation((async (_port, _config, options) => {
         injectorCalls += 1;
         if (editBeforeWrite) {
@@ -327,6 +329,7 @@ describe("catalog auto-refresh drift heal", () => {
     const processState = await import("../../src/config/process-state");
     const sync = await import("../../src/codex/sync");
     const inject = await import("../../src/codex/inject");
+    const admission = await import("../../src/codex/admission");
     const configPath = join(openCodexHome, "healed-config.toml");
     const injected: Array<{ port: number; lockTimeoutMs: number | undefined }> = [];
     const info: string[] = [];
@@ -337,6 +340,7 @@ describe("catalog auto-refresh drift heal", () => {
         configPath,
       )),
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" } as never),
       spyOn(sync, "syncModelsToCodex").mockImplementation((async () => { throw new Error("full sync must not run"); }) as never),
       spyOn(inject, "injectCodexConfig").mockImplementation((async (port, _config, options) => {
         options?.beforeClientWrite?.();
@@ -369,12 +373,71 @@ describe("catalog auto-refresh drift heal", () => {
     expect(ceded.info.some(line => line.includes("not re-injected this tick"))).toBe(true);
   });
 
+  test("service-home refusal prevents the drift healer from reaching the injector", async () => {
+    const drift = await import("../../src/codex/config-drift-heal");
+    const desired = await import("../../src/codex/desired-state");
+    const processState = await import("../../src/config/process-state");
+    const admission = await import("../../src/codex/admission");
+    const inject = await import("../../src/codex/inject");
+    const spies = [
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
+      spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(admission, "admitCodexWrite").mockReturnValue({
+        kind: "refused",
+        authority: "service-home",
+        message: "fixture refusal",
+      }),
+      spyOn(inject, "injectCodexConfig"),
+      spyOn(console, "info").mockImplementation(() => {}),
+    ];
+    try {
+      writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+      await runCatalogAutoRefreshTickForTests();
+      expect(inject.injectCodexConfig).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  test("service-home ownership is rechecked at the injector write boundary", async () => {
+    const drift = await import("../../src/codex/config-drift-heal");
+    const desired = await import("../../src/codex/desired-state");
+    const processState = await import("../../src/config/process-state");
+    const admission = await import("../../src/codex/admission");
+    const inject = await import("../../src/codex/inject");
+    const admit = spyOn(admission, "admitCodexWrite")
+      .mockReturnValueOnce({ kind: "admitted" } as never)
+      .mockReturnValue({ kind: "refused", authority: "service-home", message: "fixture refusal" });
+    const injector = spyOn(inject, "injectCodexConfig").mockImplementation((async (_port, _config, options) => {
+      options?.beforeClientWrite?.();
+      return { success: true, message: "fixture" };
+    }) as typeof inject.injectCodexConfig);
+    const spies = [
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
+      spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      admit,
+      injector,
+      spyOn(console, "info").mockImplementation(() => {}),
+    ];
+    try {
+      writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+      await runCatalogAutoRefreshTickForTests();
+      expect(admit).toHaveBeenCalledTimes(2);
+      expect(injector).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
   test.each(["stop", "restart", "settings", "off"])("a deferred injector cannot write or log success after %s", async (change) => {
     const drift = await import("../../src/codex/config-drift-heal");
     const desired = await import("../../src/codex/desired-state");
     const processState = await import("../../src/config/process-state");
     const sync = await import("../../src/codex/sync");
     const inject = await import("../../src/codex/inject");
+    const admission = await import("../../src/codex/admission");
     let entered!: () => void;
     const enteredInjector = new Promise<void>(resolve => { entered = resolve; });
     let release!: () => void;
@@ -385,6 +448,7 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" } as never),
       spyOn(sync, "syncModelsToCodex").mockImplementation((async () => {
         entered();
         await released;
@@ -450,6 +514,7 @@ describe("catalog auto-refresh drift heal", () => {
     const syncPath = fileURLToPath(new URL("../../src/codex/sync.ts", import.meta.url));
     const injectPath = fileURLToPath(new URL("../../src/codex/inject.ts", import.meta.url));
     const configPath = fileURLToPath(new URL("../../src/config.ts", import.meta.url));
+    const admissionPath = fileURLToPath(new URL("../../src/codex/admission.ts", import.meta.url));
     const script = `
       const { spyOn } = require("bun:test");
       const fs = require("node:fs");
@@ -461,6 +526,7 @@ describe("catalog auto-refresh drift heal", () => {
       const processState = require(${JSON.stringify(processStatePath)});
       const sync = require(${JSON.stringify(syncPath)});
       const inject = require(${JSON.stringify(injectPath)});
+      const admission = require(${JSON.stringify(admissionPath)});
       const catalogPath = path.join(process.env.CODEX_HOME, "alternate-catalog.json");
       fs.writeFileSync(catalogPath, JSON.stringify({ models: [{ slug: "alternate" }] }));
       fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), 'model = "gpt-5"\\n');
@@ -469,6 +535,7 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true);
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] });
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43210 });
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" });
       spyOn(sync, "syncModelsToCodex").mockImplementation(async () => { throw new Error("full sync called"); });
       let received = null;
       spyOn(inject, "injectCodexConfig").mockImplementation(async (_port, _config, options) => { received = options.catalogPath; options.beforeClientWrite(); return { success: true, message: "fixture" }; });
@@ -509,12 +576,14 @@ describe("catalog auto-refresh drift heal", () => {
       const processState = require(${JSON.stringify(source("config/process-state.ts"))});
       const inject = require(${JSON.stringify(source("codex/inject.ts"))});
       const management = require(${JSON.stringify(source("codex/management-convergence.ts"))});
+      const admission = require(${JSON.stringify(source("codex/admission.ts"))});
       const catalog = path.join(process.env.CODEX_HOME, "opencodex-catalog.json");
       fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), 'model = "gpt-5"\\n');
       fs.writeFileSync(config.getConfigPath(), JSON.stringify({ ...config.getDefaultConfig(), defaultProvider: "xai", providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" } }, catalogAutoRefresh: { enabled: true, intervalMinutes: 60 } }));
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true);
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] });
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43210 });
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" });
       const received = [];
       spyOn(inject, "injectCodexConfig").mockImplementation(async (_port, _config, options) => { received.push(options.catalogPath); return { success: true, message: "fixture" }; });
       let converges = 0;
