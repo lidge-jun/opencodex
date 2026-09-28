@@ -9,7 +9,7 @@
  * comparison instead of reimplementing it -- two diagnostics disagreeing about whether an
  * install is stale would be worse than neither reporting it.
  */
-import { parseStrictSemver, type StrictSemver } from "../lib/strict-semver";
+import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 
 /** Placeholder versions that mean "unknown", not "different". */
 const PLACEHOLDERS = new Set(["unknown", "0.0.0"]);
@@ -43,25 +43,6 @@ export function isConfirmedVersionMatch(skew: VersionSkew): boolean {
   return skew.proxyVersion === skew.cliVersion && !PLACEHOLDERS.has(skew.cliVersion);
 }
 
-/** SemVer precedence ignores build metadata; raw equality is handled separately. */
-function compareVersions(cli: StrictSemver, proxy: StrictSemver): number {
-  for (let i = 0; i < cli.core.length; i++) {
-    if (cli.core[i]! !== proxy.core[i]!) return cli.core[i]! > proxy.core[i]! ? 1 : -1;
-  }
-  if (cli.prerelease.length === 0) return proxy.prerelease.length === 0 ? 0 : 1;
-  if (proxy.prerelease.length === 0) return -1;
-  for (let i = 0; i < Math.max(cli.prerelease.length, proxy.prerelease.length); i++) {
-    const left = cli.prerelease[i];
-    const right = proxy.prerelease[i];
-    if (left === right) continue;
-    if (left === undefined) return -1;
-    if (right === undefined) return 1;
-    if (typeof left !== typeof right) return typeof left === "bigint" ? -1 : 1;
-    return left > right ? 1 : -1;
-  }
-  return 0;
-}
-
 /**
  * Compare the running CLI against the live proxy.
  *
@@ -81,7 +62,7 @@ export function computeVersionSkew(cliVersion: string, proxyVersion: string | un
   }
   const cliSemver = parseStrictSemver(cliVersion);
   const proxySemver = parseStrictSemver(proxy);
-  const order = cliSemver && proxySemver ? compareVersions(cliSemver, proxySemver) : 0;
+  const order = cliSemver && proxySemver ? compareStrictSemver(cliSemver, proxySemver) : 0;
   const relation: VersionRelation =
     order > 0 ? "cli-newer" : order < 0 ? "proxy-newer" : "incomparable";
   const advice = order > 0

@@ -24,6 +24,19 @@ Only proven absence enters registration. A query failure refuses the bare comman
 guidance, because treating `unknown` as absent can rerun elevated `schtasks /create` against an
 existing task. Explicit `ocx service install` remains the operator-owned registration request.
 
+`src/config/serving-runtimes.ts` records successfully serving installs and lets only a
+non-sibling managed-service start defer to a verified strictly newer recorded command. The
+census update uses the shared cross-process config mutation lock; recorded paths must resolve to files owned
+by the current user without group/world write permission on POSIX. Candidate
+probes are newest-recorded first, capped at four three-second attempts; a failed probe
+falls through within that cap, and a failed launch or nonzero pre-bind child exit leaves
+this install serving. A one-hop marker prevents recursive delegation; post-bind exits
+propagate to the manager. The
+foreground parent forwards SIGINT, SIGTERM and SIGHUP until the child exits, shares one
+five-second SIGKILL escalation timer across repeated signals, and clears that timer and
+its handlers on settlement. Signal exits preserve `128 + signalNumber`. A parent killed
+without running handlers is not covered by this forwarding mechanism.
+
 > Decision record: [ADR-0028](../decisions/ADR-0028-background-service-command-selection.md)
 
 ## Windows npm tray update badge

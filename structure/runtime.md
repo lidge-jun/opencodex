@@ -597,4 +597,4 @@ registration succeeds.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction).
 
-Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch.
+Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch. The serving-install census and bounded foreground delegation in `src/config/serving-runtimes.ts` follow [service command selection](ops/service-and-sidecars.md#background-service-command-selection).

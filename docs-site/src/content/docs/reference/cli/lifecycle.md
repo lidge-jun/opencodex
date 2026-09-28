@@ -436,6 +436,11 @@ previous catalog from memory.
 
 ## Background service
 
+A managed service may start a newer installation that previously served the same
+OpenCodex home, even when its service definition still points to an older install.
+If that newer child fails before binding, the original service starts instead.
+Foreground starts and client-launched proxies keep their selected executable.
+
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 On Windows Task Scheduler, the service wrapper restarts the proxy after five seconds
