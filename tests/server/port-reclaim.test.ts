@@ -174,6 +174,9 @@ describe("listen-entry parsers keep the bound address", () => {
       'LISTEN 0 128 127.0.0.3:10100 0.0.0.0:* users:(("x",pid=4141,f=9",pid=9999,fd=4))',
       // comm `x",pid=4141,fd=9` — even an ss key cannot rescue a forged field.
       'LISTEN 0 128 127.0.0.4:10100 0.0.0.0:* users:(("x",pid=4141,fd=9",pid=9999,fd=4))',
+      // comm `a",pid=123),("b` — a forged pid lands in a tuple of its own, but that
+      // fragment carries no fd= so the row is rejected instead of adopting pid 123.
+      'LISTEN 0 128 127.0.0.7:10100 0.0.0.0:* users:(("a",pid=123),("b",pid=9999,fd=4))',
       // A genuinely shared socket still reports every owner tuple.
       'LISTEN 0 128 127.0.0.5:10100 0.0.0.0:* users:(("bun",pid=4242,fd=20),("worker",pid=4243,fd=3))',
       // Trailing garbage after the column is rejected too.

@@ -160,7 +160,10 @@ const SS_OWNER_FIELD_KEYS = new Set(["fd", "ino", "sk", "v6only"]);
 /**
  * Strictly parse a `users:(("name",pid=N,fd=N)[,("name2",...)])` column, returning every
  * attributed PID, or null when the column deviates from the grammar anywhere — a row that
- * cannot be trusted must not attribute an owner at all.
+ * cannot be trusted must not attribute an owner at all. Every accepted tuple must carry
+ * its own `fd=`: a forged tuple fragment emitted inside a comm (a 15-byte comm has room
+ * for `a",pid=N),("b` but never for a full tuple plus `fd=`) supplies only `pid=`, so
+ * its PID must never reach the owner list.
  */
 function parseSsOwnerPids(field: string): number[] | null {
   if (!field.startsWith("users:(")) return null;
@@ -176,14 +179,16 @@ function parseSsOwnerPids(field: string): number[] | null {
     const pid = /^,pid=(\d+)/.exec(field.slice(at));
     if (pid === null) return null;
     at += pid[0].length;
-    pids.push(Number(pid[1]));
+    let hasFd = false;
     for (;;) {
       const kv = /^,([a-z_]+)=([^,"()\s]+)/.exec(field.slice(at));
       if (kv === null) break;
       if (!SS_OWNER_FIELD_KEYS.has(kv[1]!)) return null;
+      if (kv[1] === "fd") hasFd = true;
       at += kv[0].length;
     }
-    if (field[at] !== ")") return null;
+    if (field[at] !== ")" || !hasFd) return null;
+    pids.push(Number(pid[1]));
     at += 1;
     if (field.startsWith(",(", at)) at += 1;
   }
