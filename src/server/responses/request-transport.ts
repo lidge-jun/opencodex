@@ -13,9 +13,11 @@ import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
 import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
+import { resolveAnthropicModelRoute, routeCandidates, type AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
 import {
   isAnthropicAccountPoolEnabled,
   getAnthropicPoolAccessSnapshot,
+  getEligibleAnthropicAccounts,
   commitAnthropicSelectionRouting,
   formatAnthropicProviderForLog,
   anthropicSessionKeyFromParts,
@@ -123,6 +125,7 @@ export async function prepareResponsesTransport(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  let anthropicRouteDecision: AnthropicRouteDecision | null = null;
   // Generic OAuth rotation (#2568) for providers with no pool of their own. Bound to the account
   // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
   let genericFailoverAccountId: string | null = null;
@@ -166,6 +169,7 @@ export async function prepareResponsesTransport(
           ? await getAnthropicPoolAccessSnapshot(oauthSelection.accountId)
           : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
       }
+      if (anthropicRouteDecision && !routeCandidates(getEligibleAnthropicAccounts(), anthropicRouteDecision).includes(candidate.accountId)) return null;
       const committed = await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
         expectedSelection: oauthSelection,
         expectedCredentialGeneration: candidate.generation,
@@ -174,7 +178,7 @@ export async function prepareResponsesTransport(
       if (committed) {
         if (route.providerName === "anthropic" && !commitAnthropicSelectionRouting(
           candidate.accountId, oauthSelection, committed,
-          { config, sessionKey: anthropicSessionKey, reason: anthropicReason, expectedCredentialGeneration: candidate.generation },
+          { config, sessionKey: anthropicSessionKey, reason: anthropicReason, expectedCredentialGeneration: candidate.generation, routeDecision: anthropicRouteDecision },
         )) return null;
         oauthSelection = committed;
         servingOAuthSnapshot = candidate;
@@ -185,8 +189,11 @@ export async function prepareResponsesTransport(
       // Resolve that choice, not the rejected candidate, before trying admission again.
       oauthSelection = captureOAuthAccountSelection(route.providerName);
       if (!oauthSelection) return null;
+      const revisedAnthropicId = route.providerName === "anthropic" && anthropicRouteDecision
+        ? resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision).accountId : null;
+      if (route.providerName === "anthropic" && anthropicRouteDecision && !revisedAnthropicId) return null;
       candidate = route.providerName === "anthropic"
-        ? await getAnthropicPoolAccessSnapshot(oauthSelection.accountId)
+        ? await getAnthropicPoolAccessSnapshot(revisedAnthropicId ?? oauthSelection.accountId)
         : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
       if (route.provider.googleMode === "cloud-code-assist" && !candidate.projectId) return null;
     }
@@ -546,22 +553,26 @@ export async function prepareResponsesTransport(
   if (route.provider.authMode === "oauth") {
     try {
       if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
-        const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config);
+        const routeResult = resolveAnthropicModelRoute(config, route.modelId);
+        if (routeResult.error) return formatErrorResponse(400, "invalid_request_error", `Invalid Anthropic model routes: ${routeResult.error}`);
+        anthropicRouteDecision = routeResult.decision;
+        const selection = resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision);
         if (!selection.accountId) {
           if (selection.reason === "all-cooled") {
-            const retryAfterSec = getAnthropicPoolRetryAfterSeconds();
+            const retryAfterSec = getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision);
             return formatErrorResponse(
               429,
               "rate_limit_error",
-              "All Anthropic OAuth accounts are temporarily rate-limited",
+              anthropicRouteDecision ? `Anthropic route ${anthropicRouteDecision.name} is temporarily rate-limited` : "All Anthropic OAuth accounts are temporarily rate-limited",
               retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
             );
           }
-          return formatErrorResponse(401, "authentication_error", "No eligible Anthropic OAuth account available");
+          return formatErrorResponse(401, "authentication_error", anthropicRouteDecision ? `No eligible Anthropic OAuth account for route ${anthropicRouteDecision.name}` : "No eligible Anthropic OAuth account available");
         }
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(selection.accountId), true, selection.reason);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         anthropicPoolAccountId = admitted.accountId;
+        if (anthropicRouteDecision) console.info(`[anthropic-pool] route:${anthropicRouteDecision.name} ${selection.reason}`);
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
       } else {
@@ -837,6 +848,7 @@ export async function prepareResponsesTransport(
     set replayOAuthCredentialSnapshot(value: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined) {
       replayOAuthCredentialSnapshot = value;
     },
+    anthropicRouteDecision,
     get anthropicPoolAccountId(): string | null {
       return anthropicPoolAccountId;
     },

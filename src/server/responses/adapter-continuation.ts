@@ -83,6 +83,7 @@ export function createAdapterContinuations(
     | "oauthDispatch"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
     | "anthropicSessionKey"
@@ -398,6 +399,7 @@ export function createAdapterContinuations(
           anthropicSessionKey,
           Date.now(),
           response.headers,
+          transportState.anthropicRouteDecision,
         );
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }

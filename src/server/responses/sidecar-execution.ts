@@ -67,6 +67,7 @@ export async function executeResponsesSidecars(
     | "genericFailoverLimit"
     | "replayOAuthCredentialSnapshot"
     | "applyFailoverSnapshot"
+    | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
     | "anthropicSessionKey"
@@ -275,6 +276,7 @@ export async function executeResponsesSidecars(
         anthropicSessionKey,
         Date.now(),
         responseHeaders,
+        transportState.anthropicRouteDecision,
       );
       if (!nextAccountId) {
         hop.permit?.release();

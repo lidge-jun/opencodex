@@ -126,6 +126,7 @@ export async function prepareAdapterExchange(
     | "replayOAuthCredentialSnapshot"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
     | "anthropicSessionKey"
@@ -959,6 +960,7 @@ export async function prepareAdapterExchange(
           anthropicSessionKey,
           Date.now(),
           upstreamResponse.headers,
+          transportState.anthropicRouteDecision,
         );
         if (!nextAccountId) break;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }

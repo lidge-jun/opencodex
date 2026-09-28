@@ -76,3 +76,15 @@ test("startServer arms the baseline before it can serve a request", () => {
   expect(bareSaveConfigCalls(body).length).toBeGreaterThan(0);
   expect(bareSaveConfigCalls(after)).toEqual([]);
 });
+
+
+test("Anthropic model route candidate writes reject malformed rules without affecting other providers", async () => {
+  const { validateConfigCandidate } = await import("../../src/config/diagnostics");
+  const candidate = { port: 0, defaultProvider: "anthropic", providers: {
+    anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://example.test" },
+    deepseek: { adapter: "openai-chat", baseUrl: "https://example.test" },
+  }, anthropicAccountPool: { enabled: true, routes: [{ name: "bad", match: "[broken", accounts: ["old-id"] }] } };
+  const result = validateConfigCandidate(candidate);
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error).toContain("anthropicAccountPool.routes");
+});

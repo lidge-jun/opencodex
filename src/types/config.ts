@@ -1,6 +1,13 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 
+export interface AnthropicModelRoute {
+  name: string;
+  match: string;
+  accounts: string[];
+  fallback?: boolean;
+}
+
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
   /**
@@ -1197,6 +1204,8 @@ export interface OcxConfig {
     stickyLimit?: number;
     /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
     quotaWindow?: OcxAccountPoolQuotaWindow;
+    /** Ordered model allowlists; inactive while the pool is disabled. Stored account IDs only. */
+    routes?: AnthropicModelRoute[];
   };
   /**
    * Generic OAuth multi-account PROACTIVE account preference (#2568, #695).
