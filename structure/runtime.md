@@ -1,6 +1,6 @@
 # Runtime
 
-The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
+The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](providers/openai-tiers.md#public-provider-contract).
 
 ## Resolved static model policy
 

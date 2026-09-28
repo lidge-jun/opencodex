@@ -131,6 +131,49 @@ afterEach(async () => {
 });
 
 describe("main hard-lock background recovery", () => {
+  test("known reset waits locally, then verifies recovery instead of unlocking by time", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const deadline = now + 3_600_000;
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: deadline }, undefined, captureMainQuotaWriter(accountId));
+      const calls = fetchWith(async () => usage(99));
+      for (let tick = 0; tick < 60; tick++, now += 60_000) await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl]);
+      now += 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toHaveLength(1);
+      now += 240_000;
+      const recovery = fetchWith(async () => usage(0));
+      await runMainAccountHardLockRecovery(config());
+      expect(recovery).toEqual([whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { clock.mockRestore(); }
+  });
+
+  test("manual reads and hard-lock recovery share Retry-After without claiming fresh evidence", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const calls = fetchWith(async () => new Response("{}", { status: 429, headers: { "Retry-After": "900" } }));
+    try {
+      await runMainAccountHardLockRecovery(config());
+      for (let tick = 0; tick < 14; tick++) {
+        now += 60_000;
+        await fetchMainAccountInfo(true);
+        await runMainAccountHardLockRecovery(config());
+      }
+      expect(calls).toEqual([whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+      now += 60_000;
+      await fetchMainAccountInfo(true);
+      expect(calls).toHaveLength(2);
+    } finally { clock.mockRestore(); }
+  });
+
   test("owned metadata recovery replaces an obsolete short block with the current weekly window", async () => {
     const calls = fetchWith(async () => Response.json({ plan_type: "pro", rate_limit: {
       primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,

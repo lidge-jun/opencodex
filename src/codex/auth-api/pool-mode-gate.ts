@@ -8,7 +8,7 @@ import { readCodexTokens } from "../auth-collision";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
 import { getValidMainAccountToken, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
-import { captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
+import { getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
 import type { OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -71,12 +71,18 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
 }
 
 let mainHardLockRecoveryInFlight: Promise<void> | null = null;
+let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: number } | undefined;
 
 /** Metadata-only recovery on the existing sweep; failures retain the observed policy block. */
 export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise<void> {
   if (mainHardLockRecoveryInFlight) return mainHardLockRecoveryInFlight;
-  if (getMainAccountHardLockStatus(config).state !== "blocked"
-    || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
+  const status = getMainAccountHardLockStatus(config);
+  if (status.state !== "blocked" || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
+  // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted.
+  if (status.resetAt !== undefined && status.resetAt > Date.now()) return;
+  const previous = mainHardLockRecoveryAttempt;
+  if (previous?.identity === captureMainAccountIdentityGeneration()
+    && previous.credential === getMainQuotaCredentialGeneration() && previous.after > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -97,7 +103,13 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
       return;
     }
     if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
-    await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
+    const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
+    if (isMainAccountIdentityGenerationLive(identityGeneration) && result.quotaRefresh) {
+      mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
+        ? { identity: identityGeneration, credential: getMainQuotaCredentialGeneration(),
+          after: Date.now() + MAIN_CACHE_TTL }
+        : undefined;
+    }
   })().catch(() => {
     // Best-effort background metadata read; no cooldown/pause or policy clearing on failure.
   }).finally(() => {

@@ -1,3 +1,4 @@
+import { fetchCodexUsage } from "../quota-query-backoff";
 import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
 import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
@@ -252,15 +253,15 @@ export async function recoverPoolQuotaFrom401(ctx: {
   ctx.onCredentialGeneration?.(refreshed.generation);
 
   const writerGeneration = captureConfigGeneration();
-  markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation);
   const poolWriter = capturePoolQuotaWriter(accountId, refreshed);
-  const replay = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+  const replay = await fetchCodexUsage(`pool:${accountId}:${writerGeneration}:${refreshed.generation}`, {
     headers: {
       Authorization: `Bearer ${refreshed.accessToken}`,
       "ChatGPT-Account-Id": refreshed.chatgptAccountId,
     },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
-  });
+  }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation));
+  if (!replay) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
   if (!replay.ok) {
     if (replay.status === 401 && await isTerminalPoolAuthResponse(replay)) {
       // The refresh already settled this claim non-terminally, so the record alone would
@@ -366,11 +367,11 @@ export async function fetchFreshPoolAccountQuota(
     const poolWriter = capturePoolQuotaWriter(accountId, { accessToken, chatgptAccountId, generation });
     requestCredentialGeneration = generation;
     onCredentialGeneration?.(generation);
-    markQuotaProbeAttempted(quotaProbeEvidence, generation);
-    const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+    const resp = await fetchCodexUsage(`pool:${accountId}:${writerGeneration}:${generation}`, {
       headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
       signal: AbortSignal.timeout(8000),
-    });
+    }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation));
+    if (!resp) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
     if (!resp.ok) {
       if (resp.status !== 401) {
         return withQuotaProbeEvidence(
