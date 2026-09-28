@@ -373,6 +373,7 @@
   "cli-connect-readiness.test.ts": "cli",
   "cli-dispatch.test.ts": "cli",
   "cli-client-start-fence.test.ts": "cli",
+  "cli-client-start-owner-e2e.test.ts": "cli",
   "cli-dto-fidelity.test.ts": "cli",
   "cli-export-command.test.ts": "cli",
   "cli-head.test.ts": "cli",
