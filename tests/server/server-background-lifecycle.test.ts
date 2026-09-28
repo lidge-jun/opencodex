@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { observeCodexLowQuota } from "../../src/codex/low-quota-observer";
+import { clearLowQuotaEventsForTests, listLowQuotaEvents } from "../../src/codex/low-quota-events";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { startServer, type StartServerDeps } from "../../src/server";
 import { registerStateSweepAfterTick } from "../../src/lib/state-store-sweeper";
@@ -293,6 +294,73 @@ afterEach(async () => {
 });
 
 describe("server background lifecycle", () => {
+  test("authenticated low-quota history is bounded and an unauthenticated reader is refused", async () => {
+    clearLowQuotaEventsForTests();
+    const config = baseConfig();
+    config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
+    config.codexPool = { lowQuotaProtection: {
+      enabled: true, threshold: 80,
+      windows: { short: false, weekly: true }, actions: { pause: false, notify: true },
+    } };
+    saveConfig(config);
+    const server = trackedStart();
+    observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85, weeklyResetAt: Date.now() + 60_000 });
+    await Promise.resolve();
+    const url = new URL("/api/codex-auth/low-quota-events?limit=1", server.url);
+    const refused = await fetch(url);
+    expect(refused.status).toBe(401);
+    const allowed = await managementFetch(url);
+    expect(allowed.status).toBe(200);
+    const body = await allowed.json() as { events: Array<{ accountId: string; window: string; percentUsed: number; status: string }> };
+    expect(body.events).toHaveLength(1);
+    expect(body.events[0]).toMatchObject({ accountId: "low-quota-pool", window: "weekly", percentUsed: 85, status: "delivered" });
+    expect((await managementFetch(new URL("/api/codex-auth/low-quota-events?limit=oops", server.url))).status).toBe(400);
+    await stopTracked(server);
+  });
+
+  test("two live owners observe independently and either stop order preserves the survivor", async () => {
+    clearLowQuotaEventsForTests();
+    const config = baseConfig();
+    config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
+    config.codexPool = { lowQuotaProtection: {
+      enabled: true, threshold: 80,
+      windows: { short: false, weekly: true }, actions: { pause: false, notify: true },
+    } };
+    saveConfig(config);
+    const older = trackedStart();
+    const newer = trackedStart();
+    const reset = Date.now() + 60_000;
+    observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85, weeklyResetAt: reset });
+    await Promise.resolve();
+    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(2);
+    await stopTracked(older);
+    observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85, weeklyResetAt: reset + 60_000 });
+    await Promise.resolve();
+    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(3);
+    await stopTracked(newer);
+  });
+
+  test("a newer disabled server cannot suppress the older low-quota owner", async () => {
+    clearLowQuotaEventsForTests();
+    const enabled = baseConfig();
+    enabled.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
+    enabled.codexPool = { lowQuotaProtection: {
+      enabled: true, threshold: 80,
+      windows: { short: false, weekly: true }, actions: { pause: false, notify: true },
+    } };
+    saveConfig(enabled);
+    const older = trackedStart();
+    saveConfig(baseConfig());
+    const newer = trackedStart();
+    observeCodexLowQuota("low-quota-pool", { weeklyPercent: 85 });
+    await Promise.resolve();
+    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(1);
+    await stopTracked(newer);
+    observeCodexLowQuota("low-quota-pool", { weeklyPercent: 90, weeklyResetAt: Date.now() + 60_000 });
+    await Promise.resolve();
+    expect(listLowQuotaEvents(100).filter(event => event.status === "delivered")).toHaveLength(2);
+    await stopTracked(older);
+  });
   test("low-quota pause survives reload and server stop unregisters protection", async () => {
     const config = baseConfig();
     config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];
@@ -303,8 +371,9 @@ describe("server background lifecycle", () => {
     saveConfig(config);
     const server = trackedStart();
     observeCodexLowQuota("low-quota-pool", { shortPercent: 85 });
-    expect(loadConfig().pausedCodexAccountIds).toContain("low-quota-pool");
+    expect(loadConfig().pausedCodexAccountIds).toBeUndefined();
     await stopTracked(server);
+    expect(loadConfig().pausedCodexAccountIds).toContain("low-quota-pool");
     // An account not previously paused would act if stop leaked the registration.
     observeCodexLowQuota(MAIN_CODEX_ACCOUNT_ID, { weeklyPercent: 95 });
     expect(loadConfig().pausedCodexAccountIds).toEqual(["low-quota-pool"]);

@@ -284,7 +284,7 @@ materialized headers pass the proxy-credential exclusion check before owner matc
 
 ## Low-quota protection
 
-`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection. The opt-in [configuration policy](../config.md#remote-client-key-files) persists administrative pauses and deduplicates identifier-free notices by account and window episode.
+`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection. The opt-in [configuration policy](../config.md#remote-client-key-files) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected until recovery or a new reset episode. The process-local ledger holds bounded status records; only the authenticated management route exposes account ids.
 
 ## Bounded pool quota observations
 

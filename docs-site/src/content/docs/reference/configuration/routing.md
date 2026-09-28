@@ -21,21 +21,25 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 {"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true},"windows":{"short":true,"weekly":true}}}}
 ```
 
-Absence or `enabled: false` disables it. `threshold` is a finite inclusive percentage from 0
-through 100. A selected short or weekly window triggers at `usage >= threshold`; either selected
-window is enough. Only fresh accepted observations qualify: there is no extra polling, and
-credits-only, cached, expired, monthly, or custom-window-only observations are ignored.
+Absence or `enabled: false` disables it. `threshold` is a finite inclusive percentage from 1
+through 100. An enabled policy needs at least one true action and one true window. A selected
+5-hour or weekly window triggers at `usage >= threshold`; either selected window is enough.
+Only fresh accepted observations qualify: there is no extra polling, and credits-only,
+cached, expired, monthly, or custom-window-only observations are ignored. This policy is
+independent of proactive account switching and the main-account 98% hard lock.
 
-With `pause`, the account is added to persisted `pausedCodexAccountIds` immediately. In-flight
-requests keep their captured account, the existing Pool pause scope applies, and manual resume is
-required. A still-high next observation pauses it again. Hand-edited configuration takes effect
-after reload or restart.
+With `pause`, the account leaves Pool selection in memory before the next request. The server
+coalesces a config save after the observation turn and retries failed saves for a bounded time.
+Normal shutdown waits briefly for pending saves. A failed save is visible in the event history;
+a restart before a successful save cannot preserve the pause. In-flight requests keep their
+captured account. Manual resume suppresses repause for that account/window episode until a
+below-threshold reading or a new reset boundary. A reset never resumes an account automatically.
 
-With `notify`, the proxy writes a warning to its local log, including on headless hosts.
-This fallback reports the quota window, usage percentage, and threshold without account identifiers.
-Each account and selected window notifies once per process-local threshold episode;
-below-threshold usage or a changed reset boundary rearms it, and a restart may notify again.
-Notification failures are isolated.
+With `notify`, the server records a bounded event and writes a local log line with window and
+percentage but no account id. Authenticated `GET /api/codex-auth/low-quota-events` exposes the
+account id, window, usage percentage, known reset time, timestamp, and delivery status. `notify`
+does not create an OS popup. Each account/window notifies once per process-local episode;
+failed delivery can retry on the next eligible observation.
 
 ## Model resolution order
 

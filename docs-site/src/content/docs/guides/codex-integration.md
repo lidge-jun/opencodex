@@ -911,6 +911,14 @@ it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
 ## Routed models during Codex reserve mode
 
+Codex Pool can optionally protect accounts at a selected 5-hour or weekly usage threshold.
+Set `codexPool.lowQuotaProtection` in configuration to pause accounts, record a headless
+notification, or both; see [routing configuration](/reference/configuration/routing/#codex-pool-low-quota-protection).
+A pause takes effect for the next selection immediately, while saving it to disk is deferred.
+Check the authenticated `GET /api/codex-auth/low-quota-events` history for delivery or save
+failures. Manual resume remains in force for the current quota episode. This backend alert
+has no desktop popup yet.
+
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make
 **every other entry unselectable — including opencodex routed models**, even though those

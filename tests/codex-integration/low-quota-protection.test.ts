@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConfigCandidate } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
-import { observeCodexLowQuota } from "../../src/codex/low-quota-observer";
-import { registerCodexLowQuotaProtection } from "../../src/codex/low-quota-protection";
+import { observeCodexLowQuota, registerLowQuotaObserver } from "../../src/codex/low-quota-observer";
+import { clearLowQuotaEventsForTests, listLowQuotaEvents, publishLowQuotaEvent } from "../../src/codex/low-quota-events";
+import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../../src/codex/low-quota-protection";
+import { setCodexAccountPaused } from "../../src/codex/account-pause";
 import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import type { CodexAccount } from "../../src/types/accounts";
 import type { CodexLowQuotaProtectionConfig, OcxConfig } from "../../src/types/config";
@@ -46,7 +48,7 @@ function configWith(policy?: CodexLowQuotaProtectionConfig): OcxConfig {
 function register(config: OcxConfig, deps: {
   persist?: (next: OcxConfig) => void;
   notify?: (notice: Notice) => Promise<void>;
-} = {}): () => void {
+} = {}): LowQuotaRegistration {
   const cleanup = registerCodexLowQuotaProtection(config, deps);
   cleanups.push(cleanup);
   return cleanup;
@@ -58,6 +60,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   cleanups = [];
   clearAccountQuota();
+  clearLowQuotaEventsForTests();
 });
 
 afterEach(async () => {
@@ -70,16 +73,19 @@ afterEach(async () => {
 });
 
 describe("low quota protection", () => {
-  test("persists a paused-account snapshot only after the threshold is reached", () => {
+  test("persists a paused-account snapshot only after the threshold is reached", async () => {
     const config = configWith(protection());
     const persisted: OcxConfig[] = [];
-    register(config, { persist: next => persisted.push(structuredClone(next)) });
+    const registration = register(config, { persist: next => { persisted.push(structuredClone(next)); } });
 
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 79 });
     expect(config.pausedCodexAccountIds).toBeUndefined();
     expect(persisted).toEqual([]);
 
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 80 });
+    expect(config.pausedCodexAccountIds).toEqual([ACCOUNT_A]);
+    expect(persisted).toHaveLength(0);
+    await registration.flush();
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.pausedCodexAccountIds).toContain(ACCOUNT_A);
     observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 79 });
@@ -135,12 +141,12 @@ describe("low quota protection", () => {
     expect(notices).toEqual([]);
   });
 
-  test("does not treat carried usage in a credits-only quota write as a fresh observation", () => {
+  test("does not treat carried usage in a credits-only quota write as a fresh observation", async () => {
     setAccountQuotaFromParsed(ACCOUNT_A, { weeklyPercent: 99 });
     const config = configWith(protection({ actions: { pause: true, notify: true } }));
     const persisted: OcxConfig[] = [];
     const notices: Notice[] = [];
-    register(config, {
+    const registration = register(config, {
       persist: next => persisted.push(structuredClone(next)),
       notify: async notice => { notices.push(notice); },
     });
@@ -151,6 +157,7 @@ describe("low quota protection", () => {
     expect(persisted).toEqual([]);
     expect(notices).toEqual([]);
     setAccountQuotaFromParsed(ACCOUNT_A, { weeklyPercent: 99 });
+    await registration.flush();
     expect(persisted[0]?.pausedCodexAccountIds).toEqual([ACCOUNT_A]);
     expect(notices).toEqual([{ window: "weekly", percentUsed: 99, threshold: 80 }]);
   });
@@ -207,5 +214,112 @@ describe("low quota protection", () => {
       });
       expect(result.ok, candidate.name).toBe(false);
     }
+    for (const candidate of [
+      { ...policy, threshold: 0 },
+      { ...policy, actions: { pause: false, notify: false } },
+      { ...policy, windows: { short: false, weekly: false } },
+    ]) {
+      expect(validateConfigCandidate({ ...configWith(), codexPool: { lowQuotaProtection: candidate } }).ok).toBe(false);
+    }
+  });
+
+  test("a manual resume suppresses repause until recovery or a new reset", () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    register(config, { persist: () => {} });
+    const firstReset = Date.now() + 60_000;
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85, weeklyResetAt: firstReset });
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+    setCodexAccountPaused(config, ACCOUNT_A, false);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90, weeklyResetAt: firstReset });
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 50, weeklyResetAt: firstReset });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90, weeklyResetAt: firstReset });
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+    setCodexAccountPaused(config, ACCOUNT_A, false);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90, weeklyResetAt: firstReset + 60_000 });
+    expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
+  });
+
+  test("notice failure retries on a later observation and only then reports delivery", async () => {
+    const config = configWith(protection({ actions: { pause: false, notify: true } }));
+    let calls = 0;
+    register(config, { notify: async () => { if (++calls === 1) throw new Error("sink failed"); } });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 80 });
+    await Promise.resolve();
+    expect(listLowQuotaEvents(1)[0]?.status).toBe("failed");
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 82 });
+    await Promise.resolve();
+    expect(listLowQuotaEvents(1)[0]?.status).toBe("delivered");
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    expect(calls).toBe(2);
+    expect(listLowQuotaEvents(100).every(event => Object.keys(event).sort().join(",") ===
+      "accountId,delivery,percentUsed,resetAt,status,timestamp,window")).toBe(true);
+  });
+
+  test("a blocked save times out flush and later work is fenced", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    let resolveSave: (() => void) | undefined;
+    let writes = 0;
+    const registration = registerCodexLowQuotaProtection(config, {
+      persist: async () => { writes++; await new Promise<void>(resolve => { resolveSave = resolve; }); },
+    });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    await registration.flush();
+    expect(writes).toBe(1);
+    expect(listLowQuotaEvents(1)[0]?.status).toBe("failed");
+    resolveSave?.();
+    observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 90 });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(writes).toBe(1);
+  });
+
+  test("a failed deferred save retries and publishes durable status", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    let writes = 0;
+    let saved: (() => void) | undefined;
+    const succeeded = new Promise<void>(resolve => { saved = resolve; });
+    const registration = register(config, { persist: () => {
+      if (++writes === 1) throw new Error("transient save failure");
+      saved?.();
+    } });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 88 });
+    await Promise.race([succeeded, new Promise((_, reject) => setTimeout(() => reject(new Error("save retry timeout")), 1_000))]);
+    await registration.flush();
+    expect(writes).toBe(2);
+    expect(listLowQuotaEvents(100).map(event => event.status)).toContain("failed");
+    expect(listLowQuotaEvents(1)[0]?.status).toBe("delivered");
+  });
+
+  test("fan-out isolates throwing observers and independent server configs", async () => {
+    const older = configWith(protection({ actions: { pause: false, notify: true } }));
+    older.codexAccounts = [account(ACCOUNT_A)];
+    const newer = configWith(protection({ actions: { pause: true, notify: false } }));
+    newer.codexAccounts = [account(ACCOUNT_B)];
+    const notices: Notice[] = [];
+    const first = register(older, { notify: notice => { notices.push(notice); } });
+    const throwing = registerLowQuotaObserver(() => { throw new Error("isolated"); });
+    cleanups.push(throwing);
+    const second = register(newer, { persist: () => {} });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    expect(newer.pausedCodexAccountIds).toBeUndefined();
+    expect(notices).toHaveLength(1);
+    observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 85 });
+    expect(newer.pausedCodexAccountIds).toEqual([ACCOUNT_B]);
+    await second.flush();
+    first();
+    throwing();
+    observeCodexLowQuota(ACCOUNT_A, { shortPercent: 85 });
+    expect(notices).toHaveLength(1);
+  });
+
+  test("the event ledger retains only its newest hundred sanitized entries", () => {
+    for (let i = 0; i < 120; i++) {
+      publishLowQuotaEvent({ accountId: `account-${i}`, window: "weekly", percentUsed: 80,
+        resetAt: null, timestamp: i, status: "delivered", delivery: "notice" });
+    }
+    const events = listLowQuotaEvents(999);
+    expect(events).toHaveLength(100);
+    expect(events[0]?.accountId).toBe("account-119");
+    expect(events.at(-1)?.accountId).toBe("account-20");
   });
 });
