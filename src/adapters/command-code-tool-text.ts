@@ -404,9 +404,16 @@ export class CommandCodeToolTextFilter {
 
   /** Retain a text fragment on a block and append its pending chunk. Never drains. */
   private retainChunk(block: TextBlock, text: string): AdapterEvent[] {
-    const preceding = this.makeRoom(encoder.encode(text).byteLength);
-    this.retain(block, text);
     const bytes = encoder.encode(text).byteLength;
+    const flushing = this.queuedBytes + bytes > MAX_HELD_TOOL_TEXT_BYTES;
+    const preceding = this.makeRoom(bytes);
+    // The new block has no pending chunk during the flush, so demote it here too.
+    if (flushing && (block.state === "held" || block.state === "probing")) {
+      block.state = "queued";
+      block.markupParts = [];
+      this.activeProbes.delete(block.id);
+    }
+    this.retain(block, text);
     const tail = this.pending.at(-1);
     if (tail?.kind === "chunk" && tail.block === block && this.head < this.pending.length) {
       tail.parts.push(text);

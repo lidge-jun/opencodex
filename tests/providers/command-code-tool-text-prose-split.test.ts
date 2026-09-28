@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
-import { CommandCodeToolTextFilter } from "../../src/adapters/command-code-tool-text";
+import { CommandCodeToolTextFilter, MAX_HELD_TOOL_TEXT_BYTES } from "../../src/adapters/command-code-tool-text";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -122,6 +122,28 @@ describe("Command Code markup after prose in one text block", () => {
     const events = [...filter.nativeCall("call_c1", "exec", JS), ...filter.releaseAll()];
     expect(texts(events)).toBe("");
     expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("flushes a newly opened tail when earlier held text fills the byte queue", () => {
+    const { budget, filter } = execFilter();
+    const earlier = "<tool_call>" + "x".repeat(MAX_HELD_TOOL_TEXT_BYTES - 48 - "<tool_call>".length);
+    filter.toolInputStart("call_c1", "exec");
+    expect(filter.textDelta("held", earlier)).toEqual([]);
+    expect(filter.textEnd("held")).toEqual([]);
+    expect(filter.textDelta("t", PROSE)).toEqual([]);
+    // Earlier text uses bound - 48 bytes; prose leaves only 48 - PROSE.length bytes.
+    expect(MARKUP.length).toBeGreaterThan(48 - PROSE.length);
+    const released = filter.textDelta("t", MARKUP);
+    expect(released).toEqual([
+      { type: "text_delta", text: earlier },
+      { type: "text_delta", text: PROSE },
+      { type: "text_delta", text: MARKUP },
+    ]);
+    const native = filter.nativeCall("call_c1", "exec", JS);
+    expect(texts([...released, ...native])).toBe(earlier + PROSE + MARKUP);
+    expect(calls(native)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    expect(filter.finish()).toEqual({ events: [], salvaged: false });
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
