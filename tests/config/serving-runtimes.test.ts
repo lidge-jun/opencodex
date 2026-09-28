@@ -254,6 +254,21 @@ describe("deferToNewerServiceRuntime", () => {
     expect(exit).toBeNull();
   });
 
+  test("a newer child that stays out on purpose is not overridden by this install", async () => {
+    const dir = freshDir();
+    candidateSetup(dir);
+    // Under the Windows wrapper protocol 42 is the intentional stay-out, not a crash.
+    const exit = await deferToNewerServiceRuntime("2.67.0", selfCommand, undefined, {
+      dir,
+      exists: () => true,
+      run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }),
+      runInherited: async () => ({ exitCode: 42, ready: false }),
+      env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" },
+      log: () => {},
+    });
+    expect(exit).toBe(42);
+  });
+
   test("a real child that fails before bind leaves the parent serving", async () => {
     const dir = freshDir();
     const script = join(dir, "early-exit.ts");

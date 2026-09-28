@@ -34,6 +34,7 @@ import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "./mutation-lock";
 import { SERVICE_MANAGED_ENV } from "../service/state";
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 
 export function servingRuntimesPath(dir: string = getConfigDir()): string {
   return join(dir, "serving-runtimes.json");
@@ -253,6 +254,8 @@ export function selectNewerServingRuntime(
 export interface DeferToNewerRuntimeDeps extends NewerServingRuntimeDeps {
   readonly runInherited?: (command: readonly string[], args: readonly string[]) => Promise<DelegatedExit>;
   readonly log?: (line: string) => void;
+  /** Environment the service manager gave this child; decides its stay-out exit code. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 interface DelegatedExit { readonly exitCode: number; readonly ready: boolean }
@@ -362,7 +365,11 @@ export async function deferToNewerServiceRuntime(
   );
   try {
     const result = await run(candidate.command, startArgs);
-    if (!result.ready && result.exitCode !== 0) {
+    // A newer runtime that stands down on purpose (a foreign recorded owner) exits with the
+    // manager's stay-out code before binding. That is an answer, not a crash: serving this
+    // older install instead would override the very refusal the newer install made.
+    const stayOut = serviceStayOutExitCode(deps.env ?? process.env);
+    if (!result.ready && result.exitCode !== 0 && result.exitCode !== stayOut) {
       log(`⚠️  Newer runtime exited before bind (status ${result.exitCode}); serving this install instead.`);
       return null;
     }
@@ -387,5 +394,5 @@ export async function deferServiceChildToNewerRuntime(options: {
   readonly deps?: DeferToNewerRuntimeDeps;
 }): Promise<number | null> {
   if (options.sibling || options.env[SERVICE_MANAGED_ENV] !== "1" || options.env[DELEGATED_ONCE_ENV] === "1") return null;
-  return deferToNewerServiceRuntime(options.selfVersion, options.selfCommand, options.port, options.deps);
+  return deferToNewerServiceRuntime(options.selfVersion, options.selfCommand, options.port, { env: options.env, ...options.deps });
 }
