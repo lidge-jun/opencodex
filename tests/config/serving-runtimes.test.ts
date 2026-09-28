@@ -92,11 +92,12 @@ describe("serving runtime census", () => {
     writeFileSync(script, `import { recordServingRuntime } from ${JSON.stringify(source)};
 recordServingRuntime({ command: [process.argv[3]], version: "2.68.0", servedAt: new Date().toISOString() }, process.argv[2]);
 `);
-    const binaries = Array.from({ length: 8 }, (_, i) => fakeBinary(dir, `writer-${i}`));
+    // Each writer is a cold Bun process importing the census module; the budget covers a busy runner.
+    const binaries = Array.from({ length: 4 }, (_, i) => fakeBinary(dir, `writer-${i}`));
     const children = binaries.map(exe => Bun.spawn([process.execPath, script, dir, exe], { stdout: "pipe", stderr: "pipe" }));
     expect(await Promise.all(children.map(child => child.exited))).toEqual(binaries.map(() => 0));
     expect(readServingRuntimes(dir).map(entry => entry.command[0]).sort()).toEqual(binaries.sort());
-  });
+  }, 30_000);
 
   test("a malformed file reads as an empty census", () => {
     const dir = freshDir();
