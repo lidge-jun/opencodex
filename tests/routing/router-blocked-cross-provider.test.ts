@@ -147,7 +147,7 @@ describe("blocked-model redirect compatibility and provider changes", () => {
   test("policy trace and combo reason describe a redirected physical destination", () => {
     const configured: OcxConfig = {
       ...config({ m1: "google/g1" }),
-      routingProfiles: { fast: { candidates: [{ provider: "openai", model: "m1" }] } },
+      routingProfiles: { fast: { candidates: [{ provider: "openai", model: "m1" }, { provider: "google", model: "g1" }] } },
       combos: { quick: { alias: "quick-combo", strategy: "failover", targets: [{ provider: "openai", model: "m1" }] } },
     };
     const policy = routeModel(configured, "policy/fast");
