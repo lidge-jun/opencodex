@@ -142,9 +142,14 @@ describe("Devin GetUserStatus decode and mapping", () => {
   });
 
   test("missing credit balance fields do not publish an exhausted monthly window", () => {
-    for (const balances of [{}, { 6: 0 }, { 8: 0 }]) {
-      expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan(balances))!, 1).monthlyPercent).toBeUndefined();
-    }
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({}))!, 1).monthlyPercent).toBeUndefined();
+  });
+
+  test("proto3 zero omission: a used balance alone still reads as an exhausted pool", () => {
+    // available_prompt = 0 is omitted on the wire; the used count is the evidence.
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 6: 50 }))!, 1).monthlyPercent).toBe(100);
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 8: 100 }))!, 1).monthlyPercent).toBe(0);
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(creditPlan({ 7: 5, 4: 15 }))!, 1).monthlyPercent).toBe(25);
   });
 
   test("a known field with the wrong protobuf wire type rejects the status", () => {

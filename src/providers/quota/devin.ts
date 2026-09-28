@@ -171,7 +171,9 @@ export function decodeDevinUserStatus(buf: Buffer): DevinUserStatus | null {
     ...(dailyResetMs !== undefined ? { dailyResetMs } : {}),
     ...(weeklyResetMs !== undefined ? { weeklyResetMs } : {}),
     overageBalanceMicros: int(status, 16),
-    promptCreditBalancePresent: status.has(6) && status.has(8),
+    // proto3 omits a zero balance, so an exhausted pool arrives as `used` alone. Only a
+    // status with no balance field at all carries no credit evidence.
+    promptCreditBalancePresent: [4, 6, 7, 8].some((field) => status.has(field)),
   };
 }
 
