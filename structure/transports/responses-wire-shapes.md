@@ -553,12 +553,13 @@ The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` 
 openai-chat `reasoning_content`, kiro tags, and Gemini thought parts on routes that do not return
 thought summaries (direct and Vertex Gemini; a `cloud-code-assist` Gemini route emits its thought
 parts as `thinking_delta` instead, so the switch leaves them visible) — while `thinking_delta`
-summaries keep streaming. The suppressed text reaches no client wire: a Responses bridge route
-round-trips it in a txt-only `ocxr1` envelope, while the direct Chat and Messages encoders emit no
-envelope at all (the Chat wire has no field for one, and the Messages encoder emits no thinking
-block for a signature-less close), leaving it to the server-side replay cache the delivery's
-terminal fold fills. A fallback route without the option shows raw reasoning again. A native
-passthrough route relays the upstream's own frames and ignores the option.
+summaries keep streaming. The option controls display, not confidentiality: a Responses bridge
+route still sends the suppressed text to the client inside the txt-only `ocxr1` envelope
+(`encrypted_content`, base64 JSON, echoed back for replay), while the direct Chat and Messages
+encoders emit no envelope at all (the Chat wire has no field for one, and the Messages encoder
+emits no thinking block for a signature-less close), leaving replay to the server-side cache the
+delivery's terminal fold fills. A fallback route without the option shows raw reasoning again. A
+native passthrough route relays the upstream's own frames and ignores the option.
 
 ## Codex App visualization references
 
