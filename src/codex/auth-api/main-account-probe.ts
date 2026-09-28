@@ -1,5 +1,10 @@
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
+import { loadConfig } from "../../config";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { providerCodexAccountMode } from "../../providers/registry";
+import { isSelectableCodexPoolAccount } from "../account-id";
+import type { OcxConfig } from "../../types";
 import { parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
@@ -54,6 +59,14 @@ export function mainResetCreditsForCurrentIdentity(): number | undefined {
 
 export const MAIN_CACHE_TTL = 5 * 60_000;
 
+function sharedMainQuotaPacingEnabled(config: OcxConfig): boolean {
+  const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  if (openai?.disabled === true || openai?.codexAccountMode === "direct") return false;
+  return (openai !== undefined && isCanonicalOpenAiForwardProvider(openai)
+    && providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) === "pool")
+    || (config.codexAccounts ?? []).some(isSelectableCodexPoolAccount);
+}
+
 /**
  * A WHAM 401 is not itself proof the local credential died. Upstream edges can
  * transiently reject a still-valid access token (region/anti-abuse/rotation
@@ -105,8 +118,8 @@ export interface MainAccountInfoSnapshot {
   quotaRefresh?: CodexQuotaRefreshOutcome;
 }
 
-export async function fetchMainAccountInfoSnapshot(forceRefresh = false): Promise<MainAccountInfoSnapshot> {
-  const result = await fetchMainAccountInfoAttempt(forceRefresh, 1);
+export async function fetchMainAccountInfoSnapshot(forceRefresh = false, config?: OcxConfig): Promise<MainAccountInfoSnapshot> {
+  const result = await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false, forceRefresh, false, config);
   return {
     info: result.info,
     ...(result.quotaRefresh && result.quotaRefreshGeneration !== undefined
@@ -116,8 +129,8 @@ export async function fetchMainAccountInfoSnapshot(forceRefresh = false): Promis
   };
 }
 
-export async function fetchMainAccountInfo(forceRefresh = false): Promise<MainAccountInfo> {
-  return (await fetchMainAccountInfoSnapshot(forceRefresh)).info;
+export async function fetchMainAccountInfo(forceRefresh = false, config?: OcxConfig): Promise<MainAccountInfo> {
+  return (await fetchMainAccountInfoSnapshot(forceRefresh, config)).info;
 }
 
 export const EMPTY_MAIN_ACCOUNT_INFO: MainAccountInfo = { email: null, plan: null, quota: null };
@@ -127,12 +140,13 @@ export async function retryMainAccountInfoIfIdentityChanged(
   retriesRemaining: number,
   nativeMainLease: AdmissionLease,
   explicitRefresh: boolean,
+  paced: boolean,
 ): Promise<MainAccountInfoFetchResult | null> {
   const currentAccountId = getMainChatgptAccountId();
   if (currentAccountId === null || currentAccountId === requestAccountId) return null;
   reconcileMainCodexAccountRuntimeState();
   return retriesRemaining > 0
-    ? fetchMainAccountInfoWhileOwned(true, retriesRemaining - 1, nativeMainLease, explicitRefresh)
+    ? fetchMainAccountInfoWhileOwned(true, retriesRemaining - 1, nativeMainLease, explicitRefresh, false, paced)
     : { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
 }
 
@@ -143,6 +157,7 @@ export async function fetchMainAccountInfoAttempt(
   nativeMainSharedClaimHeld = false,
   explicitRefresh: boolean = forceRefresh,
   postReset = false,
+  config?: OcxConfig,
 ): Promise<MainAccountInfoFetchResult> {
   const nativeMainLease = existingNativeMainLease ?? tryAcquireNativeMainProfileClaim();
   if (!nativeMainLease) {
@@ -154,8 +169,9 @@ export async function fetchMainAccountInfoAttempt(
     };
   }
   try {
+    const paced = sharedMainQuotaPacingEnabled(config ?? loadConfig());
     const operation = async () => ({
-      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh, postReset),
+      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh, postReset, paced),
       identityGeneration: captureMainAccountIdentityGeneration(),
     });
     if (nativeMainSharedClaimHeld) return await operation();
@@ -190,6 +206,7 @@ export async function fetchMainAccountInfoWhileOwned(
   explicitRefresh: boolean = forceRefresh,
   /** Reset-credit consume needs a fresh post-spend observation, not an earlier read. */
   postReset = false,
+  paced = true,
 ): Promise<MainAccountInfoFetchResult> {
   const writerGeneration = captureConfigGeneration();
   reconcileMainCodexAccountRuntimeState();
@@ -225,12 +242,14 @@ export async function fetchMainAccountInfoWhileOwned(
   const read = async (): Promise<MainAccountInfoFetchResult> => {
     try {
       let dispatchSequence = 0;
+      const baseKey = `main:${writerGeneration}:${mainQuotaCredentialGeneration}`;
       const resetEpoch = postReset ? `:post-reset:${currentQuotaDispatchSequence()}` : "";
       const admission = await fetchCodexUsage<MainAccountInfoFetchResult>(
-        `main:${writerGeneration}:${mainQuotaCredentialGeneration}${resetEpoch}`, {
+        `${baseKey}${resetEpoch}`, {
         headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
         signal: quotaSignal,
-      }, () => { dispatchSequence = nextQuotaDispatchSequence(); });
+      }, () => { dispatchSequence = nextQuotaDispatchSequence(); },
+      paced ? { pacingKey: baseKey } : { unpaced: true });
       if (!admission) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
       if (admission.kind === "joined") {
         const current = mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
@@ -247,7 +266,7 @@ export async function fetchMainAccountInfoWhileOwned(
       quotaPhase = "publish";
       if (!resp.ok) {
         const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
-        const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
+        const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh, paced);
         if (retried) return retried;
         if (!isQuotaDispatchCurrent(dispatchSequence)) {
           return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
@@ -269,7 +288,7 @@ export async function fetchMainAccountInfoWhileOwned(
       quotaPhase = "body";
       const data = (await resp.json()) as WhamUsageResponse;
       quotaPhase = "publish";
-      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
+      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh, paced);
       if (retried) return retried;
       quotaPhase = "decode";
       if (data === null || typeof data !== "object" || Array.isArray(data)) {
@@ -338,7 +357,7 @@ export async function fetchMainAccountInfoWhileOwned(
         ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
       };
     } catch (error) {
-      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
+      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh, paced);
       if (retried) return retried;
       let status: CodexQuotaRefreshOutcome["status"] = "internal_error";
       if ((quotaPhase === "request" || quotaPhase === "body") && quotaSignal.aborted) status = "timeout";

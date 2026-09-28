@@ -4221,7 +4221,10 @@ describe("codex-auth API", () => {
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
       tokens: { access_token: "bulk-main-access", account_id: "bulk-main-account" },
     }));
-    const config = makeConfig();
+    const config = makeConfig({ providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "pool",
+    } } });
     let calls = 0;
     globalThis.fetch = (async () => { calls++; return new Response(null, { status: 503 }); }) as typeof fetch;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -6368,7 +6371,10 @@ describe("manual reset cooldown recovery (#3973)", () => {
   });
 
   test("main Q-first/P-last publication preserves post-reset cache, credits and hard-lock readiness", async () => {
-    const config = makeConfig({ codexMainAccountHardLock: true });
+    const config = makeConfig({ codexMainAccountHardLock: true, providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "pool",
+    } } });
     const accessToken = "ordered-main-token"; const accountId = "ordered-main-account";
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({ tokens: { access_token: accessToken, account_id: accountId } }));
     reconcileMainCodexAccountRuntimeState();
@@ -6442,6 +6448,21 @@ describe("manual reset cooldown recovery (#3973)", () => {
       expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("ready");
       expect(urls).toEqual([USAGE]);
     } finally { finish.release(); await first; }
+  });
+
+  test.each(["absent", "direct"])("%s non-pool main forces dispatch after a failed read", async mode => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "non-pool-access", account_id: "non-pool-account" },
+    }));
+    const config = makeConfig(mode === "direct" ? { providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "direct",
+    } } } : {});
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response(null, { status: 503 }); }) as typeof fetch;
+    expect((await fetchMainAccountInfoSnapshot(true, config)).quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+    expect((await fetchMainAccountInfoSnapshot(true, config)).quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+    expect(calls).toBe(2);
   });
 
   test("main reset usage does not erase an existing reauth quarantine", async () => {

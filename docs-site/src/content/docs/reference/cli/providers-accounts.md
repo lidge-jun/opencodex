@@ -159,7 +159,7 @@ not erase an already measured blocking tuple. A predicted reset time alone does 
 While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
 If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
 schedule; a longer `Retry-After` also delays profile and token preparation. Only a fresh valid reading
-can lift the block. A quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
+can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when

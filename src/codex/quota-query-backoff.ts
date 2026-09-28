@@ -13,11 +13,16 @@ export function nextQuotaQueryDelay(previous = BASE_DELAY_MS / 2): number {
 type Attempt = { delay: number; after: number; retryAfterUntil?: number; poolAccountId?: string; inFlight: boolean; pending?: Promise<unknown>; resolve?: (result: unknown) => void };
 // Keys contain configuration-home and caller-owned generation identifiers, never credentials.
 const attempts = new Map<string, Attempt>();
+const sharedDeadlines = new Map<string, { after: number; retryAfterUntil: number; poolAccountId?: string }>();
 const scopedKey = (key: string) => `${getConfigDir()}\0${key}`;
+const baseQueryKey = (key: string) => key.replace(/:post-reset:\d+$/, "");
 
 /** The next eligible query time for the current home and credential generation. */
 export function nextCodexUsageQueryAt(key: string): number | undefined {
-  return attempts.get(scopedKey(key))?.after || undefined;
+  const scoped = scopedKey(key);
+  const base = scopedKey(baseQueryKey(key));
+  return Math.max(attempts.get(scoped)?.after ?? 0, attempts.get(base)?.after ?? 0,
+    sharedDeadlines.get(base)?.after ?? 0) || undefined;
 }
 
 export interface CodexUsageOwner<T> {
@@ -29,6 +34,10 @@ export interface CodexUsageOwner<T> {
 export type CodexUsageRead<T> = CodexUsageOwner<T> | { kind: "joined"; result: T };
 
 export interface CodexUsageSchedule {
+  /** Same credential deadline for an epoch-specific dispatch key. */
+  pacingKey?: string;
+  /** Direct/non-pool main reads retain their original uncached dispatch behavior. */
+  unpaced?: true;
   /** Opaque pool identity for removal cleanup; never logged or persisted. */
   poolAccountId?: string;
   /** Recovery claims already have their own five-minute admission interval. */
@@ -44,6 +53,10 @@ export function pruneRemovedCodexPoolUsageAccounts(configuredIds: ReadonlySet<st
     if (key.startsWith(homePrefix) && attempt.poolAccountId
       && !configuredIds.has(attempt.poolAccountId)) attempts.delete(key);
   }
+  for (const [key, deadline] of sharedDeadlines) {
+    if (key.startsWith(homePrefix) && deadline.poolAccountId
+      && !configuredIds.has(deadline.poolAccountId)) sharedDeadlines.delete(key);
+  }
 }
 
 /** Shared by main, pool and 401-replay usage reads. Cache bypass does not bypass pacing. */
@@ -53,6 +66,12 @@ export async function fetchCodexUsage<T>(
   onDispatch?: () => void,
   schedule: CodexUsageSchedule = {},
 ): Promise<CodexUsageRead<T> | null> {
+  if (schedule.unpaced) {
+    onDispatch?.();
+    const response = await fetch("https://chatgpt.com/backend-api/wham/usage", init);
+    return { kind: "owner", response, settle: () => {} };
+  }
+  const pacingKey = scopedKey(schedule.pacingKey ?? baseQueryKey(key));
   key = scopedKey(key);
   const previous = attempts.get(key);
   if (previous?.inFlight) {
@@ -60,9 +79,12 @@ export async function fetchCodexUsage<T>(
     return result === undefined ? null : { kind: "joined", result };
   }
   const now = schedule.now ?? Date.now;
-  if (previous && (schedule.recoveryProbe
-    ? (previous.retryAfterUntil ?? 0) > now()
-    : previous.after > now())) return null;
+  const base = attempts.get(pacingKey);
+  const shared = sharedDeadlines.get(pacingKey);
+  if (schedule.recoveryProbe
+    ? Math.max(previous?.retryAfterUntil ?? 0, base?.retryAfterUntil ?? 0,
+      shared?.retryAfterUntil ?? 0) > now()
+    : Math.max(previous?.after ?? 0, base?.after ?? 0, shared?.after ?? 0) > now()) return null;
   if (!previous && attempts.size >= MAX_ENTRIES) {
     const evict = [...attempts].find(([, entry]) => !entry.inFlight)?.[0];
     if (!evict) return null;
@@ -84,9 +106,21 @@ export async function fetchCodexUsage<T>(
         const at = now();
         const delay = schedule.recoveryProbe ? BASE_DELAY_MS : nextQuotaQueryDelay(previous?.delay);
         const retryAfter = parseRetryAfterMs(response?.headers.get("retry-after"), at) ?? 0;
-        attempts.set(key, { delay, after: at + Math.max(delay, retryAfter),
+        const settledBase = pacingKey === key ? previous : attempts.get(pacingKey);
+        const settledShared = sharedDeadlines.get(pacingKey);
+        const after = Math.max(previous?.after ?? 0, settledBase?.after ?? 0, settledShared?.after ?? 0,
+          at + Math.max(delay, retryAfter));
+        const retryAfterUntil = Math.max(previous?.retryAfterUntil ?? 0,
+          settledBase?.retryAfterUntil ?? 0, settledShared?.retryAfterUntil ?? 0, at + retryAfter);
+        attempts.set(key, { delay, after,
           ...(attempt.poolAccountId ? { poolAccountId: attempt.poolAccountId } : {}),
-          ...(retryAfter > 0 ? { retryAfterUntil: at + retryAfter } : {}), inFlight: false });
+          ...(retryAfterUntil > 0 ? { retryAfterUntil } : {}), inFlight: false });
+        if (pacingKey !== key) {
+          if (!sharedDeadlines.has(pacingKey) && sharedDeadlines.size >= MAX_ENTRIES)
+            sharedDeadlines.delete(sharedDeadlines.keys().next().value!);
+          sharedDeadlines.set(pacingKey, { after, retryAfterUntil,
+            ...(attempt.poolAccountId ? { poolAccountId: attempt.poolAccountId } : {}) });
+        }
       }
     }
     attempt.resolve?.(result);
@@ -103,4 +137,5 @@ export async function fetchCodexUsage<T>(
 
 export function resetQuotaQueryBackoffForTests(): void {
   attempts.clear();
+  sharedDeadlines.clear();
 }

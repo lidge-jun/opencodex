@@ -256,7 +256,8 @@ export async function listCodexAuthAccountsSnapshot(
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
   // One redaction decision for the whole snapshot, read once from the operator's config (#3859).
   const maskEmails = emailMaskingEnabled(runtimeConfig);
-  const mainResult = await fetchMainAccountInfoAttempt(forceRefresh, 1);
+  const mainResult = await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false,
+    forceRefresh, false, runtimeConfig);
   const refreshedPool = await mapWithConcurrency(poolAccounts, POOL_QUOTA_REFRESH_CONCURRENCY, async account => {
     const cred = getCodexAccountCredential(account.id);
     let quotaResult: PoolQuotaResult;
@@ -395,7 +396,7 @@ export async function refreshCodexQuotaForActivation(config: OcxConfig, accountI
         return;
       }
       if (isAccountNeedsReauth(accountId)) return;
-      await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
+      await fetchMainAccountInfoAttempt(true, 1, lease, false, false, false, config);
     } finally {
       lease.release();
     }
@@ -442,7 +443,8 @@ export async function pauseExhaustedCodexAccounts(
         failedAccountCount: number;
       }> => {
         if (!mainLease) return { shouldPause: false, checkedAccountCount: 0, failedAccountCount: 1 };
-        const mainResult = await fetchMainAccountInfoAttempt(true, 1, mainLease, true);
+        const mainResult = await fetchMainAccountInfoAttempt(true, 1, mainLease, true,
+          true, false, config);
         if (!mainResult.credentialChecked || !mainResult.hasCredential) {
           return { shouldPause: false, checkedAccountCount: 0, failedAccountCount: 0 };
         }

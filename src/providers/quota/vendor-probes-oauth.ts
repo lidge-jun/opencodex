@@ -48,7 +48,7 @@ export async function fetchChatGptForwardQuota(
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
 ): Promise<ProviderQuotaReport | null> {
   if (providerCodexAccountMode(provider, providerConfig) === "direct") {
-    const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh);
+    const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh, config);
     const quota = providerQuotaFromCodexQuota(snapshot.info.quota);
     if (quota) quota.updatedAt = Date.now();
     return quota

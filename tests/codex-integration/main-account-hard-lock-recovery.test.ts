@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  fetchMainAccountInfo, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
+  fetchMainAccountInfo, fetchMainAccountInfoAttempt, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
 } from "../../src/codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
@@ -32,7 +32,10 @@ let previousFetch: typeof fetch;
 
 /** Build the minimal proxy configuration with main-account hard-lock recovery enabled. */
 function config(): OcxConfig {
-  return { port: 10100, defaultProvider: "openai", providers: {}, codexMainAccountHardLock: true };
+  return { port: 10100, defaultProvider: "openai", providers: { openai: {
+    adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward", codexAccountMode: "pool",
+  } }, codexMainAccountHardLock: true };
 }
 
 /** Encode synthetic account and expiry claims for the fixture; this is not a signed credential. */
@@ -171,6 +174,28 @@ describe("main hard-lock background recovery", () => {
       now += 60_000;
       await fetchMainAccountInfo(true);
       expect(calls).toHaveLength(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  test("post-reset Retry-After paces ordinary main reads and hard-lock sweeps", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let reads = 0;
+    const calls = fetchWith(async () => ++reads === 1
+      ? new Response("{}", { status: 429, headers: { "Retry-After": "900" } })
+      : usage(0));
+    try {
+      await fetchMainAccountInfoAttempt(true, 1, undefined, false, true, true, config());
+      for (let tick = 0; tick < 14; tick++) {
+        now += 60_000;
+        await fetchMainAccountInfo(true, config());
+        await runMainAccountHardLockRecovery(config());
+      }
+      expect(calls).toEqual([whamUrl]);
+      now += 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl, whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
     } finally { clock.mockRestore(); }
   });
 

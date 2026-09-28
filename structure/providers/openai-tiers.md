@@ -18,11 +18,13 @@ earlier three-tier implementation. The replacement contract and its verification
 
 ## Public provider contract
 
-Ordinary main/pool WHAM queries share `src/codex/quota-query-backoff.ts`: transport and non-auth
+In Pool mode, ordinary main/pool WHAM queries share `src/codex/quota-query-backoff.ts`: transport and non-auth
 HTTP failures and unusable HTTP 200 bodies defer later queries (including forced refreshes) for
 5, 10, 20, 40, then 60 minutes. Same-key callers join one read through body validation and
 receive its settled result; only a confirmed reset-credit consume selects the separate post-reset
-proof epoch. Holding a native-main shared claim by itself does not bypass pacing.
+proof epoch. Its failure deadline is also recorded for ordinary main reads under the same credential,
+so the epoch never bypasses pacing. Holding a native-main shared claim by itself does not bypass it.
+Outside Pool mode, main usage reads retain their independent forced-refresh behavior.
 A valid Retry-After can extend the delay under the existing bounded cooldown parser. Usable usage clears
 failure pacing; 401/403 retain the existing authentication recovery policy. Keys are scoped to
 configuration home, config generation and credential generation; no credentials are retained.

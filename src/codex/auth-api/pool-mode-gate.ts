@@ -126,7 +126,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
         after: currentQueryAfter };
       return;
     }
-    const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
+    const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false, false, config);
     // Never charge a replacement credential for a late result from its predecessor.
     if (isMainAccountIdentityGenerationLive(identityGeneration)
       && credential === getMainQuotaCredentialGeneration()) {
@@ -266,7 +266,8 @@ export async function primeCodexPoolQuotas(
             const bypassCachedQuota = !!observationStale;
             if (options.fetchMainInfo) await options.fetchMainInfo(bypassCachedQuota);
             // Cache bypass is passive observation, never an explicit reauthentication recovery.
-            else await fetchMainAccountInfoAttempt(bypassCachedQuota, 1, mainLease, true, false);
+            else await fetchMainAccountInfoAttempt(bypassCachedQuota, 1, mainLease, true,
+              false, false, config);
           });
         } catch (error) {
           if (!isNativeMainClaimUnavailable(error)) throw error;

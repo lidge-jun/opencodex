@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fetchPoolAccountQuota } from "../../src/codex/auth-api/pool-quota-probe";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota } from "../../src/codex/quota";
-import { fetchCodexUsage, resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
+import { fetchCodexUsage, nextCodexUsageQueryAt, resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 
 let home: string;
 let previousHome: string | undefined;
@@ -138,6 +138,26 @@ test("oversized Retry-After is bounded by the existing 24-hour ceiling", async (
   const due = await fetchCodexUsage("bounded", {});
   expect(due?.kind).toBe("owner");
   expect(calls).toBe(2);
+});
+
+test("a later short recovery failure preserves an earlier epoch Retry-After", async () => {
+  let calls = 0;
+  globalThis.fetch = Object.assign(async () => ++calls === 1
+    ? new Response("{}", { status: 429, headers: { "Retry-After": "900" } })
+    : new Response("{}", { status: 503 }), { preconnect: originalFetch.preconnect });
+  const base = "main:fixture-generation";
+  const long = await fetchCodexUsage(`${base}:post-reset:1`, {}, undefined, { pacingKey: base });
+  const short = await fetchCodexUsage(`${base}:post-reset:2`, {}, undefined,
+    { pacingKey: base, recoveryProbe: true });
+  if (long?.kind !== "owner" || short?.kind !== "owner") throw new Error("epochs must dispatch independently");
+  long.settle(false);
+  short.settle(false);
+  expect(nextCodexUsageQueryAt(`${base}:post-reset:2`)).toBe(now + 900_000);
+  now += 300_000;
+  expect(await fetchCodexUsage(base, {})).toBeNull();
+  now += 600_000;
+  expect((await fetchCodexUsage(base, {}))?.kind).toBe("owner");
+  expect(calls).toBe(3);
 });
 
 test("a full cache never evicts an active read", async () => {
