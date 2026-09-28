@@ -324,7 +324,9 @@ describe("stop failure classification (#3008)", () => {
     // this run can still prove the obligations left behind are the ones it chose to keep.
     expect(cli).toMatch(/else if \(historyDeferredNonces\) \{/);
     expect(cli).toMatch(/pendingTeardownsAreExactly\(historyDeferredNonces\)\s*\n?\s*\? STOP_HISTORY_DEFERRED_EXIT_CODE\s*\n?\s*: 1;/);
-    // Config and catalog failures are real teardown failures: a client reads those.
-    expect(cli).toMatch(/artifacts\.config\.state === "failed" \|\| artifacts\.catalog\.state === "failed"/);
+    // Config and catalog failures are real teardown failures: a client reads those. The
+    // classification lives in the restore helper handleStop calls.
+    expect(cli).toContain("restoreSharedClientStateAfterStop(");
+    expect(read("src/cli/stop-restore.ts")).toMatch(/artifacts\.config\.state === "failed" \|\| artifacts\.catalog\.state === "failed"/);
   });
 });
