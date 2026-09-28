@@ -190,8 +190,9 @@ export async function runAnthropicWebSearch(
   const body = {
     model: settings.model,
     max_tokens: ANTHROPIC_MAX_TOKENS,
-    // sonnet-5 defaults to adaptive thinking when omitted; keep the sidecar fast/cheap (audit F2).
-    thinking: sidecarThinkingOff(settings.model),
+    // Sonnet 5 defaults to adaptive thinking when omitted; keep the sidecar fast/cheap (audit F2).
+    // The per-family off switch (disabled, between_tools or a low effort) lives in the model contract.
+    ...sidecarThinkingOff(settings.model),
     // OAuth fingerprint requires the Claude Code identity as the FIRST system block (audit F6/anthropic.ts).
     system: [
       { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },

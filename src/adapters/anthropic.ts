@@ -31,7 +31,7 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
-import { rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
+import { rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -1061,8 +1061,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
 
       if (rejectsSamplingParameters(parsed.modelId)) {
-        // Sonnet 5.5 400s on any non-default sampling parameter, with or without thinking.
+        // Opus 4.7+, Sonnet 5+ and Fable 400 on any non-default sampling parameter, with or without
+        // thinking (anthropic-model-contract.ts).
         delete body.temperature;
+        delete body.top_p;
+      } else if (body.temperature !== undefined && body.top_p !== undefined && rejectsCombinedSampling(parsed.modelId)) {
+        // The 4.5/4.6 families take either field alone but 400 on both; temperature is the one kept.
         delete body.top_p;
       }
 

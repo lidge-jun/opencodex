@@ -96,24 +96,67 @@ export function supportsExplicitThinkingDisable(modelId: string): boolean {
 }
 
 /**
- * Forced `tool_choice` (`any` / `tool`) 400s on Opus 5.5 and on Sonnet 5.5 and later
- * ("tool_choice: type \"tool\" and \"any\" are not supported for this model.").
+ * Forced `tool_choice` (`any` / `tool`) 400s on Opus 5.5, Fable 5.1 and Sonnet 5.5 and later
+ * ("tool_choice: type \"tool\" and \"any\" are not supported for this model."). Opus 5, Fable 5
+ * and Sonnet 5 still accept it (live, 2026-09-29).
  */
 export function rejectsForcedToolChoice(modelId: string): boolean {
   const parsed = claudeFamilyVersion(modelId);
   if (parsed?.family === "opus") return parsed.major === 5 && parsed.minor === 5;
+  if (parsed?.family === "fable") return atLeast(parsed, [5, 1]);
   return parsed?.family === "sonnet" && atLeast(parsed, [5, 5]);
 }
 
-/** Sonnet 5.5 and later: a non-default temperature, top_p or top_k returns a 400. */
+/**
+ * Families that 400 on any non-default `temperature`, `top_p` or `top_k` ("temperature is deprecated
+ * for this model."), with or without thinking. Live 2026-09-29: Opus 4.7, 4.8, 5 and 5.5,
+ * Sonnet 5 and 5.5, Fable 5 and 5.1 reject them; Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept them.
+ * `temperature: 1` (the default) is accepted everywhere, but the adapter drops the field rather than
+ * guess which value a caller meant as default.
+ */
+const SAMPLING_REJECTION_FAMILY_MINIMUMS: Record<string, readonly [major: number, minor: number]> = {
+  sonnet: [5, 0],
+  opus: [4, 7],
+  fable: [0, 0],
+};
+
 export function rejectsSamplingParameters(modelId: string): boolean {
-  return usesBetweenToolsFloor(modelId);
+  return meetsFamilyMinimum(modelId, SAMPLING_REJECTION_FAMILY_MINIMUMS);
 }
 
 /**
- * The lowest-thinking `thinking` field a sidecar sends for `modelId`. Sidecars historically sent
- * `disabled` for every model; only the families that reject it get `between_tools` instead.
+ * Families that accept `temperature` or `top_p` alone but 400 when both are sent ("temperature and top_p
+ * cannot both be specified for this model."). Live 2026-09-29: Haiku 4.5, Sonnet 4.5 and
+ * 4.6, Opus 4.5 and 4.6. Older ids were not measured and keep both fields.
  */
-export function sidecarThinkingOff(modelId: string): { type: "disabled" } | { type: "between_tools" } {
-  return usesBetweenToolsFloor(modelId) ? { type: "between_tools" } : { type: "disabled" };
+export function rejectsCombinedSampling(modelId: string): boolean {
+  const parsed = claudeFamilyVersion(modelId);
+  if (!parsed || rejectsSamplingParameters(modelId)) return false;
+  return ["opus", "sonnet", "haiku"].includes(parsed.family) && atLeast(parsed, [4, 5]);
+}
+
+/**
+ * Families that reject both `thinking: disabled` and `thinking: between_tools` (live 2026-09-29):
+ * Opus 5.5 and every Fable. They think by default, so the lowest a request can ask for is a low effort.
+ */
+function hasNoThinkingOffSwitch(modelId: string): boolean {
+  const parsed = claudeFamilyVersion(modelId);
+  if (parsed?.family === "fable") return true;
+  return parsed?.family === "opus" && parsed.major === 5 && parsed.minor === 5;
+}
+
+export type SidecarThinkingFields =
+  | { thinking: { type: "disabled" } | { type: "between_tools" } }
+  | { output_config: { effort: "low" } };
+
+/**
+ * The lowest-thinking fields a sidecar spreads into its Messages body for `modelId`. Sidecars
+ * historically sent `thinking: disabled` for every model. Sonnet 5.5+ gets `between_tools` instead;
+ * Opus 5.5 and Fable get no `thinking` and a low effort, which a live probe showed still answers inside
+ * a 1,024-token budget (end_turn with visible text).
+ */
+export function sidecarThinkingOff(modelId: string): SidecarThinkingFields {
+  if (usesBetweenToolsFloor(modelId)) return { thinking: { type: "between_tools" } };
+  if (hasNoThinkingOffSwitch(modelId)) return { output_config: { effort: "low" } };
+  return { thinking: { type: "disabled" } };
 }

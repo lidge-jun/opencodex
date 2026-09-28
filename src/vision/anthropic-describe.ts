@@ -182,7 +182,7 @@ export async function describeImageAnthropic(
   const body = {
     model: settings.model,
     max_tokens: ANTHROPIC_VISION_MAX_TOKENS,
-    thinking: sidecarThinkingOff(settings.model),
+    ...sidecarThinkingOff(settings.model),
     system: [
       { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
       { type: "text", text: DESCRIBE_INSTRUCTION },
