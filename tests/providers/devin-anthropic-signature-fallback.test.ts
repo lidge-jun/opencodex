@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { createDevinAdapter } from "../../src/adapters/devin";
 import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { devinCacheIdentity, invalidateSessionIdentity } from "../../src/adapters/devin/cloud-direct/chat";
@@ -42,7 +42,7 @@ describe("Devin Anthropic signature fallback", () => {
     return { thinking: byNum.get(11), signature: byNum.get(12) };
   }
 
-  async function run(signature: string, modelId: string): Promise<AdapterEvent[]> {
+  async function run(signature: string, modelId: string, observed?: AdapterEvent[]): Promise<AdapterEvent[]> {
     const parsed = parseRequest({
       model: `devin/${modelId}`,
       input: [
@@ -55,7 +55,7 @@ describe("Devin Anthropic signature fallback", () => {
     parsed.modelId = modelId;
     const adapter = createDevinAdapter({ adapter: "devin", apiKey, baseUrl: host });
     const events: AdapterEvent[] = [];
-    await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: createTranslatorBudget() }, event => { events.push(event); });
+    await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: createTranslatorBudget() }, event => { events.push(event); observed?.push(event); });
     return events;
   }
 
@@ -146,19 +146,46 @@ describe("Devin Anthropic signature fallback", () => {
     expect(failed?.usage?.inputTokens).toBe(1000);
   });
 
-  test("held reasoning emits heartbeats, never the held events", async () => {
-    // Each clock read advances 20s, so every held frame is past the heartbeat interval.
-    let clock = Date.now();
-    const now = spyOn(Date, "now").mockImplementation(() => (clock += 20_000));
+  test("a held signed attempt sends a plain heartbeat while the upstream trailer is paused", async () => {
+    const started = Promise.withResolvers<void>();
+    const releaseTrailer = Promise.withResolvers<void>();
+    const regularFetch = globalThis.fetch;
+    const observed: AdapterEvent[] = [];
+    let first = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!first) return regularFetch(input, init);
+      first = false;
+      requests.push(Buffer.from(await (init!.body as Blob).arrayBuffer()).subarray(5));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(frame(encodeString(9, "held thinking")));
+          started.resolve();
+          void releaseTrailer.promise.then(() => {
+            controller.enqueue(refusal);
+            controller.close();
+          });
+        },
+      });
+      return new Response(body, { headers: { "content-type": "application/connect+proto" } });
+    }) as typeof fetch;
+    jest.useFakeTimers();
     try {
-      responses = ["usage-reasoning-then-refuse", "ok"];
-      const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium");
-      const kinds = events.map(e => e.type);
-      expect(kinds.filter(k => k === "heartbeat").length).toBeGreaterThan(0);
-      expect(kinds).not.toContain("thinking_delta");
-      expect(kinds.indexOf("heartbeat")).toBeLessThan(kinds.indexOf("text_delta"));
+      const pending = run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium", observed);
+      await started.promise;
+      jest.advanceTimersByTime(15_000);
+      expect(observed).toContainEqual({ type: "heartbeat" });
+      expect(observed.some(e => e.type === "thinking_delta")).toBe(false);
+      releaseTrailer.resolve();
+      const events = await pending;
+      expect(requests).toHaveLength(2);
+      expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+      const count = events.filter(e => e.type === "heartbeat").length;
+      jest.advanceTimersByTime(30_000);
+      expect(observed.filter(e => e.type === "heartbeat")).toHaveLength(count);
     } finally {
-      now.mockRestore();
+      releaseTrailer.resolve();
+      jest.clearAllTimers();
+      jest.useRealTimers();
     }
   });
 

@@ -784,13 +784,18 @@ export function createDevinAdapter(
           // added to every usage frame of the retry (frames are cumulative per request).
           let refusedUsage: Extract<CloudChatEvent, { kind: "usage" }> | undefined;
           let visible = false;
-          let lastHeartbeat = Date.now();
+          // The iterator may pause before a trailer. A timer feeds the bridge during that
+          // pause without starting another upstream read or marking replay unsafe.
+          const heartbeatTimer = setInterval(() => {
+            if (!visible) emit({ type: "heartbeat" });
+          }, HELD_REASONING_HEARTBEAT_MS);
           try {
             for await (const event of request(signedMessages)) {
               // Only visible output makes a retry unsafe. Live, the refusal often lands after the
               // model has streamed its reasoning, its signature and a finish frame, and nothing else.
               if (!visible && (event.kind === "text" || event.kind === "tool_call_start" || event.kind === "tool_call_args")) {
                 visible = true;
+                clearInterval(heartbeatTimer);
                 yield* held.splice(0);
               }
               if (visible) {
@@ -799,23 +804,21 @@ export function createDevinAdapter(
               }
               held.push(event);
               if (event.kind === "usage") refusedUsage = event;
-              // Held reasoning must not look like a stalled upstream to the bridge.
-              if (Date.now() - lastHeartbeat >= HELD_REASONING_HEARTBEAT_MS) {
-                lastHeartbeat = Date.now();
-                emit({ type: "heartbeat" });
-              }
             }
           } catch (error) {
             if (visible || !(error instanceof CloudChatError && error.code === "invalid_argument")) {
               yield* held.splice(0);
               throw error;
             }
+            clearInterval(heartbeatTimer);
             // Emitted first so the counts survive a retry that reports no usage or fails early.
             if (refusedUsage) yield refusedUsage;
             for await (const event of request(unsignedMessages)) {
               yield event.kind === "usage" && refusedUsage ? addDevinUsage(event, refusedUsage) : event;
             }
             return;
+          } finally {
+            clearInterval(heartbeatTimer);
           }
           yield* held.splice(0);
         }
