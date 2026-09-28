@@ -71,4 +71,3 @@ export async function restoreSharedClientStateAfterStop(
   }
   return { historyOnly, historyDeferred, other };
 }
-
