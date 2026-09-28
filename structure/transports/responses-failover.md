@@ -1,6 +1,6 @@
 # Responses Failover And Replay
 
- `src/server/responses/request-transport.ts` resolves the final Anthropic model ID once for each enabled-pool request and holds its model route through admission. The three 429 retry sites in `adapter-dispatch.ts`, `adapter-continuation.ts` and `sidecar-execution.ts` use the same route, keep the original 429 if no replacement exists inside it, and preserve existing send and output replay limits. A route-scoped cooldown returns a local 429 and Retry-After when known.
+ `src/server/responses/request-transport.ts` resolves the final Anthropic model ID once for each enabled-pool request and holds its model route through admission. The three 429 retry sites in `adapter-dispatch.ts`, `adapter-continuation.ts` and `sidecar-execution.ts` use the same route, keep the original 429 if no replacement exists inside it, and preserve existing send and output replay limits. A local cooldown returns 429 with the earliest known Retry-After among accounts the route can use when they recover; explicit fallback includes usable ordinary-pool accounts, while a strict route stays route-scoped.
 `src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher.
 It requires explicit configuration and normalized attempt evidence, preserves ordinary requests,
 and refuses cancellation, committed semantic output, tool effects, protected failures, exhausted

@@ -349,9 +349,14 @@ export function forgetAnthropicFailoverQuorum(): void {
 export function getAnthropicPoolRetryAfterSeconds(now = Date.now(), decision: AnthropicRouteDecision | null = null): number | null {
   const set = getAccountSet(PROVIDER);
   if (!set) return null;
+  // Once an explicit fallback route has no eligible declared account, selection may use
+  // the ordinary pool. Its earliest usable cooldown must determine the advertised wait.
+  const fallbackExpanded = decision?.fallback === true
+    && !getEligibleAnthropicAccounts(now).some(id => decision.accounts.includes(id));
   let earliest: number | null = null;
   for (const account of set.accounts) {
-    if (decision && !decision.accounts.includes(account.id)) continue;
+    if (decision && !fallbackExpanded && !decision.accounts.includes(account.id)) continue;
+    if (fallbackExpanded && (account.needsReauth === true || !isPoolCredentialUsable(account.id, now))) continue;
     const snap = getAnthropicAccountHealthSnapshot(account.id, now);
     if (!snap?.cooldownUntil) continue;
     if (earliest === null || snap.cooldownUntil < earliest) earliest = snap.cooldownUntil;

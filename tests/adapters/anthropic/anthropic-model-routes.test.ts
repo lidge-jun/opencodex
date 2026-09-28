@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
-import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
+import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicPoolRetryAfterSeconds, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
 import { parseAnthropicModelRoutes, resolveAnthropicModelRoute } from "../../../src/oauth/anthropic-model-routes";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
@@ -158,6 +158,32 @@ test("routed 429 without an alternate retains upstream refusal and scoped cooldo
   expect(cooledBody).toContain("this model route");
   expect(cooledBody).not.toContain(ACCOUNT_LIKE_ROUTE);
   expect(sends).toHaveLength(1);
+});
+
+test("fallback route advertises the earliest ordinary-pool cooldown when every account is cooling", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.routes = [{ name: ACCOUNT_LIKE_ROUTE, match: "claude-*", accounts: [ids[1]!], fallback: true }];
+  const decision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+  const now = Date.now();
+  rotateAnthropicAccountOn429(cfg, ids[1]!, "3600", null, now, null, decision);
+  rotateAnthropicAccountOn429(cfg, ids[0]!, "60", null, now, null, decision);
+  rotateAnthropicAccountOn429(cfg, ids[2]!, "1800", null, now, null, decision);
+
+  expect(getAnthropicPoolRetryAfterSeconds(now, decision)).toBe(60);
+  const expanded = await post(cfg);
+  expect(expanded.status).toBe(429);
+  expect(Number(expanded.headers.get("retry-after"))).toBeGreaterThan(0);
+  expect(Number(expanded.headers.get("retry-after"))).toBeLessThanOrEqual(60);
+  expect(await expanded.text()).not.toContain(ACCOUNT_LIKE_ROUTE);
+
+  cfg.anthropicAccountPool!.routes[0]!.fallback = false;
+  const strictDecision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+  expect(getAnthropicPoolRetryAfterSeconds(now, strictDecision)).toBe(3600);
+  const strict = await post(cfg);
+  expect(strict.status).toBe(429);
+  expect(Number(strict.headers.get("retry-after"))).toBeGreaterThan(3500);
+  expect(sends).toHaveLength(0);
 });
 
 test("malformed enabled routes reject before upstream send", async () => {
