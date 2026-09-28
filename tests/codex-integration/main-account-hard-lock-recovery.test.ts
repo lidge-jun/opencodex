@@ -3,8 +3,9 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  fetchMainAccountInfo, fetchMainAccountInfoAttempt, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
+  fetchMainAccountInfo, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
 } from "../../src/codex/auth-api";
+import { fetchMainAccountInfoAttempt } from "../../src/codex/auth-api/main-account-probe";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
