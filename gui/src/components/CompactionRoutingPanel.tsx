@@ -207,7 +207,12 @@ function CompactionRoutingControls({ apiBase, models, providers: providerList = 
   const options = [{ value: "", label: t("compactionRouting.currentModel") },
     ...[...new Set([...models.map(item => item.namespaced), ...(model ? [model] : [])])]
       .map(value => ({ value, label: formatNamespacedModelId(value, t) }))];
-  const providerWildcards = [...new Set(models.map(item => item.provider).filter(Boolean))].map(provider => `${provider}/*`);
+  // Configured providers count even without a catalog row: they can still serve
+  // provider-qualified ids, so their wildcard must be selectable here.
+  const providerWildcards = [...new Set([
+    ...providerList.map(provider => provider.name),
+    ...models.map(item => item.provider).filter(Boolean),
+  ])].map(provider => `${provider}/*`);
   const knownSelectors = new Set([...providerWildcards, ...models.map(item => item.namespaced)]);
   // Saved selectors the catalog no longer lists stay visible, so saving never drops them by
   // omission and the operator removes them deliberately.
@@ -222,9 +227,10 @@ function CompactionRoutingControls({ apiBase, models, providers: providerList = 
       && (sources.length !== (saved?.sourceModels?.length ?? 0)
         || sources.some(selector => !saved?.sourceModels?.includes(selector))));
   const scopeEmpty = scope === "selected" && sources.length === 0;
+  const selectedSources = new Set(sources);
   const sourceRow = (selector: string) => (
     <label key={selector}>
-      <input type="checkbox" checked={sources.includes(selector)} disabled={disabled}
+      <input type="checkbox" checked={selectedSources.has(selector)} disabled={disabled}
         onChange={() => { toggleSource(selector); }} />
       <span>{selector}</span>
     </label>

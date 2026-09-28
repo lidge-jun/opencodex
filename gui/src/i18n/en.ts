@@ -447,7 +447,7 @@ export const en = {
   "compactionRouting.comboWarning": "With this setting, every covered compaction request sends the full conversation contents to combo {combo} for summarization. The combo attempts its targets ({providers}) in order and uses the first that answers, so any one of them can receive the conversation.",
   "compactionRouting.comboProvidersUnknown": "its configured target providers",
   "compactionRouting.providerWarningScoped": "With this setting, only compaction requests whose source model matches {sources} send the full conversation contents to {provider} for summarization; other requests keep using their own model.",
-  "compactionRouting.comboWarningScoped": "With this setting, only compaction requests whose source model matches {sources} send the full conversation contents to combo {combo} for summarization; other requests keep using their own model. The combo attempts its targets ({providers}) in order and uses the first that answers, so any one of them can receive the matching requests.",
+  "compactionRouting.comboWarningScoped": "With this setting, only compaction requests whose source model matches {sources} send the full conversation contents to combo {combo} for summarization; other requests keep using their own model. The combo picks one of its targets ({providers}) by its routing strategy, so any of them can receive a matching request.",
   "compactionRouting.loadFailed": "Could not load compaction settings.",
   "compactionRouting.saved": "Compaction settings saved.",
   "compactionRouting.saveFailed": "Could not save. Your changes are still here; try again.",

@@ -232,6 +232,29 @@ test("the disclosure names the provider endpoint host when the provider is known
   expect(container.querySelector('[role="note"]')?.textContent).toContain("gateway (not a url)");
 });
 
+test("offers a provider-wide selector for a configured provider with no catalog models", async () => {
+  // A provider whose catalog is empty or unlisted can still serve provider-qualified ids, so
+  // its wildcard must come from the configured provider list, not only from catalog rows.
+  await render("", [{ name: "lonely", baseUrl: "https://lonely.example/v1" }]);
+  await choose("model", "gateway/cheap");
+  await choose("sources", "Selected sources only");
+  expect(sourceCheckbox("lonely/*")).toBeDefined();
+});
+
+test("the scoped combo disclosure stays strategy-neutral", async () => {
+  await render();
+  await choose("model", "gateway/cheap");
+  await choose("sources", "Selected sources only");
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  await choose("model", "combo/compact");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("combo combo/compact");
+  // Combos route by their own strategy (failover, round-robin, ...), so the warning must not
+  // promise configured order or first-answer selection.
+  expect(comboNote).not.toContain("in order");
+  expect(comboNote).toContain("routing strategy");
+});
+
 test("failed save retains the draft and allows retry", async () => {
   await render();
   await choose("model", "gateway/cheap");

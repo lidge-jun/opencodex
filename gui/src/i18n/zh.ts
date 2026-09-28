@@ -433,7 +433,7 @@ export const zh: Record<TKey, string> = {
   "compactionRouting.comboWarning": "启用此设置后，每个被覆盖的压缩请求都会将完整对话内容发送给组合 {combo} 以进行摘要。该组合会按顺序尝试其目标（{providers}），并使用第一个响应的目标，因此其中任意一个都可能收到该对话。",
   "compactionRouting.comboProvidersUnknown": "其已配置的目标提供商",
   "compactionRouting.providerWarningScoped": "启用此设置后，仅当压缩请求的来源模型匹配 {sources} 时，完整对话内容才会发送给 {provider} 进行摘要；其他请求仍使用自身模型压缩。",
-  "compactionRouting.comboWarningScoped": "启用此设置后，仅当压缩请求的来源模型匹配 {sources} 时，完整对话内容才会发送给组合 {combo} 进行摘要；其他请求仍使用自身模型压缩。该组合会按顺序尝试其目标（{providers}），并使用第一个响应的目标，因此其中任意一个都可能收到匹配的请求。",
+  "compactionRouting.comboWarningScoped": "启用此设置后，仅当压缩请求的来源模型匹配 {sources} 时，完整对话内容才会发送给组合 {combo} 进行摘要；其他请求仍使用自身模型压缩。该组合会按其路由策略选择其中一个目标（{providers}），因此其中任意一个都可能收到匹配的请求。",
   "compactionRouting.loadFailed": "无法加载压缩设置。",
   "compactionRouting.saved": "压缩设置已保存。",
   "compactionRouting.saveFailed": "保存失败。更改仍然保留，请重试。",

@@ -437,7 +437,7 @@ export const vi: Record<TKey, string> = {
   "compactionRouting.comboWarning": "Với thiết lập này, mỗi yêu cầu nén thuộc phạm vi áp dụng sẽ gửi toàn bộ nội dung cuộc trò chuyện đến combo {combo} để tóm tắt. Combo thử lần lượt các đích ({providers}) và dùng đích trả lời đầu tiên, nên bất kỳ đích nào cũng có thể nhận cuộc trò chuyện.",
   "compactionRouting.comboProvidersUnknown": "các nhà cung cấp đích đã cấu hình của nó",
   "compactionRouting.providerWarningScoped": "Với thiết lập này, chỉ các yêu cầu nén có model nguồn khớp với {sources} mới gửi toàn bộ nội dung cuộc trò chuyện đến {provider} để tóm tắt; yêu cầu không khớp vẫn dùng model nguồn.",
-  "compactionRouting.comboWarningScoped": "Với thiết lập này, chỉ các yêu cầu nén có model nguồn khớp với {sources} mới gửi toàn bộ nội dung cuộc trò chuyện đến combo {combo} để tóm tắt; yêu cầu không khớp vẫn dùng model nguồn. Combo thử lần lượt các đích ({providers}) và dùng đích trả lời đầu tiên, nên bất kỳ đích nào cũng có thể nhận yêu cầu khớp.",
+  "compactionRouting.comboWarningScoped": "Với thiết lập này, chỉ các yêu cầu nén có model nguồn khớp với {sources} mới gửi toàn bộ nội dung cuộc trò chuyện đến combo {combo} để tóm tắt; yêu cầu không khớp vẫn dùng model nguồn. Combo chọn một trong các đích ({providers}) theo chiến lược định tuyến của nó, nên bất kỳ đích nào cũng có thể nhận yêu cầu khớp.",
   "compactionRouting.loadFailed": "Không thể tải cài đặt nén.",
   "compactionRouting.saved": "Đã lưu cài đặt nén.",
   "compactionRouting.saveFailed": "Không thể lưu. Thay đổi của bạn vẫn còn; hãy thử lại.",

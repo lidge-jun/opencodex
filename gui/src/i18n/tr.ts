@@ -439,7 +439,7 @@ export const tr: Record<TKey, string> = {
   "compactionRouting.comboWarning": "Bu ayarla kapsama giren her özetleme isteği, konuşmanın tüm içeriğini özetlenmek üzere {combo} kombosuna gönderir. Kombo hedeflerini ({providers}) sırayla dener ve yanıt veren ilkini kullanır; dolayısıyla bunlardan herhangi biri konuşmayı alabilir.",
   "compactionRouting.comboProvidersUnknown": "yapılandırılmış hedef sağlayıcıları",
   "compactionRouting.providerWarningScoped": "Bu ayarla yalnızca kaynak modeli {sources} ile eşleşen özetleme istekleri konuşmanın tüm içeriğini {provider} hedefine gönderir; eşleşmeyen istekler kendi modelini kullanır.",
-  "compactionRouting.comboWarningScoped": "Bu ayarla yalnızca kaynak modeli {sources} ile eşleşen özetleme istekleri konuşmanın tüm içeriğini {combo} kombosuna gönderir; eşleşmeyen istekler kendi modelini kullanır. Kombo hedeflerini ({providers}) sırayla dener ve yanıt veren ilkini kullanır; dolayısıyla bunlardan herhangi biri eşleşen istekleri alabilir.",
+  "compactionRouting.comboWarningScoped": "Bu ayarla yalnızca kaynak modeli {sources} ile eşleşen özetleme istekleri konuşmanın tüm içeriğini {combo} kombosuna gönderir; eşleşmeyen istekler kendi modelini kullanır. Kombo, yönlendirme stratejisine göre hedeflerinden ({providers}) birini seçer; dolayısıyla bunlardan herhangi biri eşleşen istekleri alabilir.",
   "compactionRouting.loadFailed": "Özetleme ayarları yüklenemedi.",
   "compactionRouting.saved": "Özetleme ayarları kaydedildi.",
   "compactionRouting.saveFailed": "Kaydedilemedi. Değişiklikleriniz korunuyor; tekrar deneyin.",

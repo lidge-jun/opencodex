@@ -433,7 +433,7 @@ export const ko: Record<TKey, string> = {
   "compactionRouting.comboWarning": "이 설정을 사용하면 적용 대상 압축 요청마다 전체 대화 내용이 요약을 위해 콤보 {combo}로 전송됩니다. 콤보는 대상({providers})을 순서대로 시도해 먼저 응답한 하나를 사용하므로, 그중 어느 것이든 대화를 받을 수 있습니다.",
   "compactionRouting.comboProvidersUnknown": "구성된 대상 프로바이더",
   "compactionRouting.providerWarningScoped": "이 설정을 사용하면 원본 모델이 {sources}와 일치하는 압축 요청만 전체 대화 내용을 요약을 위해 {provider}로 전송합니다. 일치하지 않는 요청은 원래 모델을 사용합니다.",
-  "compactionRouting.comboWarningScoped": "이 설정을 사용하면 원본 모델이 {sources}와 일치하는 압축 요청만 전체 대화 내용을 요약을 위해 콤보 {combo}로 전송합니다. 일치하지 않는 요청은 원래 모델을 사용합니다. 콤보는 대상({providers})을 순서대로 시도해 먼저 응답한 하나를 사용하므로, 어느 대상이든 일치한 요청을 받을 수 있습니다.",
+  "compactionRouting.comboWarningScoped": "이 설정을 사용하면 원본 모델이 {sources}와 일치하는 압축 요청만 전체 대화 내용을 요약을 위해 콤보 {combo}로 전송합니다. 일치하지 않는 요청은 원래 모델을 사용합니다. 콤보는 라우팅 전략에 따라 대상({providers}) 중 하나를 선택하므로, 어느 대상이든 일치한 요청을 받을 수 있습니다.",
   "compactionRouting.loadFailed": "압축 설정을 불러올 수 없습니다.",
   "compactionRouting.saved": "압축 설정을 저장했습니다.",
   "compactionRouting.saveFailed": "저장하지 못했습니다. 변경 사항은 유지됩니다. 다시 시도하세요.",

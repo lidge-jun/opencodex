@@ -315,7 +315,7 @@ export const zhTW: Record<TKey, string> = {
   "compactionRouting.comboWarning": "啟用此設定後，每個涵蓋的壓縮請求都會將完整對話內容傳送給組合 {combo} 以進行摘要。該組合會依序嘗試其目標（{providers}），並使用第一個回應的目標，因此其中任一個都可能收到該對話。",
   "compactionRouting.comboProvidersUnknown": "其已設定的目標供應商",
   "compactionRouting.providerWarningScoped": "啟用此設定後，僅當壓縮請求的來源模型符合 {sources} 時，完整對話內容才會傳送給 {provider} 進行摘要；其他請求仍使用自身模型壓縮。",
-  "compactionRouting.comboWarningScoped": "啟用此設定後，僅當壓縮請求的來源模型符合 {sources} 時，完整對話內容才會傳送給組合 {combo} 進行摘要；其他請求仍使用自身模型壓縮。該組合會依序嘗試其目標（{providers}），並使用第一個回應的目標，因此其中任一個都可能收到符合條件的請求。",
+  "compactionRouting.comboWarningScoped": "啟用此設定後，僅當壓縮請求的來源模型符合 {sources} 時，完整對話內容才會傳送給組合 {combo} 進行摘要；其他請求仍使用自身模型壓縮。該組合會依其路由策略選擇其中一個目標（{providers}），因此其中任一個都可能收到符合條件的請求。",
   "compactionRouting.loadFailed": "無法載入壓縮設定。",
   "compactionRouting.saved": "壓縮設定已儲存。",
   "compactionRouting.saveFailed": "儲存失敗。變更仍然保留，請重試。",
