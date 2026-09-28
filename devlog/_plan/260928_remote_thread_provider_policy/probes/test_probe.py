@@ -96,7 +96,7 @@ class RewriteTests(unittest.TestCase):
     def test_relation_query_bypass_preserved(self):
         for key in ("parentThreadId", "ancestorThreadId"):
             with self.subTest(key=key):
-                self.request["params"] = {key: "mock-parent"}
+                self.request["params"] = {key: "00000000-0000-4000-8000-0000000000aa"}
                 self.assert_preserved(self.frame())
 
     def test_null_relation_does_not_block(self):

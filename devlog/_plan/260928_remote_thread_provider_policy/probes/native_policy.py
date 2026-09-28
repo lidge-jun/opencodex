@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from uuid import UUID
 
 
 class ConnectionOrigin(Enum):
@@ -25,6 +26,14 @@ def _validate_ids(value: tuple[str, ...], label: str) -> None:
         raise ValueError(f"{label} must contain non-empty strings")
     if len(set(value)) != len(value):
         raise ValueError(f"{label} must not contain duplicate identifiers")
+
+
+def _validate_thread_id(value: str, label: str) -> None:
+    """Upstream parses ThreadId as a UUID; a non-UUID string must not widen the list."""
+    try:
+        UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(f"{label} must be a UUID thread id")
 
 
 @dataclass(frozen=True)
@@ -61,8 +70,8 @@ def resolve_provider_filter(
         ("parent_thread_id", parent_thread_id),
         ("ancestor_thread_id", ancestor_thread_id),
     ):
-        if tid is not None and not tid.strip():
-            raise ValueError(f"{label} must be a non-empty thread id")
+        if tid is not None:
+            _validate_thread_id(tid, label)
     if parent_thread_id is not None and ancestor_thread_id is not None:
         raise ValueError("parent_thread_id and ancestor_thread_id are mutually exclusive")
     if requested is not None:

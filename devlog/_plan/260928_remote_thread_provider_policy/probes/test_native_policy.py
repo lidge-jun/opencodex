@@ -45,23 +45,35 @@ class NativePolicyTests(unittest.TestCase):
 
     def test_parent_query_keeps_native_no_default_filter(self):
         for policy in (RemoteListPolicy(), RemoteListPolicy(("opencodex",))):
-            self.assertIsNone(self.resolve(parent_thread_id="fixture-parent", policy=policy))
+            self.assertIsNone(self.resolve(parent_thread_id="00000000-0000-4000-8000-0000000000aa", policy=policy))
 
     def test_ancestor_query_keeps_native_no_default_filter(self):
         for policy in (RemoteListPolicy(), RemoteListPolicy(("opencodex",))):
-            self.assertIsNone(self.resolve(ancestor_thread_id="fixture-ancestor", policy=policy))
+            self.assertIsNone(self.resolve(ancestor_thread_id="00000000-0000-4000-8000-0000000000bb", policy=policy))
 
     def test_related_thread_ids_follow_native_validation(self):
         # Upstream thread_list_response_inner rejects malformed ids and rejects
         # parent+ancestor together; a malformed id must not silently widen the list.
-        for relation in ({"parent_thread_id": ""}, {"ancestor_thread_id": "  "}):
+        for relation in (
+            {"parent_thread_id": ""},
+            {"ancestor_thread_id": "  "},
+            {"parent_thread_id": "fixture-parent"},
+            {"ancestor_thread_id": "fixture-ancestor"},
+            {"parent_thread_id": "p"},
+        ):
             with self.subTest(relation=relation), self.assertRaises(ValueError):
                 self.resolve(**relation)
         with self.assertRaises(ValueError):
-            self.resolve(parent_thread_id="p", ancestor_thread_id="a")
+            self.resolve(
+                parent_thread_id="00000000-0000-4000-8000-0000000000aa",
+                ancestor_thread_id="00000000-0000-4000-8000-0000000000bb",
+            )
 
     def test_explicit_filter_still_wins_for_related_queries(self):
-        for relation in ({"parent_thread_id": "p"}, {"ancestor_thread_id": "a"}):
+        for relation in (
+            {"parent_thread_id": "00000000-0000-4000-8000-0000000000aa"},
+            {"ancestor_thread_id": "00000000-0000-4000-8000-0000000000bb"},
+        ):
             self.assertEqual(self.resolve(requested=("other",), policy=RemoteListPolicy(()), **relation), ("other",))
 
     def test_null_and_omitted_match_typed_native_option_semantics(self):

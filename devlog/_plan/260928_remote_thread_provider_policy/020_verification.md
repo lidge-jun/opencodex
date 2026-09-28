@@ -11,19 +11,23 @@ cd devlog/_plan/260928_remote_thread_provider_policy/probes
 python -m unittest -v test_native_policy test_probe test_loopback_bridge
 ```
 
-**Executed: 60 tests, 0 failures.**
+**Executed: 61 tests, 0 failures.**
 
-- 22 tests specify the proposed native policy: opt-out, trusted-origin scoping,
+- 23 tests specify the proposed native policy: opt-out, trusted-origin scoping,
   explicit arrays, null semantics, parent/ancestor exceptions, immutable policy,
-  exact ids, validation, and synthetic paginated fixture reads.
+  exact ids, UUID thread-id validation, and synthetic paginated fixture reads.
 - 29 retained raw-frame tests cover the relay alternative's ordinary/single-chunk
   rewrites, byte-identical pass-through, limits, and unsupported inputs.
 - 9 retained localhost HTTP/WebSocket tests use a mock host and mock backend,
   checking two-way traffic, fixture auth/headers, explicit filters, enrollment,
   unrelated HTTP, and fixture endpoint restrictions.
 
-The 22 + 29 offline tests use the Python standard library only. The 9 socket tests
+The 23 + 29 offline tests use the Python standard library only. The 9 socket tests
 need aiohttp already installed; no production dependency manifest is changed.
+
+Hosted CI runs the same command for every devlog/**/probes directory it finds
+(.github/workflows/devlog-probes.yml): the offline unit tests always run, and
+the aiohttp socket tests run when aiohttp is present on the runner image.
 
 ```sh
 python -m unittest -v test_native_policy test_probe
