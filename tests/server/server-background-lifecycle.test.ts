@@ -20,6 +20,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { startServer, type StartServerDeps } from "../../src/server";
 import { registerStateSweepAfterTick } from "../../src/lib/state-store-sweeper";
 import { getActiveMemoryWatchdog } from "../../src/server/memory-watchdog";
+import { acquireServerBackgroundLifecycle } from "../../src/server/background-lifecycle";
 import {
   getStorageCleanupPolicyJobState,
   requestStorageCleanupPolicyRun,
@@ -293,6 +294,16 @@ afterEach(async () => {
 });
 
 describe("server background lifecycle", () => {
+  test("a server without low-quota work releases its process owner synchronously", async () => {
+    const lease = acquireServerBackgroundLifecycle(() => {}, baseConfig());
+    const completion = lease.release();
+    try {
+      expect(getActiveMemoryWatchdog()).toBeNull();
+    } finally {
+      await completion;
+    }
+  });
+
   test("authenticated low-quota history is bounded and an unauthenticated reader is refused", async () => {
     const config = baseConfig();
     config.codexAccounts = [{ id: "low-quota-pool", email: "pool@example.com", isMain: false }];

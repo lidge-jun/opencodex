@@ -76,15 +76,18 @@ describe("low quota protection", () => {
     const config = configWith(protection());
     const persisted: OcxConfig[] = [];
     const registration = register(config, { persist: next => { persisted.push(structuredClone(next)); } });
+    expect(registration.hasPendingSave()).toBe(false);
 
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 79 });
     expect(config.pausedCodexAccountIds).toBeUndefined();
     expect(persisted).toEqual([]);
 
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 80 });
+    expect(registration.hasPendingSave()).toBe(true);
     expect(config.pausedCodexAccountIds).toEqual([ACCOUNT_A]);
     expect(persisted).toHaveLength(0);
     await registration.flush();
+    expect(registration.hasPendingSave()).toBe(false);
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.pausedCodexAccountIds).toContain(ACCOUNT_A);
     observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 79 });

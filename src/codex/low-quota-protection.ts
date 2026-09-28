@@ -1,4 +1,3 @@
-import { saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig } from "../types";
 import { MAIN_CODEX_ACCOUNT_ID, isSelectableCodexPoolAccount } from "./account-id";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
@@ -14,7 +13,11 @@ type Dependencies = {
 };
 type EventBase = Omit<LowQuotaEvent, "timestamp" | "status" | "delivery">;
 type Episode = { reset: string; notice: "in-flight" | "logged" | "delivered" | "failed" | undefined; pausedByUs: boolean; noticeBase?: EventBase };
-export type LowQuotaRegistration = (() => void) & { flush(): Promise<void>; listEvents(limit?: number): LowQuotaEvent[] };
+export type LowQuotaRegistration = (() => void) & {
+  hasPendingSave(): boolean;
+  flush(): Promise<void>;
+  listEvents(limit?: number): LowQuotaEvent[];
+};
 
 const RETRY_DELAYS_MS = [100, 250];
 const FLUSH_DEADLINE_MS = 500;
@@ -23,7 +26,6 @@ const FLUSH_DEADLINE_MS = 500;
 export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Dependencies = {}): LowQuotaRegistration {
   const episodes = new Map<string, Episode>();
   const ledger = createLowQuotaEventLedger();
-  const persist = deps.persist ?? saveConfigPreservingClaudeCode;
   let policyKey: string | undefined;
   let closed = false;
   let generation = 0;
@@ -62,12 +64,20 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     const ownerGeneration = generation;
     const saving = new Map(pendingPauseEvents);
     dirty = false;
-    saveFlight = Promise.resolve().then(() => {
+    saveFlight = Promise.resolve().then(async () => {
       if (closed || ownerGeneration !== generation) {
         for (const base of saving.values()) event(base, "pause-save", "cancelled");
         return;
       }
-      return persist(config);
+      if (deps.persist) return deps.persist(config);
+      // Import only for an actual deferred save, then recheck ownership: an import
+      // that resolves after a timed-out flush must not start a late config write.
+      const { saveConfigPreservingClaudeCode } = await import("../config/live-reconcile");
+      if (closed || ownerGeneration !== generation) {
+        for (const base of saving.values()) event(base, "pause-save", "cancelled");
+        return;
+      }
+      saveConfigPreservingClaudeCode(config);
     }).then(() => {
       if (!closed && ownerGeneration === generation) {
         attempts = 0;
@@ -115,7 +125,10 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       let timeout: ReturnType<typeof setTimeout> | undefined;
       const completed = await Promise.race([
         flight.then(() => true),
-        new Promise<false>(resolve => { timeout = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now())); }),
+        new Promise<false>(resolve => {
+          timeout = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+          timeout.unref?.();
+        }),
       ]);
       if (timeout) clearTimeout(timeout);
       if (!completed || Date.now() >= deadline) {
@@ -214,5 +227,9 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       }
     }
   });
-  return Object.assign(close, { flush, listEvents: ledger.list });
+  return Object.assign(close, {
+    hasPendingSave: () => dirty || saveFlight !== null || saveTimer !== null,
+    flush,
+    listEvents: ledger.list,
+  });
 }

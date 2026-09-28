@@ -199,6 +199,12 @@ export function acquireServerBackgroundLifecycle(
   }
 
   let releaseFlight: Promise<void> | null = null;
+  function finishRelease(): Promise<void> {
+    const outcome = releaseOwnerSynchronously(owner);
+    if (outcome !== "last") return Promise.resolve();
+    cleanupInProgress = true;
+    return stopStoragePolicyWorker().finally(() => { cleanupInProgress = false; });
+  }
   return {
     listLowQuotaEvents(limit) { return owner.lowQuota.listEvents(limit); },
     scheduleStartupRun() {
@@ -208,14 +214,10 @@ export function acquireServerBackgroundLifecycle(
     },
     release() {
       if (releaseFlight) return releaseFlight;
-      releaseFlight = (async () => {
-        await owner.lowQuota.flush();
-        const outcome = releaseOwnerSynchronously(owner);
-        if (outcome !== "last") return;
-        cleanupInProgress = true;
-        try { await stopStoragePolicyWorker(); }
-        finally { cleanupInProgress = false; }
-      })();
+      // Default installs have no low-quota write. Preserve synchronous owner removal;
+      // an unconditional await here extends process-global ownership into later starts.
+      if (!owner.lowQuota.hasPendingSave()) releaseFlight = finishRelease();
+      else releaseFlight = owner.lowQuota.flush().then(finishRelease, finishRelease);
       return releaseFlight;
     },
     releaseAfterFailedStart() {
