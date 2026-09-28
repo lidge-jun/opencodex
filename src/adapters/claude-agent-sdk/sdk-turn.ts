@@ -16,6 +16,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isStandaloneBinary } from "../../lib/standalone";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { modelRecordValue } from "../../reasoning-effort";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
@@ -28,8 +29,10 @@ import {
 } from "../coding-agent/profile";
 import {
   buildConversationInput,
+  MAX_TOOL_BLOCK_STARTS,
   mapStreamMessageToEvents,
   projectedHistoryCharLimit,
+  releaseOpenToolBlocks,
   toolBridgeInitError,
   type StreamMessage,
   type StreamParseState,
@@ -291,18 +294,23 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     sawPartialThinking: false,
     sawTerminalResult: false,
     openToolBlocks: new Map(),
+    // The shared parser owns tool-state admission since dev's #6081/#6083: the per-turn ceiling and
+    // the request's translator budget are set on the state here, exactly as the spawned-CLI turn
+    // sets them, so a capture path cannot retain tool identity or argument fragments unbounded.
+    translatorBudget: incoming.translatorBudget,
+    maxToolBlockStarts: toolBridge?.maxTurnToolCalls,
     strictToolBlockCapture: Boolean(toolBridge),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
   let query: ClaudeAgentSdkQuery | undefined;
   let streamError: string | undefined;
+  let streamProtocolCode: string | undefined;
   // A successful result frame that arrived after every captured tool call completed but before
   // message_stop: the leg still ends with the synthesized done(tool_use) at message_stop, so this
   // frame's usage (authoritative vendor accounting) is folded into the synthesis instead of ending
   // the turn as a text completion the client would accept and then wait on.
   let deferredResultDone: Extract<AdapterEvent, { type: "done" }> | undefined;
-  let toolCallStarts = 0;
   let initValidated = false;
 
   try {
@@ -345,6 +353,20 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         if (message.type === "system" && message.subtype === "init") initValidated = true;
       }
       const mappedEvents = mapStreamMessageToEvents(message, state);
+      if (state.toolCallLimitExceeded) {
+        // The parser refuses the start that would pass the ceiling before it allocates the block, so
+        // this flag is the only signal that a call was dropped. Without it the turn would run on with
+        // the dropped call invisible to the completeness invariants below.
+        emitOnce({
+          type: "error",
+          message: `Claude Agent SDK returned more than the ${Math.min(MAX_TOOL_BLOCK_STARTS, state.maxToolBlockStarts ?? MAX_TOOL_BLOCK_STARTS)}-tool-call turn limit.`,
+          status: 502,
+          errorType: "upstream_error",
+          code: "tool_call_limit",
+          retryable: false,
+        });
+        break;
+      }
       if (toolBridge && state.uncapturedToolUse) {
         emitOnce({
           type: "error",
@@ -356,24 +378,6 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
         });
         break;
       }
-        if (toolBridge && (state.toolBlockStarts ?? 0) > toolCallStarts) {
-          // The parser buffers a block until its stop (or same-index replacement), so the
-          // per-turn limit must be checked when the block opens, not when its buffered
-          // tool_call_start is finally emitted. The init handshake is already gated above.
-          toolCallStarts = state.toolBlockStarts!;
-          if (toolCallStarts > toolBridge.maxTurnToolCalls) {
-            emitOnce({
-              type: "error",
-              message: `Claude Agent SDK returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
-              status: 502,
-              errorType: "upstream_error",
-              code: "tool_call_limit",
-              retryable: false,
-            });
-            failClosed = true;
-            break;
-          }
-        }
       for (const event of mappedEvents) {
         if (toolBridge && !initValidated && event.type === "done") {
           emitOnce({
@@ -506,8 +510,14 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     }
   } catch (err) {
     streamError = err instanceof Error ? err.message : String(err);
+    // A translator-budget overflow is a boundedness verdict with its own code; keep it instead of
+    // flattening it into the generic SDK error the rest of this branch reports.
+    if (isTranslatorBudgetExceededError(err)) streamProtocolCode = err.code;
   }
 
+  // Release the parser's retained tool identity, argument fragments and per-ID leases on every exit
+  // path: terminal frame, fail-closed break, abort, or a budget error thrown mid-stream.
+  releaseOpenToolBlocks(state);
   clearTimeout(timeoutTimer);
   incoming.abortSignal?.removeEventListener("abort", onAbort);
   // End the turn from this side: aborting the query stops the harness process (and with it the
@@ -535,7 +545,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
       message: redactSecrets(streamError, profile.tokenEnv, apiKey),
       status: 502,
       errorType: "upstream_error",
-      code: "claude_agent_sdk_error",
+      code: streamProtocolCode ?? "claude_agent_sdk_error",
       retryable: false,
     });
   } else if (toolBridge && deferredResultDone !== undefined && !state.sawMessageStop) {

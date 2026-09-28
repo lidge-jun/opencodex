@@ -24,6 +24,7 @@ import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import type { TranslatorBudget } from "../../src/lib/translator-budget";
 
 // The binary-discovery cache is module-level (a production perf seam); reset it so a test that
 // reports a missing CLI cannot mask a later test's injected binary.
@@ -112,10 +113,10 @@ function withTools(names: string[], overrides: Partial<OcxParsedRequest> = {}): 
   } as OcxParsedRequest);
 }
 
-function incoming(abortSignal?: AbortSignal) {
+function incoming(abortSignal?: AbortSignal, translatorBudget = createTestTranslatorBudget()) {
   return {
     headers: new Headers(),
-    translatorBudget: createTestTranslatorBudget(),
+    translatorBudget,
     ...(abortSignal ? { abortSignal } : {}),
   };
 }
@@ -147,9 +148,10 @@ async function run(
   adapter: ReturnType<typeof createClaudeAgentSdkAdapter>,
   request: OcxParsedRequest,
   signal?: AbortSignal,
+  translatorBudget?: TranslatorBudget,
 ): Promise<AdapterEvent[]> {
   const events: AdapterEvent[] = [];
-  await adapter.runTurn!(request, incoming(signal), event => events.push(event));
+  await adapter.runTurn!(request, incoming(signal, translatorBudget), event => events.push(event));
   return events;
 }
 
@@ -652,6 +654,39 @@ describe("claude-agent-sdk serves the client's catalog through a capture-only MC
     const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => sdk.module });
     const events = await run(adapter, withTools(["alpha"]));
     expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "tool_call_limit", retryable: false });
+  });
+
+  test("the shared tool-start ceiling fails a turn closed even without a tool bridge", async () => {
+    // The parser's own ceiling applies to every turn, bridge or not, and since #6081/#6083 it is
+    // enforced before the block is allocated: the refused start never reaches the completeness
+    // invariants, so the flag it leaves behind is the only record that a call went missing.
+    const opens = Array.from({ length: 17 }, (_value, index) => ({
+      type: "stream_event",
+      event: { type: "content_block_start", index, content_block: { type: "tool_use", id: "tu_" + index, name: "alpha" } },
+    }));
+    const sdk = fakeSdk([...opens, messageStop]);
+    const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => sdk.module });
+    const events = await run(adapter, parsed());
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "tool_call_limit", retryable: false });
+  });
+
+  test("a retained tool argument past the request budget keeps the budget's own error code", async () => {
+    // The parser charges tool identity and argument fragments to the request's translator budget.
+    // This adapter owns a capture path, so the charge has to reach it through the parse state, and
+    // the budget's verdict has to survive instead of becoming the generic SDK error.
+    const catalog = await buildClaudeAgentSdkToolBridge(withTools(["alpha"]));
+    const emitted = [...catalog!.emittedNameMap.keys()][0]!;
+    const sdk = fakeSdk([
+      initFrame([bridgeConnected]),
+      ...toolCallFrames("tu_1", emitted, "x".repeat(64)),
+      messageStop,
+    ]);
+    const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => sdk.module });
+    const budget = createTestTranslatorBudget({ maxCallArgumentBytes: Buffer.byteLength(emitted) + 8 });
+    const events = await run(adapter, withTools(["alpha"]), undefined, budget);
+    expect(events.at(-1)).toMatchObject({
+      type: "error", status: 502, code: "translation_buffer_limit", retryable: false,
+    });
   });
 
   test("a required tool call that never happens must not look like a completion", async () => {
