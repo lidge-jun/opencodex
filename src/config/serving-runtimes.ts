@@ -34,7 +34,7 @@ import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "./mutation-lock";
 import { SERVICE_MANAGED_ENV } from "../service/state";
-import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
+import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
 
 export function servingRuntimesPath(dir: string = getConfigDir()): string {
   return join(dir, "serving-runtimes.json");
@@ -239,16 +239,18 @@ export function selectNewerServingRuntime(
     })
     .filter(record => record.command.every(part => exists(part) && trustedRecordedPath(part)))
     .sort((left, right) => compareStrictSemver(parseStrictSemver(right.version)!, parseStrictSemver(left.version)!));
-  let probes = 0;
-  for (const record of candidates) {
-    if (probes >= MAX_VERSION_PROBE_ATTEMPTS) break;
-    probes += 1;
+  // Probe the bounded candidate set and pick the greatest VERIFIED version. The recorded
+  // version only orders the probes: a record claiming 2.70 that now answers 2.68 must not win
+  // over a sibling that records and answers 2.69, and the one-hop marker means the delegate
+  // could never correct that choice itself.
+  let best: { record: ServedRuntimeRecord; version: string; semver: NonNullable<ReturnType<typeof parseStrictSemver>> } | null = null;
+  for (const record of candidates.slice(0, MAX_VERSION_PROBE_ATTEMPTS)) {
     const probed = probeServedRuntimeVersion(record.command, deps.run);
     const probedSemver = probed === null ? null : parseStrictSemver(probed);
     if (probedSemver === null || compareStrictSemver(probedSemver, self) <= 0) continue;
-    return { ...record, version: probed! };
+    if (best === null || compareStrictSemver(probedSemver, best.semver) > 0) best = { record, version: probed!, semver: probedSemver };
   }
-  return null;
+  return best === null ? null : { ...best.record, version: best.version };
 }
 
 export interface DeferToNewerRuntimeDeps extends NewerServingRuntimeDeps {
@@ -393,6 +395,17 @@ export async function deferServiceChildToNewerRuntime(options: {
   readonly port?: number;
   readonly deps?: DeferToNewerRuntimeDeps;
 }): Promise<number | null> {
-  if (options.sibling || options.env[SERVICE_MANAGED_ENV] !== "1" || options.env[DELEGATED_ONCE_ENV] === "1") return null;
+  if (options.sibling || !isManagedServiceEnvironment(options.env) || options.env[DELEGATED_ONCE_ENV] === "1") return null;
   return deferToNewerServiceRuntime(options.selfVersion, options.selfCommand, options.port, { env: options.env, ...options.deps });
+}
+
+/**
+ * A child a service manager started, as its environment proves it. launchd and systemd write
+ * `OCX_SERVICE_MANAGED=1`; the Windows Task Scheduler wrapper writes `OCX_SERVICE=1` with its
+ * stay-out protocol marker instead. Bare `OCX_SERVICE=1` never qualifies: `ocx claude` and
+ * `ocx opencode` companions carry it, and so does a WinSW child, which the environment alone
+ * cannot tell apart from them.
+ */
+export function isManagedServiceEnvironment(env: NodeJS.ProcessEnv): boolean {
+  return env[SERVICE_MANAGED_ENV] === "1" || (env.OCX_SERVICE === "1" && env[WINDOWS_WRAPPER_PROTOCOL_ENV] === "1");
 }

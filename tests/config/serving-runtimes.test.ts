@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   deferServiceChildToNewerRuntime,
+  isManagedServiceEnvironment,
   deferToNewerServiceRuntime,
   probeServedRuntimeVersion,
   readServingRuntimes,
@@ -15,6 +16,7 @@ import {
   servingRuntimesPath,
   type ServedRuntimeRecord,
 } from "../../src/config/serving-runtimes";
+import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 
 const dirs: string[] = [];
 
@@ -181,6 +183,24 @@ describe("selectNewerServingRuntime", () => {
     expect(selected).not.toBeNull();
     expect(selected!.command).toEqual([good]);
     expect(selected!.version).toBe("2.68.0");
+  });
+
+  test("the greatest probed version wins over a higher recorded claim", () => {
+    const dir = freshDir();
+    const claimed = fakeBinary(dir, "ocx-claims-2.70.exe");
+    const verified = fakeBinary(dir, "ocx-verified-2.69.exe");
+    recordServingRuntime(record([claimed], "2.70.0"), dir);
+    recordServingRuntime(record([verified], "2.69.0"), dir);
+    const selected = selectNewerServingRuntime("2.67.0", selfCommand, {
+      dir,
+      exists: () => true,
+      // Rolled back below the other candidate yet still newer than self.
+      run: (file) => file === claimed
+        ? { status: 0, stdout: "opencodex 2.68.0", stderr: "" }
+        : { status: 0, stdout: "opencodex 2.69.0", stderr: "" },
+    });
+    expect(selected!.command).toEqual([verified]);
+    expect(selected!.version).toBe("2.69.0");
   });
 
   test("an unprobed candidate never authorizes a handoff", () => {
@@ -431,6 +451,18 @@ describe("deferServiceChildToNewerRuntime", () => {
     expect(await deferServiceChildToNewerRuntime({ ...base, sibling: false, env: {} })).toBeNull();
     expect(await deferServiceChildToNewerRuntime({ ...base, sibling: false, env: { OCX_SERVICE: "1" } })).toBeNull();
     expect(await deferServiceChildToNewerRuntime({ ...base, sibling: false, env: { OCX_SERVICE_MANAGED: "1", OCX_DELEGATED_ONCE: "1" } })).toBeNull();
+    // The Task Scheduler wrapper's own environment, read back from the batch it generates.
+    const batch = buildWindowsServiceScript({ bun: "C:\\ocx\\bun.exe", bunRuntimeSource: "bundled", cli: null }, 10100, []);
+    const wrapperEnv = Object.fromEntries([...batch.matchAll(/^set "(OCX_[A-Z_]+)=([^"]*)"$/gm)].map(m => [m[1]!, m[2]!]));
+    expect(wrapperEnv.OCX_SERVICE_MANAGED).toBeUndefined();
+    expect(isManagedServiceEnvironment(wrapperEnv)).toBe(true);
+    expect(isManagedServiceEnvironment({ OCX_WINDOWS_WRAPPER_PROTOCOL: "1" })).toBe(false);
+    expect(await deferServiceChildToNewerRuntime({
+      ...base,
+      sibling: false,
+      env: wrapperEnv,
+      deps: { ...deps, runInherited: async () => ({ exitCode: 0, ready: true }) },
+    })).toBe(0);
     expect(await deferServiceChildToNewerRuntime({
       ...base,
       sibling: false,
