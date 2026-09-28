@@ -40,7 +40,7 @@ import {
 } from "../coding-agent/protocol";
 import { redactSecrets } from "../coding-agent/turn";
 import { buildChildEnv } from "./env";
-import { createHarnessProcessSupervisor, type HarnessSpawnFn, type HarnessTreeKillFn } from "./harness-process";
+import { createHarnessProcessSupervisor, reapHarnessQuarantine, type HarnessSpawnFn, type HarnessTreeKillFn } from "./harness-process";
 import type { ClaudeCliProfile } from "./profiles";
 import { buildAgentSdkTurnOptions } from "./sdk-options";
 
@@ -262,6 +262,11 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
   // turn must not delete its scratch cwd or answer the client underneath a live process. The two
   // things the SDK's own spawn did for the child that a custom spawner has to keep - the stderr pump
   // and the real exit - are in `./harness-process.ts`.
+  // Sweep the quarantine once per turn. A survivor from an earlier turn is observed here and, when
+  // it has closed, hands its bounded cleanup lease back; a turn that cannot be observed any more is
+  // dropped with a warning there. No timer of its own, and no cost while the quarantine is empty.
+  reapHarnessQuarantine();
+
   const harness = createHarnessProcessSupervisor({
     onStderr,
     reapTimeoutMs,
@@ -588,19 +593,48 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     // The harness is gone; nothing of the operator is left in there.
     await (deps.removeScratchDir ?? removeScratchDir)(scratchDir).catch(() => undefined);
   }
-  if (!cleanup.confirmed) {
+  if (!cleanup.confirmed || cleanup.overCapacity) {
     // Never silently: an unresolved teardown is the one state a caller cannot see for itself.
+    const survivors = cleanup.unresolved
+      .map(entry => `${entry.pid ?? "?"}:${entry.reason}${entry.signalFailed ? ":signal-refused" : ""}`)
+      .join(", ");
     console.warn(
       "opencodex: claude-agent-sdk harness cleanup unconfirmed ("
-      + cleanup.unresolved
-        .map(entry => `${entry.pid ?? "?"}:${entry.reason}${entry.signalFailed ? ":signal-refused" : ""}`)
-        .join(", ")
+      + (survivors.length > 0 ? survivors : "no child named")
+      + (cleanup.overCapacity ? ", cleanup lease unavailable" : "")
+      + `; ${cleanup.quarantined} quarantined`
       + `); ${cleanup.allExited ? "the scratch cwd was released" : `leaving ${scratchDir} in place`}`,
     );
   }
 
+  // A turn that still owns a process it could not take down has no success to hand over: the client
+  // would read the answer as the turn's whole outcome while the harness behind it outlives the turn,
+  // and a client that cancels repeats that without ever seeing why. A teardown outside the bounded
+  // accounting is the same state - unaccounted, therefore not reported as clean.
+  const ownsUnfinishedTeardown = !cleanup.allExited || cleanup.overCapacity;
+  const deliverTerminal = (): void => {
+    if (pendingTerminal === undefined) return;
+    if (pendingTerminal.type === "done" && ownsUnfinishedTeardown) {
+      const named = cleanup.unresolved.length > 0
+        ? cleanup.unresolved.map(entry => `${entry.pid ?? "?"}:${entry.reason}`).join(", ")
+        : "cleanup capacity";
+      emit({
+        type: "error",
+        message:
+          `Claude Agent SDK turn ended with a harness process this server still owns (${named}); `
+          + "the answer is withheld rather than reported as a completed turn.",
+        status: 502,
+        errorType: "upstream_error",
+        code: "harness_teardown_unresolved",
+        retryable: false,
+      });
+      return;
+    }
+    emit(pendingTerminal);
+  };
+
   if (terminalDecided) {
-    if (pendingTerminal !== undefined) emit(pendingTerminal);
+    deliverTerminal();
     await settleSdk();
     return;
   }
@@ -648,7 +682,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
   // is gone. The bridge closes the response body on this frame and that EOF releases the global
   // turn-admission lease, so a frame emitted earlier would let the next turn start while a
   // TERM-resistant harness is still being reaped.
-  if (pendingTerminal !== undefined) emit(pendingTerminal);
+  deliverTerminal();
   // Bounded, and no longer on the client's clock: the SDK's generator unwinds on its own terms after
   // the answer, and nothing of the turn is waiting on it but this line.
   await settleSdk();

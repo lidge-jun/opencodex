@@ -22,7 +22,13 @@ import {
 } from "../../src/adapters/claude-agent-sdk/sdk-bridge";
 import { baseScopedEnv } from "../../src/adapters/coding-agent/turn";
 import { CLAUDE_CLI_PROFILE, clearClaudeCliBinaryCache } from "../../src/adapters/claude-agent-sdk/profiles";
-import { createHarnessProcessSupervisor } from "../../src/adapters/claude-agent-sdk/harness-process";
+import {
+  createHarnessProcessSupervisor,
+  harnessQuarantineSnapshot,
+  harnessTeardownMetrics,
+  reapHarnessQuarantine,
+  resetHarnessQuarantineForTests,
+} from "../../src/adapters/claude-agent-sdk/harness-process";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
@@ -32,9 +38,10 @@ import { getActiveTurnCount, trackStreamLifetime, tryAdmitTurn } from "../../src
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import type { TranslatorBudget } from "../../src/lib/translator-budget";
 
-// The binary-discovery cache is module-level (a production perf seam); reset it so a test that
-// reports a missing CLI cannot mask a later test's injected binary.
-beforeEach(() => clearClaudeCliBinaryCache());
+// The binary-discovery cache and the harness quarantine are module-level (production seams); reset
+// them so a test that reports a missing CLI cannot mask a later test's injected binary, and a case
+// that asserts on survivors does not inherit the previous one's.
+beforeEach(() => { clearClaudeCliBinaryCache(); resetHarnessQuarantineForTests(); });
 
 interface FakeSdk {
   module: ClaudeAgentSdkModule;
@@ -946,25 +953,36 @@ describe("claude-agent-sdk owns the harness process it starts", () => {
  * and a child that never ends at all.
  */
 describe("claude-agent-sdk reports the harness teardown it could not confirm", () => {
-  function supervisorFor(harness: ReturnType<typeof fakeHarnessChild>) {
+  function supervisorFor(
+    harness: ReturnType<typeof fakeHarnessChild>,
+    options: { killProcessTree?: (signal: NodeJS.Signals, pid: number) => boolean; platform?: NodeJS.Platform } = {},
+  ) {
     const supervisor = createHarnessProcessSupervisor({
       onStderr: () => undefined,
       spawn: () => harness.child as unknown as ChildProcess,
       killGraceMs: 10,
       reapTimeoutMs: 20,
-      killProcessTree: () => false,
+      // A unit test never signals a real process group; the platform's tree call is a seam here.
+      killProcessTree: options.killProcessTree ?? (() => false),
+      ...(options.platform !== undefined ? { platform: options.platform } : {}),
     });
     supervisor.spawn({ command: "claude", args: [], env: {}, signal: new AbortController().signal });
     return supervisor;
   }
 
-  test("an exit with an inherited pipe reclaims the stdio instead of calling the drain a clean exit", async () => {
+  test("an exit with an inherited pipe still gets the tree signal, then the stdio back", async () => {
     const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", exitWithoutClose: true });
+    const treeSignals: NodeJS.Signals[] = [];
 
-    const outcome = await supervisorFor(harness).terminate();
+    const outcome = await supervisorFor(harness, {
+      killProcessTree: signal => { treeSignals.push(signal); return true; },
+    }).terminate();
 
-    // The process is gone - that much `exit` carries - while `close` never arrives, so the pipes this
-    // turn owns are taken back rather than awaited, and the drain is reported as such.
+    // The direct parent is gone - that much `exit` carries - while `close` never arrives, so the
+    // process question is the descendant holding those pipes, and the group is the only handle on it.
+    // The KILL pass runs for that child too: skipping it because the parent already exited is what
+    // left a TERM-resistant descendant with the cwd still underneath it.
+    expect(treeSignals).toEqual(["SIGTERM", "SIGKILL"]);
     expect(harness.child.exitCode).toBe(0);
     expect(harness.child.stdout.destroyed).toBe(true);
     expect(harness.child.stderr.destroyed).toBe(true);
@@ -972,7 +990,48 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       confirmed: false,
       allExited: true,
       unresolved: [{ pid: 4711, reason: "pipes-held", signalFailed: false }],
+      quarantined: 1,
+      overCapacity: false,
     });
+  });
+
+  test("a tree that cannot be signalled while the parent is gone is an unresolved tree, not a clean exit", async () => {
+    // The dead-parent case: `exit` arrived without `close`, so a descendant holds the pipes, and the
+    // platform cannot walk a tree from a pid that no longer exists (`taskkill /PID <dead> /T` on
+    // Windows). Nothing here can name or signal that descendant, so it is not rounded to "gone" and
+    // the working directory it may still be using is not released.
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", exitWithoutClose: true });
+
+    const outcome = await supervisorFor(harness, { platform: "win32", killProcessTree: () => false }).terminate();
+
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "unresolved-tree", signalFailed: false }],
+      quarantined: 1,
+      overCapacity: false,
+    });
+    expect(harnessQuarantineSnapshot()).toEqual([{ pid: 4711, reason: "unresolved-tree", ageMs: expect.any(Number) }]);
+    // The survivor keeps the bounded cleanup lease, which is the whole point of taking it: the
+    // teardown outlives its turn, and it does not do so unaccounted for.
+    expect(harnessTeardownMetrics().active).toBe(1);
+  });
+
+  test("a quarantined survivor that closes later hands its cleanup lease back", async () => {
+    const harness = fakeHarnessChild({ terminatesOn: "never" });
+
+    const outcome = await supervisorFor(harness).terminate();
+    expect(outcome.allExited).toBe(false);
+    expect(harnessTeardownMetrics().active).toBe(1);
+
+    // The process reports its exit after the turn is over. The next turn's sweep sees it on the
+    // handle that was pinned to that process, so the lease comes back with it and nothing is left
+    // behind in the account.
+    harness.child.emit("exit", 0, "SIGKILL");
+    harness.child.emit("close", 0, "SIGKILL");
+    expect(reapHarnessQuarantine()).toBe(0);
+    expect(harnessQuarantineSnapshot()).toEqual([]);
+    expect(harnessTeardownMetrics().active).toBe(0);
   });
 
   test("a refused signal is reported rather than read as a dead process", async () => {
@@ -984,6 +1043,8 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       confirmed: false,
       allExited: false,
       unresolved: [{ pid: 4711, reason: "running", signalFailed: true }],
+      quarantined: 1,
+      overCapacity: false,
     });
   });
 
@@ -997,12 +1058,14 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       confirmed: false,
       allExited: false,
       unresolved: [{ pid: 4711, reason: "running", signalFailed: false }],
+      quarantined: 1,
+      overCapacity: false,
     });
   });
 });
 
 describe("claude-agent-sdk does not answer the client underneath a live harness", () => {
-  test("an unresolved teardown keeps the scratch cwd and names it", async () => {
+  test("an unresolved teardown keeps the scratch cwd, names it, and withholds the answer", async () => {
     const harness = fakeHarnessChild({ terminatesOn: "never" });
     const removed: string[] = [];
     const warnings: string[] = [];
@@ -1022,16 +1085,102 @@ describe("claude-agent-sdk does not answer the client underneath a live harness"
 
       const events = await run(adapter, parsed());
 
-      // The turn still answers - the ladder is teardown, not another failure path - but a cwd a
-      // survivor may still be using is left alone instead of deleted underneath it, and the leak is
-      // reported rather than rounded to a clean exit.
-      expect(events.at(-1)).toMatchObject({ type: "done" });
+      // A completed answer is not this turn's to hand over while a process it started is still
+      // alive: the client would read it as the turn's whole outcome, and every repeat of the same
+      // state would add another harness nobody is accounting for. The cwd a survivor may still be
+      // using stays where it is, and the survivor is named instead of rounded to a clean exit.
+      expect(events.some(event => event.type === "done")).toBe(false);
+      expect(events.at(-1)).toMatchObject({
+        type: "error", status: 502, code: "harness_teardown_unresolved", retryable: false,
+      });
       expect(removed).toEqual([]);
       expect(warnings.join("\n")).toContain("leaving /tmp/ocx-unconfirmed-harness in place");
       expect(warnings.join("\n")).toContain("4711:running");
+      expect(warnings.join("\n")).toContain("1 quarantined");
+      expect(harnessQuarantineSnapshot()).toMatchObject([{ pid: 4711, reason: "running" }]);
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  test("an unreachable tree is named, keeps the cwd, and never becomes a completed turn", async () => {
+    // The turn-level shape of the Windows dead-parent case: the harness ended while a descendant kept
+    // its pipes, and the tree could not be walked from a pid that is gone.
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", exitWithoutClose: true });
+    const removed: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+      const adapter = createClaudeAgentSdkAdapter(provider(), {
+        loadSdk: async () => sdk.module,
+        spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+        killHarnessProcessTree: () => false,
+        harnessPlatform: "win32",
+        killGraceMs: 10,
+        reapTimeoutMs: 20,
+        makeScratchDir: async () => "/tmp/ocx-unresolved-tree",
+        removeScratchDir: async dir => { removed.push(dir); },
+      });
+
+      const events = await run(adapter, parsed());
+
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "harness_teardown_unresolved" });
+      expect(removed).toEqual([]);
+      expect(harnessQuarantineSnapshot()).toMatchObject([{ pid: 4711, reason: "unresolved-tree" }]);
+      expect(harnessTeardownMetrics().active).toBe(1);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("a cancelled turn hands its harness to the cleanup lease, not to nobody", async () => {
+    // The client disconnects, and core returns the turn's own admission on that cancel - that slot is
+    // the turn's, and the response body it belongs to is gone. The harness is not the turn's. It is
+    // still alive here, so the teardown holds a separate bounded lease until the process is confirmed
+    // gone, and the turn slot being back does not mean the process is.
+    let turnSlotAtHarnessEnd: number | undefined;
+    let cleanupLeasesAtHarnessEnd: number | undefined;
+    const harness = fakeHarnessChild({
+      terminatesOn: "SIGKILL",
+      onEnd: () => {
+        turnSlotAtHarnessEnd = getActiveTurnCount();
+        cleanupLeasesAtHarnessEnd = harnessTeardownMetrics().active;
+      },
+    });
+    const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+      killHarnessProcessTree: () => false,
+      killGraceMs: 10,
+      reapTimeoutMs: 200,
+      makeScratchDir: async () => "/tmp/ocx-cancelled-harness",
+      removeScratchDir: async () => undefined,
+    });
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    const events = channel<AdapterEvent>();
+    const turn = adapter.runTurn!(parsed(), incoming(), event => events.push(event)).finally(() => events.close());
+    const clientCancelled = new AbortController();
+    const tracked = trackStreamLifetime(
+      bridgeToResponsesSSE(events.stream(), "claude-sonnet-5", undefined, undefined, undefined, () => clientCancelled.abort()),
+      new AbortController(),
+      () => undefined,
+      lease!,
+    );
+
+    const reader = tracked.getReader();
+    await reader.read();
+    await reader.cancel();
+    await turn;
+
+    // Sampled while the harness was still being reaped, which is after the client's slot went back.
+    expect(turnSlotAtHarnessEnd).toBe(0);
+    expect(cleanupLeasesAtHarnessEnd).toBe(1);
+    // And once the process is confirmed gone, the bounded account is empty again.
+    expect(harnessTeardownMetrics().active).toBe(0);
+    expect(harnessQuarantineSnapshot()).toEqual([]);
   });
 
   test("the response body, and the admission it releases, waits for the owned harness", async () => {
