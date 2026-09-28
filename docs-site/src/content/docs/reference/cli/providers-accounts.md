@@ -368,9 +368,10 @@ Devin rows come from Cognition's `GetUserStatus` for that account's own key, sen
 allowlisted api-server host. If an older credential has no host, the probe uses the configured
 provider base URL when allowlisted, or the US default. They show the dated daily and weekly
 windows the plan exposes, and a monthly credit window only on a credit-billed plan that reports
-a credit balance; an unlimited balance, or a status with no balance at all, shows no credit window.
-Only a rejected key (401)
-clears a cached reading; other probe failures retain the last reading.
+a credit balance; an unknown billing strategy uses that credit fallback only if both reset dates
+are absent. Expired daily and weekly windows stay hidden without becoming monthly credit quota.
+An unlimited balance, or a status with no balance at all, shows no credit window.
+Only a rejected key (401) clears a cached reading; other probe failures retain the last reading.
 
 ```text
 $ ocx account list anthropic --quota

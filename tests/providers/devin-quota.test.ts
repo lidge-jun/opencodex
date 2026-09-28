@@ -107,6 +107,12 @@ describe("Devin GetUserStatus decode and mapping", () => {
     expect(devinQuotaFromStatus(decodeDevinUserStatus(dated)!, 1).monthlyPercent).toBeUndefined();
   });
 
+  test("expired dated windows do not make an unknown strategy credit-billed", () => {
+    const dated = userStatusResponse(planInfo({ tier: 16, name: "Pro", billing: 0 }), { 6: 0, 8: 0, 14: 0, 15: 0 });
+    const now = WEEKLY_RESET * 1000 + 1;
+    expect(devinQuotaFromStatus(decodeDevinUserStatus(dated)!, now)).toEqual({ updatedAt: now });
+  });
+
   test("a window whose reset has already passed is dropped rather than read as spent", () => {
     const buf = userStatusResponse(planInfo({ tier: 17, name: "Max", billing: 2 }), { 8: -1, 14: 0, 15: 0 });
     const status = decodeDevinUserStatus(buf)!;

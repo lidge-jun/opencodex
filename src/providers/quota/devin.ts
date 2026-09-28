@@ -194,8 +194,9 @@ function remainingToUsed(remaining: number): number {
  * account exhausted for routing.
  *
  * The credit pool is published only for a credit-billed plan, or for an unknown strategy
- * with no dated window. A quota-billed plan still reports credit balances, and a zero
- * balance there does not gate anything.
+ * with both reset fields absent. Expired dated windows still identify a quota plan.
+ * A quota-billed plan still reports credit balances, and a zero balance there does not
+ * gate anything.
  *
  * Flow credits are decoded but not published. They meter agent tool actions, not chat
  * turns, and account ranking reads the fullest custom window as the account's limit, so an
@@ -218,7 +219,7 @@ export function devinQuotaFromStatus(status: DevinUserStatus, now = Date.now()):
   }
   const strategy = status.plan.billingStrategy;
   const creditBilled = strategy === BILLING_STRATEGY_CREDITS
-    || (strategy === 0 && !ahead(status.dailyResetMs) && !ahead(status.weeklyResetMs));
+    || (strategy === 0 && status.dailyResetMs === undefined && status.weeklyResetMs === undefined);
   const available = status.availablePromptCredits + status.availableFlexCredits;
   const credits = !creditBilled || !status.promptCreditBalancePresent || status.availablePromptCredits < 0 || status.availableFlexCredits < 0
     ? undefined

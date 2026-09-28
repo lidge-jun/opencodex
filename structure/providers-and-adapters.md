@@ -82,10 +82,11 @@ publishes only daily and weekly windows the plan does not hide whose reset is st
 because a credit-billed plan leaves those percents at a zero default and a past reset describes a
 rolled-over window; both would read as exhausted. Prompt plus flex credits form one monthly pool
 measured against the server balance, published only for a credit-billed plan (or an unknown
-strategy with no dated window) when at least one of the four prompt/flex balance fields is
-present (proto3 omits zeros, so an exhausted pool arrives as a used count alone); a negative
-balance is the unlimited sentinel, and zero available reads as exhausted. Only a 401 rejects the
-credential and clears last-good; a 403 may scope this one RPC away from a key that still serves
+strategy with both reset fields absent) when at least one of the four prompt/flex balance fields
+is present (proto3 omits zeros, so an exhausted pool arrives as a used count alone); a negative
+balance is the unlimited sentinel, and zero available reads as exhausted. Expired dated windows
+do not cause the credit fallback. Only a 401 rejects the credential and clears last-good; a 403
+may scope this one RPC away from a key that still serves
 chat. Other HTTP failures and malformed protobufs, including a wrong
 wire type for a known field or a varint longer than ten bytes, keep last-good; a decoded status
 with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
