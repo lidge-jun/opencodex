@@ -92,6 +92,10 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       {snapshot.runtime.usage?.mode === "observe" && snapshot.runtime.usage.phase.endsWith("awaiting-original-response") && <p className="notice-warn" role="status">{t("desktopCompat.cacheRefreshHint")}</p>}
       {snapshot.runtime.contextFailure && <p className="notice-warn" role="status">{t(errorLabel[snapshot.runtime.contextFailure])}</p>}
       {running && <p className="muted text-control">{t("desktopCompat.reconnectHint")}</p>}
+      {snapshot.runtime.usage?.observation && <p className="muted text-control" role="status">{t("desktopCompat.observation", {
+        json: snapshot.runtime.usage.observation.jsonSnapshots, sse: snapshot.runtime.usage.observation.streamSnapshots,
+        streams: snapshot.runtime.usage.observation.validatedActiveStreams,
+      })}</p>}
     </>}
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--space-2)" }}>
       {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh}

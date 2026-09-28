@@ -5,7 +5,9 @@ export interface CompatibilityCertificate {
 export interface CompatibilityRuntime {
   supported: boolean; phase: "off" | "starting" | "running" | "stopping" | "cleanup-required"; running: boolean;
   contextFailure?: "build_unverified" | "native_routing_unverified" | null;
-  usage?: { mode: "observe" | "apply"; phase: string; outputs: number; appCacheConfirmed: false };
+  usage?: { mode: "observe" | "apply"; phase: string; outputs: number; appCacheConfirmed: false;
+    observation?: { jsonSnapshots: number; streamSnapshots: number; validatedActiveStreams: number; lastSnapshotAt: number | null;
+      sourceProcessVerified: false; composerRecoveryVerified: false } };
 }
 export interface CompatibilitySnapshot { certificate: CompatibilityCertificate; runtime: CompatibilityRuntime }
 export interface CompatibilityStartupSettings { startOnProxyStart: boolean; revision: string }
@@ -62,6 +64,15 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
       || !/^[a-z-]{1,80}$/.test(value.usage.phase) || !Number.isSafeInteger(value.usage.outputs) || Number(value.usage.outputs) < 0
       || value.usage.appCacheConfirmed !== false) throw new CompatibilityApiError("invalid_runtime_status");
     runtime.usage = { mode: value.usage.mode as "observe" | "apply", phase: value.usage.phase, outputs: value.usage.outputs as number, appCacheConfirmed: false };
+    if (value.usage.observation !== undefined) {
+      const observed = value.usage.observation;
+      if (!object(observed) || ![observed.jsonSnapshots, observed.streamSnapshots, observed.validatedActiveStreams].every(n => Number.isSafeInteger(n) && Number(n) >= 0)
+        || !(observed.lastSnapshotAt === null || typeof observed.lastSnapshotAt === "number" && Number.isSafeInteger(observed.lastSnapshotAt) && observed.lastSnapshotAt >= 0 && observed.lastSnapshotAt <= 8.64e15)
+        || observed.sourceProcessVerified !== false || observed.composerRecoveryVerified !== false) throw new CompatibilityApiError("invalid_runtime_status");
+      runtime.usage.observation = { jsonSnapshots: observed.jsonSnapshots as number, streamSnapshots: observed.streamSnapshots as number,
+        validatedActiveStreams: observed.validatedActiveStreams as number, lastSnapshotAt: observed.lastSnapshotAt as number | null,
+        sourceProcessVerified: false, composerRecoveryVerified: false };
+    }
   }
   return runtime;
 }

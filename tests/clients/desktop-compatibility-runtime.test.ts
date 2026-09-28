@@ -20,6 +20,23 @@ const stopped: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const stop of stopped.splice(0)) await stop(); resetOptionalShutdownHooksForTests(); });
 
 describe("bounded compatibility usage controller", () => {
+  test("an open stream is not an observed account snapshot or proof of native composer recovery", async () => {
+    const ctl = new UsageRelayController(account, async () => account, async () => account, () => 1000, 100000);
+    const stream = ctl.registerStream(exchange, async () => {})!;
+    expect(ctl.snapshot().trackedStreams).toBe(1);
+    expect(ctl.snapshot().observation).toEqual({ jsonSnapshots: 0, streamSnapshots: 0, validatedActiveStreams: 0,
+      lastSnapshotAt: null, sourceProcessVerified: false, composerRecoveryVerified: false });
+    await ctl.rewriteJson(frame({ ...usage, account_id: "foreign" }), exchange, stream);
+    expect(ctl.snapshot().observation.streamSnapshots).toBe(0);
+    const validStream = ctl.registerStream(exchange, async () => {})!;
+    await ctl.rewriteJson(frame(), exchange, validStream);
+    await ctl.rewriteJson(JSON.stringify(usage), { ...exchange, pathname: "/backend-api/wham/usage" });
+    expect(ctl.snapshot().observation).toEqual({ jsonSnapshots: 1, streamSnapshots: 1, validatedActiveStreams: 1,
+      lastSnapshotAt: 1000, sourceProcessVerified: false, composerRecoveryVerified: false });
+    validStream.release();
+    expect(ctl.snapshot().observation.validatedActiveStreams).toBe(0);
+    expect(ctl.snapshot().observation.streamSnapshots).toBe(1);
+  });
   for (const [label, replacement] of [
     ["available", { ...usage, rate_limit: { ...usage.rate_limit, allowed: true, limit_reached: false } }],
     ["protected", { ...usage, spend_control: { reached: true } }],

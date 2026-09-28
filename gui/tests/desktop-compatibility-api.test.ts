@@ -2,6 +2,17 @@ import { afterEach, expect, test } from "bun:test";
 import { parseCompatibilityCertificate, parseCompatibilityRuntime, runCompatibilityAction } from "../src/desktop-compatibility-api";
 import { DICTS } from "../src/i18n/catalogs";
 const originalFetch = globalThis.fetch;
+test("observation counters never upgrade response observations into native recovery proof", () => {
+  const observation = { jsonSnapshots: 1, streamSnapshots: 3, validatedActiveStreams: 1, lastSnapshotAt: 1000,
+    sourceProcessVerified: false, composerRecoveryVerified: false };
+  const status = { supported: true, phase: "running", running: true,
+    usage: { mode: "observe", phase: "observing", outputs: 0, appCacheConfirmed: false, observation } };
+  expect(parseCompatibilityRuntime(status).usage?.observation).toEqual(observation);
+  for (const invalid of [{ ...observation, sourceProcessVerified: true }, { ...observation, composerRecoveryVerified: true },
+    { ...observation, streamSnapshots: -1 }, { ...observation, jsonSnapshots: "1" }, { ...observation, lastSnapshotAt: Infinity }]) {
+    expect(() => parseCompatibilityRuntime({ ...status, usage: { ...status.usage, observation: invalid } })).toThrow("invalid_runtime_status");
+  }
+});
 afterEach(() => { globalThis.fetch = originalFetch; });
 test("status projection excludes private/unknown data and rejects coerced states", () => {
   const certificate = parseCompatibilityCertificate({ supported: true, state: "trusted", busy: null, fingerprint: "A".repeat(64), privateKey: "fixture-secret" });

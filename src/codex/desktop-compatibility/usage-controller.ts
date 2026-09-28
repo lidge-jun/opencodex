@@ -17,6 +17,9 @@ export class UsageRelayController {
   private readonly key: string;
   private readonly refresh = new UsageRefreshRegistry();
   private readonly activation: UsageActivation;
+  private jsonSnapshots = 0;
+  private streamSnapshots = 0;
+  private lastSnapshotAt: number | null = null;
   constructor(account: UsageIdentity, private readonly readCurrentIdentity: () => Promise<UsageIdentity | null>,
     verifyFreshIdentity: () => Promise<UsageIdentity | null>, private readonly clock: () => number,
     private readonly expiresAt: number, timeoutMs = 180000, private readonly contextValid: () => boolean | Promise<boolean> = () => true) {
@@ -30,7 +33,10 @@ export class UsageRelayController {
       return same(await verifyFreshIdentity(), this.account) ? this.key : null;
     }, clock, timeoutMs);
   }
-  snapshot() { return { ...this.activation.snapshot(), trackedStreams: this.refresh.size, expired: this.clock() >= this.expiresAt }; }
+  snapshot() { return { ...this.activation.snapshot(), trackedStreams: this.refresh.size, expired: this.clock() >= this.expiresAt,
+    observation: { jsonSnapshots: this.jsonSnapshots, streamSnapshots: this.streamSnapshots,
+      validatedActiveStreams: this.refresh.boundSize, lastSnapshotAt: this.lastSnapshotAt,
+      sourceProcessVerified: false as const, composerRecoveryVerified: false as const } }; }
   private async checkContext() { try { return await this.contextValid(); } catch { return false; } }
   async activate(options: { scope: ApplyScope; accountWideConsent: boolean }) {
     const generation = this.activation.snapshot().generation, valid = await this.checkContext();
@@ -72,6 +78,11 @@ export class UsageRelayController {
       stream?.exclude(); return null;
     }
     if (stream && !stream.bind(this.key)) return null;
+    // Identity-checked responses received by this relay do not establish the
+    // sending process or prove that an authoritative UI cache consumed them.
+    if (exchange.pathname.endsWith('/stream')) this.streamSnapshots = Math.min(Number.MAX_SAFE_INTEGER, this.streamSnapshots + 1);
+    else this.jsonSnapshots = Math.min(Number.MAX_SAFE_INTEGER, this.jsonSnapshots + 1);
+    this.lastSnapshotAt = this.clock();
     const context: UsageRewriteContext = { enabled: true, mode: 'observe', status: exchange.status,
       pathname: exchange.pathname, account: this.account };
     const observed = evaluateUsageRewrite(original, context);

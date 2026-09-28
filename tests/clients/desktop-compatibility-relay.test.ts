@@ -54,6 +54,24 @@ for (const route of ["direct", "http", "https", "socks5"] as const) test(`upgrad
   }
 }, 10000);
 
+test("conversation initialization restrictions remain untouched even during a usage trial", async () => {
+  const account = { id: "fixture-account", userId: "fixture-user", plan: "pro", structure: "personal" } as const;
+  const controller = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000);
+  await controller.rewriteJson(JSON.stringify({ account_id: account.id, user_id: account.userId, plan_type: "pro",
+    rate_limit: { allowed: false, limit_reached: true }, spend_control: { reached: false }, credits: { has_credits: false, unlimited: false } }),
+    { method: "GET", pathname: "/backend-api/wham/usage", status: 200 });
+  expect((await controller.activate({ scope: "account-ui-compatibility", accountWideConsent: true })).accepted).toBe(true);
+  const payload = JSON.stringify({ blocked_features: ["fixture-policy"], limits_progress: { fixture_limit: 100 },
+    rate_limit: { allowed: false, limit_reached: true } });
+  for (const method of ["GET", "POST"]) {
+    const upstream = new Response(payload, { headers: { "content-type": "application/json", etag: '"original"' } });
+    const forward = createUsageControlledFetch(controller, (async () => upstream) as typeof fetch);
+    const response = await forward("https://chatgpt.com/backend-api/conversation/init", { method });
+    expect(response).toBe(upstream); expect(await response.text()).toBe(payload); expect(response.headers.get("etag")).toBe('"original"');
+  }
+  expect(controller.snapshot().outputs).toBe(0);
+});
+
 for (const mode of ["observe", "apply"] as const) test(`attachment upload stays byte-identical in ${mode} mode`, async () => {
   const account = { id: "fixture-account", userId: "fixture-user", plan: "pro", structure: "personal" } as const;
   const controller = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000);

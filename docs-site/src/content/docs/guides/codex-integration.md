@@ -1003,6 +1003,37 @@ a refusal before the restart. This does not enable a compatibility mode, install
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.
 
+### Transport coverage and recovery evidence
+
+The compatibility panel reports identity-checked JSON/SSE usage responses and currently
+bound streams separately from open connections. These are lifetime relay observations,
+including requests made by diagnostic clients. They do not identify the sending native
+process, prove that the app updated its authoritative cache, or prove composer recovery.
+No request body, token, account ID or source IP is added to this diagnostic status.
+
+[Issue #6196](https://github.com/lidge-jun/opencodex/issues/6196) reports a macOS build whose
+authoritative gate requests originate in the bundled Rust app-server and bypass Chromium
+PAC settings. A healthy PAC, certificate or synthetic request cannot establish coverage
+of that transport. This Windows experiment is not a fix for that macOS design blocker.
+
+Before adding another platform or transport, document and validate this sequence:
+
+1. Identify the actual process and transport that sends each authoritative gate request.
+2. Prove that an app-origin request reaches the intended relay, separately from test clients.
+3. Verify the response schema and the app's cache/update path for the exact installed build.
+4. On natural account exhaustion, verify original-composer submission, independent-provider
+   completion, and preservation of sign-in, Chat, existing threads and remote connections.
+5. Verify shutdown, ordinary launch, restart and update behavior; do not infer one from another.
+
+The present policy handles only `/backend-api/wham/usage` and its `/stream` endpoint.
+Conversation initialization and other endpoints, including their `blocked_features` and
+`limits_progress`, pass unchanged. Their presence is not permission to clear them: they may
+represent unrelated restrictions. The Windows build's renderer-to-Electron fetch path does
+not establish the network path of a different OS/build or every app-server RPC. App-server
+routing requires its own reviewed design; changing model-provider URLs alone is not proof
+that account, login or remote-control traffic follows the same route. No automatic app-server
+wrapper, global proxy change or login rewrite is installed by these controls.
+
 ## Routed models during Codex reserve mode
 
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model

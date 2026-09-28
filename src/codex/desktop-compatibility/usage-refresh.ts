@@ -29,4 +29,5 @@ export class UsageRefreshRegistry {
       failed: results.filter(r => r.status === 'rejected').length };
   }
   get size() { return this.entries.size; }
+  get boundSize() { return [...this.entries].filter(entry => !entry.tainted && entry.binding !== null).length; }
 }

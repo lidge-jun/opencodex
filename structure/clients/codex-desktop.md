@@ -129,6 +129,13 @@ correction. `usage-sse-controller.ts` preserves event metadata and original sequ
 `usage-refresh.ts` closes only usage streams bound by validated original account records.
 `usage-controlled-fetch.ts` removes stale validators from changed JSON and controlled SSE.
 Response production is reported separately from app-cache or UI confirmation.
+Observation counters distinguish validated JSON/SSE snapshots from merely registered streams;
+only identity-bound, untainted active streams count as `validatedActiveStreams`. Counts and the
+last snapshot time describe this relay's lifetime, including responses sent by diagnostic clients.
+They never establish a source PID, authoritative gate coverage or composer recovery. Both
+`sourceProcessVerified` and `composerRecoveryVerified` remain false. Invalid/foreign snapshots do
+not advance these counters. Conversation initialization and other non-WHAM endpoints retain
+their original response bytes, including `blocked_features` and `limits_progress`.
 
 `routing-binding.ts` records the server's actual bound data/companion ports. Shutdown
 unregisters only its matching owner. `routing-preflight.ts` verifies bounded native root

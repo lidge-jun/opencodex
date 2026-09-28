@@ -22,7 +22,7 @@ afterEach(async () => {
   for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
 });
 const requests: { url: string; method: string; body?: unknown }[] = [];
-function server(uncertain = false, certificateState?: string, usagePhase?: string) {
+function server(uncertain = false, certificateState?: string, usagePhase?: string, observation?: Record<string, unknown>) {
   requests.length = 0; let trusted = false, startup = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input), method = init?.method ?? "GET";
@@ -34,7 +34,7 @@ function server(uncertain = false, certificateState?: string, usagePhase?: strin
     if (method === "POST") { trusted = true; if (uncertain) throw new TypeError("uncertain response"); return Response.json({ ok: true }); }
     return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: trusted ? "trusted" : certificateState ?? "prepared", busy: null,
       fingerprint: (url.startsWith("/second") ? "B" : "A").repeat(64) } } : { ok: true, runtime: { supported: true, phase: usagePhase ? "running" : "off", running: !!usagePhase,
-        ...(usagePhase ? { usage: { mode: "observe", phase: usagePhase, outputs: 0, appCacheConfirmed: false } } : {}) } });
+        ...(usagePhase ? { usage: { mode: "observe", phase: usagePhase, outputs: 0, appCacheConfirmed: false, ...(observation ? { observation } : {}) } } : {}) } });
   }) as typeof fetch;
 }
 async function mount(apiBase = "") {
@@ -73,6 +73,15 @@ test.each(["expired-awaiting-original-response", "observing-awaiting-original-re
   server(false, "trusted", phase); const container = await mount();
   expect(container.textContent).toContain("Stopping correction does not immediately reset the Codex display.");
   expect(container.textContent).toContain("this panel cannot confirm that refresh.");
+  expect(requests.every(req => req.method === "GET")).toBe(true);
+});
+
+test("observed response counts are displayed without claiming a native process or recovered composer", async () => {
+  server(false, "trusted", "observing", { jsonSnapshots: 2, streamSnapshots: 3, validatedActiveStreams: 1, lastSnapshotAt: 1000,
+    sourceProcessVerified: false, composerRecoveryVerified: false });
+  const container = await mount();
+  expect(container.textContent).toContain("JSON 2, SSE 3; active bound streams: 1");
+  expect(container.textContent).toContain("Counts do not identify the sending process or prove composer recovery.");
   expect(requests.every(req => req.method === "GET")).toBe(true);
 });
 
