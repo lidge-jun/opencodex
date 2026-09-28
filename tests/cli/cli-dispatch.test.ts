@@ -555,6 +555,16 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(start).toContain("startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port)");
   });
 
+  test("the in-lease bind revalidates the recorded owner before choosing a port", () => {
+    // The first gate runs before the awaited probe work; a desktop claim can commit to the
+    // journal in between while its endpoint is still down. Re-validating inside the
+    // bind ownership lease is what makes claim-and-bind one atomic decision.
+    const bind = slice("bind: async () => {", "let port = await chooseListenPort(");
+    expect(bind).toContain("serviceChildStayOutIfForeignOwner(process.env");
+    // Throwing rather than process.exit is required so the ownership lease is released.
+    expect(bind).toContain("throw new StartCommandExit(code)");
+  });
+
   test("the exit cleanup routes every shared teardown through the decision", () => {
     const cleanup = slice("const syncCleanup = () => {", "let shuttingDown = false;");
     expect(cleanup).toContain("decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE })");

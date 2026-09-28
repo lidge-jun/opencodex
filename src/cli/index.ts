@@ -500,9 +500,10 @@ async function handleStart(options: { block?: boolean } = {}) {
           markSiblingStart(fencedLive.port);
         }
         if (!fencedLive && !siblingStart) siblingStart = await markCrossHomeSibling();
+        // Re-run the gate inside the lease: a desktop claim committed since the earlier check is still respected; throwing releases the lease.
+        serviceChildStayOutIfForeignOwner(process.env, undefined, {}, (code) => { throw new StartCommandExit(code); });
 
-        // Port selection is check-then-bind. The lease prevents every cooperating start or
-        // updater from turning that check into a different ownership decision.
+        // Port selection is check-then-bind; the lease keeps every cooperating start on one ownership decision.
         let port = await chooseListenPort(requestedPort, { sibling: siblingStart });
         const serverModule = await import("../server");
         const readinessGate = createReadinessGate();
