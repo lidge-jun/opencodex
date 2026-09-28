@@ -970,7 +970,7 @@ an idle trial to observation. Original responses and other app traffic continue 
 Native login-file replacement or token rotation also invalidates the trial, even when the
 same account returns. Stop and start observation to bind the current login before another
 explicit trial; old responses cannot authorize the replacement session.
-Changes to the root Codex config, provider configuration, model aliases, routing profiles,
+Changes to the root Codex config (except its MCP server table and formatting), provider configuration, model aliases, routing profiles,
 fallback, compaction or memory-model routes also invalidate the observation context. Restoring the previous
 settings does not restore its consent: stop and start observation, then confirm a new trial
 when eligible. This detects changes to those configured routes, not which model a conversation
@@ -981,6 +981,9 @@ OpenCodex starts** in the same panel. The optional OpenCodex configuration
 `"desktopCompatibility": { "startOnProxyStart": true }` resumes **observation only** when the model
 proxy starts. Omission or `false` disables this automatic start. It reuses the saved endpoints
 and trusted certificate, never launches Codex or enrolls trust, and never resumes an Apply trial.
+Automatic observation waits for startup configuration sync to finish. Failed sync or a wait
+longer than two minutes leaves observation off; inspect its status and start it manually after
+resolving the startup problem. The model proxy continues to follow its own readiness policy.
 If prerequisites are missing, observation stays off and the model proxy continues running.
 Saving this preference does not start or stop the current service. Use its separate service
 controls for immediate changes. If a save cannot be confirmed, refresh its status before retrying.

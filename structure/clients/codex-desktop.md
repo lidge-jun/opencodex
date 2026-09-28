@@ -181,6 +181,9 @@ rejects candidate writes containing unknown options, while invalid hand edits di
 Windows, non-test execution and non-sibling/non-client ownership. It keeps `startServer`
 synchronous and does not await before the Lab activation boundary. Unsupported prerequisites
 warn without stopping the model proxy or installing trust.
+When the CLI supplies its readiness gate, observation waits for post-startup native configuration
+sync before loading its runtime. A failed sync or a two-minute pending limit leaves observation
+off with a generic diagnostic; shutdown cancels this optional wait without delaying proxy exit.
 
 `service.ts` shares one runtime between startup and management. Server shutdown retains
 the asynchronous teardown, waits for in-flight startup, and prevents a late start after stop.

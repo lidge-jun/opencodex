@@ -5,6 +5,7 @@ import { createDesktopCompatibilityRuntime } from "../../src/codex/desktop-compa
 import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { nativeCompatibilityOwner } from "../../src/codex/desktop-compatibility/routing-binding";
+import { createReadinessGate } from "../../src/server/readiness";
 
 test("startup captures the actual bound hostname and clears that owner on shutdown", async () => {
   const config = { ...getDefaultConfig(), hostname: "192.0.2.10" };
@@ -72,4 +73,39 @@ test("shutdown before module load finishes prevents late service activation", as
     } });
   await Promise.resolve(); const closing = handle.shutdown(); release(); await closing;
   expect(starts).toBe(0); expect(shutdowns).toBe(1);
+});
+
+test("automatic observation waits for native configuration readiness", async () => {
+  const readiness = createReadinessGate(); let starts = 0, loads = 0;
+  const runtime = createDesktopCompatibilityRuntime({ platform: "linux" });
+  runtime.start = async () => { starts++; return runtime.status(); };
+  const handle = scheduleDesktopCompatibilityStartup({ ...getDefaultConfig(), desktopCompatibility: { startOnProxyStart: true } },
+    { platform: "win32", testGuard: false, sibling: false, readiness,
+      load: async () => { loads++; return { getDesktopCompatibilityRuntime: () => runtime, shutdownDesktopCompatibility: async () => {} }; } });
+  try {
+    await Bun.sleep(20); expect(loads).toBe(0); expect(starts).toBe(0);
+    readiness.markReady(); await Bun.sleep(150);
+    expect(loads).toBe(1); expect(starts).toBe(1);
+  } finally { await handle.shutdown(); }
+});
+
+test("shutdown cancels pending readiness and never starts a late observation", async () => {
+  const readiness = createReadinessGate(); let loads = 0;
+  const handle = scheduleDesktopCompatibilityStartup({ ...getDefaultConfig(), desktopCompatibility: { startOnProxyStart: true } },
+    { platform: "win32", testGuard: false, sibling: false, readiness,
+      load: async () => { loads++; throw new Error("must not load"); }, warn: () => {} });
+  await Promise.resolve(); await handle.shutdown(); readiness.markReady(); await Bun.sleep(150);
+  expect(loads).toBe(0);
+});
+
+test("failed or timed-out readiness leaves optional observation off", async () => {
+  for (const failed of [true, false]) {
+    const readiness = createReadinessGate(); if (failed) readiness.markFailed();
+    let loads = 0; const warnings: string[] = [];
+    const handle = scheduleDesktopCompatibilityStartup({ ...getDefaultConfig(), desktopCompatibility: { startOnProxyStart: true } },
+      { platform: "win32", testGuard: false, sibling: false, readiness, readinessTimeoutMs: 1,
+        load: async () => { loads++; throw new Error("must not load"); }, warn: value => warnings.push(value) });
+    await Bun.sleep(150); await handle.shutdown();
+    expect(loads).toBe(0); expect(warnings).toHaveLength(1);
+  }
 });

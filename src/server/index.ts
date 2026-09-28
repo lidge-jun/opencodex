@@ -881,7 +881,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   }
 
   startPackageRefresh();
-  desktopCompatibilityStartup = scheduleDesktopCompatibilityStartup(config, { boundHostname: bindHost, boundPort: actualPort, loopbackPort: loopbackServer?.port ?? undefined });
+  desktopCompatibilityStartup = scheduleDesktopCompatibilityStartup(config, { boundHostname: bindHost, boundPort: actualPort, loopbackPort: loopbackServer?.port ?? undefined, readiness: deps.readinessGate });
   return server;
 }
 
