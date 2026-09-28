@@ -142,15 +142,10 @@ function manifest(root: string): Record<string, string> {
   return entries;
 }
 
-/** Artifacts a runtime may legitimately leave in a foreign or OFF Codex home: the
- *  catalog/cache files an explicit side-profile sync can write, and the shared
- *  ocx-homes/ owner-registry pointer every serving runtime publishes so sibling
- *  homes can locate its protected runtime record. Neither names managed state. */
-function manifestWithoutLifecycleArtifacts(entries: Record<string, string>): Record<string, string> {
+/** The catalog/cache artifacts an explicit side-profile sync may legitimately write while OFF. */
+function manifestWithoutCatalogArtifacts(entries: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(entries).filter(([key]) =>
-      !key.includes("opencodex-catalog") && key !== "models_cache.json"
-      && !key.startsWith("ocx-homes/") && !key.startsWith("ocx-homes\\")),
+    Object.entries(entries).filter(([key]) => !key.includes("opencodex-catalog") && key !== "models_cache.json"),
   );
 }
 
@@ -550,15 +545,15 @@ describe("WP13 composed toggle acceptance", () => {
       // SID and LocalAppData PowerShell children with 30 s budgets each; run 35093667426
       // exceeded healthy controls by 33.8 s before the runtime-port watchdog fired at 45 s.
       expect(existsSync(fx.catalogLockPath)).toBe(false);
-      expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+      expect(manifest(fx.codex)).toEqual(before);
       for (const argv of [["ensure"], ["restore"]]) {
         const result = await fx.runCli(argv);
         expect(result.exitCode).toBe(0);
-        expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+        expect(manifest(fx.codex)).toEqual(before);
       }
       const synced = await fx.runCli(["sync"]);
       expect(synced.exitCode).toBe(0);
-      expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+      expect(manifestWithoutCatalogArtifacts(manifest(fx.codex))).toEqual(manifestWithoutCatalogArtifacts(before));
       const unchangedCache = await fx.runCli(["sync-cache", "--json"]);
       expect(unchangedCache.exitCode).toBe(0);
       // An OFF sync may or may not leave a catalog behind; either way the explicit cache
@@ -573,7 +568,7 @@ describe("WP13 composed toggle acceptance", () => {
         ? "Codex model cache is already current; nothing to sync."
         : "No Codex catalog to derive a cache from; nothing to sync.");
       expect(unchangedHuman.stdout).not.toContain("Codex integration is OFF");
-      expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+      expect(manifestWithoutCatalogArtifacts(manifest(fx.codex))).toEqual(manifestWithoutCatalogArtifacts(before));
       const sync = await fx.request(server.runtime, "/api/sync", { method: "POST" });
       expect(sync.status).toBe(200);
       expect(sync.body).toMatchObject({ status: "skipped", skippedReason: "desired_disabled", ok: true });
@@ -584,7 +579,7 @@ describe("WP13 composed toggle acceptance", () => {
         expect([200, 404]).toContain(toggle.status);
         expect(toggle.body).toHaveProperty("desiredEnabled", false);
       }
-      expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+      expect(manifestWithoutCatalogArtifacts(manifest(fx.codex))).toEqual(manifestWithoutCatalogArtifacts(before));
       // P08 is intentionally the ON control: it must reach the same running
       // server through the real CLI without passing a port flag.
       const enabled = await fx.request(server.runtime, "/api/native-integrations/codex", {
@@ -727,7 +722,7 @@ describe("WP13 composed toggle acceptance", () => {
       expect(String(sync.body.message ?? sync.body.error)).toMatch(/Refusing|service|ownership/i);
       const restore = await fx.runCli(["restore"]);
       expect(restore.exitCode).toBe(1);
-      expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+      expect(manifest(fx.codex)).toEqual(before);
       expect(fx.lockAllowlist.some(existsSync)).toBe(false);
     } finally {
       await fx.stop(server);
@@ -772,7 +767,7 @@ describe("WP13 composed toggle acceptance", () => {
       const sync = await fx.request(server.runtime, "/api/sync", { method: "POST" });
       expect(sync.status).toBe(409);
       expect(String(sync.body.message ?? sync.body.error)).toMatch(/ownership|proven|read|malformed/i);
-      expect(manifestWithoutLifecycleArtifacts(manifest(fx.codex))).toEqual(manifestWithoutLifecycleArtifacts(before));
+      expect(manifest(fx.codex)).toEqual(before);
       expect(fx.lockAllowlist.some(existsSync)).toBe(false);
     } finally {
       await fx.stop(server);
