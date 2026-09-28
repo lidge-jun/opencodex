@@ -1,5 +1,7 @@
 import type { OcxContentPart } from "../types";
 import { normalizeImageTargets, type NormalizeOptions, type NormalizeTarget } from "./anthropic-image-normalize";
+import { MAX_INPUT_BASE64_LENGTH, MAX_INPUT_PIXELS } from "./anthropic-image-codec";
+import { sniffImageDimensions } from "./anthropic-image-guard";
 
 // CodeWhisperer native image part (matches Kiro IDE wire format): the base64 bytes live directly in
 // userInputMessage.images, NOT in userInputMessageContext. Verified against kiro-gateway.
@@ -123,11 +125,19 @@ function appendNote(carrier: KiroImageCarrier, note: string): void {
   carrier.content = carrier.content ? `${carrier.content}\n${note}` : note;
 }
 
+/** Cheap structural check (no decode or encode) for the request-wide count. */
+function countsTowardRequestCap(image: KiroImage): boolean {
+  const b64 = typeof image.source?.bytes === "string" ? image.source.bytes : "";
+  if (b64.length === 0 || b64.length > MAX_INPUT_BASE64_LENGTH) return false;
+  const dims = sniffImageDimensions(b64);
+  return dims !== null && dims.width * dims.height <= MAX_INPUT_PIXELS;
+}
+
 /**
  * Apply the generous image pipeline to a built CodeWhisperer payload (mutates in
- * place): per-message 20-image cap first, then the shared tier machinery with
- * the kiro budget and terminal-overflow DROP (kiro has no downstream guard),
- * then the 100-image request cap over surviving images (oldest dropped).
+ * place): per-message 20-image cap, then the 100-image request cap over
+ * structurally usable images (oldest dropped), then the shared tier machinery
+ * with the kiro budget and terminal-overflow DROP (kiro has no downstream guard).
  * Test seams (encode/validate) forward into the core.
  */
 export async function normalizeKiroImages(
@@ -143,6 +153,28 @@ export async function normalizeKiroImages(
     if (!images || images.length <= KIRO_MAX_IMAGES_PER_MESSAGE) continue;
     images.splice(0, images.length - KIRO_MAX_IMAGES_PER_MESSAGE);
     appendNote(carrier, COUNT_CAP_NOTE);
+  }
+
+  // Request count cap BEFORE the byte budget: a surplus image must not push survivors to
+  // lower tiers, which #4532 then pins across turns. Only structurally usable images count
+  // (bytes present, within the bomb limits, dimensions sniffable), so a corrupt image cannot
+  // evict valid history; the normalizer below still drops it with its own marker. This stays
+  // a cheap header check: truncated data that still sniffs as an image does count.
+  let excess = carriers.reduce((count, carrier) => count + (carrier.images ?? []).filter(countsTowardRequestCap).length, 0)
+    - KIRO_MAX_IMAGES_PER_REQUEST;
+  for (const carrier of carriers) {
+    if (excess <= 0) break;
+    const images = carrier.images;
+    if (!images?.length) continue;
+    const kept: KiroImage[] = [];
+    for (const image of images) {
+      if (excess > 0 && countsTowardRequestCap(image)) excess--;
+      else kept.push(image);
+    }
+    if (kept.length === images.length) continue;
+    if (kept.length === 0) delete carrier.images;
+    else carrier.images = kept;
+    appendNote(carrier, kept.length === 0 ? REQUEST_CAP_EMPTY_NOTE : REQUEST_CAP_NOTE);
   }
 
   // Targets over the survivors, oldest→newest across carriers. Drops resolve the image
@@ -175,18 +207,4 @@ export async function normalizeKiroImages(
     overflowAction: "drop",
     ...(opts ?? {}),
   });
-
-  // Count only images that survived decoding and the byte budget. Otherwise an
-  // undecodable current image could evict a valid history image unnecessarily.
-  let excess = carriers.reduce((count, carrier) => count + (carrier.images?.length ?? 0), 0) - KIRO_MAX_IMAGES_PER_REQUEST;
-  for (const carrier of carriers) {
-    if (excess <= 0) break;
-    const images = carrier.images;
-    if (!images?.length) continue;
-    const dropped = Math.min(images.length, excess);
-    images.splice(0, dropped);
-    if (images.length === 0) delete carrier.images;
-    appendNote(carrier, images.length === 0 ? REQUEST_CAP_EMPTY_NOTE : REQUEST_CAP_NOTE);
-    excess -= dropped;
-  }
 }

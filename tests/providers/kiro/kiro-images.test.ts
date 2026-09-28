@@ -228,6 +228,32 @@ describe("kiro generous image pipeline", () => {
     expect(oldest.content).not.toContain("request cap");
   });
 
+  test("K2h: count surplus cannot consume byte budget or pin a surviving image to a lower tier", async () => {
+    const imageSize = 184 * 1024; // 100 fit 18 MiB; 101 exceed it.
+    const originals = Array.from({ length: 101 }, (_, i) => fakePngB64(100 + i, 100, imageSize / 4 * 3));
+    let encodes = 0;
+    const encode: EncodeFn = async () => {
+      encodes++;
+      return { data: fakePngB64(100, 100, 100 * 1024 / 4 * 3), mediaType: "image/jpeg" };
+    };
+    const options = { encode, validate: async () => {} };
+    const payload = kiroPayload(originals.map((bytes, i) => ({ content: `m${i}`, images: [img(bytes)] })));
+    await normalizeKiroImages(payload, options);
+    const state = payload.conversationState as Record<string, any>;
+    expect(state.history[0].userInputMessage.images).toBeUndefined();
+    expect(state.history[0].userInputMessage.content).toContain("100-image request cap");
+    expect(state.history[1].userInputMessage.images[0]).toEqual(img(originals[1]));
+    expect(state.currentMessage.userInputMessage.images[0]).toEqual(img(originals[100]));
+    expect(encodes).toBe(0);
+
+    // A later turn reuses the same source bytes; the discarded image must not
+    // have pinned the oldest survivor to a demoted emitted tier.
+    const later = kiroPayload(originals.slice(1).map((bytes, i) => ({ content: `later${i}`, images: [img(bytes)] })));
+    await normalizeKiroImages(later, options);
+    expect((later.conversationState as Record<string, any>).history[0].userInputMessage.images[0]).toEqual(img(originals[1]));
+    expect(encodes).toBe(0);
+  });
+
   test("K2c: a message whose sole image is undecodable loses the images field entirely", async () => {
     const payload = kiroPayload([
       { content: "old", images: [img(Buffer.from("not an image").toString("base64"))] },

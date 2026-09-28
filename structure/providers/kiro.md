@@ -204,9 +204,10 @@ Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
 
 `src/adapters/kiro-images.ts` limits each user input message to 20 inline images and
 the whole `GenerateAssistantResponse` request to 100. It applies the per-message
-limit and the separate 18 MiB image byte budget first, then removes the oldest
-surviving history images until the request fits. A bounded text marker remains
-in each affected message; the current turn's newest images are retained.
+limit first, then removes the oldest structurally usable history images to meet
+the request count before applying the separate 18 MiB image byte budget.
+A bounded text marker remains in each affected message; the current turn's
+newest images are retained.
 
 ## Remote image references
 
