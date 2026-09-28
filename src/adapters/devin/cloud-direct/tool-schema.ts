@@ -45,14 +45,21 @@ function splitTypeArray(node: Schema, types: unknown[]): Schema {
     Object.defineProperty(ANNOTATION_KEYS.has(key) ? annotations : rest, key, { value, enumerable: true, writable: true, configurable: true });
   }
   const concrete = types.filter((type) => type !== 'null');
-  const allowsNull = concrete.length < types.length;
+  // An outer enum/const is still binding after the type array is split.
+  const allowsNull = concrete.length < types.length
+    && (!Array.isArray(rest.enum) || rest.enum.includes(null))
+    && (!Object.hasOwn(rest, 'const') || rest.const === null);
   const existing = Array.isArray(node.anyOf) ? node.anyOf : undefined;
   // Folding merges each branch into the outer keywords, which is only exact when
   // they never disagree: `{maxLength: 5, anyOf: [{maxLength: 50}]}` folded would
   // loosen the outer limit. On a disagreement keep both constraints under allOf,
   // which this backend accepts (live: gemini-3-8-flash-medium).
-  if (existing?.some((branch) => isSchema(branch) && Object.keys(branch).some(
-    (key) => key !== 'type' && key in rest && JSON.stringify(branch[key]) !== JSON.stringify(rest[key]),
+  if (existing?.some((branch) => isSchema(branch) && (
+    Object.keys(branch).some((key) => key !== 'type' && key in rest && JSON.stringify(branch[key]) !== JSON.stringify(rest[key]))
+    // Keep an existing null branch's own constraints; folding it to {type:"null"}
+    // would admit values that its enum, const, or nested schema rejects.
+    || (allowsNull && branch.type === 'null' && Object.keys(branch).some((key) => key !== 'type'))
+    || (allowsNull && branch.type === undefined && ['enum', 'const', 'not', 'allOf', 'oneOf'].some((key) => key in branch))
   ))) {
     return { ...annotations, allOf: [splitTypeArray({ ...rest, type: types }, types), { anyOf: existing }] };
   }
