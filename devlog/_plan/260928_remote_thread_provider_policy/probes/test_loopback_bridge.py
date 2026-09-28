@@ -116,6 +116,9 @@ class LoopbackBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.received = asyncio.Queue()
         self.handshake_headers = {}
         self.http_received = []
+        self.backend_closed = asyncio.Event()
+        self.backend_close_code = None
+        self.backend_close_on_connect = None
         self.backend_app = web.Application()
         self.backend_app.router.add_route("*", "/backend-api/{tail:.*}", self.mock_backend)
         self.backend_runner, self.backend_base = await start_loopback_app(self.backend_app)
@@ -141,11 +144,16 @@ class LoopbackBridgeTests(unittest.IsolatedAsyncioTestCase):
             await websocket.prepare(request)
             for frame in self.frames:
                 await websocket.send_str(frame)
+            if self.backend_close_on_connect is not None:
+                await websocket.close(code=self.backend_close_on_connect)
+                return websocket
             async for message in websocket:
                 if message.type == aiohttp.WSMsgType.TEXT:
                     await self.received.put(message.data)
                 elif message.type == aiohttp.WSMsgType.PING:
                     await websocket.pong(message.data)
+            self.backend_close_code = websocket.close_code
+            self.backend_closed.set()
             return websocket
         body = await request.read()
         self.http_received.append((request.path, body, selected_headers(request.headers)))
@@ -203,6 +211,24 @@ class LoopbackBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extract_message(incoming)["params"]["modelProviders"], ["openai", "opencodex"])
         self.assertEqual(incoming["seq_id"], 7)
         self.assertEqual(incoming["cursor"], "mock-backend-cursor")
+
+    async def test_host_close_code_reaches_backend(self):
+        async with self.host.ws_connect(self.relay_base + WS_PATH,
+                                       headers={"Authorization": MOCK_AUTH}) as host:
+            await host.close(code=1001)
+        await asyncio.wait_for(self.backend_closed.wait(), 5)
+        self.assertEqual(self.backend_close_code, 1001)
+
+    async def test_backend_close_code_reaches_host(self):
+        self.backend_close_on_connect = 1011
+        async with self.host.ws_connect(self.relay_base + WS_PATH,
+                                       headers={"Authorization": MOCK_AUTH}) as host:
+            async for message in host:
+                if message.type in (aiohttp.WSMsgType.CLOSE,
+                                    aiohttp.WSMsgType.CLOSED,
+                                    aiohttp.WSMsgType.CLOSING):
+                    break
+            self.assertEqual(host.close_code, 1011)
 
     async def test_enrollment_http_forwarding_with_fake_credentials(self):
         body = b'{"name":"mock-host","installation_id":"mock-installation"}'
