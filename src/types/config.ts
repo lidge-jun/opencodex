@@ -1576,7 +1576,7 @@ export interface OcxCodexPoolConfig {
 /** Optional policy for pausing accounts and notifying when selected quota windows are low. */
 export interface CodexLowQuotaProtectionConfig {
   enabled: boolean;
-  /** Inclusive usage percentage from 0 to 100. */
+  /** Inclusive usage percentage from 1 to 100. */
   threshold: number;
   actions: {
     pause: boolean;

@@ -103,6 +103,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/codex-auth/login-status", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota/history", module: "codex/auth-api/routes", mutates: false },
+  { method: "GET", path: "/api/codex-auth/low-quota-events", module: "server/management/low-quota-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The authenticated event history is an operator diagnostic with no CLI verb yet.", owner: "rt5 low-quota", ownerDoc: "structure/gui-and-management-api.md" } },
   { method: "GET", path: "/api/codex-auth/reset-credits", module: "codex/auth-api/routes", mutates: false },
   { method: "PATCH", path: "/api/codex-auth/pool-strategy", module: "codex/auth-api/routes", mutates: true },
   { method: "POST", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: true },

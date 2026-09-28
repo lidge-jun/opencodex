@@ -1,4 +1,5 @@
-import type { StorageCleanupPolicy } from "../types";
+import type { OcxConfig, StorageCleanupPolicy } from "../types";
+import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../codex/low-quota-protection";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   abortStorageCleanupPolicyJobAsync,
@@ -40,6 +41,7 @@ type LeaseOwner = {
   token: symbol;
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
+  lowQuota: LowQuotaRegistration;
 };
 
 export type ServerBackgroundLifecycleLease = {
@@ -148,6 +150,7 @@ function removeOwner(owner: LeaseOwner): boolean {
 
 function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "last" {
   if (!removeOwner(owner)) return "inactive";
+  owner.lowQuota();
   owner.resources.release();
   const nextOwner = owners.at(-1);
   if (nextOwner) {
@@ -168,6 +171,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
  */
 export function acquireServerBackgroundLifecycle(
   applyPolicy: PolicyApply,
+  config: OcxConfig,
 ): ServerBackgroundLifecycleLease {
   if (cleanupInProgress) {
     throw new Error("server background lifecycle cleanup is still in progress");
@@ -177,6 +181,7 @@ export function acquireServerBackgroundLifecycle(
     token: Symbol("server-background-lifecycle"),
     applyPolicy,
     resources: acquireServerResourceOwner(),
+    lowQuota: registerCodexLowQuotaProtection(config),
   };
   try {
     if (!processLoops) {
@@ -186,6 +191,7 @@ export function acquireServerBackgroundLifecycle(
     }
     owners.push(owner);
   } catch (error) {
+    owner.lowQuota();
     owner.resources.release();
     throw error;
   }
@@ -199,19 +205,19 @@ export function acquireServerBackgroundLifecycle(
     },
     release() {
       if (releaseFlight) return releaseFlight;
-      const outcome = releaseOwnerSynchronously(owner);
-      if (outcome !== "last") {
-        releaseFlight = Promise.resolve();
-        return releaseFlight;
-      }
-      cleanupInProgress = true;
-      releaseFlight = stopStoragePolicyWorker().finally(() => {
-        cleanupInProgress = false;
-      });
+      releaseFlight = (async () => {
+        await owner.lowQuota.flush();
+        const outcome = releaseOwnerSynchronously(owner);
+        if (outcome !== "last") return;
+        cleanupInProgress = true;
+        try { await stopStoragePolicyWorker(); }
+        finally { cleanupInProgress = false; }
+      })();
       return releaseFlight;
     },
     releaseAfterFailedStart() {
       if (releaseFlight) return;
+      owner.lowQuota();
       // Startup evaluation is scheduled only after both listeners bind, so a
       // failed start cannot have spawned a Worker for this lease. Keep rollback
       // synchronous so a caller may immediately retry a different port.

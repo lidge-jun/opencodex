@@ -12,12 +12,12 @@ export function registerLowQuotaObserver(observer: Observer): () => void {
 
 /** Only newly accepted evidence belongs here, never carried or disk-hydrated windows. */
 export function observeCodexLowQuota(accountId: string, quota: Omit<StoredAccountQuota, "updatedAt">): void {
-  const observer = [...observers.values()].at(-1);
-  if (!observer) return;
-  try {
-    observer(accountId, quota);
-  } catch {
-    // Optional protection must not turn a committed quota observation into a failed request.
-    console.warn("[codex-low-quota] protection action failed");
+  for (const observer of observers.values()) {
+    try {
+      observer(accountId, quota);
+    } catch {
+      // One server's optional policy cannot suppress another server's observation.
+      console.warn("[codex-low-quota] protection action failed");
+    }
   }
 }
