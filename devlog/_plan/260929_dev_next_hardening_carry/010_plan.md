@@ -59,3 +59,19 @@ plus typecheck and the file-size ratchet on the combined tree, check open review
 Cherry-pick #6089's commits onto a fresh branch from `dev`, add `Co-authored-by` for fflake33, run the
 Usage tests, `bun run lint:gui` and `bun run build:gui`, open a PR carrying its screenshot link, admin
 merge, then close #6089 with a pointer to the carry.
+
+## Audit (020, gpt-6-sol, NEAR-PASS) folded
+
+1. Sidecar budget for families that reject both `disabled` and `between_tools`: live probe at
+   max_tokens 1024 returned `end_turn` with 430-630 characters of text for Opus 5.5, Fable 5.1 and
+   Fable 5, both with thinking omitted and with `output_config.effort: "low"`. The sidecar sends
+   `output_config: {effort: "low"}` and no `thinking` for those families.
+2. The sampling rule keys on the family-first parse; legacy `claude-3-7-sonnet` does not parse and
+   keeps its sampling fields, and `claude-opus-4-20250514` parses as Opus 4.0 (keeps them).
+3. `tests/adapters/anthropic/anthropic-reasoning.test.ts` expects Fable 5 to keep `temperature`; it is
+   updated to the live contract. New wire cases cover each rejecting family and Fable 5.1 forced choice.
+4. wp3/wp4 run the combined-tree checks on current `dev` before each admin merge.
+5. wp5 disposes the open CodeRabbit thread (the old regex was already `/i`) before merging.
+6. wp6 opens a template PR with the screenshot link, trailer
+   `Co-authored-by: Jian Gong <fflake33@icloud.com>`, waits for its exact-head CI, and adds typecheck,
+   structure and privacy checks to the GUI verification.
