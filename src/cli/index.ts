@@ -1290,7 +1290,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (siblingStopFoundOwner(siblingOfPort, live)) {
       record.proxy = "not-running";
       console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
-    } else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {
+    } else if (live?.pid && (await proveLiveProxyOwnedByHome(live)) !== "proven") {
       stopFailed = true;
       ownershipBlocked = true;
       record.proxy = "ownership-refused";

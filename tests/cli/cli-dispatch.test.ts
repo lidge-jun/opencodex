@@ -601,7 +601,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     const stop = slice("async function handleStopUnlocked(", "async function handleUninstall(");
     const findAt = stop.indexOf("const live = await findLiveProxy({ acceptPackageTreeFenced: true });");
     const askAt = stop.indexOf("if (siblingStopFoundOwner(siblingOfPort, live)) {");
-    const attestAt = stop.indexOf("} else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {");
+    const attestAt = stop.indexOf('} else if (live?.pid && (await proveLiveProxyOwnedByHome(live)) !== "proven") {');
     expect(findAt).toBeGreaterThan(-1);
     expect(askAt).toBeGreaterThan(findAt);
     expect(askAt).toBeLessThan(attestAt);

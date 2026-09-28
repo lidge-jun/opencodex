@@ -2,7 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findCrossHomeOwner, markLiveHomeSibling } from "../../src/cli/cross-home-owner";
+import { findCrossHomeOwner, findCrossHomeOwnerDetailed, markCrossHomeSibling, markLiveHomeSibling } from "../../src/cli/cross-home-owner";
+import { readOwnerRegistryHomes, registerOwnerRegistryHome } from "../../src/config/owner-registry";
+import { writeRuntimePort } from "../../src/config/process-state";
+import { directLocalHttpFetch } from "../../src/server/direct-local-http";
 import { resetSiblingStartForTests, siblingOfLivePort } from "../../src/codex/sibling-start";
 import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
 import {
@@ -411,3 +414,106 @@ test("a lone custom-home start still syncs Grok and prunes its own Claude roster
   expect(await ensure.exited).toBe(0);
   expect(existsSync(claudePath)).toBe(false);
 }, 30_000);
+
+test("a registered custom-home owner is proven through its own runtime record", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  const port = healthServer(ownerPid);
+  const homeA = join(fx.root, "homeA", ".opencodex");
+  mkdirSync(homeA, { recursive: true });
+  writeFileSync(join(homeA, "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port, attestationSecret: TEST_ATTESTATION_SECRET,
+  }));
+  writeFileSync(join(fx.grok, "config.toml"), grokFence(port));
+
+  // Before registration no record names the listener: unverifiable is not absent.
+  const verdict = await findCrossHomeOwnerDetailed({ homeDir: fx.home });
+  expect(verdict.kind).toBe("indeterminate");
+  expect(verdict.kind === "indeterminate" ? verdict.port : null).toBe(port);
+  expect(await markCrossHomeSibling()).toBe(true);
+  resetSiblingStartForTests();
+
+  registerOwnerRegistryHome(homeA);
+  expect(readOwnerRegistryHomes()).toContain(homeA);
+  expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(port);
+});
+
+test("a live legacy record without an attestation secret fails closed", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  const port = healthServer(ownerPid);
+  writeFileSync(join(fx.home, ".opencodex", "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port,
+  }));
+  writeFileSync(join(fx.grok, "config.toml"), grokFence(port));
+  const verdict = await findCrossHomeOwnerDetailed({ homeDir: fx.home });
+  expect(verdict.kind).toBe("indeterminate");
+  expect(await markCrossHomeSibling()).toBe(true);
+  expect(siblingOfLivePort()).toBe(port);
+});
+
+test("a dropped attestation probe retries inside the shared deadline", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  const port = healthServer(ownerPid);
+  defaultRuntime(fx, ownerPid, port);
+  writeFileSync(join(fx.grok, "config.toml"), grokFence(port));
+  let calls = 0;
+  const flakyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    // The identity probe answers; the first attestation is lost, the retry wins.
+    if (calls === 2) throw new TypeError("fetch failed");
+    return directLocalHttpFetch(input, init);
+  }) as typeof fetch;
+  const verdict = await findCrossHomeOwnerDetailed({
+    homeDir: fx.home,
+    io: { fetchFn: flakyFetch, sleepFn: () => Promise.resolve() },
+  });
+  expect(verdict).toEqual({ kind: "owner", port });
+  expect(calls).toBe(3);
+});
+
+test("one shared deadline bounds every candidate probe", async () => {
+  const fx = fixture();
+  const port = healthServer(process.pid + 1);
+  defaultRuntime(fx, process.pid + 1, port);
+  writeFileSync(join(fx.grok, "config.toml"), grokFence(port));
+  let calls = 0;
+  const countingFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    return directLocalHttpFetch(input, init);
+  }) as typeof fetch;
+  const verdict = await findCrossHomeOwnerDetailed({
+    homeDir: fx.home,
+    io: { fetchFn: countingFetch, deadlineAt: 0, nowFn: () => 0 },
+  });
+  expect(verdict.kind).toBe("indeterminate");
+  expect(calls).toBe(0);
+});
+
+test("an attested sibling record defers to the owner port it names", async () => {
+  const fx = fixture();
+  const siblingPid = process.pid + 1;
+  const ownerPid = process.pid + 2;
+  const siblingPort = healthServer(siblingPid);
+  const ownerPort = healthServer(ownerPid);
+  const homeA = join(fx.root, "homeA", ".opencodex");
+  mkdirSync(homeA, { recursive: true });
+  writeFileSync(join(homeA, "runtime-port.json"), JSON.stringify({
+    pid: siblingPid, port: siblingPort, siblingOfPort: ownerPort,
+  }));
+  const homeB = join(fx.root, "homeB", ".opencodex");
+  mkdirSync(homeB, { recursive: true });
+  writeFileSync(join(homeB, "runtime-port.json"), JSON.stringify({
+    pid: ownerPid, port: ownerPort, attestationSecret: TEST_ATTESTATION_SECRET,
+  }));
+  registerOwnerRegistryHome(homeA);
+  registerOwnerRegistryHome(homeB);
+  expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(ownerPort);
+});
+
+test("publishing a runtime record registers the home for cross-home discovery", () => {
+  const fx = fixture();
+  writeRuntimePort({ pid: process.pid, port: 0 });
+  expect(readOwnerRegistryHomes()).toContain(fx.ocx);
+});

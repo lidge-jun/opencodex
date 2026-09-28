@@ -185,9 +185,17 @@ export interface LiveProxy {
 /**
  * A /healthz identity proves only that a proxy holds the port. Before a destructive orphan stop,
  * require that listener to prove possession of this home's runtime-record secret as well.
+ *
+ * The verdict is three-valued on purpose. "proven" is the only answer that authorizes the
+ * caller's action; "refuted" means the answer was definitive (no record, a pid/port
+ * mismatch, or a failed proof); "indeterminate" means transport, deadline, or an
+ * unattestable record left the question open, which a shared-write decision must treat
+ * the same as a live owner it simply could not verify (#6198).
  */
-export async function proveLiveProxyOwnedByHome(live: LiveProxy, io: LivenessIo = {}): Promise<boolean> {
-  if (live.pid === null) return false;
+export type HomeOwnershipProof = "proven" | "refuted" | "indeterminate";
+
+export async function proveLiveProxyOwnedByHome(live: LiveProxy, io: LivenessIo = {}): Promise<HomeOwnershipProof> {
+  if (live.pid === null) return "indeterminate";
   return attestFencedIdentity(
     `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
     live.port,
@@ -258,17 +266,18 @@ async function attestFencedIdentity(
   io: LivenessIo,
   fetchFn: LivenessFetch,
   timeoutMs: number,
-): Promise<boolean> {
+): Promise<HomeOwnershipProof> {
   const readRuntimeFn = io.readRuntimeFn ?? readRuntimePort;
   let record: ReturnType<NonNullable<LivenessIo["readRuntimeFn"]>>;
   try {
     record = readRuntimeFn(pid);
   } catch {
-    return false;
+    return "indeterminate";
   }
   // The typed seam omits the secret; the production record (readRuntimePort) carries it.
   const secret: unknown = record ? Reflect.get(record, "attestationSecret") : undefined;
-  if (!record || record.pid !== pid || record.port !== port || typeof secret !== "string") return false;
+  if (!record || record.pid !== pid || record.port !== port) return "refuted";
+  if (typeof secret !== "string" || secret.length === 0) return "indeterminate";
   const challenge = (io.createChallengeFn ?? createLocalAttestationChallenge)();
   // One proof failure is definitive and never retried; a transport failure only means
   // the listener did not answer yet, so it gets the same bounded retry the identity
@@ -282,7 +291,7 @@ async function attestFencedIdentity(
     : Math.max(1, Math.min(requestedAttempts, 5));
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const remainingMs = io.deadlineAt === undefined ? timeoutMs : Math.min(timeoutMs, io.deadlineAt - nowFn());
-    if (remainingMs <= 0) return false;
+    if (remainingMs <= 0) return "indeterminate";
     try {
       const res = await fetchFn(url, {
         headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
@@ -290,15 +299,17 @@ async function attestFencedIdentity(
       });
       const body = (await res.json().catch(() => null)) as HealthzIdentity | null;
       // The second answer must still be the same fenced (or by now healthy) process.
-      if (!isOpencodexHealthz(body) && !isPackageTreeFencedHealthz(body)) return false;
-      if (body?.pid !== pid) return false;
-      return verifyLocalAttestationProof(secret, challenge, pid, port, res.headers.get(LOCAL_ATTESTATION_PROOF_HEADER));
+      if (!isOpencodexHealthz(body) && !isPackageTreeFencedHealthz(body)) return "refuted";
+      if (body?.pid !== pid) return "refuted";
+      return verifyLocalAttestationProof(secret, challenge, pid, port, res.headers.get(LOCAL_ATTESTATION_PROOF_HEADER))
+        ? "proven"
+        : "refuted";
     } catch {
-      if (attempt >= attempts) return false;
+      if (attempt >= attempts) return "indeterminate";
       await sleepFn(100);
     }
   }
-  return false;
+  return "indeterminate";
 }
 
 /** A bounded version string safe to carry beyond the untrusted health response. */
@@ -333,7 +344,7 @@ export function isConnectionRefused(error: unknown): boolean {
   return visit(error, 0);
 }
 
-async function classifyHealthz(
+export async function classifyHealthz(
   url: string,
   fetchFn: LivenessFetch,
   timeoutMs: number,
@@ -407,7 +418,7 @@ export async function proxyIdentityAt(
         if (opts.expectedPid !== undefined && fencedPid !== opts.expectedPid) return null;
         const attestMs = io.deadlineAt === undefined ? baseTimeoutMs : Math.min(baseTimeoutMs, io.deadlineAt - nowFn());
         if (attestMs <= 0) return null;
-        if (!(await attestFencedIdentity(url, port, fencedPid, io, fetchFn, attestMs))) return null;
+        if ((await attestFencedIdentity(url, port, fencedPid, io, fetchFn, attestMs)) !== "proven") return null;
         const fencedVersion = isHealthzVersion(fenced?.version) ? fenced!.version as string : undefined;
         return {
           pid: fencedPid,
