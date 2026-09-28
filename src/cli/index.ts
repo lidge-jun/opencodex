@@ -156,6 +156,7 @@ import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { restoreSharedClientStateAfterStop } from "./stop-restore";
+import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
@@ -462,7 +463,13 @@ async function handleStart(options: { block?: boolean } = {}) {
       throw new Error(`client startup refused: ${rotationGate.reason}`);
     }
     const { startClientRuntime } = await import("../client/runtime");
-    await startClientRuntime({ port: requestedPort, block: options.block });
+    // Same lease-held owner recheck as the server path below: this branch binds and publishes too.
+    await startClientRuntimeUnderOwnershipLease({
+      acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+      decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
+      stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
+      start: afterPublish => startClientRuntime({ port: requestedPort, block: options.block, afterPublish }),
+    });
     return;
   }
 

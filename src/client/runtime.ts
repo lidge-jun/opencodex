@@ -266,7 +266,7 @@ export async function bindClientListener(
 }
 
 export async function startClientRuntime(
-  options: { port?: number; block?: boolean } = {},
+  options: { port?: number; block?: boolean; afterPublish?: () => void } = {},
   io: ClientRuntimeIo = {},
 ): Promise<void> {
   const state = readClientConnectionState();
@@ -310,6 +310,7 @@ export async function startClientRuntime(
   installCrashGuards();
   writePid(process.pid);
   writeRuntimePort(clientRuntimeRecord(process.pid, boundPort));
+  options.afterPublish?.();
 
   let shuttingDown = false;
   const shutdown = () => {

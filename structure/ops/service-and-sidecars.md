@@ -115,7 +115,11 @@ The verbs are only reachable through `ocx service`, but the process managers spa
 ownership mutation lease held by `bindAndPublishStartOwnership`, before port selection or
 listener bind. The supervised-child classification is kept from the first check; the
 recorded owner is read fresh under the lease, so a desktop claim committed between checks
-cannot be overwritten by PID or runtime publication. A child carrying
+cannot be overwritten by PID or runtime publication.
+The connected-client branch, which returns into `startClientRuntime` before the server path,
+takes the same lease through `startClientRuntimeUnderOwnershipLease`
+(`src/cli/client-start-fence.ts`), rechecks there, and releases once the client runtime has
+published its PID and runtime records (`afterPublish`). A child carrying
 `OCX_SERVICE_MANAGED` or `OCX_WINDOWS_WRAPPER_PROTOCOL` resolves the recorded owner and
 exits the supervisor's stand-down code on a foreign or unknown answer: `42` inside the
 marker-protocol Windows wrapper, `0` elsewhere — the legacy `ERRORLEVEL NEQ 0` loop reads
