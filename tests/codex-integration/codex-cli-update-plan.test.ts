@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { existsSync, mkdtempSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -448,6 +449,109 @@ describe("registry configuration isolation", () => {
     for (const call of calls) {
       const env = call.options.env as NodeJS.ProcessEnv;
       expect(env.PATH).toBe(boundEnv.PATH);
+    }
+  });
+
+  test("hostile Node startup channels cannot reach the spawned npm", () => {
+    const priorOptions = process.env.NODE_OPTIONS;
+    const priorPath = process.env.NODE_PATH;
+    const priorTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_OPTIONS = "--require=evil";
+    process.env.NODE_PATH = "C:\\evil-modules";
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    try {
+      const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+      const target = resolveCodexCliUpdateTarget("latest", spawn);
+      expect(target.kind).toBe("resolved");
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        const lower = new Set(Object.keys(env).map(key => key.toLowerCase()));
+        expect(lower.has("node_options")).toBe(false);
+        expect(lower.has("node_path")).toBe(false);
+        expect(lower.has("node_tls_reject_unauthorized")).toBe(false);
+      }
+    } finally {
+      if (priorOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = priorOptions;
+      if (priorPath === undefined) delete process.env.NODE_PATH;
+      else process.env.NODE_PATH = priorPath;
+      if (priorTls === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = priorTls;
+    }
+  });
+
+  test("a trusted snapshot without PATH installs an explicit empty PATH and fails closed", () => {
+    const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+    const target = resolveCodexCliUpdateTarget("latest", spawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    // With no trusted PATH the resolver must refuse, never falling back to the
+    // ambient PATH that could resolve a hostile npm. Windows resolves the binary
+    // itself and spawns nothing; POSIX spawns the bare name whose execvp lookup
+    // must then run under the explicit empty PATH.
+    expect(target.kind).toBe("unresolved");
+    for (const call of calls) {
+      expect((call.options.env as NodeJS.ProcessEnv).PATH).toBe("");
+    }
+  });
+
+  test("npm cache and log state stay inside the owned temporary root", () => {
+    const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+    const target = resolveCodexCliUpdateTarget("latest", spawn);
+    expect(target.kind).toBe("resolved");
+    for (const call of calls) {
+      const cwd = call.options.cwd as string;
+      const line = argvLine(call);
+      expect(line).toContain("--cache=");
+      const cacheFlag = line.match(/--cache=(\S+)/);
+      expect(cacheFlag).not.toBeNull();
+      // The cache root (and therefore npm's _logs directory beneath it) must live
+      // inside the owned isolation dir, not under an ambient ~/.npm.
+      expect(cacheFlag![1]!.startsWith(cwd)).toBe(true);
+    }
+  });
+
+  test("a real npm call under the isolated argv leaves the operator HOME untouched", () => {
+    // Runs real npm exactly once: the first captured query executes for real with a
+    // disposable HOME while the rest stay stubbed. npm_config_offline makes the
+    // registry leg fail fast without network; the residue assertions hold either way.
+    const fakeHome = mkdtempSync(join(tmpdir(), "ocx-update-test-home-"));
+    try {
+      const calls: CapturedCall[] = [];
+      let realRan = false;
+      const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+        const cwd = options.cwd as string;
+        const call: CapturedCall = {
+          bin, args, options,
+          cwdHadSentinel: existsSync(join(cwd, "package.json")),
+          cwdHadNpmrc: existsSync(join(cwd, "ocx-update.npmrc")),
+        };
+        calls.push(call);
+        const field = queriedField(call);
+        if (realRan) return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+        realRan = true;
+        const env = { ...(options.env as NodeJS.ProcessEnv), HOME: fakeHome, USERPROFILE: fakeHome, npm_config_offline: "true" };
+        return spawnSync(bin, args, { ...options, env, timeout: 30_000, windowsHide: true, encoding: "utf8" });
+      }) as never;
+      resolveCodexCliUpdateTarget("latest", spawn);
+      expect(realRan).toBe(true);
+      const cwd = calls[0]!.options.cwd as string;
+      // Anything npm persisted must be inside the owned root; the ambient HOME must
+      // stay completely empty (no ~/.npm, no ~/.npmrc, no _logs).
+      const collect = (root: string, base: string, out: string[]): void => {
+        let names: string[];
+        try { names = readdirSync(root); } catch { return; }
+        for (const name of names) out.push(join(base, name));
+      };
+      const homeEntries: string[] = [];
+      collect(fakeHome, ".", homeEntries);
+      expect(homeEntries).toEqual([]);
+      const leaked: string[] = [];
+      collect(cwd, ".", leaked);
+      for (const entry of leaked) {
+        const normalized = entry.replace(/\\/g, "/");
+        expect(normalized.startsWith("./package.json") || normalized.startsWith("./ocx-update.npmrc") || normalized.startsWith("./npm-cache")).toBe(true);
+      }
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
     }
   });
 });

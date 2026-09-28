@@ -450,7 +450,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "ocx system codex-cli-update attest [--json]",
       "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
       "ocx system codex-cli-update plan [--channel latest] [--json]",
-      "check and attest make no package-registry request, do not execute Codex or npm, and write nothing. plan adds a registry query and a process-table read and still writes nothing.",
+      "check and attest make no package-registry request, do not execute Codex or npm, and write nothing. plan adds a registry query and a process-table read and mutates no application state (temporary isolated npm files only, removed best-effort).",
     ],
   },
   {

@@ -32,9 +32,11 @@ import {
  *    is a digest over the evidence the decision rests on, so an approved change to any
  *    bound field produces a different id.
  *  - Nothing is terminated or restarted. A live Codex session refuses the plan; it is
- *    never signalled, killed or waited on. The plan installs nothing: it resolves
- *    registry metadata and reads the process table under a temporary isolated npm
- *    config directory that is removed afterwards, leaving no state behind.
+ *    never signalled, killed or waited on. The plan performs no application-state
+ *    mutation: it resolves registry metadata and reads the process table under a
+ *    temporary isolated npm root (cwd, npmrc, cache and logs) that is removed
+ *    afterwards; a forcibly terminated run may leave that temp root behind, so the
+ *    cleanup contract is best-effort rather than absolute.
  */
 
 export const CODEX_CLI_PACKAGE = "@openai/codex";
@@ -193,11 +195,26 @@ function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget 
  * this codebase intentionally supports survive untouched: the standard proxy
  * variables npm itself honors (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, any case)
  * and NODE_EXTRA_CA_CERTS, which npm's own Node runtime reads for TLS.
+ *
+ * Node's own startup channels are stripped too. npm runs inside Node, so ambient
+ * NODE_OPTIONS injects code before the first npm line, NODE_PATH redirects module
+ * resolution, and NODE_TLS_REJECT_UNAUTHORIZED would make the pinned-registry TLS
+ * check void - each one reaches the evidence-producing process unless removed.
+ * NODE_EXTRA_CA_CERTS survives because it is the supported TLS extension, not an
+ * execution or trust bypass.
  */
+const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
+  "node_options",
+  "node_path",
+  "node_tls_reject_unauthorized",
+  "node_compile_cache",
+]);
+
 function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of Object.keys(env)) {
-    if (key.toLowerCase().startsWith("npm_config_")) delete env[key];
+    const lower = key.toLowerCase();
+    if (lower.startsWith("npm_config_") || NPM_ENV_DROP_KEYS.has(lower)) delete env[key];
   }
   return env;
 }
@@ -216,10 +233,18 @@ function codexCliUpdateBoundEnv(bound: NodeJS.ProcessEnv | undefined): NodeJS.Pr
     const k = key.toLowerCase();
     if (k === "path" || k === "pathext") delete merged[key];
   }
+  let hasTrustedPath = false;
   for (const [key, value] of Object.entries(bound)) {
     const k = key.toLowerCase();
-    if ((k === "path" || k === "pathext") && value !== undefined) merged[key] = value;
+    if ((k === "path" || k === "pathext") && value !== undefined) {
+      merged[key] = value;
+      if (k === "path") hasTrustedPath = true;
+    }
   }
+  // A trusted snapshot without PATH means "no trusted PATH", not "keep the ambient
+  // one". Install the empty value explicitly so executable resolution fails closed
+  // instead of silently re-inheriting a PATH the proof never attested.
+  if (!hasTrustedPath) merged.PATH = "";
   return merged;
 }
 
@@ -228,6 +253,9 @@ interface NpmConfigIsolation {
   readonly dir: string;
   /** Empty file substituted for both the user and the global npmrc. */
   readonly npmrc: string;
+  /** npm cache root under dir: keeps _cacache and _logs inside the owned root so a
+   *  successful query cannot leave residue in the ambient ~/.npm. */
+  readonly cache: string;
   readonly env: NodeJS.ProcessEnv;
 }
 
@@ -248,7 +276,8 @@ function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): N
     writeFileSync(join(root, "package.json"), "{}\n");
     const npmrc = join(root, "ocx-update.npmrc");
     writeFileSync(npmrc, "");
-    return { dir: root, npmrc, env: codexCliUpdateBoundEnv(boundEnv) };
+    const cache = join(root, "npm-cache");
+    return { dir: root, npmrc, cache, env: codexCliUpdateBoundEnv(boundEnv) };
   } catch (error) {
     // A mid-setup failure must not leak a directory this call created; a
     // caller-supplied directory stays the caller's responsibility.
@@ -264,6 +293,7 @@ function isolatedNpmArgs(args: readonly string[], isolation: NpmConfigIsolation)
     "--registry=" + CODEX_CLI_REGISTRY,
     "--userconfig=" + isolation.npmrc,
     "--globalconfig=" + isolation.npmrc,
+    "--cache=" + isolation.cache,
   ];
 }
 
@@ -390,9 +420,9 @@ function refusedPlan(
 const NOT_EVALUATED: CodexCliUpdateSession = Object.freeze({ state: "not-evaluated" as const, matches: null });
 
 /**
- * Build the dry-run plan. Installs nothing and leaves no state behind; registry
- * evidence is gathered under a temporary isolated npm config directory that is
- * removed afterwards.
+ * Build the dry-run plan. Installs nothing and mutates no application state;
+ * registry evidence is gathered under a temporary isolated npm root whose cache,
+ * logs, npmrc and cwd are all inside it and removed best-effort afterwards.
  *
  * The refusal order is deliberate. Ownership and target questions are settled before the
  * process table is read, so a machine that can never be updated by this workflow does not

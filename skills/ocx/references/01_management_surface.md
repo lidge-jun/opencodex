@@ -462,7 +462,7 @@ JSON mode: `envelope`.
 
 - Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.
 - The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.
-- Installs nothing and leaves no state behind; registry evidence is gathered under a temporary isolated npm config directory that is removed afterwards. A refusal is a normal dry-run answer and still exits 0.
+- Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.
 - The plan id is a digest of the evidence the decision rests on — ownership, the installed version, a digest of the canonical install root, the resolved target — not a stored job. There is no plan state on disk to expire, collide or clean up.
 - An unreadable process table refuses rather than reading as no live session.
 
