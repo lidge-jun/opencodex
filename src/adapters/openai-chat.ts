@@ -13,6 +13,7 @@ import { isDebugEnabled } from "../lib/debug-settings";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../providers/service-tier";
+import { applyGithubCopilotContextTier } from "../providers/github-copilot-context";
 import { createAdapterTierMetadata, decideTier, type AdapterTierMetadata } from "../providers/fastwire";
 import {
   isTranslatorBudgetExceededError,
@@ -229,7 +230,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
         if (parsed.stream) body.stream_options = { include_usage: true };
 
-        const bodyJson = JSON.stringify(body);
+        const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, parsed.modelId, incoming?.providerName));
         const actualServiceTier = typeof body.service_tier === "string" ? body.service_tier : null;
         const tierLog = createAdapterTierMetadata(
           parsed.options.tierObservation,

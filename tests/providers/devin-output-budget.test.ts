@@ -13,12 +13,11 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 /**
  * The output budget a Devin turn actually sends.
  *
- * CompletionConfiguration #2 is the output cap and #3 is the context window.
- * Every assertion below reads both, because the defect these guard against is
- * not "the number is wrong" but "the two meanings were collapsed into one":
- * a caller that names no cap has to reach the configured output budget without
- * the context window leaking into the field that decides how long the answer
- * may run.
+ * CompletionConfiguration #2 is the output cap; #3 is `max_newlines`, which
+ * the adapter holds at a fixed large value. A caller that names no cap has to
+ * reach the configured budget, then the catalog's own ceiling for the selected
+ * row (ModelInfo #13), without the context window leaking into the field that
+ * decides how long the answer may run.
  */
 describe("Devin output budget on the wire", () => {
   const apiKey = "ocx-devin-output-fixture";
@@ -37,11 +36,12 @@ describe("Devin output budget on the wire", () => {
   function fields(buf: Buffer) {
     return new Map([...iterFields(buf)].map(field => [field.num, field]));
   }
-  function seed(rows: Array<{ uid: string; window?: number }>): void {
+  function seed(rows: Array<{ uid: string; window?: number; maxOut?: number }>): void {
     const buffer = Buffer.concat(rows.map(row => encodeMessage(1, Buffer.concat([
       encodeString(1, row.uid),
       encodeString(22, row.uid),
       ...(row.window === undefined ? [] : [encodeVarintField(18, row.window)]),
+      ...(row.maxOut === undefined ? [] : [encodeMessage(23, encodeVarintField(13, row.maxOut))]),
       encodeVarintField(4, 0),
     ]))));
     setCachedCatalogForTests(parseCatalogBuffer(buffer, apiKey, host));
@@ -62,10 +62,10 @@ describe("Devin output budget on the wire", () => {
     return events;
   }
   /** The completion configuration the one captured turn actually encoded. */
-  function sentCompletion(): { output: bigint; context: bigint } {
+  function sentCompletion(): { output: bigint; newlines: bigint } {
     expect(requests).toHaveLength(1);
     const completion = fields(fields(requests[0]!).get(8)!.value as Buffer);
-    return { output: completion.get(2)!.value as bigint, context: completion.get(3)!.value as bigint };
+    return { output: completion.get(2)!.value as bigint, newlines: completion.get(3)!.value as bigint };
   }
 
   beforeEach(() => {
@@ -125,12 +125,29 @@ describe("Devin output budget on the wire", () => {
     await run({ contextWindow: 200_000, modelContextWindows: { "swe-2-high": 180_000 } });
     const sent = sentCompletion();
     expect(sent.output).toBe(8192n);
-    expect(sent.context).toBe(180_000n);
+    expect(sent.newlines).toBe(128_000n);
   });
 
-  test("a configured output budget does not disturb the input ceiling", async () => {
+  test("the selected row's catalog ceiling replaces the 8192 fallback", async () => {
+    seed([{ uid: "swe-2-high", window: 262_000, maxOut: 128_000 }, { uid: "swe-2-max", maxOut: 96_000 }]);
+    await run();
+    expect(sentCompletion().output).toBe(128_000n);
+  });
+
+  test("configured budgets and an explicit cap still outrank the catalog ceiling", async () => {
+    seed([{ uid: "swe-2-high", maxOut: 128_000 }]);
     await run({ defaultMaxOutputTokens: 64_000 });
-    expect(sentCompletion().context).toBe(262_000n);
+    expect(sentCompletion().output).toBe(64_000n);
+    requests = [];
+    await run({}, { maxOutputTokens: 500 });
+    expect(sentCompletion().output).toBe(500n);
+  });
+
+  test("max_newlines stays fixed whatever the context window", async () => {
+    // #3 once carried each row's context window as if it were an input ceiling.
+    seed([{ uid: "swe-2-high", window: 1_000_000 }]);
+    await run({ contextWindow: 80_000 });
+    expect(sentCompletion().newlines).toBe(128_000n);
   });
 });
 

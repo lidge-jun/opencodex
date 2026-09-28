@@ -382,7 +382,7 @@ roster the exporter itself iterates. The count is
 deliberately not restated here: it was written as eight, a bounded label value was added, and the
 documentation then contradicted the output it describes. A
 logical request increments once, physical sends sum the finalized attempt counts, and each distinct
-recovery kind already retained on an attempt contributes once to its coarse class.
+recovery kind already retained on an attempt contributes once to its coarse class. The Antigravity validation-refusal sibling resend records `oauth-account-403`, which Logs labels from the shared recovery roster.
 `opencodex_request_failures_total` counts the cause the recorder derived and never re-derives one,
 and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
@@ -478,7 +478,7 @@ advances the observation clock, so a retained older row cannot defer evaluation 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
 
-The provider editor field policy exposes `showThinkingSummary` as a boolean provider option; it controls Responses summary defaults without a dashboard rendering change. See [Google provider](providers/google.md).
+The provider editor field policy exposes `showThinkingSummary` as a boolean provider option; it controls Responses summary defaults without a dashboard rendering change. See [Google provider](providers/google.md). It also exposes `hideRawReasoning` as a boolean option, which suppresses only the raw reasoning channel and leaves provider-authored summaries visible; a dashboard save keeps an omitted value for the same provider name even after a destination move, while `PATCH` accepts a boolean or `null` to clear it. The display contract is owned by [Chat compatibility](providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 
 The same editor policy accepts the per-model `inlineThinkTagModels` string list. Its opt-in
 format contract is owned by [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).

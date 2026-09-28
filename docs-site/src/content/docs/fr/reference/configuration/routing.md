@@ -31,7 +31,7 @@ Les fournisseurs désactivés sont exclus. Un espace de noms explicite qui dési
 
 ### Redirections des modèles bloqués
 
-`blockedModelRedirects` est un `Record<string, string>` facultatif de premier niveau associant des remplacements exacts d’identifiants de modèle résolus ; il est non défini par défaut. Il s’applique après l’ordre de résolution ci-dessus : une correspondance conserve la route du fournisseur et du compte déjà sélectionnée, ne remplace que l’identifiant du modèle en amont et enregistre le motif de routage `blocked-model-redirect`. L’omission de la clé ne modifie pas le routage.
+`blockedModelRedirects` est une table facultative de remplacements exacts, non définie par défaut. Les clés de modèle nu sont appliquées après la résolution du fournisseur, du compte et de l'alias. Une cible sans autre fournisseur configuré explicite remplace une seule fois le modèle en amont, en conservant le fournisseur et le compte choisis, même pour une valeur contenant `/`. Seule une cible nommant explicitement un autre fournisseur configuré change de fournisseur ; une clé `<fournisseur-source>/<modèle-résolu>` avec une telle cible prévaut sur la clé nue. Les chaînes inter-fournisseurs détectent les cycles et sont limitées à cinq sauts. Un sélecteur de compte épinglé refuse tout changement de fournisseur. La destination utilise ses propres identifiants et quotas. Le motif devient `blocked-model-redirect`.
 
 ```json
 {

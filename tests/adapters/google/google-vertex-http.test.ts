@@ -5,6 +5,7 @@ import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
 import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+import { isAntigravityValidationRefusal } from "../../../src/server/responses/antigravity-validation-refusal";
 
 describe("Antigravity 403 body boundary", () => {
   test("a complete structured reason inside 4096 bytes survives normalization", async () => {
@@ -14,6 +15,23 @@ describe("Antigravity 403 body boundary", () => {
       executor: (async () => new Response(payload, { status: 403 })) as typeof fetch,
     });
     expect((await result.text()).startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(true);
+  });
+
+  test("only a complete normalized marker admits rotation and inspection preserves the response", async () => {
+    const accepted = new Response(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: validation needed`, { status: 403 });
+    expect(await isAntigravityValidationRefusal(accepted)).toBe(true);
+    expect(await accepted.text()).toContain("validation needed");
+    for (const text of [ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, `${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}x: fake`,
+      `Antigravity access denied: ${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: fake`]) {
+      const refused = new Response(text, { status: 403 });
+      expect(await isAntigravityValidationRefusal(refused)).toBe(false);
+      expect(await refused.text()).toBe(text);
+    }
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = new Response(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: validation needed`, { status: 403 });
+    expect(await isAntigravityValidationRefusal(aborted, controller.signal)).toBe(false);
+    expect(await aborted.text()).toContain("validation needed");
   });
 
   test("an oversized validation body is discarded before formatting", async () => {

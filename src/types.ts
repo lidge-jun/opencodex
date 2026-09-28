@@ -80,6 +80,7 @@ export type {
   OcxConfig,
   SkillsCatalogRefresh,
   OcxSkillsConfig,
+  CodexLowQuotaProtectionConfig,
   OcxAccountPoolRotationStrategy,
   OcxAccountPoolQuotaWindow,
   OcxComboCooldownWaitPolicy,

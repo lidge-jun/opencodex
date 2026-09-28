@@ -18,6 +18,7 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 interface ToolOptions {
   hideThinkingSummary?: boolean;
+  hideRawReasoning?: boolean;
   declaredToolNames?: Set<string>;
   freeformToolNames?: Set<string>;
   toolParameterSchemas?: Map<string, Record<string, unknown>>;
@@ -34,6 +35,7 @@ function legacyChatStream(events: AdapterEvent[], options: ToolOptions = {}) {
     {
       translatorBudget,
       ...(options.hideThinkingSummary ? { hideThinkingSummary: true } : {}),
+      ...(options.hideRawReasoning ? { hideRawReasoning: true } : {}),
       ...(options.declaredToolNames ? { declaredToolNames: options.declaredToolNames } : {}),
       ...(options.toolParameterSchemas ? { toolParameterSchemas: options.toolParameterSchemas } : {}),
       // The Chat inbound wire never enforces the declared catalog (#4735).
@@ -48,6 +50,7 @@ function directOptions(options: ToolOptions = {}) {
     model: "client-model",
     translatorBudget: createTestTranslatorBudget(),
     ...(options.hideThinkingSummary ? { hideThinkingSummary: true } : {}),
+    ...(options.hideRawReasoning ? { hideRawReasoning: true } : {}),
     ...(options.declaredToolNames ? { declaredToolNames: options.declaredToolNames } : {}),
     ...(options.freeformToolNames ? { freeformToolNames: options.freeformToolNames } : {}),
     ...(options.toolParameterSchemas ? { toolParameterSchemas: options.toolParameterSchemas } : {}),
@@ -179,6 +182,15 @@ const SCENARIOS: Record<string, { events: AdapterEvent[]; options?: ToolOptions 
       { type: "done" },
     ],
     options: { hideThinkingSummary: true },
+  },
+  "provider raw-reasoning policy keeps summaries and drops the cot": {
+    events: [
+      { type: "reasoning_raw_delta", text: "private cot" },
+      { type: "thinking_delta", thinking: "summary" },
+      { type: "text_delta", text: "Answer" },
+      { type: "done" },
+    ],
+    options: { hideRawReasoning: true },
   },
   "freeform tool calls have no Chat representation": {
     events: [

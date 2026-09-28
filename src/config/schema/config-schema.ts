@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 import { compactionRecoverySchema } from "./compaction-recovery";
+import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -284,7 +285,9 @@ export const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
-  blockedModelRedirects: z.record(z.string(), z.string()).optional().catch(undefined),
+  blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
+  // Preserve malformed hand edits for a local routing error; candidate writes use the shared parser.
+  anthropicAccountPool: z.unknown().optional(),
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).

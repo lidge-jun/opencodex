@@ -5,7 +5,7 @@ import type { ServiceDiagnostic } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall, assertServiceAuthEnvironment } from "./guards";
 import { installLaunchd, restartLaunchdJob } from "./launchd";
 import type { LaunchdInstallOutcome } from "./launchd";
-import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership } from "./state";
+import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
 import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
 import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml } from "./windows-ops";
@@ -62,6 +62,8 @@ export interface RepairServiceDeps {
   schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+  /** Test seam for a recorded temporary launcher. */
+  launcherPathDiagnostic?: () => string | null;
 }
 
 /**
@@ -174,6 +176,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
 
   (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
   (deps.assertAuth ?? assertServiceAuthEnvironment)();
+
+  const temporaryLauncher = (deps.launcherPathDiagnostic ?? (() => serviceLauncherPathDiagnostic(undefined, platform, true)))();
+  if (temporaryLauncher) console.warn(`⚠️ ${temporaryLauncher}`);
 
   if (platform === "win32") {
     if (diag.backend === "native") {

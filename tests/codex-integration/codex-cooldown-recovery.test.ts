@@ -32,6 +32,7 @@ import {
 } from "../../src/codex/routing";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-cooldown-recovery-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -97,6 +98,7 @@ describe("Codex cooldown recovery worker", () => {
     clearAccountQuota();
     clearCodexUpstreamHealth();
     clearCodexCooldownRecoveryProbeState();
+    resetQuotaQueryBackoffForTests();
   });
 
   afterEach(() => {
@@ -104,6 +106,7 @@ describe("Codex cooldown recovery worker", () => {
     clearAccountQuota();
     clearCodexUpstreamHealth();
     clearCodexCooldownRecoveryProbeState();
+    resetQuotaQueryBackoffForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

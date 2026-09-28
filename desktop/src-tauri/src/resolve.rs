@@ -83,6 +83,35 @@ impl Default for Takeover {
     }
 }
 
+/// Which side of the CLI-versus-runtime comparison runs newer.
+///
+/// The strings are the wire values the CLI emits; `Unknown` also stands in for an
+/// absent `versionSkew` document or a future relation string. Unknown display metadata
+/// must not discard an otherwise valid live-runtime answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VersionRelation {
+    Match,
+    CliNewer,
+    ProxyNewer,
+    Incomparable,
+    #[serde(other)]
+    Unknown,
+}
+
+/// The bundled CLI's version laid next to the live runtime's, as the CLI computed it.
+/// The warning is the operator-facing sentence `ocx status` already prints; this shell
+/// repeats it verbatim so two surfaces never describe the same skew differently.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionSkew {
+    pub cli_version: String,
+    pub proxy_version: Option<String>,
+    pub skewed: bool,
+    pub relation: VersionRelation,
+    pub warning: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resolved {
@@ -97,6 +126,10 @@ pub struct Resolved {
     pub ownership: Recorded,
     #[serde(default)]
     pub takeover: Takeover,
+    /// The version comparison, absent on every CLI older than this field and on a
+    /// proven absence. Absent reads as unknown, never as a match.
+    #[serde(default)]
+    pub version_skew: Option<VersionSkew>,
 }
 
 impl Resolved {
@@ -109,6 +142,21 @@ impl Resolved {
 
     pub fn home(&self) -> PathBuf {
         PathBuf::from(&self.config_home)
+    }
+
+    /// The runtime's version relative to the bundled CLI's, or Unknown when the
+    /// document does not say — including every CLI that predates the field.
+    pub fn runtime_relation(&self) -> VersionRelation {
+        self.version_skew
+            .as_ref()
+            .map_or(VersionRelation::Unknown, |skew| skew.relation)
+    }
+
+    /// The skew warning when there is a confirmed difference worth surfacing.
+    pub fn skew_warning(&self) -> Option<&str> {
+        self.version_skew
+            .as_ref()
+            .and_then(|skew| skew.warning.as_deref())
     }
 }
 
@@ -271,7 +319,7 @@ pub async fn run(app: &AppHandle, deadline: Instant) -> Resolution {
 mod tests {
     use super::{
         live_verdict, loopback_reachable, may_start, read, LiveVerdict, Resolution, Status,
-        Takeover, SCHEMA,
+        Takeover, VersionRelation, SCHEMA,
     };
     use crate::ownership::{Owner, Recorded};
 
@@ -429,6 +477,48 @@ mod tests {
                 detail: "path uses 2.59.0".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn the_version_skew_is_read_whole_and_defaults_to_unknown() {
+        // A document carrying the comparison hands the shell both the direction and the
+        // operator-facing warning verbatim.
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","versionSkew":{"cliVersion":"2.61.0","proxyVersion":"2.62.0","skewed":true,"relation":"proxy-newer","warning":"CLI 2.61.0 does not match the running proxy 2.62.0"}"#
+        );
+        let resolved = read(Some(0), document.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert_eq!(resolved.runtime_relation(), VersionRelation::ProxyNewer);
+        assert_eq!(
+            resolved.skew_warning(),
+            Some("CLI 2.61.0 does not match the running proxy 2.62.0")
+        );
+        // An older CLI sends nothing; absent must read unknown, not a match.
+        let resolved = read(Some(0), LIVE.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert_eq!(resolved.runtime_relation(), VersionRelation::Unknown);
+        assert_eq!(resolved.skew_warning(), None);
+    }
+
+    #[test]
+    fn a_future_version_relation_keeps_the_live_answer() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","versionSkew":{"cliVersion":"2.61.0","proxyVersion":"2.62.0","skewed":true,"relation":"future-comparison","warning":"upgrade the CLI"}"#
+        );
+        let resolution = read(Some(0), document.as_bytes(), b"");
+        let resolved = resolution.resolved().expect("a live answer");
+        assert_eq!(resolved.runtime_relation(), VersionRelation::Unknown);
+        assert_eq!(resolved.skew_warning(), Some("upgrade the CLI"));
+        assert!(matches!(live_verdict(&resolution), LiveVerdict::Attach));
+        assert!(!may_start(&resolution));
     }
 
     #[test]

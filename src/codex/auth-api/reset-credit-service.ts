@@ -225,7 +225,7 @@ async function refreshAfterManualReset(
     if (!manualResetAuthStillLive(accountId, auth)) return undefined;
     if (auth.isMain) {
       const result = await fetchMainAccountInfoAttempt(true, 1, auth.nativeMainLease,
-        auth.nativeMainSharedClaimHeld === true, false);
+        auth.nativeMainSharedClaimHeld === true, false, didReset, config);
       const proof = result.resetRecoveryProof;
       const recovered = didReset && manualResetAuthStillLive(accountId, auth)
         && !!proof && !!auth.mainProof

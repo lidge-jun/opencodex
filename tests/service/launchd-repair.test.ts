@@ -213,6 +213,59 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     }
   });
 
+  test("cleans stale fnm PATH and reloads the live definition", () => {
+    const plistPath = fixturePlist();
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = "/usr/bin:/bin";
+      const rendered = renderedPlist();
+      const stalePath = "/tmp/fnm_multishells/1/bin:/usr/bin:/bin";
+      writeFileSync(plistPath, rendered.replace(
+        /(<key>PATH<\/key><string>)[^\n]*(<\/string>)/,
+        (_match, open: string, close: string) => `${open}${stalePath}${close}`,
+      ), "utf8");
+      const { argv, launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+      const outcome = installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} });
+      expect(outcome.reloaded).toBe(true);
+      expect(verbs(argv)).toContain("bootout");
+      expect(verbs(argv)).toContain("bootstrap");
+      expect(readFileSync(plistPath, "utf8")).toBe(rendered);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
+  test("a proxy change survives stale PATH cleanup and reaches the reloaded plist", () => {
+    const plistPath = fixturePlist();
+    const originalPath = process.env.PATH;
+    const originalProxy = process.env.HTTPS_PROXY;
+    try {
+      process.env.PATH = "/usr/bin:/bin";
+      delete process.env.HTTPS_PROXY;
+      let previous = renderedPlist();
+      previous = previous.replace(
+        /(<key>PATH<\/key><string>)[^\n]*(<\/string>)/,
+        (_match, open: string, close: string) => `${open}/tmp/fnm_multishells/1/bin:/usr/bin:/bin${close}`,
+      );
+      writeFileSync(plistPath, previous, "utf8");
+      process.env.HTTPS_PROXY = "http://proxy.example:8080";
+      const { argv, launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+      const outcome = installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} });
+      const repaired = readFileSync(plistPath, "utf8");
+      expect(outcome.reloaded).toBe(true);
+      expect(verbs(argv)).toContain("bootstrap");
+      expect(repaired).toContain("<key>HTTPS_PROXY</key><string>http://proxy.example:8080</string>");
+      expect(repaired).not.toContain("fnm_multishells");
+      expect(reusePreviousPlistPathVariable(previous, repaired)).toBeNull();
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = originalProxy;
+    }
+  });
+
   test("an identical plist whose job is loaded from an OLDER command still reloads", () => {
     const plistPath = fixturePlist();
     writeFileSync(plistPath, renderedPlist(), "utf8");

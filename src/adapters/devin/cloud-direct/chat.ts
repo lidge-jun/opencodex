@@ -39,6 +39,7 @@ import { getCachedCatalog, ModelNotAvailableError, type CacheEntry } from './cat
 import { anySignal, cancelBodyOnAbort } from '../../../lib/abort.js';
 import { parseRetryAfterFromMessage } from '../../../lib/retry-delay.js';
 import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
+import { normalizeDevinToolParameters } from './tool-schema.js';
 
 /**
  * Connect-RPC streaming inactivity timeout. If the cloud sends zero bytes
@@ -175,6 +176,7 @@ export function allocateCascadeId(): string {
  *   #3 prompt: string                          (text content)
  *   #4 num_tokens: int                          (rough estimate)
  *   #5 safe_for_code_telemetry: bool            (1 = ok to log)
+ *   #9 tool_result_is_error: bool               (tool prompts only)
  *   #10 images: repeated ImageData              (multimodal)
  *   #11 thinking: string                        (assistant reasoning, replayed)
  *   #12 signature: string                       (opaque attestation for #11)
@@ -218,6 +220,7 @@ function encodeChatMessagePrompt(
     thinking?: string;
     signature?: string;
     signatureType?: string;
+    isError?: boolean;
   },
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
@@ -234,6 +237,9 @@ function encodeChatMessagePrompt(
   if (opts?.toolCallId) {
     parts.push(encodeString(7, opts.toolCallId));
   }
+  // Accepted live on a tool prompt. Only some models act on it, so the adapter
+  // also keeps an in-band marker in the text.
+  if (opts?.isError) parts.push(encodeVarintField(9, 1));
   // Assistant message with tool_calls: encode each as a ChatToolCall.
   if (opts?.toolCalls && opts.toolCalls.length > 0) {
     for (const tc of opts.toolCalls) {
@@ -257,30 +263,26 @@ function encodeChatMessagePrompt(
 const SOURCE_BY_ROLE: Record<string, number> = {
   user: 1,
   assistant: 2,
-  // NOTE: do not send source=3 (SYSTEM) directly — the Codeium chat backend
-  // returns "third-party model provider is experiencing issues" when any
-  // ChatMessagePrompt has source=SYSTEM. The captured LS upstream traffic
-  // shows the IDE inlines system context into the *user* prompt (source=1)
-  // wrapped in <additional_metadata>...</additional_metadata>. We collapse
-  // role:'system' messages into the next user turn before building the
-  // proto — see `collapseSystemIntoUser` below.
+  // Never sent as a prompt source: the leading system text goes in request #2,
+  // and a later system message is collapsed into the next user turn below.
   system: 1,
   tool: 4,
 };
 
 /**
- * Collapse OpenAI-style messages so all `role:'system'` entries are inlined
- * into the immediately-following user message, matching the wire format the
- * IDE uses. Cognition's chat backend rejects raw role=system entries.
+ * Collapse `role:'system'` entries that follow the conversation start into the
+ * immediately-following user message. The leading run of system messages never
+ * reaches here; it is the request's #2 system prompt. With S0 already sent as #2:
  *
- *   [{system: "S1"}, {system: "S2"}, {user: "U1"}, {assistant: "A1"}, {user: "U2"}]
+ *   [{user: "U1"}, {assistant: "A1"}, {system: "S1"}, {system: "S2"}, {user: "U2"}]
  *
  * becomes
  *
- *   [{user: "<system>\nS1\nS2\n</system>\nU1"}, {assistant: "A1"}, {user: "U2"}]
+ *   [{user: "U1"}, {assistant: "A1"}, {user: "<system>\nS1\n\nS2\n</system>\nU2"}]
  *
  * If there's no following user message, the trailing system messages get
- * appended as a synthesized user turn.
+ * appended as a synthesized user turn. A request made only of system messages
+ * keeps no #2 and comes through here whole, so its prompt list is never empty.
  */
 function collapseSystemIntoUser(messages: ChatHistoryItem[]): ChatHistoryItem[] {
   const out: ChatHistoryItem[] = [];
@@ -332,10 +334,15 @@ function collapseSystemIntoUser(messages: ChatHistoryItem[]): ChatHistoryItem[] 
  * CompletionConfiguration — mirrors the LS-shipped defaults, lets the caller
  * override the obvious knobs.
  */
-/** Output cap when the caller named none. */
+/** Output cap when neither the caller nor the catalog named one. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
-/** Context window when the caller named none. */
-const DEFAULT_CONTEXT_WINDOW = 128_000;
+/**
+ * CompletionConfiguration #3 is `max_newlines`, not a token count and not an
+ * input ceiling: live, a value of 5 did not truncate a 25-line answer. It is
+ * still sent, at the value every turn has carried, so the request shape the
+ * service accepts does not change.
+ */
+const MAX_NEWLINES = 128_000;
 
 /**
  * Cognition rejects a temperature of exactly 0 with the same opaque internal
@@ -353,7 +360,6 @@ function safeTemperature(value: number | undefined): number {
 
 function encodeCompletionConfiguration(opts: {
   maxOutputTokens?: number;
-  maxInputTokens?: number;
   temperature?: number;
   topK?: number;
   topP?: number;
@@ -365,15 +371,15 @@ function encodeCompletionConfiguration(opts: {
   };
   // Tag map, verified by building the same turn with a working client and
   // diffing the encoded messages field by field: #2 is the OUTPUT cap and #3 is
-  // the context window. This layout had those two swapped, so a caller asking
-  // for 32 output tokens put 32 into the context-window field and the request
-  // came back as an opaque "an internal error occurred" — for every turn, on
-  // every account, which is why free and paid failed identically. #6 and #11
-  // are not part of the message the service accepts.
+  // max_newlines. This layout once had those two swapped, so a caller's output
+  // cap landed in #3 and a large value in #2, and the request came back as an
+  // opaque "an internal error occurred" — for every turn, on every account,
+  // which is why free and paid failed identically. #6 and #11 are not part of
+  // the message the service accepts.
   return Buffer.concat([
     encodeVarintField(1, 1),
     encodeVarintField(2, opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS),
-    encodeVarintField(3, opts.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW),
+    encodeVarintField(3, MAX_NEWLINES),
     enc64(5, safeTemperature(opts.temperature)),
     encodeVarintField(7, opts.topK ?? 40),
     enc64(8, opts.topP ?? 1.0),
@@ -424,6 +430,8 @@ export interface ChatHistoryItem {
   thinking?: string;
   signature?: string;
   signature_type?: string;
+  /** For `role: 'tool'` only — the tool failed. Encoded as ChatMessagePrompt #9. */
+  is_error?: boolean;
 }
 
 /**
@@ -486,7 +494,7 @@ export type CloudChatEvent =
    * turn produced. Without decoding it there is nothing to put in the prompt's
    * #12 on the next turn, so the replay would always be unsigned.
    */
-  | { kind: 'reasoning_signature'; signature: string }
+  | { kind: 'reasoning_signature'; signature: string; signatureType?: string }
   | { kind: 'tool_call_start'; id: string; name: string }
   | {
       kind: 'tool_call_args';
@@ -531,8 +539,8 @@ interface BuildArgs {
   messages: ChatHistoryItem[];
   cascadeId: string;
   /**
-   * GetChatMessageRequest #22. Optional because it is omitted on a first turn;
-   * the working client only reuses one across a later tool loop.
+   * GetChatMessageRequest #17 prompt_id. Optional because it is omitted on a
+   * first turn; the working client only reuses one across a later tool loop.
    */
   promptId?: string;
   sessionId: string;
@@ -543,7 +551,6 @@ interface BuildArgs {
   requestType?: number;
   completionOpts?: {
     maxOutputTokens?: number;
-    maxInputTokens?: number;
     temperature?: number;
     topK?: number;
     topP?: number;
@@ -636,16 +643,20 @@ export function sanitizeToolDescriptionForCognitionForTests(description: string)
   return sanitizeToolDescriptionForCognition(description);
 }
 
-function encodeToolDef(tool: ToolDef): Buffer {
-  const rawDesc = sanitizeToolDescriptionForCognition(tool.description ?? '');
-  const desc =
-    rawDesc.length > MAX_TOOL_DESC_LEN
-      ? rawDesc.slice(0, MAX_TOOL_DESC_LEN - 24) + '\n…(truncated for cloud)'
-      : rawDesc;
+/** Description as transmitted on the Cognition wire, also used by overflow estimation. */
+export function prepareToolDescriptionForCognition(description: string): string {
+  const rawDesc = sanitizeToolDescriptionForCognition(description);
+  return rawDesc.length > MAX_TOOL_DESC_LEN
+    ? rawDesc.slice(0, MAX_TOOL_DESC_LEN - 24) + '\n…(truncated for cloud)'
+    : rawDesc;
+}
+
+function encodeToolDef(tool: ToolDef, modelUid: string): Buffer {
+  const desc = prepareToolDescriptionForCognition(tool.description ?? '');
   return Buffer.concat([
     encodeString(1, tool.name),
     encodeString(2, desc),
-    encodeString(3, JSON.stringify(tool.parameters ?? {})),
+    encodeString(3, JSON.stringify(normalizeDevinToolParameters(modelUid, tool.parameters ?? {}))),
   ]);
 }
 
@@ -664,9 +675,22 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     cloudChatShape: true,
   });
 
-  // System messages must be inlined into the user turn (Cognition cloud
-  // rejects source=3). See `collapseSystemIntoUser` for the format.
-  const collapsed = collapseSystemIntoUser(args.messages);
+  // The leading system messages become request #2. Measured live on swe-1-6
+  // with a ~6.7k-token system prompt: turn 2 read 6688 of 6715 prompt tokens
+  // from cache in #2, against 7072 of 7097 when the same text was collapsed
+  // into the first user prompt, so the cache ratio is unchanged and the prompt
+  // is smaller. The model obeyed an instruction given only in #2.
+  // A request with only system text keeps it as a user prompt: #2 alone would
+  // leave the request with no prompt at all.
+  const firstNonSystem = args.messages.findIndex((m) => m.role !== 'system');
+  const leadingSystem = firstNonSystem === -1 ? [] : args.messages.slice(0, firstNonSystem);
+  const systemPrompt = leadingSystem
+    .map((m) => normalizeContent(m.content)
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text).join('\n'))
+    .filter(Boolean)
+    .join('\n\n');
+  const collapsed = collapseSystemIntoUser(args.messages.slice(leadingSystem.length));
   const promptParts = collapsed.map((m) =>
     encodeMessage(
       3,
@@ -683,6 +707,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
           thinking: m.role === 'assistant' ? m.thinking : undefined,
           signature: m.role === 'assistant' ? m.signature : undefined,
           signatureType: m.role === 'assistant' ? m.signature_type : undefined,
+          isError: m.role === 'tool' ? m.is_error : undefined,
         },
       ),
     ),
@@ -691,7 +716,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   const completion = encodeCompletionConfiguration(args.completionOpts ?? {});
 
   const toolParts: Buffer[] = (args.tools ?? []).map((t) =>
-    encodeMessage(10, encodeToolDef(t)),
+    encodeMessage(10, encodeToolDef(t, args.modelUid)),
   );
 
   // Field layout from mitm capture of the LS:
@@ -701,15 +726,15 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   //   #8  completion_configuration
   //   #10 tools (repeated ChatToolDefinition)
   //   #13 prompt_cache_options
+  //   #15 CortexTrajectoryReference
   //   #16 cascade_id (string)
+  //   #17 prompt_id (string)
   //   #21 chat_model_uid (string)
-  //   #22 prompt_id (string)
+  //   #22 execution_id (string)
   return Buffer.concat([
     encodeMessage(1, metadata),
-    // #2 system_prompt is always written, empty when the caller had none. The
-    // system turn is separately collapsed into the first user message because
-    // source=SYSTEM is refused; this field is the one the wire expects here.
-    encodeString(2, ''),
+    // #2 system_prompt is always written, empty when the caller had none.
+    encodeString(2, systemPrompt),
     ...promptParts,
     encodeVarintField(7, args.requestType ?? 5),
     encodeMessage(8, completion),
@@ -721,7 +746,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     // it and records real savings; sending it unconditionally matches both the
     // native client and CLIProxyAPIPlus, which places it outside its tools gate.
     encodeMessage(13, encodeVarintField(1, PROMPT_CACHE_EPHEMERAL)),
-    // #15 session model config: { id, turn, 4 }. Present on every verified
+    // #15 CortexTrajectoryReference: { id, 1, 4 }. Present on every verified
     // request.
     encodeMessage(15, Buffer.concat([
       encodeString(1, crypto.randomUUID()),
@@ -731,9 +756,9 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
     encodeString(16, args.cascadeId),
     encodeVarintField(20, 1),
     encodeString(21, args.modelUid),
-    // #22 is deliberately omitted. It is a user-exchange id that only appears
-    // from the second turn onward and is reused across that turn's tool loop; a
-    // fresh per-request uuid matches neither shape.
+    // #17 prompt_id is deliberately omitted. It is a user-exchange id that only
+    // appears from the second turn onward and is reused across that turn's tool
+    // loop; a fresh per-request uuid matches neither shape.
   ]);
 }
 
@@ -792,6 +817,10 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
     }
   }
   if (authoritativeUsage) yield authoritativeUsage;
+  let signatureType: string | undefined;
+  for (const f of iterFields(proto)) {
+    if (f.num === 21 && f.wire === 2 && Buffer.isBuffer(f.value)) signatureType = (f.value as Buffer).toString('utf8') || undefined;
+  }
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       // Visible delta_text — what the user should SEE in the chat.
@@ -817,7 +846,8 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
       if (s) yield { kind: 'reasoning', text: s };
     } else if (f.num === 10 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       const s = (f.value as Buffer).toString('utf8');
-      if (s) yield { kind: 'reasoning_signature', signature: s };
+      // #21 delta_signature_type arrives in the same frame; the prompt replays it as #18.
+      if (s) yield { kind: 'reasoning_signature', signature: s, ...(signatureType ? { signatureType } : {}) };
     } else if (f.num === 6 && f.wire === 2 && Buffer.isBuffer(f.value)) {
       let id: string | undefined;
       let name: string | undefined;

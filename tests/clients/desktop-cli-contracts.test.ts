@@ -74,6 +74,18 @@ describe("desktop CLI contracts", () => {
     expect(startup.slice(unusable, spawn)).toContain("return;");
   });
 
+  test("the version skew rides the resolve document and gates a downgrade takeover", () => {
+    // The CLI computes the comparison once (it already owns version-skew semantics for
+    // `ocx status` and doctor); the shell consumes the relation rather than reparsing
+    // versions, and a newer runtime must never be offered a takeover that downgrades it.
+    expect(resolveTs).toContain("versionSkew: computeVersionSkew(cliVersion, live.version)");
+    expect(resolveRs).toContain("pub version_skew: Option<VersionSkew>");
+    const startup = code(STARTUP);
+    const newer = startup.indexOf("VersionRelation::ProxyNewer");
+    expect(newer).toBeGreaterThan(-1);
+    expect(startup.slice(newer)).toContain("AttachPlan::Guest(");
+  });
+
   test("a Child's client runtime is attached to without a takeover prompt, never started beside", () => {
     // Refusing it failed every recovery on a Child whose runtime restarted outside the app.
     const startup = code(STARTUP);

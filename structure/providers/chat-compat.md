@@ -478,6 +478,8 @@ the desktop thinking band shows the "Thinking…" placeholder, and raw text appe
 #45 display intent, intentionally reverted 260911) put unsummarized thinking in the desktop band,
 which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
 grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
+Provider policy `hideRawReasoning` hides only this raw channel (summaries keep streaming); it controls
+display, not confidentiality ([Responses wire shapes](../transports/responses-wire-shapes.md)).
 
 For models that require a reasoning placeholder, a preserved thinking-only assistant turn with no
 plaintext receives that placeholder even when it has no tool call. Otherwise the Chat serializer
