@@ -55,8 +55,8 @@ export interface CliDispatchDeps {
   handleResolve: (args: ResolveArgs) => Promise<number>;
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
-  handleRestartStartWhenStopped: () => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: () => Promise<ProxyRestartStartOutcome>) => Promise<boolean>;
+  handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
