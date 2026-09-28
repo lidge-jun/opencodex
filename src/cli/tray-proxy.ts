@@ -298,7 +298,7 @@ async function startRestartedProxy(
     // Recovery after a live restart: the old PID coming back is not a replacement this
     // command started. It is serving, so never start another over it, and never call it
     // success either.
-    if (attested && previous && !isProxyReplacement(previous, recheck.live)) {
+    if (attested && previous && recheck.status === "live" && !isProxyReplacement(previous, recheck.live)) {
       return { ok: false, phase: "replacement" };
     }
     if (attested && outcome.error !== undefined) return { ok: false, phase: "start", error: originalError };

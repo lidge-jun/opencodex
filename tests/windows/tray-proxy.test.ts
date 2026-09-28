@@ -434,7 +434,9 @@ describe("tray proxy coordinator", () => {
       },
     });
     expect(seen).toEqual(previous);
-    expect(result).toEqual({ ok: false, phase: "start", error: new Error("must not start") });
+    // The recovery start threw and the recheck still sees the ORIGINAL pid: that is not a
+    // replacement this command produced, so recovery fails closed as a missed replacement.
+    expect(result).toEqual({ ok: false, phase: "replacement" });
   });
 
   test("pollReplacementDeparture attests a PID that changes inside the budget", async () => {
