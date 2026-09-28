@@ -211,6 +211,13 @@ function resolveFamilyUid(catalog: CacheEntry, modelId: string, reasoningEffort?
     ...(caller?.fast || fromId.fast ? { fast: true } : {}),
     ...(caller?.longContext || fromId.longContext ? { longContext: true } : {}),
   };
+  // A disabled row the caller named keeps its uid when the request still lands
+  // on it (`swe-2-max` asked for at `max`), so the chat preflight reports that
+  // row's tier refusal instead of quietly serving a different tier. A request
+  // for a different variant still passes over disabled rows.
+  if (anchor?.disabled && selectDevinFamilyMember(members, request, anchor, { includeDisabled: true }) === anchor) {
+    return anchor.modelUid;
+  }
   return selectDevinFamilyMember(members, request, anchor)?.modelUid;
 }
 

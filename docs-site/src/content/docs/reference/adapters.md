@@ -602,7 +602,11 @@ below when nothing is above, so a missing rung never turns reasoning down:
 `swe-2-medium`, and `kimi-k3` at `medium` selects `kimi-k3-high`. `fast` selects the Fast variant and `1m`, `max-1m` or `none-1m`
 the 1M-context variant where the family has one; otherwise they change nothing.
 A suffixed id such as `claude-opus-5-high-fast` keeps its variant without an
-effort, and with one keeps its Fast and context settings. Resolution never moves
+effort, and with one keeps its Fast and context settings unless that would lower the
+effort: with no Fast row at or above the effort, the regular row is used instead.
+An id naming a variant your account has disabled is sent as named when the effort
+still lands on it, so the request fails with that variant's own error rather than
+quietly switching tier. Resolution never moves
 to another family. When the account catalog is unavailable, the effort is
 appended to the id instead.
 

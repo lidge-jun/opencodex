@@ -220,6 +220,45 @@ describe("family-based wire model resolution", () => {
   test("an unknown caller effort keeps a named row", async () => {
     expect(await resolve(catalog, "swe-2-max", "future-effort")).toBe("swe-2-max");
   });
+
+  test("a disabled named row keeps its uid when the request lands on it", async () => {
+    const rows = LIVE_ROWS.map((r) => (r.uid === "swe-2-max" ? { ...r, disabled: true } : r));
+    // The preflight then names the refused row instead of serving High.
+    expect(await resolve(catalogOf(rows), "swe-2-max", "max")).toBe("swe-2-max");
+    // A different variant still passes over the disabled row.
+    expect(await resolve(catalogOf(rows), "swe-2-max", "high")).toBe("swe-2-high");
+    // Naming the family is not naming the row: selection skips it.
+    expect(await resolve(catalogOf(rows), "swe-2", "max")).toBe("swe-2-high");
+  });
+
+  test("a requested effort is not lowered to keep a toggle", async () => {
+    const family = "devin-test-mix";
+    const rows: Row[] = [
+      { uid: "mix-medium", family, axes: [["Reasoning Effort", 0, "Medium"], ["Fast Mode", 0]], isDefault: true },
+      { uid: "mix-high", family, axes: [["Reasoning Effort", 1, "High"], ["Fast Mode", 0]] },
+      { uid: "mix-medium-fast", family, axes: [["Reasoning Effort", 0, "Medium"], ["Fast Mode", 1]] },
+    ];
+    // Named Fast row, asked for at High: no High Fast row exists, so Fast yields.
+    expect(await resolve(catalogOf(rows), "mix-medium-fast", "high")).toBe("mix-high");
+    // A Fast row at or above the request still wins over dropping Fast.
+    const withMaxFast = [...rows, { uid: "mix-max-fast", family, axes: [["Reasoning Effort", 2, "Max"], ["Fast Mode", 1]] } as Row];
+    expect(await resolve(catalogOf(withMaxFast), "mix-medium-fast", "high")).toBe("mix-max-fast");
+    // An unranked Fast row cannot prove it is not lower than High.
+    const unranked: Row[] = [rows[0]!, rows[1]!, { uid: "mix-fast", family, axes: [["Fast Mode", 1]] }];
+    expect(await resolve(catalogOf(unranked), "mix-fast", "high")).toBe("mix-high");
+    // Without a requested effort, Fast still decides.
+    expect(await resolve(catalogOf(rows), "devin-test-mix", "fast")).toBe("mix-medium-fast");
+  });
+
+  test("none keeps Thinking off when the Thinking-off row has no rung", async () => {
+    const family = "devin-test-think";
+    const rows: Row[] = [
+      { uid: "think-off", family, axes: [["Thinking", 0]] },
+      { uid: "think-high", family, axes: [["Effort", 2, "High"], ["Thinking", 1]], isDefault: true },
+    ];
+    expect(await resolve(catalogOf(rows), "devin-test-think", "none")).toBe("think-off");
+    expect(await resolve(catalogOf(rows), "devin-test-think", "high")).toBe("think-high");
+  });
 });
 
 describe("suffix fallback without family metadata never crosses families", () => {

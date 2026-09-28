@@ -207,6 +207,13 @@ function effortIndex(rung: string | undefined): number {
  * rung never quietly turns reasoning down: `high` on SWE-1.7 (Medium, Max)
  * selects Max, `xhigh` on SWE-2 selects Max, and `medium` on Kimi K3 (Low,
  * High, Max) selects High.
+ *
+ * Not lowering a requested effort outranks the non-effort axes: in a family
+ * whose Fast rows stop at Medium, `high` plus Fast selects the regular High row
+ * rather than dropping to Medium to keep Fast. A member with no effort rung
+ * cannot prove it is not lower, so it ranks behind any rung at or above the
+ * request. `none` (the bottom of the ladder) is never "lowered", which leaves
+ * the Thinking-off target in charge of that request.
  */
 function closestMember(
   members: ModelCatalogEntry[],
@@ -220,10 +227,11 @@ function closestMember(
     const axes = member.familyAxes ?? {};
     const mismatches = Object.entries(targets).filter(([axis, order]) => (axes[axis]?.order ?? 0) !== order).length;
     const have = effortIndex(devinFamilyEffortOf(member));
+    const lowered = want > 0 && have < want ? 1 : 0;
     const distance = want < 0 ? 0
       : have < 0 ? 2 * FAMILY_EFFORT_LADDER.length
       : have >= want ? have - want : FAMILY_EFFORT_LADDER.length + (want - have);
-    const score = [mismatches, distance, -have];
+    const score = [lowered, mismatches, distance, -have];
     if (!bestScore || lexicallyLess(score, bestScore)) {
       best = member;
       bestScore = score;
@@ -239,12 +247,15 @@ function closestMember(
  * the family's catalog default, else the neutral member (every toggle off,
  * effort nearest Medium) for the few families that mark no default. Disabled
  * members are passed over while any enabled one remains, so the pre-flight
- * only reports a tier refusal when the whole family is refused.
+ * only reports a tier refusal when the whole family is refused. `includeDisabled`
+ * ranks every member, which tells a caller whether a disabled row is itself the
+ * best match for the request.
  */
 export function selectDevinFamilyMember(
   members: ModelCatalogEntry[],
   request: DevinVariantRequest,
   anchor?: ModelCatalogEntry,
+  options: { includeDisabled?: boolean } = {},
 ): ModelCatalogEntry | undefined {
   const axisNames = new Set(members.flatMap((m) => Object.keys(m.familyAxes ?? {})).filter((a) => !isEffortAxis(a)));
   const base = anchor
@@ -258,7 +269,7 @@ export function selectDevinFamilyMember(
   // `none` means no reasoning. Families like Claude Sonnet 4.6 express that as
   // Thinking off rather than as an effort rung.
   if (request.effort === "none" && axisNames.has(THINKING_AXIS)) targets[THINKING_AXIS] = 0;
-  const enabled = members.filter((m) => !m.disabled);
+  const enabled = options.includeDisabled ? members : members.filter((m) => !m.disabled);
   return closestMember(enabled.length > 0 ? enabled : members, targets, request.effort ?? devinFamilyEffortOf(base));
 }
 
