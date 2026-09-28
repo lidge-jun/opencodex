@@ -264,7 +264,10 @@ the path and identity checks as best effort. Every visited directory entry consu
 scan budget before filtering; at most 16 skills are selected. Individual files, aggregate skill reads, serialized XML, and the full
 skill-loading interval are bounded. The
 contents are sent to the configured Command Code endpoint when enabled, and missing or
-failed reads degrade to empty fields. A 30-second, 128-entry cache bounds repeated reads.
+failed reads degrade to empty fields. A cwd-keyed single-flight shares cold or expired loads.
+Eight outstanding scan slots remain occupied until every dispatched filesystem operation
+settles, including after a caller timeout; a 64-operation global admission ceiling fails
+soft on further work. The 30-second, 128-entry cache rechecks capacity at insertion time.
 
 ## TypeSafe JEV decision provider
 

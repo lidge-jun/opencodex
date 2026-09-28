@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  type Stats,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -99,28 +100,98 @@ describe("loadCommandCodeProjectContext", () => {
       for (const stalled of ["lstat", "realpath"] as const) {
         projectContextCache.clear();
         let stalledCalls = 0;
+        let releaseStalled: () => Promise<void> = async () => {};
         if (stalled === "lstat") {
-          lstatMock.mockImplementation(async path => {
+          lstatMock.mockImplementation(path => {
             if (String(path) !== agentsPath) return realLstat(path);
             stalledCalls++;
-            return new Promise<never>(() => {});
+            return new Promise<Stats>(resolve => {
+              releaseStalled = async () => { resolve(await realLstat(path)); };
+            });
           });
         } else {
-          realpathMock.mockImplementation(async path => {
+          realpathMock.mockImplementation(path => {
             if (String(path) !== agentsPath) return realRealpath(path);
             stalledCalls++;
-            return new Promise<never>(() => {});
+            return new Promise<string>(resolve => {
+              releaseStalled = async () => { resolve(await realRealpath(path)); };
+            });
           });
         }
-        setCommandCodeFileOpTimeoutForTests(500);
-        const result = await loadCommandCodeProjectContext(root);
-        expect(stalledCalls).toBe(1);
-        expect(result.memory).toBe("");
-        lstatMock.mockImplementation(realLstat);
-        realpathMock.mockImplementation(realRealpath);
+        try {
+          setCommandCodeFileOpTimeoutForTests(500);
+          const result = await loadCommandCodeProjectContext(root);
+          expect(stalledCalls).toBe(1);
+          expect(result.memory).toBe("");
+        } finally {
+          lstatMock.mockImplementation(realLstat);
+          realpathMock.mockImplementation(realRealpath);
+          await releaseStalled();
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+        }
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent cold-cache requests share one project scan", async () => {
+    const root = makeTempDir("ocx-cc-ctx-single-flight-");
+    const agentsPath = join(root, "AGENTS.md");
+    let releaseRead: () => void = () => {};
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+    let openGates = 0;
+    try {
+      writeFileSync(agentsPath, "shared memory", "utf8");
+      setCommandCodeBeforeOpenForTests(path => {
+        if (path !== agentsPath) return;
+        openGates++;
+        markStarted();
+        return gate;
+      });
+      const first = loadCommandCodeProjectContext(root);
+      await started;
+      const second = loadCommandCodeProjectContext(root);
+      releaseRead();
+      const [one, two] = await Promise.all([first, second]);
+      expect(openGates).toBe(1);
+      expect(one).toBe(two);
+      expect(one.memory).toBe("shared memory");
+    } finally {
+      releaseRead();
+      setCommandCodeBeforeOpenForTests(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("never-settling scans retain their cwd slots and cap work across keys", async () => {
+    const roots = Array.from({ length: 12 }, () => makeTempDir("ocx-cc-ctx-abandoned-cap-"));
+    const rootSet = new Set(roots);
+    const release: Array<() => Promise<void>> = [];
+    let lstatCalls = 0;
+    try {
+      lstatMock.mockImplementation(path => {
+        if (!rootSet.has(String(path))) return realLstat(path);
+        lstatCalls++;
+        return new Promise<Stats>(resolve => {
+          release.push(async () => { resolve(await realLstat(path)); });
+        });
+      });
+      setCommandCodeFileOpTimeoutForTests(20);
+      for (const root of roots) {
+        expect(await loadCommandCodeProjectContext(root)).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
+      }
+      expect(lstatCalls).toBe(8);
+      projectContextCache.delete(roots[0]!);
+      expect(await loadCommandCodeProjectContext(roots[0])).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
+      expect(lstatCalls).toBe(8);
+    } finally {
+      lstatMock.mockImplementation(realLstat);
+      await Promise.all(release.map(settle => settle()));
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      for (const root of roots) rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -787,64 +858,71 @@ describe("projectContextCache eviction", () => {
     const root = makeTempDir("ocx-cc-ctx-refresh-capacity-");
     const now = Date.now();
     const emptyValue = { memory: "", taste: null, skills: null };
-    let releaseFirstRead!: () => void;
-    let releaseSecondRead!: () => void;
-    let firstReadStarted!: () => void;
-    let secondReadStarted!: () => void;
-    const firstRead = new Promise<void>(resolve => { firstReadStarted = resolve; });
-    const secondRead = new Promise<void>(resolve => { secondReadStarted = resolve; });
-    const firstGate = new Promise<void>(resolve => { releaseFirstRead = resolve; });
-    const secondGate = new Promise<void>(resolve => { releaseSecondRead = resolve; });
-    let readCount = 0;
-
-    for (let i = 0; i < MAX_PROJECT_CONTEXT_CACHE_ENTRIES - 1; i++) {
-      projectContextCache.set(`/sibling-${i}`, { collectedAt: now, value: emptyValue });
-    }
-    projectContextCache.set(root, {
-      collectedAt: now - PROJECT_CONTEXT_TTL_MS - 1,
-      value: emptyValue,
-    });
-    writeFileSync(join(root, "AGENTS.md"), "refreshed", "utf8");
-    openMock.mockImplementation(async path => {
-      if (String(path) === join(root, "AGENTS.md")) {
-        const handle = await realOpen(path);
-        const originalRead = handle.read.bind(handle);
-        return {
-          ...handle,
-          read: async (buffer: Buffer, offset: number, length: number, position: number) => {
-            readCount++;
-            if (readCount === 1) {
-              firstReadStarted();
-              await firstGate;
-            } else if (readCount === 2) {
-              secondReadStarted();
-              await secondGate;
-            }
-            return originalRead(buffer, offset, length, position);
-          },
-          stat: handle.stat.bind(handle),
-          close: handle.close.bind(handle),
-        } as Awaited<ReturnType<typeof realOpen>>;
-      }
-      return realOpen(path);
-    });
-
+    let releaseRead: () => void = () => {};
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+    let reads = 0;
     try {
-      const firstLoad = loadCommandCodeProjectContext(root);
-      await firstRead;
-      const secondLoad = loadCommandCodeProjectContext(root);
-      await secondRead;
-
-      releaseFirstRead();
-      await firstLoad;
-      releaseSecondRead();
-      await secondLoad;
-
+      for (let i = 0; i < MAX_PROJECT_CONTEXT_CACHE_ENTRIES - 1; i++) {
+        projectContextCache.set(`/sibling-${i}`, { collectedAt: now, value: emptyValue });
+      }
+      projectContextCache.set(root, { collectedAt: now - PROJECT_CONTEXT_TTL_MS - 1, value: emptyValue });
+      writeFileSync(join(root, "AGENTS.md"), "refreshed", "utf8");
+      setCommandCodeBeforeOpenForTests(path => {
+        if (path !== join(root, "AGENTS.md")) return;
+        reads++;
+        markStarted();
+        return gate;
+      });
+      const first = loadCommandCodeProjectContext(root);
+      await started;
+      const second = loadCommandCodeProjectContext(root);
+      releaseRead();
+      const [one, two] = await Promise.all([first, second]);
+      expect(one).toBe(two);
+      expect(reads).toBe(1);
       expect(projectContextCache.size).toBe(MAX_PROJECT_CONTEXT_CACHE_ENTRIES);
       expect(projectContextCache.has("/sibling-0")).toBe(true);
       expect(projectContextCache.get(root)?.value.memory).toBe("refreshed");
     } finally {
-      openMock.mockImplementation(realOpen);
+      releaseRead();
+      setCommandCodeBeforeOpenForTests(undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("cache insertion rechecks capacity after an in-flight key is evicted", async () => {
+    const root = makeTempDir("ocx-cc-ctx-interleaved-capacity-");
+    const now = Date.now();
+    const emptyValue = { memory: "", taste: null, skills: null };
+    let releaseRead: () => void = () => {};
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseRead = resolve; });
+    try {
+      for (let i = 0; i < MAX_PROJECT_CONTEXT_CACHE_ENTRIES - 1; i++) {
+        projectContextCache.set(`/sibling-${i}`, { collectedAt: now, value: emptyValue });
+      }
+      projectContextCache.set(root, { collectedAt: now - PROJECT_CONTEXT_TTL_MS - 1, value: emptyValue });
+      writeFileSync(join(root, "AGENTS.md"), "new value", "utf8");
+      setCommandCodeBeforeOpenForTests(path => {
+        if (path !== join(root, "AGENTS.md")) return;
+        markStarted();
+        return gate;
+      });
+      const loading = loadCommandCodeProjectContext(root);
+      await started;
+      projectContextCache.delete(root);
+      projectContextCache.set("/replacement", { collectedAt: Date.now(), value: emptyValue });
+      releaseRead();
+      expect((await loading).memory).toBe("new value");
+      expect(projectContextCache.size).toBe(MAX_PROJECT_CONTEXT_CACHE_ENTRIES);
+      expect(projectContextCache.has(root)).toBe(true);
+      expect(projectContextCache.has("/replacement")).toBe(true);
+    } finally {
+      releaseRead();
+      setCommandCodeBeforeOpenForTests(undefined);
       rmSync(root, { recursive: true, force: true });
     }
   });

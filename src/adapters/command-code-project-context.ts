@@ -37,6 +37,12 @@ export function setCommandCodeFileOpTimeoutForTests(timeoutMs: number | undefine
 }
 const PROJECT_CONTEXT_TTL_MS = 30_000;
 const MAX_PROJECT_CONTEXT_CACHE_ENTRIES = 128;
+const MAX_CONCURRENT_PROJECT_CONTEXT_SCANS = 8;
+const MAX_PENDING_PROJECT_CONTEXT_FILE_OPS = 64;
+const projectContextInFlight = new Map<string, Promise<CommandCodeProjectContext>>();
+type ScanScope = { cwd: string; pendingOps: number; finished: boolean };
+const outstandingProjectContextScans = new Map<string, ScanScope>();
+const pendingProjectContextFileOps = new Set<Promise<unknown>>();
 
 const TRUNCATION_MARKER = "\n<!-- truncated -->";
 
@@ -75,18 +81,41 @@ export function pruneProjectContextCache(now: number): void {
   }
 }
 
+/** A timed-out scan retains its cwd slot until every operation it dispatched settles. */
+function releaseScanIfSettled(scope: ScanScope): void {
+  if (scope.finished && scope.pendingOps === 0 && outstandingProjectContextScans.get(scope.cwd) === scope) {
+    outstandingProjectContextScans.delete(scope.cwd);
+  }
+}
+
+function trackedFileOperation<T>(operation: () => Promise<T>, scope: ScanScope, enforceLimit = true): Promise<T> {
+  if (enforceLimit && pendingProjectContextFileOps.size >= MAX_PENDING_PROJECT_CONTEXT_FILE_OPS) {
+    throw new Error("project context filesystem admission limit");
+  }
+  const pending = operation();
+  scope.pendingOps++;
+  pendingProjectContextFileOps.add(pending);
+  const settle = (): void => {
+    pendingProjectContextFileOps.delete(pending);
+    scope.pendingOps--;
+    releaseScanIfSettled(scope);
+  };
+  void pending.then(settle, settle);
+  return pending;
+}
+
 /** Keep filesystem metadata work off the request thread and inside one load deadline. */
-async function withinDeadline<T>(operation: () => Promise<T>, deadline: number): Promise<T> {
+async function withinDeadline<T>(operation: () => Promise<T>, deadline: number, scope: ScanScope): Promise<T> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new Error("timeout");
-  return withTimeout(operation(), remaining);
+  return withTimeout(trackedFileOperation(operation, scope), remaining);
 }
 
 /** Fail-soft canonical path; no synchronous filesystem calls run on the request thread. */
-async function canonicalPath(candidate: string, deadline: number): Promise<string | null> {
+async function canonicalPath(candidate: string, deadline: number, scope: ScanScope): Promise<string | null> {
   try {
-    await withinDeadline(() => lstat(candidate), deadline);
-    return await withinDeadline(() => realpath(candidate), deadline);
+    await withinDeadline(() => lstat(candidate), deadline, scope);
+    return await withinDeadline(() => realpath(candidate), deadline, scope);
   } catch {
     return null;
   }
@@ -103,12 +132,12 @@ export function isContainedCanonicalPath(cwdCanonical: string, fileCanonical: st
 }
 
 async function confinedCanonicalPath(
-  filePath: string, cwdCanonical: string, deadline: number, kind: "file" | "directory",
+  filePath: string, cwdCanonical: string, deadline: number, kind: "file" | "directory", scope: ScanScope,
 ): Promise<string | null> {
-  const canonical = await canonicalPath(filePath, deadline);
+  const canonical = await canonicalPath(filePath, deadline, scope);
   if (!canonical || !isContainedCanonicalPath(cwdCanonical, canonical)) return null;
   try {
-    const info = await withinDeadline(() => stat(canonical), deadline);
+    const info = await withinDeadline(() => stat(canonical), deadline, scope);
     return (kind === "file" ? info.isFile() : info.isDirectory()) ? canonical : null;
   } catch {
     return null;
@@ -142,28 +171,28 @@ function truncateUtf8(text: string, capBytes: number): string {
 
 /** Match the opened inode to a still-canonical path inside cwd before publishing bytes. */
 async function openedFileIsConfined(
-  handle: Awaited<ReturnType<typeof open>>, path: string, cwdCanonical: string, deadline: number,
+  handle: Awaited<ReturnType<typeof open>>, path: string, cwdCanonical: string, deadline: number, scope: ScanScope,
 ): Promise<boolean> {
-  const opened = await withinDeadline(() => handle.stat(), deadline);
+  const opened = await withinDeadline(() => handle.stat(), deadline, scope);
   if (!opened.isFile()) return false;
-  const current = await withinDeadline(() => lstat(path), deadline);
+  const current = await withinDeadline(() => lstat(path), deadline, scope);
   if (!current.isFile() || opened.dev !== current.dev || opened.ino !== current.ino) return false;
-  const resolved = await withinDeadline(() => realpath(path), deadline);
+  const resolved = await withinDeadline(() => realpath(path), deadline, scope);
   // The input path was canonical before open. A changed intermediate symlink changes this
   // result even though O_NOFOLLOW protects only the final component on macOS and Linux.
   if (!isContainedCanonicalPath(cwdCanonical, resolved)
     || normalizePathIdentity(resolved) !== normalizePathIdentity(path)) return false;
-  const resolvedInfo = await withinDeadline(() => lstat(resolved), deadline);
+  const resolvedInfo = await withinDeadline(() => lstat(resolved), deadline, scope);
   return resolvedInfo.isFile() && opened.dev === resolvedInfo.dev && opened.ino === resolvedInfo.ino;
 }
 
-async function readUtf8File(path: string, capBytes: number, deadline: number, cwdCanonical: string): Promise<string | null> {
+async function readUtf8File(path: string, capBytes: number, deadline: number, cwdCanonical: string, scope: ScanScope): Promise<string | null> {
   type FileHandle = Awaited<ReturnType<typeof open>>;
   let fileHandle: FileHandle | undefined;
   const closedHandles = new WeakSet<object>();
   if (beforeOpenForTests) {
     try {
-      await withinDeadline(() => Promise.resolve(beforeOpenForTests!(path)), deadline);
+      await withinDeadline(() => Promise.resolve(beforeOpenForTests!(path)), deadline, scope);
     } catch {
       return null;
     }
@@ -173,32 +202,43 @@ async function readUtf8File(path: string, capBytes: number, deadline: number, cw
   // O_NONBLOCK prevents a race that swaps a checked regular file for a FIFO.
   // Windows lacks these POSIX open guards; post-open path/identity checks remain best-effort there.
   const flags = process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
-  const opened = open(path, flags);
+  let opened: ReturnType<typeof open>;
+  try {
+    opened = trackedFileOperation(() => open(path, flags), scope);
+  } catch {
+    return null;
+  }
   const closeBestEffort = (handle: FileHandle): Promise<void> => {
     if (closedHandles.has(handle)) return Promise.resolve();
     closedHandles.add(handle);
     return Promise.resolve()
-      .then(() => handle.close())
+      .then(() => trackedFileOperation(() => handle.close(), scope, false))
       .catch(() => {
         /* closing a timed-out read is best-effort */
       });
   };
 
-  const read = (async () => {
-    const handle = await opened;
-    fileHandle = handle;
-    try {
-      if (Date.now() >= deadline || !await openedFileIsConfined(handle, path, cwdCanonical, deadline)) return null;
-      const data = Buffer.alloc(capBytes + 1);
-      const { bytesRead } = await handle.read(data, 0, data.length, 0);
-      // Do not return bytes if an intermediate directory changed while the read was pending.
-      if (!await openedFileIsConfined(handle, path, cwdCanonical, deadline)) return null;
-      return data.subarray(0, bytesRead).toString("utf8");
-    } finally {
-      await closeBestEffort(handle);
-      if (fileHandle === handle) fileHandle = undefined;
-    }
-  })();
+  let read: Promise<string | null>;
+  try {
+    read = trackedFileOperation(async () => {
+      const handle = await opened;
+      fileHandle = handle;
+      try {
+        if (Date.now() >= deadline || !await openedFileIsConfined(handle, path, cwdCanonical, deadline, scope)) return null;
+        const data = Buffer.alloc(capBytes + 1);
+        const { bytesRead } = await handle.read(data, 0, data.length, 0);
+        // Do not return bytes if an intermediate directory changed while the read was pending.
+        if (!await openedFileIsConfined(handle, path, cwdCanonical, deadline, scope)) return null;
+        return data.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await closeBestEffort(handle);
+        if (fileHandle === handle) fileHandle = undefined;
+      }
+    }, scope);
+  } catch {
+    void opened.then(handle => closeBestEffort(handle), () => undefined);
+    return null;
+  }
 
   try {
     return await withTimeout(read, remaining);
@@ -238,20 +278,20 @@ function parseSkillFrontmatter(text: string): { name: string | null; body: strin
   return { name, body };
 }
 
-async function readMemory(cwd: string, cwdCanonical: string, deadline: number): Promise<string> {
+async function readMemory(cwd: string, cwdCanonical: string, deadline: number, scope: ScanScope): Promise<string> {
   const path = join(cwd, "AGENTS.md");
-  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
+  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file", scope);
   if (!canonical) return "";
-  const text = await readUtf8File(canonical, MEMORY_CAP_BYTES, deadline, cwdCanonical);
+  const text = await readUtf8File(canonical, MEMORY_CAP_BYTES, deadline, cwdCanonical, scope);
   if (text === null) return "";
   return truncateUtf8(text, MEMORY_CAP_BYTES);
 }
 
-async function readTaste(cwd: string, cwdCanonical: string, deadline: number): Promise<string | null> {
+async function readTaste(cwd: string, cwdCanonical: string, deadline: number, scope: ScanScope): Promise<string | null> {
   const path = join(cwd, ".commandcode", "taste", "taste.md");
-  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
+  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file", scope);
   if (!canonical) return null;
-  const text = await readUtf8File(canonical, TASTE_CAP_BYTES, deadline, cwdCanonical);
+  const text = await readUtf8File(canonical, TASTE_CAP_BYTES, deadline, cwdCanonical, scope);
   if (text === null) return null;
   return truncateUtf8(text, TASTE_CAP_BYTES);
 }
@@ -262,9 +302,17 @@ interface SkillEntry {
   bytesRead: number;
 }
 
-async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget: number, deadline: number): Promise<string[]> {
+function closeSkillDirectoryBestEffort(dir: Awaited<ReturnType<typeof opendir>>, scope: ScanScope): void {
+  try {
+    void trackedFileOperation(() => dir.close(), scope, false).catch(() => undefined);
+  } catch {
+    /* a failed cleanup must not reject the request */
+  }
+}
+
+async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget: number, deadline: number, scope: ScanScope): Promise<string[]> {
   if (scanBudget <= 0) return [];
-  const skillRootCanonical = await confinedCanonicalPath(skillRoot, cwdCanonical, deadline, "directory");
+  const skillRootCanonical = await confinedCanonicalPath(skillRoot, cwdCanonical, deadline, "directory", scope);
   if (!skillRootCanonical) return [];
   let dir: Awaited<ReturnType<typeof opendir>> | undefined;
   try {
@@ -273,7 +321,7 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
         const openedDir = await opendir(skillRootCanonical);
         dir = openedDir;
         if (Date.now() >= deadline) {
-          void openedDir.close().catch(() => undefined);
+          closeSkillDirectoryBestEffort(openedDir, scope);
           return [];
         }
         const names: string[] = [];
@@ -285,7 +333,7 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
             const atLimit = visitedEntries >= scanBudget;
             if (!entry.name.startsWith(".") && entry.isDirectory()) {
               const skillMd = join(skillRoot, entry.name, "SKILL.md");
-              const skillMdCanonical = await confinedCanonicalPath(skillMd, cwdCanonical, deadline, "file");
+              const skillMdCanonical = await confinedCanonicalPath(skillMd, cwdCanonical, deadline, "file", scope);
               if (skillMdCanonical) {
                 names.push(entry.name);
               }
@@ -294,7 +342,7 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
           }
         } catch {
           try {
-            void openedDir.close().catch(() => undefined);
+            closeSkillDirectoryBestEffort(openedDir, scope);
           } catch {
             /* closing a failed iterator is best-effort */
           }
@@ -304,11 +352,12 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
         return names;
       },
       deadline,
+      scope,
     );
   } catch {
     if (dir) {
       try {
-        void dir.close().catch(() => undefined);
+        closeSkillDirectoryBestEffort(dir, scope);
       } catch {
         /* closing a timed-out iterator is best-effort */
       }
@@ -317,11 +366,11 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
   }
 }
 
-async function readSkill(skillRoot: string, dirName: string, cwdCanonical: string, capBytes: number, deadline: number): Promise<SkillEntry | null> {
+async function readSkill(skillRoot: string, dirName: string, cwdCanonical: string, capBytes: number, deadline: number, scope: ScanScope): Promise<SkillEntry | null> {
   const path = join(skillRoot, dirName, "SKILL.md");
-  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
+  const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file", scope);
   if (!canonical) return null;
-  const text = await readUtf8File(canonical, capBytes, deadline, cwdCanonical);
+  const text = await readUtf8File(canonical, capBytes, deadline, cwdCanonical, scope);
   if (text === null) return null;
   const { name, body } = parseSkillFrontmatter(truncateUtf8(text, capBytes));
   return { name: name ?? dirName, body, bytesRead: Buffer.byteLength(text, "utf8") };
@@ -390,7 +439,7 @@ function truncateUtf8BodyForXml(body: string, capBytes: number): string | null {
   return best;
 }
 
-async function readSkills(cwd: string, cwdCanonical: string, deadline: number): Promise<string | null> {
+async function readSkills(cwd: string, cwdCanonical: string, deadline: number, scope: ScanScope): Promise<string | null> {
   const seen = new Set<string>();
   const collected: SkillEntry[] = [];
   let remainingBytes = SKILLS_READ_CAP_BYTES;
@@ -399,12 +448,12 @@ async function readSkills(cwd: string, cwdCanonical: string, deadline: number): 
     const remainingScanMs = deadline - Date.now();
     if (remainingScanMs <= 0) break;
     const skillRoot = join(cwd, ...rootRel.split("/"));
-    const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, deadline);
+    const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, deadline, scope);
     for (const dirName of dirs) {
       if (collected.length >= MAX_SKILLS || remainingBytes <= 1) break;
       const remainingReadMs = deadline - Date.now();
       if (remainingReadMs <= 0) break;
-      const skill = await readSkill(skillRoot, dirName, cwdCanonical, Math.min(SKILL_FILE_CAP_BYTES, remainingBytes - 1), deadline);
+      const skill = await readSkill(skillRoot, dirName, cwdCanonical, Math.min(SKILL_FILE_CAP_BYTES, remainingBytes - 1), deadline, scope);
       if (!skill) continue;
       remainingBytes -= skill.bytesRead;
       if (seen.has(skill.name)) continue;
@@ -417,15 +466,15 @@ async function readSkills(cwd: string, cwdCanonical: string, deadline: number): 
   return buildSkillsXml(collected);
 }
 
-async function collectProjectContext(cwd: string, timeoutMs: number): Promise<CommandCodeProjectContext> {
+async function collectProjectContext(cwd: string, timeoutMs: number, scope: ScanScope): Promise<CommandCodeProjectContext> {
   const deadline = Date.now() + timeoutMs;
-  const cwdCanonical = await canonicalPath(cwd, deadline);
+  const cwdCanonical = await canonicalPath(cwd, deadline, scope);
   if (!cwdCanonical) return { ...EMPTY_COMMAND_CODE_PROJECT_CONTEXT };
 
   const [memory, taste, skills] = await Promise.all([
-    readMemory(cwd, cwdCanonical, deadline),
-    readTaste(cwd, cwdCanonical, deadline),
-    readSkills(cwd, cwdCanonical, deadline),
+    readMemory(cwd, cwdCanonical, deadline, scope),
+    readTaste(cwd, cwdCanonical, deadline, scope),
+    readSkills(cwd, cwdCanonical, deadline, scope),
   ]);
 
   return { memory, taste, skills };
@@ -434,19 +483,33 @@ async function collectProjectContext(cwd: string, timeoutMs: number): Promise<Co
 export async function loadCommandCodeProjectContext(cwd: string | undefined): Promise<CommandCodeProjectContext> {
   if (!cwd) return { ...EMPTY_COMMAND_CODE_PROJECT_CONTEXT };
 
-  const hadCachedEntry = projectContextCache.has(cwd);
   const cached = projectContextCache.get(cwd);
-  if (cached && Date.now() - cached.collectedAt < PROJECT_CONTEXT_TTL_MS) {
-    return cached.value;
+  if (cached && Date.now() - cached.collectedAt < PROJECT_CONTEXT_TTL_MS) return cached.value;
+  const existing = projectContextInFlight.get(cwd);
+  if (existing) return existing;
+  // A stuck filesystem operation stays counted after its caller's timeout. Once the cap is
+  // reached, fail soft without dispatching another scan or consuming another I/O worker.
+  if (outstandingProjectContextScans.has(cwd)
+    || outstandingProjectContextScans.size >= MAX_CONCURRENT_PROJECT_CONTEXT_SCANS
+    || pendingProjectContextFileOps.size >= MAX_PENDING_PROJECT_CONTEXT_FILE_OPS) {
+    return { ...EMPTY_COMMAND_CODE_PROJECT_CONTEXT };
   }
-
-  const value = await collectProjectContext(cwd, fileOpTimeoutForTests ?? COMMAND_CODE_FILE_OP_TIMEOUT_MS);
-  const now = Date.now();
-  if (hadCachedEntry) {
+  const scope: ScanScope = { cwd, pendingOps: 0, finished: false };
+  outstandingProjectContextScans.set(cwd, scope);
+  const scan = (async () => {
+    const value = await collectProjectContext(cwd, fileOpTimeoutForTests ?? COMMAND_CODE_FILE_OP_TIMEOUT_MS, scope);
+    const now = Date.now();
     pruneExpiredProjectContextCache(now);
-  } else {
-    pruneProjectContextCache(now);
+    if (!projectContextCache.has(cwd)) pruneProjectContextCache(now);
+    projectContextCache.set(cwd, { collectedAt: now, value });
+    return value;
+  })();
+  projectContextInFlight.set(cwd, scan);
+  try {
+    return await scan;
+  } finally {
+    if (projectContextInFlight.get(cwd) === scan) projectContextInFlight.delete(cwd);
+    scope.finished = true;
+    releaseScanIfSettled(scope);
   }
-  projectContextCache.set(cwd, { collectedAt: now, value });
-  return value;
 }
