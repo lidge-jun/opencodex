@@ -434,9 +434,9 @@ capture/route time and explicit false or empty declarations retain their field-s
 `src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
 CLI writes, and management DTO validation. `src/config.ts` imports those checks for Zod refinement
 and re-exports them as a compatibility facade; it must not grow a second copy. Validation error text,
-ordering, and cross-field rules are part of the write/load contract because management requests and
-hand-edited `config.json` must accept and reject the same provider shapes.
+ordering, and cross-field rules are part of the write/load contract: management requests and hand-edited `config.json` accept and reject the same provider shapes.
 
+Provider `projectContext` accepts `"off"` or `"on"` only for native `command-code`; `src/config/schema/leaf-validators.ts` rejects other adapters on load, while `src/config/provider-validation.ts` and `src/server/auth-cors.ts` reject them on management writes. This editor-owned outbound-file field follows [provider and adapter selection](providers-and-adapters.md).
 The Google tool-schema policy uses a closed enum at this boundary. Unknown values fail config load,
 management admission, and command-line creation rather than silently degrading to compatible mode.
 

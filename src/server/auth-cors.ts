@@ -16,6 +16,7 @@ import {
 } from "../config";
 import {
   apiKeyTransportConfigError,
+  projectContextConfigError,
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   booleanRecordConfigError,
@@ -830,6 +831,8 @@ export function providerManagementConfigError(
   }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
+  const projectContextError = projectContextConfigError(typed);
+  if (projectContextError) return `provider ${JSON.stringify(redactSecretString(name))} ${projectContextError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const autoCompactError = modelAutoCompactTokenLimitsConfigError(
@@ -969,6 +972,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultAliases: "editor",
   adapter: "editor",
   codexToolMode: "editor",
+  projectContext: "editor",
   requestPacing: "editor",
   mcpMaxTools: "editor",
   mcpMaxSchemaBytes: "editor",

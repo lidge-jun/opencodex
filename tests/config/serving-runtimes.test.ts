@@ -18,6 +18,7 @@ import {
 } from "../../src/config/serving-runtimes";
 import { buildWinswXml } from "../../src/lib/winsw";
 import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
+import { repoPath } from "../helpers/repo-root";
 
 const dirs: string[] = [];
 
@@ -88,7 +89,7 @@ describe("serving runtime census", () => {
 
   test("concurrent process writers preserve both commands", async () => {
     const dir = freshDir();
-    const source = new URL("../../src/config/serving-runtimes.ts", import.meta.url).pathname;
+    const source = repoPath("src", "config", "serving-runtimes.ts");
     const script = join(dir, "writer.ts");
     writeFileSync(script, `import { recordServingRuntime } from ${JSON.stringify(source)};
 recordServingRuntime({ command: [process.argv[3]], version: "2.68.0", servedAt: new Date().toISOString() }, process.argv[2]);
@@ -322,7 +323,7 @@ describe("deferToNewerServiceRuntime", () => {
   test("a real child that marks bind propagates a later nonzero exit", async () => {
     const dir = freshDir();
     const script = join(dir, "ready-child.ts");
-    const source = new URL("../../src/config/serving-runtimes.ts", import.meta.url).pathname;
+    const source = repoPath("src", "config", "serving-runtimes.ts");
     writeFileSync(script, `import { markDelegatedServiceReady } from ${JSON.stringify(source)};
 markDelegatedServiceReady();
 process.exit(42);

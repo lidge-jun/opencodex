@@ -140,6 +140,17 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       thinking: { levels: FULL, order: T },
     },
   },
+  // 260929 Claude Sonnet 5.5: cursor.com/docs/models/claude-sonnet-5-5 lists it (1M max context),
+  // but the live GetUsableModels roster does not yet. Shaped like Opus 5.5 (flat effort ids, no
+  // thinking variant); re-shape from the roster once it appears.
+  "claude-sonnet-5-5": {
+    displayName: "Claude Sonnet 5.5",
+    window: CONTEXT_1M,
+    defaultVariant: "regular",
+    variants: {
+      regular: { levels: FULL },
+    },
+  },
   "claude-sonnet-5": {
     displayName: "Claude Sonnet 5",
     window: CONTEXT_1M,
