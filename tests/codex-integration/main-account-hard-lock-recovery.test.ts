@@ -365,12 +365,14 @@ describe("main hard-lock background recovery", () => {
       const pending = fetchMainAccountInfoAttempt(true, 0);
       try {
         await started.promise;
-        if (transition !== "unchanged") writeFileSync(authPath, JSON.stringify(replacement));
-        // A newer read observes the bearer but fails, so it cannot advance the publication fence.
-        expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
-        if (transition === "restored") {
-          writeFileSync(authPath, originalAuth);
+        if (transition !== "unchanged") {
+          writeFileSync(authPath, JSON.stringify(replacement));
+          // A newer read observes the bearer but fails, so it cannot advance the publication fence.
           expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+          if (transition === "restored") {
+            writeFileSync(authPath, originalAuth);
+            expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+          }
         }
         const policy = getMainPolicyQuota();
         const display = structuredClone(getAccountQuota(MAIN));
@@ -378,6 +380,7 @@ describe("main hard-lock background recovery", () => {
         finish.resolve();
         const result = await pending;
         if (transition === "unchanged") {
+          expect(reads).toBe(1);
           expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
           expect(result.freshQuota?.weeklyPercent).toBe(64);
           expect(result.resetRecoveryProof).toBeDefined();
@@ -432,17 +435,20 @@ describe("main hard-lock background recovery", () => {
         const pending = fetchMainAccountInfoAttempt(true, 0);
         try {
           await Promise.race([started.promise, pending.then(() => { throw new Error("Terminal WHAM never started"); })]);
-          if (transition !== "unchanged") writeFileSync(authPath, JSON.stringify(replacement));
-          expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
-          if (transition === "restored") {
-            writeFileSync(authPath, originalAuth);
+          if (transition !== "unchanged") {
+            writeFileSync(authPath, JSON.stringify(replacement));
             expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+            if (transition === "restored") {
+              writeFileSync(authPath, originalAuth);
+              expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+            }
           }
           const info = structuredClone(getMainAccountInfoCache());
           const policy = getMainPolicyQuota();
           finish.resolve();
           const result = await pending;
           if (transition === "unchanged") {
+            expect(reads).toBe(1);
             expect(getMainAccountInfoCache()).toBeNull();
             expect(isAccountNeedsReauth(MAIN)).toBe(true);
             expect(result.quotaRefresh).toEqual({ status: "http_error", httpStatus: status });
