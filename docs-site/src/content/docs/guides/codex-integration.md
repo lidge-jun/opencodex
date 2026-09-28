@@ -490,6 +490,13 @@ carry it — so Codex Desktop voice uses its native endpoint rather than the pro
 
 ### Emergency compaction model (opt-in)
 
+When OpenCodeX translates remote compaction for providers such as Google, it replaces images
+from earlier turns with short reopening notes if a later explicit final answer exists. Existing
+analysis and file references stay in the summary input; images after the last final answer stay
+available for unresolved work. Commentary-only and unphased histories are preserved. This affects
+only the compaction request, not stored attachments or ordinary model requests. It reduces repeated
+vision input but does not guarantee that a long text history fits the provider's context limit.
+
 `compactionRecovery` leaves the initial compaction on the conversation's selected route. It
 permits one emergency attempt only after a supported, pre-output compaction failure. It is
 separate from `compactionRouting`, which chooses another model before compaction starts, and

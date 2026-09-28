@@ -1,5 +1,15 @@
 # Responses Wire Shapes
 
+## Compaction image input
+
+For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
+tool-result images with a short reopening note only when a later nonempty `final_answer` message
+exists. This structural boundary does not prove the image was analyzed: text and source references
+remain, and the note asks the next model to reopen unresolved visual evidence. Pending images and
+commentary-only or unphased histories stay intact. The request-local copy leaves raw/stored history,
+normal generation and native compaction unchanged. Both routed v1 and v2 pass through this boundary;
+raw Responses gateways retain their existing text-only compaction conversion.
+
 ## Direct MCP calls in code mode
 
 On routed bridge or converted-custom passthrough paths, when the request declares a
