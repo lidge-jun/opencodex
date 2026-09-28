@@ -1018,6 +1018,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.attempt.recovery.emptyCompletion": "空完成重试",
   "logs.detail.attempt.recovery.consoleGoUpload": "Console 上传重试",
   "logs.detail.attempt.recovery.key401": "API 密钥重新认证",
+  "logs.detail.attempt.recovery.oauthAccount403": "需要验证账号 (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "账号速率受限 (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "已丢弃过期加密状态",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "已降低推理强度",

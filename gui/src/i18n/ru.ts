@@ -1023,6 +1023,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.attempt.recovery.emptyCompletion": "Повтор пустого завершения",
   "logs.detail.attempt.recovery.consoleGoUpload": "Повтор загрузки Console",
   "logs.detail.attempt.recovery.key401": "Повторная аутентификация API-ключа",
+  "logs.detail.attempt.recovery.oauthAccount403": "Требуется проверка аккаунта (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "Ограничение частоты для аккаунта (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Устаревшее зашифрованное состояние отброшено",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Уровень рассуждения понижен",

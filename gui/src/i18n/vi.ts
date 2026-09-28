@@ -1036,6 +1036,7 @@ export const vi: Record<TKey, string> = {
   "logs.detail.attempt.recovery.emptyCompletion": "Thử lại do hoàn thành rỗng (Empty completion retry)",
   "logs.detail.attempt.recovery.consoleGoUpload": "Thử lại tải lên Console",
   "logs.detail.attempt.recovery.key401": "Xác thực lại khóa API",
+  "logs.detail.attempt.recovery.oauthAccount403": "Cần xác minh tài khoản (403)",
   "logs.detail.attempt.recovery.oauthAccount429": "Tài khoản bị giới hạn tần suất (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Đã bỏ trạng thái mã hóa cũ",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Đã giảm mức suy luận",
