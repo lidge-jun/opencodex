@@ -369,7 +369,6 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
-  // A supervised service child defers to a foreign recorded owner before binding.
   serviceChildStayOutIfForeignOwner(process.env);
   // Native (WinSW) service mode has no batch wrapper to read the service token file into
   // the environment, and a FOREGROUND `ocx start` has no wrapper at all — so the app loads
