@@ -167,6 +167,7 @@ response; a fresh status read is required. Changing the API target remounts the 
 pending consent. `useClientResource` owns bounded, visibility-aware reads and invalidates earlier
 reads when a mutation result is published. Certificate status is not repeatedly polled; runtime
 status polls only while the tab is active. Consent copy exists in all ten locale catalogs.
+Trial consent and pending withdrawal distinguish stopped response correction from unconfirmed native cache refresh; the panel never reports cache rollback as confirmed.
 The panel offers renewal only for prepared, trusted or expired identities. Unknown trust permits fingerprint-verified removal but not renewal; invalid keys expose neither action.
 Running-state help distinguishes a listening service from a connected native app: ordinary app launches or updates can omit the managed PAC argument. It points to explicit package launch after the user closes Codex and states that a certificate reinstall cannot authorize an unassessed build.
 

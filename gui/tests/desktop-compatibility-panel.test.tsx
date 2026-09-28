@@ -22,7 +22,7 @@ afterEach(async () => {
   for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
 });
 const requests: { url: string; method: string; body?: unknown }[] = [];
-function server(uncertain = false, certificateState?: string) {
+function server(uncertain = false, certificateState?: string, usagePhase?: string) {
   requests.length = 0; let trusted = false, startup = false;
   globalThis.fetch = (async (input, init) => {
     const url = String(input), method = init?.method ?? "GET";
@@ -33,7 +33,8 @@ function server(uncertain = false, certificateState?: string) {
     }
     if (method === "POST") { trusted = true; if (uncertain) throw new TypeError("uncertain response"); return Response.json({ ok: true }); }
     return Response.json(url.endsWith("/certificate") ? { ok: true, certificate: { supported: true, state: trusted ? "trusted" : certificateState ?? "prepared", busy: null,
-      fingerprint: (url.startsWith("/second") ? "B" : "A").repeat(64) } } : { ok: true, runtime: { supported: true, phase: "off", running: false } });
+      fingerprint: (url.startsWith("/second") ? "B" : "A").repeat(64) } } : { ok: true, runtime: { supported: true, phase: usagePhase ? "running" : "off", running: !!usagePhase,
+        ...(usagePhase ? { usage: { mode: "observe", phase: usagePhase, outputs: 0, appCacheConfirmed: false } } : {}) } });
   }) as typeof fetch;
 }
 async function mount(apiBase = "") {
@@ -66,6 +67,22 @@ test("StrictMode status reads are inert and a fingerprint-bound action needs exp
   await act(async () => button(container, "Start observation").click());
   expect(requests.filter(req => req.method === "POST").at(-1)?.body).toEqual({ action: "start", confirmed: true });
   expect(container.querySelector("fieldset")).toBeNull();
+});
+
+test.each(["expired-awaiting-original-response", "observing-awaiting-original-response"])("%s does not claim the native cache has reverted", async phase => {
+  server(false, "trusted", phase); const container = await mount();
+  expect(container.textContent).toContain("Stopping correction does not immediately reset the Codex display.");
+  expect(container.textContent).toContain("this panel cannot confirm that refresh.");
+  expect(requests.every(req => req.method === "GET")).toBe(true);
+});
+
+test("trial confirmation explains delayed native refresh before any correction request", async () => {
+  server(false, "trusted", "observing"); const container = await mount();
+  expect(container.textContent).not.toContain("Stopping correction does not immediately reset the Codex display.");
+  await act(async () => button(container, "Run 3-minute trial").click());
+  expect(container.querySelector("fieldset")?.textContent).toContain("Codex must receive fresh usage data");
+  expect(button(container, "Confirm action").disabled).toBe(true);
+  expect(requests.every(req => req.method === "GET")).toBe(true);
 });
 
 test.each([

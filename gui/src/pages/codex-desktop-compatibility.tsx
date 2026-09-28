@@ -89,6 +89,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       </dl>
       {snapshot.certificate.renewalDue && <p className="notice-warn">{t("desktopCompat.renewalDue")}</p>}
       {snapshot.runtime.usage?.mode === "apply" && <p className="notice-warn">{t("desktopCompat.trialRisk")}</p>}
+      {snapshot.runtime.usage?.mode === "observe" && snapshot.runtime.usage.phase.endsWith("awaiting-original-response") && <p className="notice-warn" role="status">{t("desktopCompat.cacheRefreshHint")}</p>}
       {snapshot.runtime.contextFailure && <p className="notice-warn" role="status">{t(errorLabel[snapshot.runtime.contextFailure])}</p>}
       {running && <p className="muted text-control">{t("desktopCompat.reconnectHint")}</p>}
     </>}
@@ -102,6 +103,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     {choice && <fieldset disabled={busy}>
       <legend>{t(label[choice.action])}</legend>
       <p className="notice-warn">{t(choice.action === "apply" ? "desktopCompat.trialRisk" : "desktopCompat.risk")}</p>
+      {choice.action === "apply" && <p className="muted text-control">{t("desktopCompat.cacheRefreshHint")}</p>}
       {choice.target === "certificate" && choice.fingerprint && <code style={{ overflowWrap: "anywhere" }}>{choice.fingerprint}</code>}
       <label className="row"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />{t("desktopCompat.acknowledge")}</label>
       <div className="row" style={{ gap: "var(--space-2)" }}>

@@ -929,7 +929,11 @@ An original response showing available usage or a protected state ends the trial
 If eligible exhaustion appears again, another explicit trial is required; the earlier consent
 does not silently reactivate correction.
 
-**Return to observation** disarms correction. **Stop service** closes its connections and leaves
+**Return to observation** disarms correction. The three-minute limit bounds response correction,
+not the time until Codex refreshes its display. Expiry and returning to observation request a
+fresh usage response; the app may retain its previous display until that response arrives.
+The panel shows this limitation before trial consent and while awaiting the original response;
+it cannot confirm the app's cache refresh. **Stop service** closes its connections and leaves
 the certificate for reuse; active connections may be interrupted. For renewal or trust removal,
 stop the service and close Codex first. Renewal prepares a new untrusted certificate; review the
 new fingerprint before registering it. An uncertain action is not automatically retried.
