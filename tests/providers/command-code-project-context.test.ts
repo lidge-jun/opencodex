@@ -37,6 +37,7 @@ mock.module("node:fs/promises", () => ({
 
 const {
   EMPTY_COMMAND_CODE_PROJECT_CONTEXT,
+  commandCodeProjectContextWorkCountsForTests,
   loadCommandCodeProjectContext,
   isContainedCanonicalPath,
   projectContextCache,
@@ -191,6 +192,7 @@ describe("loadCommandCodeProjectContext", () => {
       lstatMock.mockImplementation(realLstat);
       await Promise.all(release.map(settle => settle()));
       await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(commandCodeProjectContextWorkCountsForTests()).toEqual({ inFlight: 0, outstandingScans: 0, pendingFileOps: 0 });
       for (const root of roots) rmSync(root, { recursive: true, force: true });
     }
   });
@@ -217,11 +219,74 @@ describe("loadCommandCodeProjectContext", () => {
     }
   });
 
+  test("loads a skill directory symlink that resolves inside cwd", async () => {
+    if (process.platform === "win32") return;
+    const root = makeTempDir("ocx-cc-ctx-internal-skill-link-");
+    try {
+      const skillRoot = join(root, ".commandcode", "skills");
+      const target = join(root, "internal-skill-target");
+      mkdirSync(skillRoot, { recursive: true });
+      mkdirSync(target);
+      writeFileSync(join(target, "SKILL.md"), "inside symlink body", "utf8");
+      symlinkSync(target, join(skillRoot, "linked"), "dir");
+      expect((await loadCommandCodeProjectContext(root)).skills)
+        .toBe('<skills>\n  <skill name="linked">inside symlink body</skill>\n</skills>');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a skill directory symlink that resolves outside cwd", async () => {
+    if (process.platform === "win32") return;
+    const root = makeTempDir("ocx-cc-ctx-external-skill-link-");
+    const outside = makeTempDir("ocx-cc-ctx-external-skill-target-");
+    try {
+      const skillRoot = join(root, ".commandcode", "skills");
+      mkdirSync(skillRoot, { recursive: true });
+      writeFileSync(join(outside, "SKILL.md"), "outside secret body", "utf8");
+      symlinkSync(outside, join(skillRoot, "external"), "dir");
+      expect((await loadCommandCodeProjectContext(root)).skills).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a timed-out scan is not cached and recovers after its operation settles", async () => {
+    const root = makeTempDir("ocx-cc-ctx-transient-timeout-");
+    const agentsPath = join(root, "AGENTS.md");
+    let release: () => Promise<void> = async () => {};
+    try {
+      writeFileSync(agentsPath, "recovered memory", "utf8");
+      lstatMock.mockImplementation(path => {
+        if (String(path) !== agentsPath) return realLstat(path);
+        return new Promise<Stats>(resolve => {
+          release = async () => { resolve(await realLstat(path)); };
+        });
+      });
+      setCommandCodeFileOpTimeoutForTests(100);
+      expect((await loadCommandCodeProjectContext(root)).memory).toBe("");
+      expect(projectContextCache.has(root)).toBe(false);
+      lstatMock.mockImplementation(realLstat);
+      await release();
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(commandCodeProjectContextWorkCountsForTests()).toEqual({ inFlight: 0, outstandingScans: 0, pendingFileOps: 0 });
+      expect((await loadCommandCodeProjectContext(root)).memory).toBe("recovered memory");
+      expect(projectContextCache.has(root)).toBe(true);
+    } finally {
+      lstatMock.mockImplementation(realLstat);
+      await release();
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("missing files return empty memory, null taste, null skills", async () => {
     const root = makeTempDir("ocx-cc-ctx-empty-");
     try {
       const result = await loadCommandCodeProjectContext(root);
       expect(result).toEqual({ memory: "", taste: null, skills: null });
+      expect(await loadCommandCodeProjectContext(root)).toBe(result);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -291,13 +356,14 @@ describe("loadCommandCodeProjectContext", () => {
     const skillRoot = join(root, ".commandcode", "skills");
     mkdirSync(skillRoot, { recursive: true });
     let closeCalls = 0;
+    let releaseNext: () => void = () => {};
     const hangingDir = {
-      close: async () => {
-        closeCalls++;
-      },
+      close: async () => { closeCalls++; },
       [Symbol.asyncIterator]() {
         return {
-          next: () => new Promise<never>(() => {}),
+          next: () => new Promise<IteratorResult<unknown>>(resolve => {
+            releaseNext = () => resolve({ done: true, value: undefined });
+          }),
         };
       },
     };
@@ -316,6 +382,9 @@ describe("loadCommandCodeProjectContext", () => {
       expect(closeCalls).toBe(1);
     } finally {
       opendirMock.mockImplementation(realOpendir);
+      releaseNext();
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(commandCodeProjectContextWorkCountsForTests()).toEqual({ inFlight: 0, outstandingScans: 0, pendingFileOps: 0 });
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -510,9 +579,12 @@ describe("loadCommandCodeProjectContext", () => {
     const root = makeTempDir("ocx-cc-ctx-read-timeout-");
     const agentsPath = join(root, "AGENTS.md");
     let closeCalls = 0;
+    let releaseRead: () => void = () => {};
     const hangingFile = {
       stat: async () => statSync(agentsPath),
-      read: () => new Promise<never>(() => {}),
+      read: () => new Promise<{ bytesRead: number; buffer: Buffer }>(resolve => {
+        releaseRead = () => resolve({ bytesRead: 0, buffer: Buffer.alloc(0) });
+      }),
       close: async () => {
         closeCalls++;
       },
@@ -534,6 +606,9 @@ describe("loadCommandCodeProjectContext", () => {
       expect(closeCalls).toBe(1);
     } finally {
       openMock.mockImplementation(realOpen);
+      releaseRead();
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      expect(commandCodeProjectContextWorkCountsForTests()).toEqual({ inFlight: 0, outstandingScans: 0, pendingFileOps: 0 });
       rmSync(root, { recursive: true, force: true });
     }
   });

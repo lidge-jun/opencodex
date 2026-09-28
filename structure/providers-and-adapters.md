@@ -267,7 +267,10 @@ contents are sent to the configured Command Code endpoint when enabled, and miss
 failed reads degrade to empty fields. A cwd-keyed single-flight shares cold or expired loads.
 Eight outstanding scan slots remain occupied until every dispatched filesystem operation
 settles, including after a caller timeout; a 64-operation global admission ceiling fails
-soft on further work. The 30-second, 128-entry cache rechecks capacity at insertion time.
+soft on further work. Timed-out or admission-degraded loads are not cached, so a later
+healthy request can retry; stable missing files still cache as empty. Symlinked skill
+directories pass through canonical confinement: inside-cwd targets load, outside targets
+do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
 
 ## TypeSafe JEV decision provider
 

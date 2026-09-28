@@ -39,10 +39,21 @@ const PROJECT_CONTEXT_TTL_MS = 30_000;
 const MAX_PROJECT_CONTEXT_CACHE_ENTRIES = 128;
 const MAX_CONCURRENT_PROJECT_CONTEXT_SCANS = 8;
 const MAX_PENDING_PROJECT_CONTEXT_FILE_OPS = 64;
+class ProjectContextTimeoutError extends Error {}
+class ProjectContextAdmissionError extends Error {}
 const projectContextInFlight = new Map<string, Promise<CommandCodeProjectContext>>();
-type ScanScope = { cwd: string; pendingOps: number; finished: boolean };
+type ScanScope = { cwd: string; pendingOps: number; finished: boolean; degraded: boolean };
 const outstandingProjectContextScans = new Map<string, ScanScope>();
 const pendingProjectContextFileOps = new Set<Promise<unknown>>();
+
+/** Test-only observation of scan admission and abandoned filesystem work. */
+export function commandCodeProjectContextWorkCountsForTests(): { inFlight: number; outstandingScans: number; pendingFileOps: number } {
+  return {
+    inFlight: projectContextInFlight.size,
+    outstandingScans: outstandingProjectContextScans.size,
+    pendingFileOps: pendingProjectContextFileOps.size,
+  };
+}
 
 const TRUNCATION_MARKER = "\n<!-- truncated -->";
 
@@ -90,7 +101,7 @@ function releaseScanIfSettled(scope: ScanScope): void {
 
 function trackedFileOperation<T>(operation: () => Promise<T>, scope: ScanScope, enforceLimit = true): Promise<T> {
   if (enforceLimit && pendingProjectContextFileOps.size >= MAX_PENDING_PROJECT_CONTEXT_FILE_OPS) {
-    throw new Error("project context filesystem admission limit");
+    throw new ProjectContextAdmissionError("project context filesystem admission limit");
   }
   const pending = operation();
   scope.pendingOps++;
@@ -107,8 +118,16 @@ function trackedFileOperation<T>(operation: () => Promise<T>, scope: ScanScope, 
 /** Keep filesystem metadata work off the request thread and inside one load deadline. */
 async function withinDeadline<T>(operation: () => Promise<T>, deadline: number, scope: ScanScope): Promise<T> {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("timeout");
-  return withTimeout(trackedFileOperation(operation, scope), remaining);
+  if (remaining <= 0) {
+    scope.degraded = true;
+    throw new ProjectContextTimeoutError("timeout");
+  }
+  try {
+    return await withTimeout(trackedFileOperation(operation, scope), remaining);
+  } catch (error) {
+    if (error instanceof ProjectContextTimeoutError || error instanceof ProjectContextAdmissionError) scope.degraded = true;
+    throw error;
+  }
 }
 
 /** Fail-soft canonical path; no synchronous filesystem calls run on the request thread. */
@@ -150,7 +169,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), ms);
+        timer = setTimeout(() => reject(new ProjectContextTimeoutError("timeout")), ms);
       }),
     ]);
   } finally {
@@ -198,14 +217,18 @@ async function readUtf8File(path: string, capBytes: number, deadline: number, cw
     }
   }
   const remaining = deadline - Date.now();
-  if (remaining <= 0) return null;
+  if (remaining <= 0) {
+    scope.degraded = true;
+    return null;
+  }
   // O_NONBLOCK prevents a race that swaps a checked regular file for a FIFO.
   // Windows lacks these POSIX open guards; post-open path/identity checks remain best-effort there.
   const flags = process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   let opened: ReturnType<typeof open>;
   try {
     opened = trackedFileOperation(() => open(path, flags), scope);
-  } catch {
+  } catch (error) {
+    if (error instanceof ProjectContextAdmissionError) scope.degraded = true;
     return null;
   }
   const closeBestEffort = (handle: FileHandle): Promise<void> => {
@@ -235,14 +258,16 @@ async function readUtf8File(path: string, capBytes: number, deadline: number, cw
         if (fileHandle === handle) fileHandle = undefined;
       }
     }, scope);
-  } catch {
+  } catch (error) {
+    if (error instanceof ProjectContextAdmissionError) scope.degraded = true;
     void opened.then(handle => closeBestEffort(handle), () => undefined);
     return null;
   }
 
   try {
     return await withTimeout(read, remaining);
-  } catch {
+  } catch (error) {
+    if (error instanceof ProjectContextTimeoutError || error instanceof ProjectContextAdmissionError) scope.degraded = true;
     if (fileHandle) void closeBestEffort(fileHandle);
     void opened.then(handle => closeBestEffort(handle), () => undefined);
     return null;
@@ -331,7 +356,7 @@ async function listSkillDirs(skillRoot: string, cwdCanonical: string, scanBudget
             if (Date.now() >= deadline) break;
             visitedEntries++;
             const atLimit = visitedEntries >= scanBudget;
-            if (!entry.name.startsWith(".") && entry.isDirectory()) {
+            if (!entry.name.startsWith(".") && (entry.isDirectory() || entry.isSymbolicLink())) {
               const skillMd = join(skillRoot, entry.name, "SKILL.md");
               const skillMdCanonical = await confinedCanonicalPath(skillMd, cwdCanonical, deadline, "file", scope);
               if (skillMdCanonical) {
@@ -446,13 +471,13 @@ async function readSkills(cwd: string, cwdCanonical: string, deadline: number, s
 
   for (const rootRel of SKILL_ROOTS) {
     const remainingScanMs = deadline - Date.now();
-    if (remainingScanMs <= 0) break;
+    if (remainingScanMs <= 0) { scope.degraded = true; break; }
     const skillRoot = join(cwd, ...rootRel.split("/"));
     const dirs = await listSkillDirs(skillRoot, cwdCanonical, MAX_SKILL_DIRS_TO_SCAN, deadline, scope);
     for (const dirName of dirs) {
       if (collected.length >= MAX_SKILLS || remainingBytes <= 1) break;
       const remainingReadMs = deadline - Date.now();
-      if (remainingReadMs <= 0) break;
+      if (remainingReadMs <= 0) { scope.degraded = true; break; }
       const skill = await readSkill(skillRoot, dirName, cwdCanonical, Math.min(SKILL_FILE_CAP_BYTES, remainingBytes - 1), deadline, scope);
       if (!skill) continue;
       remainingBytes -= skill.bytesRead;
@@ -494,14 +519,16 @@ export async function loadCommandCodeProjectContext(cwd: string | undefined): Pr
     || pendingProjectContextFileOps.size >= MAX_PENDING_PROJECT_CONTEXT_FILE_OPS) {
     return { ...EMPTY_COMMAND_CODE_PROJECT_CONTEXT };
   }
-  const scope: ScanScope = { cwd, pendingOps: 0, finished: false };
+  const scope: ScanScope = { cwd, pendingOps: 0, finished: false, degraded: false };
   outstandingProjectContextScans.set(cwd, scope);
   const scan = (async () => {
     const value = await collectProjectContext(cwd, fileOpTimeoutForTests ?? COMMAND_CODE_FILE_OP_TIMEOUT_MS, scope);
-    const now = Date.now();
-    pruneExpiredProjectContextCache(now);
-    if (!projectContextCache.has(cwd)) pruneProjectContextCache(now);
-    projectContextCache.set(cwd, { collectedAt: now, value });
+    if (!scope.degraded) {
+      const now = Date.now();
+      pruneExpiredProjectContextCache(now);
+      if (!projectContextCache.has(cwd)) pruneProjectContextCache(now);
+      projectContextCache.set(cwd, { collectedAt: now, value });
+    }
     return value;
   })();
   projectContextInFlight.set(cwd, scan);
