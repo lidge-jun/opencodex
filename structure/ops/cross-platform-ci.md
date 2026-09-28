@@ -28,9 +28,10 @@ runners: `cargo fmt` on Linux, then `cargo clippy -D warnings` and `cargo test` 
 the live confinement tests compile only on macOS and Windows. A change under `deploy/` (or to
 `docker/cloudflare-supervisor.ts` or its test) runs `cloudflare-deploy` on Linux: a frozen-lockfile
 install and `tsc` inside `deploy/cloudflare`, which the root typecheck does not reach, then
-`tests/service/cloudflare-deploy.test.ts`. All three filters also list `ci.yml`, stay pull-request
-scope like `docs` and `structure`, have their outputs validated before any job reads them, and the
-aggregate gate expects each job exactly when its filter output is `true`.
+`tests/service/cloudflare-deploy.test.ts`. The `setup_action` and `deploy` filters also list
+`ci.yml`, so an edit to the workflow verifies them; all three stay pull-request scope like `docs` and
+`structure`, have their outputs validated before any job reads them, and the aggregate gate expects
+each job exactly when its filter output is `true`.
 
 `privacy:scan` runs inside `gates`, and `gates` is scoped to the `ci` filter. The `privacy
 gate` job is its exact complement on pull requests — it runs wherever the `ci` filter declines —
