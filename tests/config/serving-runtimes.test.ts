@@ -276,19 +276,37 @@ describe("deferToNewerServiceRuntime", () => {
     expect(exit).toBeNull();
   });
 
-  test("a newer child that stays out on purpose is not overridden by this install", async () => {
+  test("any pre-bind exit, including 0 and the stay-out code, falls back to this installation", async () => {
+    // Propagating a clean pre-bind exit would end the service with nothing serving. The
+    // fallback then runs this install's own start path, whose lease-held bind fence re-applies
+    // every stay-out condition, so a deliberate stand-down is still honored there.
+    for (const exitCode of [0, 42, 1]) {
+      const dir = freshDir();
+      candidateSetup(dir);
+      const lines: string[] = [];
+      const exit = await deferToNewerServiceRuntime("2.67.0", selfCommand, undefined, {
+        dir,
+        exists: () => true,
+        run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }),
+        runInherited: async () => ({ exitCode, ready: false }),
+        env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" },
+        log: line => lines.push(line),
+      });
+      expect(exit).toBeNull();
+      expect(lines.join("\n")).toContain(`exited before bind (status ${exitCode})`);
+    }
+  });
+
+  test("a delegate that published its bind owns its exit, including 0", async () => {
     const dir = freshDir();
     candidateSetup(dir);
-    // Under the Windows wrapper protocol 42 is the intentional stay-out, not a crash.
-    const exit = await deferToNewerServiceRuntime("2.67.0", selfCommand, undefined, {
+    expect(await deferToNewerServiceRuntime("2.67.0", selfCommand, undefined, {
       dir,
       exists: () => true,
       run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }),
-      runInherited: async () => ({ exitCode: 42, ready: false }),
-      env: { OCX_SERVICE: "1", OCX_SERVICE_MANAGED: "1", OCX_WINDOWS_WRAPPER_PROTOCOL: "1" },
+      runInherited: async () => ({ exitCode: 0, ready: true }),
       log: () => {},
-    });
-    expect(exit).toBe(42);
+    })).toBe(0);
   });
 
   test("a real child that fails before bind leaves the parent serving", async () => {

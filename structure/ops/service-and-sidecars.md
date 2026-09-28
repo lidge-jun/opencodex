@@ -33,8 +33,10 @@ delegate until `ocx service repair` rewrites the XML. The census update uses the
 cross-process config mutation lock; recorded paths must resolve to files owned
 by the current user without group/world write permission on POSIX. Candidate
 probes are newest-recorded first, capped at four three-second attempts; a failed probe
-falls through within that cap, and a failed launch or nonzero pre-bind child exit leaves
-this install serving. A one-hop marker prevents recursive delegation; post-bind exits
+falls through within that cap, and a failed launch or any pre-bind child exit (0 and the
+stay-out code included) leaves this install serving: its own lease-held bind fence then
+re-applies every stay-out condition, so a deliberate stand-down is still honored. A one-hop
+marker prevents recursive delegation; post-bind exits
 propagate to the manager. The
 foreground parent forwards SIGINT, SIGTERM and SIGHUP until the child exits, shares one
 five-second SIGKILL escalation timer across repeated signals, and clears that timer and

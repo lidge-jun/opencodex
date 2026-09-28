@@ -34,7 +34,7 @@ import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "./mutation-lock";
 import { SERVICE_MANAGED_ENV } from "../service/state";
-import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
+import { WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
 
 export function servingRuntimesPath(dir: string = getConfigDir()): string {
   return join(dir, "serving-runtimes.json");
@@ -367,11 +367,12 @@ export async function deferToNewerServiceRuntime(
   );
   try {
     const result = await run(candidate.command, startArgs);
-    // A newer runtime that stands down on purpose (a foreign recorded owner) exits with the
-    // manager's stay-out code before binding. That is an answer, not a crash: serving this
-    // older install instead would override the very refusal the newer install made.
-    const stayOut = serviceStayOutExitCode(deps.env ?? process.env);
-    if (!result.ready && result.exitCode !== 0 && result.exitCode !== stayOut) {
+    // Any exit before the delegate published its bind, whatever the code, falls back to this
+    // installation. Propagating a pre-bind exit 0 (or the stay-out code) would end the service
+    // with nothing serving. Falling back cannot override a deliberate stand-down: this process
+    // continues through the same start path, whose lease-held bind fence re-applies every
+    // stay-out condition (a live proxy, a foreign recorded owner) before it binds anything.
+    if (!result.ready) {
       log(`⚠️  Newer runtime exited before bind (status ${result.exitCode}); serving this install instead.`);
       return null;
     }

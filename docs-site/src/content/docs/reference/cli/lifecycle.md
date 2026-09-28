@@ -438,7 +438,8 @@ previous catalog from memory.
 
 A managed service may start a newer installation that previously served the same
 OpenCodex home, even when its service definition still points to an older install.
-If that newer child fails before binding, the original service starts instead.
+If that newer child exits before binding, with any exit code, the original service starts instead
+and applies its own checks before serving.
 Foreground starts and client-launched proxies keep their selected executable.
 On Windows, this applies to Task Scheduler and newly installed or repaired native WinSW
 services. A native WinSW definition created before this behavior needs `ocx service repair`
