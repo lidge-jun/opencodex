@@ -6,6 +6,7 @@ import {
   clearLoginState,
   getLoginStatus,
   getValidAccessToken,
+  OAuthAccountPausedError,
   OAuthLoginRequiredError,
   OAuthProviderPublicationError,
   OAuthReauthIdentityMismatchError,
@@ -16,7 +17,7 @@ import {
   publicOAuthAuthenticationErrorMessage,
   UnsupportedOAuthProviderError,
 } from "../../src/oauth";
-import { OAuthMutationBusyError, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, OAuthMutationBusyError, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
@@ -248,6 +249,35 @@ describe("OAuth status privacy", () => {
     expect(body).not.toContain("config.json");
   });
 
+  test("pausing the active OAuth account returns an account-paused response, not login required", async () => {
+    await saveCredential("xai", {
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-xai",
+    });
+    const accountId = getAccountSet("xai")!.accounts[0]!.id;
+    await setAccountPaused("xai", accountId, true);
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "test-model", input: "hello", stream: false }),
+    }), {
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1" } },
+    } as OcxConfig, { model: "", provider: "" });
+    const body = await response.text();
+
+    expect(response.status).toBe(403);
+    expect(JSON.parse(body)).toMatchObject({ error: {
+      type: "permission_error",
+      message: "OAuth account is paused. Resume it in account settings and retry.",
+    } });
+    expect(body).toContain("OAuth account is paused");
+    expect(body).not.toContain("login xai");
+  });
+
   test("OAuth responses redact token-shaped custom provider names", async () => {
     const providerName = "sk-secret-provider-key";
     const config = {
@@ -290,6 +320,9 @@ describe("OAuth status privacy", () => {
     expect(publicOAuthAuthenticationErrorMessage(new Error(PUBLIC_ERROR_CANARY))).toBe(PUBLIC_OAUTH_ERROR);
     expect(publicOAuthAuthenticationErrorMessage(new OAuthLoginRequiredError("xai"))).toBe(
       "Not logged in to xai. Run: ocx login xai",
+    );
+    expect(publicOAuthAuthenticationErrorMessage(new OAuthAccountPausedError())).toBe(
+      "OAuth account is paused. Resume it in account settings and retry.",
     );
     expect(publicOAuthAuthenticationErrorMessage(new OAuthLoginRequiredError(PUBLIC_ERROR_CANARY)))
       .toBe(PUBLIC_OAUTH_ERROR);

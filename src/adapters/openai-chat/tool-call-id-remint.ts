@@ -17,6 +17,7 @@ import type { OcxMessage } from "../../types";
  */
 export function createToolCallIdReminter(reservedIds: Iterable<string>): (rawId: string) => string {
   const occupied = new Set(reservedIds);
+  const nextSuffixByWidthAndPrefix = new Map<string, number>();
   return rawId => {
     if (!occupied.has(rawId)) {
       occupied.add(rawId);
@@ -25,16 +26,24 @@ export function createToolCallIdReminter(reservedIds: Iterable<string>): (rawId:
     // A non-conforming source is sanitized, never dropped: the wire still needs an id, and the
     // occupied check below covers a sanitized form that now equals some other call's id.
     const base = isConformingToolCallId(rawId) ? rawId : rawId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    for (let n = 2; ; n++) {
+    for (let n = 2; ;) {
       // Hyphen, not underscore: an id that extends another id as `<earlier>_<digits>` is parsed by
       // at least one client as a batch sub-call of `<earlier>`, which pairs the second call's
       // result to the first call. A `-<n>` suffix is in the same id family without that reading.
       const suffix = `-${n}`;
-      const candidate = base.slice(0, Math.max(1, MAX_TOOL_CALL_ID_LENGTH - suffix.length)) + suffix;
+      // A wider suffix retains less of the base, so siblings that were separate at -9
+      // can converge at -10. Resume in the candidate's actual width/prefix domain.
+      const prefix = base.slice(0, Math.max(1, MAX_TOOL_CALL_ID_LENGTH - suffix.length));
+      const cursorKey = `${suffix.length}:${prefix}`;
+      const next = nextSuffixByWidthAndPrefix.get(cursorKey);
+      if (next !== undefined && next > n) { n = next; continue; }
+      const candidate = prefix + suffix;
+      nextSuffixByWidthAndPrefix.set(cursorKey, n + 1);
       if (!occupied.has(candidate)) {
         occupied.add(candidate);
         return candidate;
       }
+      n++;
     }
   };
 }

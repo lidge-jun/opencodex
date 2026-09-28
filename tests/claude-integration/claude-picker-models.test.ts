@@ -62,3 +62,42 @@ test("snapshot persists mode 0600, loads synchronously, and retains last good on
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("picker preserves real million-token routed windows without promoting small or unknown routes", () => {
+  const rows = buildPickerModels({ nativeSlugs: ["gpt-5.5"], routedModels: [
+    { provider: "meta-muse", id: "muse-spark-1.3-contributor", contextWindow: 1_048_576 },
+    { provider: "meta-model", id: "muse-spark-1.3-contributor", contextWindow: 1_048_576 },
+    { provider: "example", id: "small", contextWindow: 128_000 },
+    { provider: "example", id: "unknown" },
+  ] });
+  expect(rows.map(row => row.id)).toEqual([
+    "ocx-claude-native--gpt-5.5",
+    "ocx-claude-meta-muse--muse-spark-1.3-contributor[1m]",
+    "ocx-claude-meta-model--muse-spark-1.3-contributor[1m]",
+    "ocx-claude-example--small", "ocx-claude-example--unknown",
+  ]);
+  expect(rows[1]?.contextWindow).toBe(1_048_576);
+});
+
+test("picker leaves sub-million native opt-ins unmarked without a runner compaction guarantee", () => {
+  const rows = buildPickerModels({
+    nativeSlugs: ["gpt-5.5", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-terra"],
+    routedModels: [], nativeContextCap: { modelWindows: {
+      "gpt-6-astra": 872_000, "gpt-6-sol": 872_000, "gpt-6-luna": 872_000, "gpt-5.6-terra": 922_000,
+    } },
+  });
+  expect(rows.every(row => !row.id.endsWith("[1m]"))).toBe(true);
+  expect(rows.map(row => row.contextWindow)).toEqual([272_000, 872_000, 872_000, 872_000, 922_000]);
+});
+
+test("picker marks the million-token boundary and leaves smaller routed windows unmarked", () => {
+  const rows = buildPickerModels({ nativeSlugs: [], routedModels: [
+    { provider: "example", id: "below", contextWindow: 999_999 },
+    { provider: "example", id: "exact", contextWindow: 1_000_000 },
+    { provider: "example", id: "larger", contextWindow: 2_000_000 },
+  ] });
+  expect(rows.map(row => row.id)).toEqual([
+    "ocx-claude-example--below", "ocx-claude-example--exact[1m]", "ocx-claude-example--larger[1m]",
+  ]);
+  expect(rows.map(row => row.contextWindow)).toEqual([999_999, 1_000_000, 2_000_000]);
+});

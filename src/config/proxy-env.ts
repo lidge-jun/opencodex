@@ -5,6 +5,7 @@ import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./subagent-mod
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION } from "./multi-agent-surface";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES } from "../lib/app-owned-memory";
 import { describeProxyForLog, readWindowsSystemProxy, type WindowsProxyRegistryReader } from "../lib/windows-system-proxy";
+import { readMacOSSystemProxy, type MacOSProxyReader } from "./macos-system-proxy";
 import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "../types";
 import type { OcxRuntimeRole } from "../types/config";
 
@@ -152,6 +153,23 @@ function mergeNoProxyEntries(configured: readonly string[] = [], loopback: reado
   }
 }
 
+function configuredNoProxyEntries(config: OcxConfig): string[] {
+  const raw = config.noProxy;
+  let entries: string[];
+  if (Array.isArray(raw)) {
+    if (raw.some(entry => typeof entry !== "string")) warnProxyConfigDiscardOnce("noProxyElements");
+    entries = raw.filter((entry): entry is string => typeof entry === "string");
+  } else if (typeof raw === "string") {
+    const resolved = resolveEnvValue(raw);
+    if (raw && resolved === undefined) warnProxyConfigDiscardOnce("noProxy");
+    entries = (resolved ?? "").split(",");
+  } else {
+    if (raw !== undefined) warnProxyConfigDiscardOnce("noProxy");
+    entries = [];
+  }
+  return entries.map(entry => entry.trim()).filter(Boolean);
+}
+
 /**
  * Mirror `config.proxy` into HTTP(S)_PROXY env vars. Bun fetch consumes them natively; transports
  * such as the ChatGPT upstream WebSocket select the same environment explicitly. User-set HTTP(S)_PROXY
@@ -172,7 +190,7 @@ export function applyProxyEnv(config: OcxConfig, announce = false): void {
 /** Test seam for `proxy: "auto"`: the registry reader and platform are injectable. */
 export function applyProxyEnvWith(
   config: OcxConfig,
-  auto: { reader?: WindowsProxyRegistryReader; platform?: NodeJS.Platform } = {},
+  auto: { reader?: WindowsProxyRegistryReader; macOSReader?: MacOSProxyReader; platform?: NodeJS.Platform } = {},
 ): void {
   // `proxy` and `noProxy` are not declared in the top-level schema, which ends in
   // `.passthrough()`, so whatever is on disk arrives here verbatim. A non-string value
@@ -194,6 +212,52 @@ export function applyProxyEnvWith(
     return;
   }
   if (proxy.trim().toLowerCase() === "auto") {
+    if ((auto.platform ?? process.platform) === "darwin") {
+      // An inherited scheme or ALL_PROXY route owns both its proxy and bypass
+      // variables. Combining it with system exceptions would change that route.
+      if (["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]
+        .some(key => process.env[key]?.trim())) {
+        console.log('[opencodex] proxy "auto": existing proxy environment wins; macOS system proxy not consulted');
+        configureSocks5Fetch();
+        return;
+      }
+      const found = readMacOSSystemProxy(auto.macOSReader);
+      if (found.kind !== "proxy") {
+        const reason = found.kind === "unsafe-exceptions"
+          ? "macOS exceptions cannot be safely translated; discovery refused"
+          : found.kind === "disabled"
+            ? "macOS system proxy is disabled"
+            : "macOS proxy settings could not be read";
+        console.log(`[opencodex] proxy "auto": ${reason}; proxy environment unchanged`);
+        return;
+      }
+      const configured = configuredNoProxyEntries(config);
+      const inheritedLowercase = process.env.no_proxy?.trim();
+      if (inheritedLowercase && configured.some(host => /^localhost\.?$/i.test(host))) {
+        console.log('[opencodex] proxy "auto": configured noProxy "localhost" cannot be represented exactly for Bun while an inherited no_proxy is set; discovery refused');
+        return;
+      }
+      const origins = [
+        found.httpUrl && `HTTP ${describeProxyForLog(found.httpUrl)}`,
+        found.httpsUrl && `HTTPS ${describeProxyForLog(found.httpsUrl)}`,
+      ].filter(Boolean).join(", ");
+      console.log(`[opencodex] proxy "auto": using macOS system proxy ${origins}`);
+      if (found.droppedLinkLocal) {
+        console.log('[opencodex] proxy "auto": link-local IP literals use the proxy; macOS link-local range exceptions are not expressible');
+      }
+      if (found.httpUrl) process.env.HTTP_PROXY = found.httpUrl;
+      if (found.httpsUrl) process.env.HTTPS_PROXY = found.httpsUrl;
+      // Bun gives non-empty lowercase no_proxy priority over NO_PROXY. Before
+      // discovery there was no proxy, so an ordinary configured name and its
+      // subdomains can stay direct in both paths. Bare localhost is refused
+      // above when lowercase is inherited: Bun cannot match it exactly there.
+      mergeNoProxyEntries([...configured, ...found.exceptions], LOOPBACK_ADDRESS_NO_PROXY);
+      if (process.env.no_proxy?.trim()) {
+        process.env.no_proxy = withNoProxyEntries(process.env.no_proxy, [...configured, ...found.exceptions], LOOPBACK_ADDRESS_NO_PROXY);
+      }
+      configureSocks5Fetch();
+      return;
+    }
     // #1525 slice 1: one startup read of the Windows static proxy. Never copy the literal
     // "auto" into HTTP_PROXY; every non-proxy outcome leaves outbound routing as it was.
     if (process.env.HTTP_PROXY?.trim() || process.env.http_proxy?.trim()
@@ -213,7 +277,7 @@ export function applyProxyEnvWith(
         proxy = undefined;
       } else {
         const reason = found.kind === "unsupported"
-          ? "only Windows system proxy discovery is supported; using direct egress on this OS"
+          ? "only Windows and macOS system proxy discovery is supported; using direct egress on this OS"
           : found.kind === "disabled"
             ? "Windows system proxy is disabled; using direct egress"
             : found.kind === "socks-only"
@@ -240,23 +304,6 @@ export function applyProxyEnvWith(
   }
   // Configured entries first, then loopback: loopback is unconditional, so appending it last
   // keeps it present even when the operator lists a loopback host themselves.
-  const raw = config.noProxy;
-  let configuredEntries: string[];
-  if (Array.isArray(raw)) {
-    // One unusable element must not discard the operator's other entries.
-    if (raw.some(entry => typeof entry !== "string")) warnProxyConfigDiscardOnce("noProxyElements");
-    configuredEntries = raw.filter((entry): entry is string => typeof entry === "string");
-  } else if (typeof raw === "string") {
-    const resolved = resolveEnvValue(raw);
-    if (raw && resolved === undefined) warnProxyConfigDiscardOnce("noProxy");
-    configuredEntries = (resolved ?? "").split(",");
-  } else {
-    if (raw !== undefined) warnProxyConfigDiscardOnce("noProxy");
-    configuredEntries = [];
-  }
-  const configured = configuredEntries
-    .map(entry => entry.trim())
-    .filter(Boolean);
-  mergeNoProxyEntries(configured);
+  mergeNoProxyEntries(configuredNoProxyEntries(config));
   configureSocks5Fetch();
 }

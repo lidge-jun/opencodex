@@ -9,7 +9,7 @@ const record = (value: unknown): value is Record<string, unknown> => !!value && 
 // changes revoke the observed context even if the loopback URL stays the same.
 const ROUTING_KEYS = ["providers", "defaultProvider", "defaultModelAliases", "customModels", "combos", "routingProfiles",
   "subagentModelFallback", "subagentModelFallbackByModel", "injectionModel", "compactionRouting", "compactionRecovery",
-  "blockedModelRedirects", "shadowCallIntercept", "protocols"] as const satisfies readonly (keyof OcxConfig)[];
+  "blockedModelRedirects", "shadowCallIntercept", "protocols", "memoryModels"] as const satisfies readonly (keyof OcxConfig)[];
 function routingDigest(text: string, owner: NativeCompatibilityOwner): string {
   const projection = Object.fromEntries(ROUTING_KEYS.map(key => [key, owner.config[key]]));
   const serialized = JSON.stringify([owner.port, owner.loopbackPort, projection], (_key, value) =>

@@ -42,7 +42,8 @@ import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { getAccountSet } from "../../oauth/store";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
@@ -64,6 +65,7 @@ import {
   rotateGenericOAuthAccountOnRefusal,
   quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
+  rotateAntigravityAccountOnAuthRefusal,
 } from "../../oauth/generic-account-failover";
 import {
   attemptOpaqueBlobRecovery,
@@ -197,6 +199,8 @@ export async function prepareAdapterExchange(
   // Key/OAuth rotation re-resolves credentials, never the origin, so the routed baseUrl is stable.
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
   transportState.activeAdapter = transportState.adapter;
+  const antigravityPoolActivated = route.providerName === "google-antigravity"
+    && isGenericOAuthFailoverEnabled(config, route.providerName);
 
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // auth headers, generated compat headers). Same-target 429 replays reuse it verbatim; the
@@ -409,6 +413,7 @@ export async function prepareAdapterExchange(
     // moments later; at most one byte-identical replay is allowed per request.
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = false;
+    let antigravity401RotationAttempted = false;
     // At most one reasoning-effort downgrade per request. This sits outside the recovery loop
     // below for the same reason the two guards above do: a guard declared inside it is reset by
     // every `continue recovery`, which would let one turn walk the whole ladder down.
@@ -588,6 +593,54 @@ export async function prepareAdapterExchange(
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
       }
     };
+    const rotateAntigravityAuth = async (
+      failedResponse: Response,
+      recovery: AttemptRecoveryKind,
+    ): Promise<Response | null> => {
+      const sent = transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot;
+      if (!antigravityPoolActivated || !sent
+        || transportState.genericFailovers >= transportState.genericFailoverLimit) return null;
+      const nextId = rotateAntigravityAccountOnAuthRefusal(
+        antigravityPoolActivated, sent.accountId, sent.generation, route.modelId,
+      );
+      if (!nextId) return null;
+      const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
+      const hop = reserveCredentialHop("auth-recovery",
+        `${route.providerName}|${route.modelId}|antigravity-auth`,
+        !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null);
+      if (!hop.allowed) return null;
+      try {
+        const snapshot = await failoverAccountSnapshot(route.providerName, nextId);
+        const admitted = await applyFailoverSnapshot(snapshot);
+        if (admitted?.accountId !== nextId) return null;
+        invalidateSameTargetRequest();
+        transportState.activeAdapter = resolveSelectionAdapter(
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+          config.cacheRetention);
+        bindRouteReasoningReplayScope({
+          parsed, providerName: route.providerName, provider: route.provider,
+          adapterName: transportState.activeAdapter.name,
+          oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+        });
+        sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider,
+          transportState.activeAdapter.name, logCtx.accountLogLabel);
+        recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName,
+          route.provider, transportState.activeAdapter.name);
+        sendBudgetState.pendingHopPermit = hop.permit;
+        const result = await rebuildAndRefetch(recovery, () => {
+          if (!adapterOwnsDispatch) hop.permit?.use();
+        }, failedResponse);
+        if ("failed" in result) return result.failed === failedResponse ? null : result.failed;
+        transportState.genericFailovers += 1;
+        try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        return result;
+      } catch {
+        return null;
+      } finally {
+        sendBudgetState.pendingHopPermit = undefined;
+        hop.permit?.release();
+      }
+    };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
       // Preserve the terminal verdict through adapter and combo error formatting.
@@ -604,12 +657,18 @@ export async function prepareAdapterExchange(
         && !sendBudgetExhausted()
       ) {
         oauth401ReplayAttempted = true;
-        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         let refreshed: OAuthAccessSnapshot;
         try {
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
         } catch (err) {
           const failed = transportState.sentOAuthSnapshot;
+          if (route.providerName === "google-antigravity" && err instanceof OAuthLoginRequiredError && failed
+            && getAccountSet(route.providerName)?.accounts.some(row =>
+              row.id === failed.accountId && row.needsReauth === true)) {
+            antigravity401RotationAttempted = true;
+            const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-401");
+            if (rotated) { upstreamResponse = rotated; continue recovery; }
+          }
           if (route.providerName === "kiro" && err instanceof OAuthLoginRequiredError && failed
             && transportState.genericFailovers < transportState.genericFailoverLimit) {
             const alternate = await tryKiroAlternateAfterTerminalRefresh(config, failed.accountId, failed.generation);
@@ -650,6 +709,9 @@ export async function prepareAdapterExchange(
             }
           }
           cleanupUpstreamAbort();
+          if (err instanceof OAuthAccountPausedError) {
+            return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));
+          }
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
         }
         if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
@@ -693,6 +755,14 @@ export async function prepareAdapterExchange(
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
         continue recovery;
+      }
+
+      if (route.providerName === "google-antigravity" && upstreamResponse.status === 401
+        && oauth401ReplayAttempted && !antigravity401RotationAttempted
+        && !isNonReplayableResponse(upstreamResponse)) {
+        antigravity401RotationAttempted = true;
+        const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-401");
+        if (rotated) { upstreamResponse = rotated; continue recovery; }
       }
 
       // Static API-key pools can recover a credential-scoped 401 without abandoning the

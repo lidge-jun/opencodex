@@ -1,7 +1,4 @@
 import type { Server } from "bun";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
@@ -10,7 +7,8 @@ import { classifyInterceptClient, interceptRouteFor } from "./client-class";
 import { CLAUDE_INTERCEPT_HOSTS, isBrowserConnect, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
 import { startClaudeInterceptListener } from "./listener";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocalInterceptLeaf } from "./local-ca";
-import { discardPickerCaKey, ensurePickerCa, pickerCaCertPath, pickerCaFingerprints } from "./picker-ca";
+import { discardPickerCaKey, ensurePickerCa } from "./picker-ca";
+import { drainPendingPickerCaUntrust } from "./picker-ca-cleanup";
 import type { PickerRouteInput } from "./picker-models";
 import { createPickerRuntime, type CreatePickerRuntimeOptions, type PickerRuntime } from "./picker-runtime";
 import type { SecurityRunner } from "./picker-trust";
@@ -193,46 +191,39 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       // it in place — row id and its recorded previous selection included — so the picker proxy
       // can fail to bind without losing it, and the restore enable below only updates the proxy
       // URL inside the same row rather than recreating a selection around a placeholder pivot.
-      const pickerProfileApplied = inspectDesktopPickerProfile({
+      const pickerProfile = inspectDesktopPickerProfile({
         configDir,
         ...(options.pickerPlatform ? { platform: options.pickerPlatform } : {}),
-      }).kind === "applied";
-      const oldCaPath = pickerCaCertPath(configDir);
+      });
+      const pickerProfileApplied = pickerProfile.kind === "applied";
       let pickerBlocked = false;
-      if (existsSync(oldCaPath)) {
-        // Rotation cleanup drops the *replaced* authority's keychain trust. A reused process
-        // authority keeps its trust — removing it would revoke picker access mid-flight and force
-        // a redundant keychain prompt. When removal of a genuinely different predecessor fails,
-        // the picker must not arm at all: the outgoing signing key would otherwise stay trusted
-        // beside the new authority, and the already-bound main intercept pair keeps serving alone.
-        // Capture the published bytes before ensurePickerCa replaces them: the untrust step below
-        // must remove trust for the *outgoing* certificate, so it needs the old file contents.
-        let publishedPem: string | undefined;
-        let publishedSha1: string | undefined;
-        try {
-          publishedPem = readFileSync(oldCaPath, "utf8");
-          publishedSha1 = pickerCaFingerprints(publishedPem).sha1;
-        } catch { /* unreadable or malformed: nothing identifiable to remove */ }
-        const nextSha1 = pickerCaFingerprints(ensurePickerCa(configDir).certPem).sha1;
-        if (publishedPem !== undefined && publishedSha1 !== undefined && publishedSha1 !== nextSha1) {
-          const { untrustPickerCa } = await import("./picker-trust");
+      try {
+        // A prior process may have died after publishing the journal but before cleanup. Finish
+        // that entry before rotation can replace it, then drain the newly queued predecessor.
+        const drain = () => drainPendingPickerCaUntrust(configDir, options.pickerSecurity, options.pickerPlatform);
+        if (!await drain()) pickerBlocked = true;
+        if (!pickerBlocked) {
+          ensurePickerCa(configDir, { rotation: "startup" });
+          if (!await drain()) pickerBlocked = true;
+        }
+      } catch (error) {
+        pickerBlocked = true;
+        console.warn(`⚠ Claude Desktop picker CA cleanup deferred: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (pickerBlocked) {
+        console.warn("⚠ Claude Desktop picker disabled: the previous certificate could not be untrusted");
+        if (pickerProfile.kind === "applied") {
+          // Keep Desktop's actual pinned egress alive without ever constructing a TLS terminator.
+          const port = Number(new URL(pickerProfile.proxyUrl).port);
           try {
-            // remove-trusted-cert takes the certificate file; ca.pem now holds the replacement,
-            // so untrust from a private copy of the bytes that were actually trusted.
-            const privateDir = mkdtempSync(join(tmpdir(), "ocx-picker-untrust-"));
-            try {
-              const outgoing = join(privateDir, "ca.pem");
-              writeFileSync(outgoing, publishedPem, { mode: 0o600 });
-              const dropped = await untrustPickerCa(outgoing, publishedSha1, options.pickerSecurity, options.pickerPlatform);
-              pickerBlocked = !dropped.ok;
-            } finally {
-              rmSync(privateDir, { recursive: true, force: true });
-            }
-          } catch {
-            pickerBlocked = true;
-          }
-          if (pickerBlocked) {
-            console.warn("⚠ Claude Desktop picker disabled: the previous certificate could not be untrusted");
+            pickerProxy = await startProxy(port, {
+              interceptPort: listener.port!,
+              interceptHosts: [],
+              selectTunnel: () => ({ kind: "blind" }),
+            });
+            pickerProxyLive = true;
+          } catch (error) {
+            console.warn(`⚠ Claude Desktop blind egress relay could not start: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
       }
@@ -324,7 +315,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const state: ClaudeInterceptState = {
     proxyPort: proxy.port,
     caCertPath: claudeInterceptCaCertPath(configDir),
-    pickerProxyPort: picker && pickerProxy ? pickerProxy.port : null,
+    pickerProxyPort: pickerProxy?.port ?? null,
   };
   activeState = state;
   activePicker = picker;

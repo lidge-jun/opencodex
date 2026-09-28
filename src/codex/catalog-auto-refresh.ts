@@ -29,9 +29,12 @@ const MIN_INTERVAL_MS = 15 * 60_000;
  * callers fail fast and defer (ConvergeRequest.mode) rather than holding the
  * write lock across a slow tick.
  */
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import type { OcxConfig } from "../types";
 
 const TICK_DEADLINE_MS = 1_000;
+const MAX_JOURNAL_BYTES = 1024 * 1024;
+const MAX_CATALOG_BYTES = 64 * 1024 * 1024;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let detachShutdownHook: (() => void) | null = null;
@@ -45,24 +48,84 @@ let generation = 0;
 /** setInterval does not skip a firing while the previous callback is still awaiting. */
 let inFlight = false;
 
-/**
- * Re-run the standard Codex sync when the injected config surface drifted (src/codex/config-
- * drift-heal.ts). The gate mirrors syncCodexOnStartIfEnabled: a hub must not rewrite its own
- * client, and the user's Codex OFF decision outlives restarts. A failed heal is silent here —
- * the next tick retries, and the sync's own callers report their refusals.
- *
- * "healed" means the keys that were missing are back on disk. A sync can succeed without
- * writing them (for example when an external provider now owns config.toml and the injector
- * stands down), so the outcome is read from the file, not from the sync result.
- */
-async function healCodexConfigDrift(config: OcxConfig): Promise<"none" | "healed" | "not-healed"> {
-  const [{ codexConfigDrift }, { journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { syncModelsToCodex }] =
+/** Read only a regular file, with a byte limit even if it grows after the stat. */
+function readBoundedRegularFile(path: string, maxBytes: number): string | null {
+  let fd: number | undefined;
+  try {
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.size > maxBytes) return null;
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size > maxBytes) return null;
+    const bytes = Buffer.alloc(opened.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const read = readSync(fd, bytes, length, bytes.length - length, null);
+      if (read === 0) break;
+      length += read;
+    }
+    return length > maxBytes ? null : bytes.subarray(0, length).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** A background observation must not use journaledInjectedCatalogPath(), which cleans invalid journals. */
+function readJournaledCatalogPath(journalPath: string): string | null {
+  const bytes = readBoundedRegularFile(journalPath, MAX_JOURNAL_BYTES);
+  if (bytes === null) return null;
+  try {
+    const journal: unknown = JSON.parse(bytes);
+    if (!journal || typeof journal !== "object" || Array.isArray(journal)) return null;
+    const record = journal as Record<string, unknown>;
+    return record.version === 1 && typeof record.injectedCatalogPath === "string" && record.injectedCatalogPath.trim()
+      ? record.injectedCatalogPath
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function usableCatalogPath(path: string | null): string | null {
+  if (!path) return null;
+  const bytes = readBoundedRegularFile(path, MAX_CATALOG_BYTES);
+  if (bytes === null) return null;
+  try {
+    const catalog: unknown = JSON.parse(bytes);
+    return catalog && typeof catalog === "object" && Array.isArray((catalog as { models?: unknown }).models)
+      ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Testable path decision with no journal mutation or catalog write. */
+export function selectDriftHealCatalogPath(
+  journalPath: string,
+  defaultCatalogPath: string,
+  resolvePath: (path: string) => string,
+): string | null {
+  const recorded = readJournaledCatalogPath(journalPath);
+  return usableCatalogPath(recorded ? resolvePath(recorded) : null)
+    ?? usableCatalogPath(defaultCatalogPath);
+}
+
+/** Repair only the missing config roots; catalog convergence remains the later tick step. */
+async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number): Promise<"none" | "healed" | "not-healed"> {
+  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { DEFAULT_CATALOG_PATH, resolveCodexConfigPath }, { loadConfig }] =
     await Promise.all([
       import("./config-drift-heal"),
       import("./journal"),
       import("./desired-state"),
-      import("./sync"),
+      import("./inject"),
+      import("./paths"),
+      import("../config"),
     ]);
+  const capturedSettings = JSON.stringify(config);
+  const current = () => entryGeneration === generation && JSON.stringify(loadConfig()) === capturedSettings;
+  if (!current()) return "none";
   if (!shouldSyncCodexOnStart(config)) return "none";
   const journaled = {
     injectedOpenaiBaseUrl: journaledInjectedOpenaiBaseUrl({ readOnly: true }),
@@ -71,9 +134,22 @@ async function healCodexConfigDrift(config: OcxConfig): Promise<"none" | "healed
   const drift = codexConfigDrift(() => journaled);
   if (!drift.drifted) return "none";
   const { readRuntimePort } = await import("../config/process-state");
+  if (!current()) return "none";
   const runtime = readRuntimePort(process.pid);
   if (!runtime) return "not-healed";
-  await syncModelsToCodex(runtime.port, config, null).catch(() => null);
+  const catalogPath = selectDriftHealCatalogPath(JOURNAL_PATH, DEFAULT_CATALOG_PATH, resolveCodexConfigPath);
+  if (!current()) return "none";
+  // Keep the missing routing roots visible to the next tick. Catalog-only convergence below
+  // may recreate the file now, but it does not re-inject config.toml in this tick.
+  if (catalogPath === null) return "not-healed";
+  await injectCodexConfig(runtime.port, config, {
+    catalogPath,
+    lockTimeoutMs: TICK_DEADLINE_MS,
+    beforeClientWrite: () => {
+      if (!current()) throw new Error("Catalog drift heal tick is stale");
+    },
+  }).catch(() => null);
+  if (!current()) return "none";
   return codexConfigDrift(() => journaled).drifted ? "not-healed" : "healed";
 }
 
@@ -128,7 +204,8 @@ async function tick(): Promise<void> {
     // report "no change" while Codex serves its native model picker. Re-injecting through the
     // standard sync rewrites the keys, re-journals the baseline, and only runs when the
     // integration is on and this install is allowed to manage its local client.
-    const heal = await healCodexConfigDrift(config);
+    const heal = await healCodexConfigDrift(config, entryGeneration);
+    if (entryGeneration !== generation) return;
     if (heal === "healed") {
       console.info("[catalog-auto-refresh] injected Codex config keys were rewritten externally; re-injected");
     } else if (heal === "not-healed") {

@@ -4,14 +4,14 @@ Native result continuations and function-result injection follow [the mode-speci
 
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
-The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages) is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 Plaintext collaboration restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
 When a successful streamed native response has a missing or unrecognized non-JSON content type, the plaintext V2 path confirms a bounded Responses SSE prefix, under the server's `stallTimeoutSec` probe budget, before applying that restoration; an `application/json` body takes the bounded JSON path instead, and an unknown, stalled, or unreadable body retains the fail-closed response.
 
 ## Responses HTTP/SSE
-Responses request preparation stabilizes incoming `<skills_instructions>` under `skills.catalog_refresh`: `per_session` (default) reuses the first received catalog for a conversation; `per_turn` leaves the supplied catalog unchanged. Other instruction sections and user/tool content remain untouched. Requests without a reliable conversation identity bypass snapshots; shared prompt-cache cohorts are not conversation identities. Only a body with exactly one catalog block across its instructions and developer/system content takes part; two or more pass through unchanged. A known snapshot is substituted before parsing, but a new catalog is stored only when preparation reaches its success return, so a request rejected by parsing or admission pins nothing. Without a named principal, snapshots are shared by conversation id only on a server that requires no data-plane auth. Snapshots are process-local, expire after four idle hours, and use bounded LRU retention; oversized blocks bypass caching. The dashboard's `src/codex/prompt-layers.ts` and `src/codex/prompt-text-probe.ts` continue observing current files for previews and do not own session snapshots.
+
+Optional Codex memory selection enters `src/server/responses/request-prepare.ts` for HTTP and WebSocket frames, as specified in [memory phase routing](responses-failover.md#memory-phase-routing); an unset phase keeps its existing route and starts no background work. Responses request preparation stabilizes incoming `<skills_instructions>` under `skills.catalog_refresh`: `per_session` (default) reuses the first received catalog for a conversation; `per_turn` leaves the supplied catalog unchanged. Other instruction sections and user/tool content remain untouched. Requests without a reliable conversation identity bypass snapshots; shared prompt-cache cohorts are not conversation identities. Only a body with exactly one catalog block across its instructions and developer/system content takes part; two or more pass through unchanged. A known snapshot is substituted before parsing, but a new catalog is stored only when preparation reaches its success return, so a request rejected by parsing or admission pins nothing. Without a named principal, snapshots are shared by conversation id only on a server that requires no data-plane auth. Snapshots are process-local, expire after four idle hours, and use bounded LRU retention; oversized blocks bypass caching. The dashboard's `src/codex/prompt-layers.ts` and `src/codex/prompt-text-probe.ts` continue observing current files for previews and do not own session snapshots.
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).
@@ -275,11 +275,8 @@ cancellation terminates dispatch before rotation can persist another key.
 
 ### Routed service-tier capability
 
-OpenAI-compatible service-tier support is resolved only after the final provider/model wire is
-known. `supportsServiceTier` remains the provider fallback, while the exact
-`modelSupportsServiceTier` map can override it per upstream model, including an explicit `false`.
-The catalog and request path share this decision: a routed row publishes `service_tiers` only when
-the resolved policy is eligible, and the final-route normalizer applies the same gate to
+OpenAI-compatible service-tier support is resolved only after the final provider/model wire is known. `supportsServiceTier` remains the provider fallback, while the exact `modelSupportsServiceTier` map can override it per upstream model, including an explicit `false`.
+The catalog and request path share this decision: a routed row publishes `service_tiers` only when the resolved policy is eligible, and the final-route normalizer applies the same gate to
 `service_tier`. Both `openai-responses` and `openai-chat` use the resolved provider/model capability
 for catalog publication, routing evidence, and fingerprints. Canonical Fast injection additionally
 requires a compatible FastWire mapping on the final adapter and an eligible policy. Setting
@@ -288,10 +285,13 @@ foreign caller values; an exact-model `true` does not grant that forwarding perm
 unclassified Chat routes it gates every caller tier because no canonical Fast capability has been
 validated. An object-form registry wire default may also set `forwardCallerServiceTier: false` to
 close a known subscription gateway while leaving generic unclassified Responses passthrough
-unchanged. Exact `false`
-narrows provider defaults, and provider-level `supportsServiceTier: false` cannot be reopened.
+unchanged. Exact `false` narrows provider defaults, and provider-level `supportsServiceTier: false` cannot be reopened.
 Capability is namespaced by the selected provider and model; model-name similarity and adapter type
-alone never opt a gateway in.
+alone never opt a gateway in. Response-tier evidence is governed by `src/providers/openai-tiers-destination.ts`: canonical ChatGPT Codex forwarding is non-authoritative (#2558); other destinations honor the optional provider boolean `responseTierAuthoritative`, with omission retaining legacy response authority. No gateway name or address infers a declaration. The final route captures this in `TierObservationContext` through `src/server/responses/core-normalize.ts`, without changing capability, `TierDecision`, or outgoing parameters.
+
+### Response-tier observation authority
+
+`src/providers/fastwire.ts` copies a defined authority flag into `AttemptTierOutcome`. With false, an eligible serialized priority request remains `fastOutcome: applied` and `confirmation: assumed`: the parameter was sent, while actual scheduling is unconfirmed. Neither a `default` nor a `priority` echo can confirm or deny Fast; sanitized `responseServiceTier` remains for inspection, while local capability and wire failures still downgrade. Logs and persisted attempts retain the flag, and `src/usage/cost.ts` uses requested-tier estimation without promoting an untrusted echo or a confirmed label to response-confirmed pricing. Official API and undeclared destinations retain legacy response judgments.
 
 Anthropic Fast eligibility and downgrade recovery use the [Responses failover contract](responses-failover.md#anthropic-fast-downgrade-recovery).
 

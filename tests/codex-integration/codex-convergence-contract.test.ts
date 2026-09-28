@@ -374,10 +374,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 8 + 14 + 2 + 2 convergence paths", () => {
+test("the route inventory contains exactly the specified 8 + 15 + 2 + 2 convergence paths", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 8],
-    ["model-routes.ts", 14],
+    ["model-routes.ts", 15],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -396,7 +396,7 @@ test("the route inventory contains exactly the specified 8 + 14 + 2 + 2 converge
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 8,
-    "model-routes.ts": 14,
+    "model-routes.ts": 15,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });
@@ -445,6 +445,31 @@ test("both model-preset write paths converge the Codex catalog", () => {
   expect(handlerBody.match(/await convergeVisibleCatalogs\(\)/g)?.length).toBe(2);
   const customBranch = handlerBody.slice(handlerBody.indexOf('if (mode === "custom")'), handlerBody.indexOf("const preset ="));
   expect(customBranch).not.toMatch(/await converge(?:CodexCatalog|VisibleCatalogs)\(\)/);
+});
+
+/**
+ * The fifteenth model-route call belongs to `PUT /api/model-settings`: it writes the per-model
+ * context window, declared input modalities and reasoning ladder the catalog publishes for that
+ * row, so the exported catalog is stale the moment the config is saved. Keep this route-specific
+ * assertion beside the total for the same reason the preset pair above has one — otherwise a
+ * later bump could satisfy the count while this route quietly lost its own convergence.
+ */
+test("the per-model settings route converges the Codex catalog once", () => {
+  const source = readFileSync(
+    repoPath("src", "server", "management", "model-routes.ts"),
+    "utf8",
+  );
+  const handlerStart = source.indexOf('url.pathname === "/api/model-settings" && req.method === "PUT"');
+  expect(handlerStart).toBeGreaterThan(-1);
+  // Sliced to the next route check, as above: a fixed far boundary would swallow a later
+  // route's convergence call and count it as this one's.
+  const handlerBody = source.slice(handlerStart, source.indexOf("url.pathname ===", handlerStart + 1));
+  expect(handlerBody.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
+  // An unchanged request must not converge: `changed: false` is the no-op answer, and the
+  // convergence sits behind it rather than before the early return.
+  const earlyReturn = handlerBody.indexOf("if (!changed) return jsonResponse");
+  expect(earlyReturn).toBeGreaterThan(-1);
+  expect(handlerBody.indexOf("await convergeCodexCatalog()")).toBeGreaterThan(earlyReturn);
 });
 
 /**

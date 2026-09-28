@@ -99,6 +99,13 @@ check(NativeTrayFormat.percentText(69.9) == "69%" && NativeTrayFormat.severity(6
 check(NativeTrayFormat.percentText(89.9) == "89%" && NativeTrayFormat.severity(89.9) == .warn, "89.9% reads 89% on orange")
 check(NativeTrayFormat.percentDescription(89.9) == "89 percent", "Spoken value floors too")
 check(NativeTrayFormat.percentText(nil) == "—", "Missing value renders a dash")
+check(NativeTrayFormat.percentText(1e20) == "—", "Oversized percent cannot trap visible formatting")
+check(NativeTrayFormat.percentDescription(1e20) == "Unavailable", "Oversized percent cannot trap spoken formatting")
+let largestSafePercent = Double(Int.max).nextDown
+check(NativeTrayFormat.percentText(largestSafePercent) == "\(Int(largestSafePercent))%", "Largest representable percent remains visible")
+check(NativeTrayFormat.percentDescription(largestSafePercent) == "\(Int(largestSafePercent)) percent", "Largest representable percent remains spoken")
+check(NativeTrayFormat.percentText(Double(Int.max)) == "—", "Rounded Int upper bound is unavailable visibly")
+check(NativeTrayFormat.percentDescription(Double(Int.max)) == "Unavailable", "Rounded Int upper bound is unavailable when spoken")
 
 // Account switching: only names cross to the host, and only for rows the runtime would accept.
 func switchRow(_ id: String, _ fields: [String: Any]) -> [String: Any] {

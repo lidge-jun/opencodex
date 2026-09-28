@@ -4,7 +4,39 @@ import { createRequestExecutionBudget } from "../../../src/lib/request-execution
 import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
-import { safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+
+describe("Antigravity 403 body boundary", () => {
+  test("a complete structured reason inside 4096 bytes survives normalization", async () => {
+    const payload = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "validate",
+      details: [{ reason: "VALIDATION_REQUIRED" }] } });
+    const result = await fetchAntigravityWithRetry(request, {
+      executor: (async () => new Response(payload, { status: 403 })) as typeof fetch,
+    });
+    expect((await result.text()).startsWith(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}:`)).toBe(true);
+  });
+
+  test("an oversized validation body is discarded before formatting", async () => {
+    const payload = JSON.stringify({ error: { status: "PERMISSION_DENIED", message: "secret-canary",
+      filler: "x".repeat(4200), details: [{ reason: "VALIDATION_REQUIRED" }] } });
+    const result = await fetchAntigravityWithRetry(request, {
+      executor: (async () => new Response(payload, { status: 403 })) as typeof fetch,
+    });
+    const text = await result.text();
+    expect(text).toBe("Antigravity access denied: HTTP 403");
+    expect(text).not.toContain("secret-canary");
+  });
+
+  test("a stalled validation body falls back after the 2 second bound", async () => {
+    const stalled = new ReadableStream<Uint8Array>({ start() {} });
+    const start = performance.now();
+    const result = await fetchAntigravityWithRetry(request, {
+      executor: (async () => new Response(stalled, { status: 403 })) as typeof fetch,
+    });
+    expect(performance.now() - start).toBeLessThan(3500);
+    expect(await result.text()).toBe("Antigravity access denied: HTTP 403");
+  });
+});
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });

@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
-import { LAYOUT_PATH, loadLayout, rewriteMetaDirEscapes, rewriteSource, scanEscapes, type Layout } from "./schema";
+import { LAYOUT_PATH, loadLayout, rewriteMetaDirEscapes, rewriteSource, scanEscapes, seedsPathFor, type Layout } from "./schema";
 import { parseDomainArgs, planMoves, repoRootFromHere, type Move } from "./plan";
 import { filesNamingAny, runVerify } from "./verify";
 
@@ -11,7 +11,7 @@ import { filesNamingAny, runVerify } from "./verify";
  *
  * Order is preflight-all, move-all, rewrite-all, append migrated, escape scan, verify. The
  * preflight computes the full write set (every source file, every file that names a moved
- * path, scripts/test.ts when a serial-lane file is in the slice, layout.json) and refuses to
+ * path, scripts/test.ts when a serial-lane file is in the slice, seeds.json) and refuses to
  * start if any of them is dirty; `git mv` itself would happily carry an unrelated edit inside a
  * rename. Exit 2 means the slice is fully moved and the lines printed as MANUAL need a human;
  * exit 1 means the automatic verify failed after a clean move.
@@ -68,6 +68,7 @@ export function runMove(options: MoveOptions): MoveReport {
   const log = options.log ?? ((line: string) => console.log(line));
   const git = options.git ?? defaultGit(root);
   const layoutPath = options.layoutPath ?? LAYOUT_PATH;
+  const seedsPath = seedsPathFor(layoutPath);
   const layout: Layout = loadLayout(layoutPath);
   if (domains.length === 0) throw new Error("move: at least one --domain is required");
   for (const domain of domains) {
@@ -76,7 +77,7 @@ export function runMove(options: MoveOptions): MoveReport {
 
   const { moves, unresolved } = planMoves(layout, root, domains);
   if (unresolved.length > 0) {
-    throw new Error(`move: ${unresolved.length} unresolved file(s); fix layout.json first:\n  ${unresolved.join("\n  ")}`);
+    throw new Error(`move: ${unresolved.length} unresolved file(s); fix layout.json or seeds.json first:\n  ${unresolved.join("\n  ")}`);
   }
   if (moves.length === 0) {
     log("move: nothing to do");
@@ -97,8 +98,8 @@ export function runMove(options: MoveOptions): MoveReport {
   const serial = new Set(serialLaneFiles(root));
   const touchesSerial = moves.some(move => serial.has(basename(move.from)));
   if (touchesSerial && !literalTargets.has(SERIAL_LANE_SOURCE)) literalTargets.set(SERIAL_LANE_SOURCE, []);
-  const layoutRel = relative(root, layoutPath).split("\\").join("/");
-  const writeSet = new Set<string>([...moves.map(move => move.from), ...literalTargets.keys(), layoutRel]);
+  const seedsRel = relative(root, seedsPath).split("\\").join("/");
+  const writeSet = new Set<string>([...moves.map(move => move.from), ...literalTargets.keys(), seedsRel]);
   const status = git(["status", "--porcelain", "--", ...writeSet]);
   if (status.status !== 0) throw new Error(`git status failed: ${status.stderr}`);
   const dirty = status.stdout.split("\n").filter(Boolean);
@@ -163,8 +164,15 @@ export function runMove(options: MoveOptions): MoveReport {
 
   const migrated = new Set(layout.migrated);
   for (const domain of domains) migrated.add(domain);
-  layout.migrated = [...migrated].sort();
-  writeFileSync(layoutPath, JSON.stringify(layout, null, 2) + "\n");
+  const seeds = JSON.parse(readFileSync(seedsPath, "utf8")) as Pick<Layout, "keepAtRoot" | "domains" | "migrated">;
+  seeds.migrated = [...migrated].sort();
+  const tempSeedsPath = `${seedsPath}.tmp-${process.pid}`;
+  try {
+    writeFileSync(tempSeedsPath, JSON.stringify(seeds, null, 2) + "\n");
+    renameSync(tempSeedsPath, seedsPath);
+  } finally {
+    rmSync(tempSeedsPath, { force: true });
+  }
 
   scanMoved(root, moves, move => readFileSync(join(root, move.to), "utf8"), manual, suppressed);
   for (const hit of suppressed) log(`  layout: local honoured at ${hit.file}:${hit.line}`);

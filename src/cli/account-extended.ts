@@ -772,14 +772,21 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
   return 0;
 }
 
-/**
- * `ocx account pause|resume <provider> <id>` (#2702).
- *
- * The server routes have always existed; only the CLI caller was missing, so pausing an
- * account was dashboard-only. The issue reports these as POST; the code is PUT
- * (`auth-api.ts:1494`), and the route is shared by both directions with a `paused` boolean
- * rather than being two endpoints.
- */
+function resolveGenericOAuthPauseTarget(accounts: unknown[], requested: string): { id: string } | { error: string } {
+  const rows = accounts.filter((value): value is { id: string; alias?: unknown } =>
+    typeof value === "object" && value !== null && typeof (value as { id?: unknown }).id === "string",
+  );
+  if (rows.some(account => account.id === requested)) return { id: requested };
+  const exact = rows.filter(account => account.alias === requested);
+  const matches = exact.length > 0
+    ? exact
+    : rows.filter(account => typeof account.alias === "string" && account.alias.toLowerCase() === requested.toLowerCase());
+  if (matches.length === 1) return { id: matches[0]!.id };
+  if (matches.length > 1) return { error: `alias "${requested}" names ${matches.length} accounts; use the account id` };
+  return { error: `Account not found: no OAuth account has the id or alias "${requested}"` };
+}
+
+/** Pause or resume a Codex account or a generic OAuth provider account. */
 export async function cmdPause(args: string[], deps: AccountDeps, paused: boolean): Promise<number> {
   const wantsJson = flag(args, "--json");
   const name = args.shift();
@@ -788,11 +795,40 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
   if (!name || !requestedId || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  if (classified.type !== "codex") {
-    return usage(`Error: ${verb} applies to the openai Codex account pool`);
-  }
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+
+  if (classified.type === "oauth") {
+    if (name === "anthropic") return usage(`Error: ${verb} is not supported for the Anthropic OAuth pool`);
+    const list = await apiJson(deps, baseUrl, "GET", `/api/oauth/accounts?provider=${encodeURIComponent(name)}`);
+    if (list.status === 0) return proxyUnreachable(list.transportError);
+    if (list.status !== 200) return apiError(list.json, `failed to list ${name} OAuth accounts`, list.status);
+    const target = resolveGenericOAuthPauseTarget(Array.isArray(list.json.accounts) ? list.json.accounts : [], requestedId);
+    if ("error" in target) return usage(`Error: ${target.error}`);
+
+    const response = await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/pause", {
+      provider: name,
+      accountId: target.id,
+      paused,
+    });
+    if (response.status === 0) return proxyUnreachable(response.transportError);
+    if (response.status !== 200) return apiError(response.json, `failed to ${verb} ${requestedId}`, response.status);
+
+    if (wantsJson) {
+      console.log(JSON.stringify({ ok: true, provider: name, id: target.id, paused,
+        activeAccountId: response.json.activeAccountId }, null, 2));
+    } else {
+      console.log(`${name}: ${requestedId} ${paused ? "paused" : "resumed"}`);
+      if (response.json.activeAccountChanged === true) {
+        console.error(`Active account changed to ${String(response.json.activeAccountId)}.`);
+      }
+    }
+    return 0;
+  }
+
+  if (classified.type !== "codex") {
+    return usage(`Error: ${verb} applies to the openai Codex account pool or a generic OAuth provider`);
+  }
   const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
   if ("networkDown" in target) return proxyUnreachable(target.transportError);
   if ("error" in target) return reportCodexAccountTargetError(target);

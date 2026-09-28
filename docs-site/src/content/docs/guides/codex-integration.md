@@ -19,6 +19,7 @@ For bare native Codex models and OpenCodex-generated account-selector rows, the 
 authenticated access program metadata. Bare models use the main Codex account; account-qualified
 models use their selected account. Refreshing the integration updates these rows when upstream
 changes the account's access programs.
+OpenCodex carries the logged-in main account's live model availability prompt onto bare native model rows.
 
 The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
 plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;
@@ -131,6 +132,14 @@ echo `default`, so request logs show the response tier as an observation with co
 `assumed`. For latency-sensitive work, compare observed first-output times across the providers you
 actually use rather than assuming any particular channel is faster.
 
+For a gateway forwarding to a backend with the same metadata limitation, explicitly declare
+[`responseTierAuthoritative: false`](/reference/configuration/providers/#response-service-tier-authority)
+on that provider. The request still sends priority and records the raw echo, while actual Fast
+scheduling remains unconfirmed. Undeclared gateways and the official API keep their existing
+response-based interpretation. Updating OpenCodex alone does not add this declaration to existing
+gateway entries: without it, an eligible priority request followed by a `default` echo still records
+`response-declined`.
+
 The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
 `GET /v1/models`, `GET /healthz`, and the `/api/*` management surface.
@@ -227,8 +236,10 @@ This is separate from the [Image Bridge](/guides/image-bridge/), which only acti
 **Responses** turn lists the hosted `image_generation` tool while a non-OpenAI model is selected.
 Standalone `/images/generations` calls never enter that bridge.
 
-- **One mode-aware forward candidate:** Pool selects an eligible main/added account; Direct uses the
-  caller OAuth bearer. The configured mode applies consistently to the image request.
+- **One mode-aware forward candidate:** Pool selects an eligible main/added account and uses its
+  stored ChatGPT credential even when the client authenticates to opencodex with a proxy admission
+  bearer. Direct uses the caller's ChatGPT OAuth bearer and cannot forward a proxy admission token.
+  The configured mode applies consistently to the image request.
 - **OpenAI API-key provider:** it is used only when no forward candidate owns an authentication
   failure. A broken/expired Pool credential is never hidden behind separately billed API usage.
 - **Explicit custom provider:** set `images.provider` to the id of a custom API-key
@@ -949,7 +960,7 @@ Native login-file replacement or token rotation also invalidates the trial, even
 same account returns. Stop and start observation to bind the current login before another
 explicit trial; old responses cannot authorize the replacement session.
 Changes to the root Codex config, provider configuration, model aliases, routing profiles,
-fallback or compaction routes also invalidate the observation context. Restoring the previous
+fallback, compaction or memory-model routes also invalidate the observation context. Restoring the previous
 settings does not restore its consent: stop and start observation, then confirm a new trial
 when eligible. This detects changes to those configured routes, not which model a conversation
 actually selects; an unchanged mixed-provider configuration is not proof of provider isolation.

@@ -227,6 +227,14 @@ and its subdomains. Its signing key exists only inside the running OpenCodex pro
 OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
 prompt, or later run `ocx claude desktop picker trust`, after each restart.
 
+On restart OpenCodex first removes the previous authority from the keychain. If that removal fails
+(for example because you decline the keychain prompt), the picker stays off for this run so two
+authorities are never trusted side by side. Desktop keeps its network connection: the proxy address
+in its profile still answers, but only as a plain relay that does not read claude.ai traffic, and the
+picker lists Anthropic's own models until the removal succeeds. OpenCodex remembers which certificate
+still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
+picker as unavailable meanwhile.
+
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with
 `ocx claude desktop picker status`; use `ocx claude desktop picker trust` to repeat the trust step,
@@ -902,3 +910,7 @@ An explicit first-party apply recreates a missing token and refreshes the owned 
 requiring a proxy restart; existing tunnels are not revoked. Invalid, linked, oversized or
 non-token files are refused rather than overwritten. Inspect such an entry before removing only
 the confirmed obsolete token file and applying first-party mode again; never delete its link target.
+
+### First-party picker context markers
+
+The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens, so Claude uses its 1M accounting instead of the smaller custom-model fallback. Labels, profile order, and provider routes stay unchanged. Unknown and sub-million windows remain unmarked, including native long-window opt-ins: the picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.

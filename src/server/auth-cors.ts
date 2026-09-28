@@ -973,6 +973,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   mcpMaxResultBytes: "editor",
   modelAdapters: "editor",
   fastWire: "editor",
+  responseTierAuthoritative: "editor",
   fastEnabled: "editor",
   baseUrl: "editor",
   responsesPath: "editor",

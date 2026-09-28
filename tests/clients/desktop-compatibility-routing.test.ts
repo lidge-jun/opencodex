@@ -46,6 +46,7 @@ test("model and fallback edits revoke routing until a new observation context is
     { blockedModelRedirects: { "external/model": "openai/gpt-6-luna" } },
     { providers: { external: { baseUrl: "https://changed.example.test/v1" } } },
     { combos: {} }, { routingProfiles: {} },
+    { memoryModels: { extract: { model: "openai/gpt-6-luna" } } },
   ];
   const root = mkdtempSync(join(tmpdir(), "ocx-desktop-route-change-")); roots.push(root);
   writeFileSync(join(root, "config.toml"), text);

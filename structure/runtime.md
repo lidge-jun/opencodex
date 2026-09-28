@@ -4,7 +4,7 @@ The minute sweep checks persisted activation deadlines locally; only missing dea
 
 ## Resolved static model policy
 
-`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
+`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Fast observation, persistence and cost provenance follow the [response-tier authority contract](transports/responses.md#response-tier-observation-authority); outbound Fast policy is unchanged. Policy/combo
 route spreads retain that object. Every initial, fallback, and recovery route is recaptured for the
 request's original inbound protocol before route-dependent normalization, and all adapter rebuilds
 consume its recorded adapter. A translated Chat or Anthropic replay therefore cannot inherit a
@@ -187,7 +187,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
-until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. Service mode sets
+until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. `src/cli/index.ts` resolves same-home ownership, then checks shared client hints through the cross-home owner helper, then reconciles the journal only when no sibling is marked. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected and no pending connect marker owns the newly issued key. `src/client/connect.ts` publishes that fingerprint marker before the key, then clears it with the connection commit or rollback under the client lifecycle and config mutation locks. Connected, invalid, or mismatched client state retains an existing token. A valid pending marker retains only its matching fingerprint; an older marker does not own a replacement service key. An absent token is reported as absent; unsafe, malformed, or unreadable markers and lock, state-read, or deletion failures leave cleanup unverified.
 The package-tree integrity fence for live package replacement follows the

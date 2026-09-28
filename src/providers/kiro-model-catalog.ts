@@ -27,7 +27,8 @@ export function kiroModelDiscoveryEnabled(): boolean {
 }
 
 function liveAccount(accountId: string): ProviderAccount | undefined {
-  return getAccountSet("kiro")?.accounts.find(account => account.id === accountId && account.needsReauth !== true);
+  return getAccountSet("kiro")?.accounts.find(account => account.id === accountId
+    && account.needsReauth !== true && account.paused !== true);
 }
 
 function currentIdentity(accountId: string): string | undefined {
@@ -74,7 +75,7 @@ export function refreshKiroAccountModelsDetached(
   providerConfig: OcxProviderConfig,
   dependencies: ProviderOutboundDependencies = {},
 ): void {
-  if (!kiroModelDiscoveryEnabled() || account.needsReauth === true) return;
+  if (!kiroModelDiscoveryEnabled() || account.needsReauth === true || account.paused === true) return;
   const identity = kiroEvidenceIdentity(account);
   if (currentIdentity(account.id) !== identity) return;
   const old = validRow(account);
@@ -138,7 +139,7 @@ export function kiroAccountSupportsModel(accountId: string, model: string): bool
 export function kiroObservedContextWindow(model: string): number | undefined {
   const normalized = normalizeKiroModelId(model);
   if (normalized === "auto") return undefined;
-  const accounts = getAccountSet("kiro")?.accounts.filter(account => account.needsReauth !== true) ?? [];
+  const accounts = getAccountSet("kiro")?.accounts.filter(account => account.needsReauth !== true && account.paused !== true) ?? [];
   const limits: number[] = [];
   let unknown = accounts.length === 0;
   for (const account of accounts) {

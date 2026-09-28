@@ -237,7 +237,7 @@ afterEach(async () => {
 
 async function mountClient(
   active = true,
-  client: "hermes" | "dsh" = "hermes",
+  client: "hermes" | "dsh" | "kilo" = "hermes",
 ): Promise<void> {
   const [{ createRoot }, { LanguageProvider }, { default: FileIntegrationPage }] = await Promise.all([
     import("react-dom/client"),
@@ -262,7 +262,7 @@ async function mountClient(
  * replays the first response and the new `stateResponse` has no effect. Rotating
  * the base is what makes a state sweep in a single test possible at all.
  */
-async function remountClient(client: "hermes" | "dsh" = "hermes"): Promise<void> {
+async function remountClient(client: "hermes" | "dsh" | "kilo" = "hermes"): Promise<void> {
   if (root) {
     const current = root;
     await act(async () => { current.unmount(); });
@@ -437,6 +437,43 @@ test("a conflict offers an overwrite, and no other state does", async () => {
   stateResponse = () => json(status({ state: "conflict", reason: "unowned-key" }));
   await remountClient();
   expect(buttonByText("Replace")).toBeDefined();
+});
+
+test("Kilo candidate conflict names the other file and offers no overwrite", async () => {
+  const path = "/tmp/home/.config/kilo/opencode.jsonc";
+  stateResponse = () => json(status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path] }));
+  await mountClient(true, "kilo");
+  expect(buttonByText("Replace")).toBeUndefined();
+  expect(container.textContent).toContain(path);
+  expect(container.textContent).toContain("Remove provider.opencodex from that file");
+});
+
+test("an owned Kilo candidate conflict still offers Disable", async () => {
+  const path = "/tmp/home/.config/kilo/opencode.jsonc";
+  stateResponse = () => json(status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path], lastOpId: "owned-operation" }));
+  await mountClient(true, "kilo");
+  const sw = toggleSwitch();
+  expect(sw.disabled).toBe(false);
+  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { sw.click(); });
+  await confirmDialog("Disable");
+  expect(requests.find(request => request.method === "PUT")?.body).toEqual({
+    enabled: false, operation: "disable", planFingerprint: previewPlan("disable").fingerprint,
+  });
+});
+
+test("Kilo can disable past an unsafe later candidate, but not an unsafe selected file", async () => {
+  const configPath = "/tmp/home/.config/kilo/kilo.jsonc";
+  stateResponse = () => json(status({ clientId: "kilo", configPath, state: "unsafe", reason: "unparseable",
+    candidateFailurePath: "/tmp/home/.config/kilo/opencode.jsonc", lastOpId: "owned-operation" }));
+  await mountClient(true, "kilo");
+  expect(toggleSwitch().disabled).toBe(false);
+  expect(toggleSwitch().getAttribute("aria-pressed")).toBe("true");
+
+  stateResponse = () => json(status({ clientId: "kilo", configPath, state: "unsafe", reason: "unparseable",
+    candidateFailurePath: configPath, lastOpId: "owned-operation" }));
+  await remountClient("kilo");
+  expect(toggleSwitch().disabled).toBe(true);
 });
 
 test("a client with no config on disk is never offered an overwrite", async () => {
@@ -678,6 +715,41 @@ async function mountOverview(): Promise<void> {
   });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
+
+test("overview names a competing Kilo file without offering Replace", async () => {
+  const path = "/tmp/home/.config/kilo/config.json";
+  stateResponse = () => json({ clients: [status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path] })] });
+  await mountOverview();
+  const card = container.querySelector('.integration-card[data-client="kilo"]')!;
+  expect(card.textContent).toContain(path);
+  expect(Array.from(card.querySelectorAll("button")).some(button => button.textContent?.trim() === "Replace")).toBe(false);
+});
+
+test("overview allows disabling an owned Kilo block during candidate conflict", async () => {
+  const path = "/tmp/home/.config/kilo/config.json";
+  stateResponse = () => json({ clients: [status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path], lastOpId: "owned-operation" })] });
+  await mountOverview();
+  const card = container.querySelector('.integration-card[data-client="kilo"]')!;
+  const sw = card.querySelector("button.switch") as HTMLButtonElement;
+  expect(sw.disabled).toBe(false);
+  expect(sw.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { sw.click(); });
+  expect(requests.some(request => request.url.endsWith("/api/client-integrations/preview")
+    && (request.body as { operation?: string }).operation === "disable")).toBe(true);
+});
+
+test("Disable all includes an owned Kilo block with an off-target candidate conflict", async () => {
+  const path = "/tmp/home/.config/kilo/config.json";
+  stateResponse = () => json({ clients: [status({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", conflictPaths: [path], lastOpId: "owned-operation" })] });
+  await mountOverview();
+  const disableAll = buttonByText("Disable all…");
+  expect(disableAll?.disabled).toBe(false);
+  await act(async () => { disableAll!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  expect(requests.some(request => request.url.endsWith("/api/client-integrations/preview")
+    && (request.body as { clientId?: string; operation?: string }).clientId === "kilo"
+    && (request.body as { operation?: string }).operation === "disable")).toBe(true);
+});
 
 test("the overview reconciles a journal row another tab already deleted", async () => {
   stateResponse = () => json({ clients: [status()] });

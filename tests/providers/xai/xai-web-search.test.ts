@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as storeModule from "../../../src/oauth/store";
 
-let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean }>; activeAccountId?: string }> = {};
+let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean; paused?: boolean }>; activeAccountId?: string }> = {};
 mock.module("../../../src/oauth/store", () => ({
   ...storeModule,
   getAccountSet: (provider: string) => accountSets[provider] ?? null,
@@ -130,6 +130,8 @@ describe("planWebSearch xai arm (L7)", () => {
 
   test("findXaiSidecarProvider: disabled/key-auth/reauth all fail", () => {
     accountSets = { xai: { accounts: [{ id: "a1", needsReauth: true }], activeAccountId: "a1" } };
+    expect(findXaiSidecarProvider(config())).toBeUndefined();
+    accountSets = { xai: { accounts: [{ id: "a1", paused: true }], activeAccountId: "a1" } };
     expect(findXaiSidecarProvider(config())).toBeUndefined();
     accountSets = { xai: { accounts: [{ id: "a1" }], activeAccountId: "a1" } };
     expect(findXaiSidecarProvider(config({ providers: { routed, xai: { ...xaiProvider, disabled: true } } }))).toBeUndefined();

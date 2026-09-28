@@ -26,13 +26,18 @@ import { parseClineDocument } from "./cline-document";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import {
   INTEGRATION_CLIENTS,
+  boundIntegrationConfigPath,
+  assertDroidPathsUnambiguous,
+  assertDroidRecordedSettingsUnambiguous,
   isLoopbackOnly,
   resolveIntegrationPaths,
+  restoreOwnershipCollision,
   type IntegrationClientId,
 } from "./registry";
 import { declaredIntegrationTarget, resolveIntegrationTarget, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
+import { inspectKiloCandidates } from "./kilo-candidates";
 import { InvalidSelectorError } from "./merge";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 import type { OcxConfig } from "../types";
@@ -144,6 +149,8 @@ const CLIENT_MANAGED_PATHS = {
     ["settings", "providers", OPENCODE_PROVIDER_ID],
     ["catalog", "providers", OPENCODE_PROVIDER_ID],
   ],
+  kilo: [["provider", OPENCODE_PROVIDER_ID]],
+  droid: [["customModels", DYNAMIC_SEGMENT]],
 } satisfies Record<IntegrationClientId, readonly (readonly string[])[]>;
 
 /** Not a configuration surface. Exported so a parity case can compare it against the shipped clients. */
@@ -339,6 +346,7 @@ function foreignEditOf(input: PlanInput): IntegrationPlanForeignEdit {
 function applyOutcome(input: PlanInput): PlanOutcome {
   if (input.installKind !== "dir") return deny("not_installed");
   if (input.admissionBlocked) return deny("non_loopback");
+  if (input.clientId === "droid" && input.contribution?.fragments.length === 0) return deny("unsafe");
   /*
    * Before any file state. The document may be perfectly writable and our block
    * may already be current in it; neither says anything about whether the
@@ -551,7 +559,9 @@ export function observeRestore(
   const clientId = input.clientId;
   let resolved: { configPath: string; detectDir: string };
   try {
-    resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home);
+    const context = exportContextOf(input);
+    resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home, context);
+    if (clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(resolved.detectDir, context);
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
     return { failed: observationFailure("unsafe", "unsafe", error.message) } as const;
@@ -581,6 +591,22 @@ export function observeRestore(
     return {
       failed: observationFailure("conflict", "conflict", "that operation was recorded for a different location"),
     } as const;
+  }
+  /*
+   * A legal historical path is not enough. Another candidate can already own
+   * the single record, and committing this row's prior record would orphan the
+   * block that candidate still holds. Direct restore asks the same question.
+   */
+  const currentOwner = store.readRecords()[clientId] ?? null;
+  const collision = restoreOwnershipCollision({
+    clientId,
+    journaledPath: configPath,
+    currentPath: currentOwner && currentOwner.clientId === clientId ? currentOwner.configPath : null,
+    env: input.env,
+    home: input.home,
+  });
+  if (collision !== null) {
+    return { failed: observationFailure("conflict", "conflict", collision) } as const;
   }
   if (clientId === "cline") {
     try { io = createClineIO(io, configPath, store, effects.recover); }
@@ -640,7 +666,7 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
   // Restore never reaches the general observation, because the writer's undo path never parses
   // or classifies and a preview that did would answer a different question.
   if (request.operation === "restore") return previewRestore(input, request);
-  const observed = observeIntegration(input, { maintenance: false, recover: false });
+  const observed = observeIntegration(input, { maintenance: false, recover: false }, request.operation);
   if (observed.failed) return unboundPlan(input.clientId, request.operation, observed.failed, request.profileId);
 
   const shared = {
@@ -743,7 +769,7 @@ function previewRestore(input: IntegrationWriteInput, request: PreviewRequest): 
       ? {}
       : observed.clientId === "cline"
         ? parseClineDocument(observed.before)
-        : parseConfig(observed.before, observed.format),
+        : parseConfig(observed.before, observed.format, EXPORT_CLIENTS[observed.clientId].jsonc ? { jsonc: true } : undefined),
     restore: {
       opId: observed.entry.opId,
       entry: observed.entry,
@@ -812,7 +838,11 @@ export interface ObservationEffects {
  * classification rather than two independent reads that can disagree. The ordering of refusals is
  * load-bearing and is preserved exactly as the writer had it.
  */
-export function observeIntegration(input: IntegrationWriteInput, effects: ObservationEffects) {
+export function observeIntegration(
+  input: IntegrationWriteInput,
+  effects: ObservationEffects,
+  operation: Exclude<IntegrationPlanOperation, "restore">,
+) {
   const store = input.store ?? createIntegrationStateStore();
   let io = input.io ?? defaultIntegrationIO(store);
   const clientId = input.clientId;
@@ -839,7 +869,9 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
      * an Aside account switch land between the two, so a direct apply could
      * verify account 1 was installed and then write account 0's catalog.
      */
-    const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home);
+    const context = exportContextOf(input);
+    const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home, context);
+    if (clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(resolved.detectDir, context);
     detectDir = resolved.detectDir;
     if (clientId === "cline") io = createClineIO(io, resolved.configPath, store, effects.recover);
     /*
@@ -850,6 +882,10 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
      * target is known, because that is the path it has to match.
      */
     stored = store.readRecords()[clientId] ?? null;
+    const recordedPath = boundIntegrationConfigPath({
+      clientId, record: stored, resolvedPath: resolved.configPath,
+      statKind: io.statKind, env: input.env, home: input.home,
+    });
     /*
      * Inside the same guard as resolution, because this resolver can refuse the
      * same way: the store is named by a client env var, and a relative one is a
@@ -857,7 +893,7 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
      * collection route.
      */
     effective = resolveIntegrationTarget({
-      clientId, configPath: resolved.configPath, io, record: stored, env: input.env, home: input.home,
+      clientId, configPath: recordedPath, io, record: stored, env: input.env, home: input.home,
     });
     configPath = effective.configPath;
   } catch (error) {
@@ -868,6 +904,13 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
     return { failed: observationFailure("unsafe", "unsafe", error.message) } as const;
   }
   // Pruning writes, so only a mutation may perform it. Preview reports the state it finds.
+  if (clientId === "kilo" && operation !== "disable") {
+    const candidates = inspectKiloCandidates({ io, selectedPath: configPath, env: input.env, home: input.home });
+    if (candidates.kind !== "ok") return { failed: candidates.kind === "conflict"
+      ? observationFailure("conflict", "conflict", `${configPath} cannot be managed while ${candidates.paths.join(", ")} also defines provider.opencodex`)
+      : observationFailure("unsafe", "unsafe", `${candidates.path} cannot be inspected safely (${candidates.why})`),
+    } as const;
+  }
   if (effects.maintenance) store.retryPendingPrunes();
 
   const loaded = loadTarget(io, configPath);
@@ -880,7 +923,9 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
     } as const;
   }
   const before = loaded.before;
-  const parsed = clientId === "cline" ? parseClineDocument(before) : parseConfig(before, effective.format);
+  const parsed = clientId === "cline"
+    ? parseClineDocument(before)
+    : parseConfig(before, effective.format, exportSpec.jsonc ? { jsonc: true } : undefined);
   if (parsed === PARSE_FAILED) {
     return { failed: observationFailure("unsafe", "unsafe",
       `${configPath} could not be parsed, or holds something opencodex cannot rewrite without changing it (a non-finite number, a large integer or a tiny one a rewrite would round, -0, a duplicate member, or nesting deeper than 1000 levels)`) } as const;
@@ -898,6 +943,9 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
   const record = stored && stored.clientId === clientId && stored.configPath === configPath
     ? stored
     : null;
+  if (clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0 && !record) {
+    return { failed: observationFailure("unsafe", "unsafe", "Factory Droid has no addressable models in the selected catalog") } as const;
+  }
   // `configPath`/`clientId` are load-bearing, not decoration: a record proves
   // ownership of ONE file, and the writer mutates whatever path resolves NOW.
   // Without them a record written for another home directory would grant
@@ -906,6 +954,13 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
     format: effective.format,
   });
+  if (clientId === "droid" && record && (classified.state === "current" || classified.state === "stale")) {
+    try { assertDroidRecordedSettingsUnambiguous(detectDir, parsed, record); }
+    catch (error) {
+      if (!(error instanceof ClientPathError)) throw error;
+      return { failed: observationFailure("unsafe", "unsafe", error.message) } as const;
+    }
+  }
   return {
     failed: undefined, store, io, clientId, spec, exportSpec, target: effective, configPath, detectDir,
     /*

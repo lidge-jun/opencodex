@@ -275,6 +275,62 @@ describe("combo management API", () => {
     });
   });
 
+  test("model notes round-trip across strategies and reject invalid lengths", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-profile",
+        combo: { strategy: "jev", targets: [{ provider: "a", model: "m1", modelProfile: "  Low marginal subscription cost; 1M context.  " }] },
+      });
+      expect(created?.status).toBe(200);
+      expect(config.combos?.["jev-profile"]?.targets[0]?.modelProfile).toBe("Low marginal subscription cost; 1M context.");
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(listed.combos[0].targets[0].modelProfile).toBe("Low marginal subscription cost; 1M context.");
+      const switched = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-profile",
+        combo: {
+          strategy: "failover",
+          targets: [{ provider: "a", model: "m1", modelProfile: "  Low marginal subscription cost; 1M context.  " }],
+        },
+      });
+      expect(switched?.status).toBe(200);
+      expect(config.combos?.["jev-profile"]).toMatchObject({
+        strategy: "failover",
+        targets: [{ modelProfile: "Low marginal subscription cost; 1M context." }],
+      });
+      const switchedListed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(switchedListed.combos[0]).toMatchObject({
+        strategy: "failover",
+        targets: [{ modelProfile: "Low marginal subscription cost; 1M context." }],
+      });
+      const reloaded = readConfigDiagnostics();
+      expect(reloaded.source).toBe("file");
+      expect(reloaded.error).toBeNull();
+      expect(reloaded.config.combos?.["jev-profile"]?.targets[0]?.modelProfile)
+        .toBe("Low marginal subscription cost; 1M context.");
+      for (const invalidNote of [" ".repeat(513), "   ", "Unsafe\u0000note", "Bell\u0007note", "Del\u007fnote", 123]) {
+        const rejected = await comboApi(config, "PUT", "/api/combos", {
+          id: "jev-profile",
+          combo: { strategy: "jev", targets: [{ provider: "a", model: "m1", modelProfile: invalidNote }] },
+        });
+        expect(rejected?.status).toBe(400);
+      }
+      const invalid = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-profile",
+        combo: { strategy: "jev", targets: [{ provider: "a", model: "m1", modelProfile: "x".repeat(513) }] },
+      });
+      expect(invalid?.status).toBe(400);
+      expect(config.combos?.["jev-profile"]?.targets[0]?.modelProfile).toBe("Low marginal subscription cost; 1M context.");
+      const multiline = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-profile",
+        combo: { strategy: "jev", targets: [{ provider: "a", model: "m1", modelProfile: "Line one\n\tLine two\r\nLine three" }] },
+      });
+      expect(multiline?.status).toBe(200);
+      expect(config.combos?.["jev-profile"]?.targets[0]?.modelProfile).toBe("Line one\n\tLine two\r\nLine three");
+    });
+  });
+
   test("PUT preserves explicit cooldown knobs and omits sparse defaults", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

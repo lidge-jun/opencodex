@@ -17,6 +17,7 @@ import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transpor
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
 import { hasValidatedActiveReasoningEffort } from "../../responses/parser";
+import { responseTierAuthorityForProvider } from "../../providers/openai-tiers-destination";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { applyOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
@@ -220,14 +221,12 @@ export async function applyFinalRouteRequestNormalization(args: {
   );
   const modelServiceTierSupport = serviceTierSupportFromPolicy(fastPolicy);
   const callerTier = parsed.options.serviceTier;
-  // The ChatGPT-internal Codex backend echoes `service_tier: "default"` even on turns it
-  // scheduled as priority, so its echo cannot confirm OR deny Fast. Believing it reported every
-  // Fast request as `response-declined` (#2558). The public API's echo stays authoritative.
+  // Capture destination evidence policy separately from the unchanged outbound Fast decision.
   parsed.options.tierObservation = tierObservationContext(
     fastPolicy,
     config.fastMode,
     callerTier,
-    isCanonicalOpenAiForwardProvider(route.provider) ? false : undefined,
+    responseTierAuthorityForProvider(route.provider),
   );
   parsed.options.tierDecision = decideTier(fastPolicy, config.fastMode, callerTier);
   parsed.options.serviceTier = tierValueAfterDecision(parsed.options.tierDecision, callerTier);
@@ -275,6 +274,22 @@ export async function applyFinalRouteRequestNormalization(args: {
       logCtx.requestedEffort = pinned.from ? `${pinned.from}->${pinned.to}` : pinned.to;
       if (isInjectionDebugEnabled()) {
         injectionDebugLog(`[opencodex] ${route.modelId}: pinned reasoning effort applied (${pinned.from ?? "none"} -> ${pinned.to})`);
+      }
+    }
+  }
+
+  {
+    // Last word on a memory turn's effort: the phase setting is more specific than a provider-wide
+    // pin, and Codex hard-codes the phase effort with no config key of its own.
+    const phase = parsed._memoryModelPhase;
+    if (phase) {
+      const { applyMemoryModelEffort } = await import("./memory-models");
+      const applied = applyMemoryModelEffort(parsed, config, phase);
+      if (applied) {
+        logCtx.requestedEffort = applied.from ? `${applied.from}->${applied.to}` : applied.to;
+        if (isInjectionDebugEnabled()) {
+          injectionDebugLog(`[opencodex] ${route.modelId}: memory ${phase} effort applied (${applied.from ?? "none"} -> ${applied.to})`);
+        }
       }
     }
   }

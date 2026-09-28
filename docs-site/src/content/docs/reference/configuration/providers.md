@@ -205,6 +205,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `allowEncryptedV2AgentTasks?` | `boolean` | Disabled by default. Trust a direct key-auth `openai-responses` provider to consume or relay opaque encrypted V2 sub-agent tasks unchanged. Eligible routes skip `agentTaskRecovery`; all other routes keep the existing recovery or fail-closed behavior. OpenCodex does not decrypt, translate, or recover tasks sent through this opt-in. |
 | `upstreamWebsocket?` | `boolean` | Opt-in upstream Responses WebSocket transport for `openai-responses` requests (default false). Honored only for the first-party `https://api.openai.com/v1` upstream; custom-provider endpoints always use bounded HTTP/SSE because Bun cannot enforce an inbound WebSocket message limit before allocating the complete message. For the canonical ChatGPT `openai` provider, omitting it keeps the upstream WebSocket on eligible turns, an explicit `false` sends streaming turns over HTTP/SSE, and provider management rejects `true`; with `false`, native mid-turn steering and injection are unavailable. The field is independent of the client-facing `websockets` setting and changes neither the endpoint nor the credential. Plain HTTP remains on SSE; non-Responses paths and `openai-chat` requests stay on HTTP. |
 | `supportsServiceTier?` | `boolean` | Tri-state canonical Fast capability fallback. `true` publishes Fast in the catalog, satisfies service-tier routing requirements, contributes a supported fingerprint, and lets fast mode inject the provider's canonical wire value on a compatible final adapter. `false` strips the field and never injects, and exact model declarations cannot reopen it. Absent leaves the provider unclassified: fast mode does not inject or normalize a canonical caller value, and caller values obey the final wire's forwarding permission (`chatServiceTier` on Chat; passthrough on Responses). The registry classifies canonical OpenAI (`true`), DeepSeek, and Volcengine Ark (`false`); set it explicitly only for custom gateways that genuinely support tiers. |
+| `responseTierAuthoritative?` | `boolean` | Whether the response tier can confirm or deny Fast. Set `false` explicitly for routes with non-authoritative response metadata; omission preserves existing behavior. This does not enable Fast or change outbound parameters. See [Response service-tier authority](#response-service-tier-authority). |
 | `fastEnabled?` | `boolean` | Operator switch for the provider's Fast lane. `false` turns Fast off (no Fast toggle, no `--fast` row, no fast wire field) and overrides `supportsServiceTier`. `true` enables a lane the registry marks opt-in. Absent keeps the registry default: off for `anthropic` and `anthropic-apikey`, whose fast mode spends usage credits at 2x price, and unchanged for every other provider. The dashboard Models page shows an Off/On row for opt-in providers. |
 | `modelSupportsServiceTier?` | `Record<string, boolean>` | Exact upstream model capability overrides. Exact `true` enables canonical Fast for that model; exact `false` narrows provider defaults. An explicit provider-level `supportsServiceTier: false` remains fail-closed and cannot be reopened. Exact `true` does not authorize foreign caller-tier forwarding on Chat. Undeclared models fall back to provider-wide behavior. Management `PATCH /api/providers` merges entries and accepts `null` to clear one. |
 | `chatServiceTier?` | `boolean` | Provider-wide Chat-wire opt-in for forwarding caller `service_tier` values. On a classified route it governs foreign values such as `flex`, not proxy-owned canonical Fast after capability validation; on an unclassified route it governs every caller value because no Fast capability has been validated. Exact model capability does not authorize foreign forwarding. Responses routes retain their capability-based caller forwarding behavior. |
@@ -565,6 +566,44 @@ cleared or unresolved. The persisted catalog field is read by Codex for the curr
 model, which is why a valid configured selector is copied to each applicable entry.
 Provider-scoped selectors (above) are applied before this root fallback and win on routed rows.
 
+### Response service-tier authority
+
+Set `providers.<name>.responseTierAuthoritative` to `false` in `config.json` when that
+provider's response `service_tier` cannot establish whether Fast was granted. This is an
+operator declaration about the entire provider route, independent of `supportsServiceTier` and
+`fastWire`. It neither enables Fast nor changes the outgoing `service_tier`.
+
+For example, add this field to an existing gateway provider whose Codex backend has
+non-authoritative response metadata:
+
+```json
+{ "responseTierAuthoritative": false }
+```
+
+**Gateway support is opt-in.** Updating OpenCodex alone does not add this declaration to
+existing providers. Without it, an eligible priority request followed by `service_tier: "default"`
+retains the legacy `response-declined` interpretation. Configure `false` only when the
+route's response metadata is known to be non-authoritative.
+
+For an eligible request serialized as `priority`, both a `default` and a `priority` echo remain
+observations. Logs preserve `responseServiceTier` and record
+`tierOutcome.responseTierAuthoritative: false`, `fastOutcome: "applied"`, and
+`confirmation: "assumed"`, without `response-declined`. Here **applied means the request parameter
+was sent**, and **assumed means the actual Fast effect is unconfirmed**. The model tooltip shows
+the request and raw response separately with that confirmation. Neither this setting nor these
+records prove an acceleration or a billed tier.
+
+Cost estimates use the existing requested-tier fallback instead of treating the raw echo as a
+confirmed price tier; pricing rules requiring response confirmation cannot use that echo. Historical records
+without an authority flag retain their previous interpretation.
+
+The field accepts only booleans. Omission and explicit `true` retain response-based confirmation
+for other destinations, including the official API and undeclared gateways. Canonical
+`https://chatgpt.com/backend-api/codex` with `authMode: "forward"` remains automatically
+non-authoritative, even if `true` is configured. Gateway names and URLs are never inferred.
+If one gateway mixes response contracts, use separate provider entries for those routes and
+apply the declaration only to the relevant entry.
+
 ### FastWire B1 capability migration
 
 Fast capability and arbitrary Chat caller-tier forwarding are independent after FastWire B1. The
@@ -908,6 +947,17 @@ total allowance of four. Explicit caller ceilings and combo scopes keep their ex
 Rotation carries the alternate account's **full** credential snapshot, not just its bearer, so a
 provider that pairs routing metadata with its token — Antigravity's Cloud Code Assist project id,
 for example — cannot end up sending one account's token with another account's metadata.
+
+For primary Antigravity inference through the Google adapter's main dispatch, a 401 first refreshes
+and replays the same account. If that replay is still 401, or refresh fails with a terminal credential
+rejection that requires reauthentication, the request may switch once to an eligible live sibling.
+That sibling request keeps the adapter's ordinary transient retries, and every physical send counts
+against the request's existing send budget. A transient refresh failure keeps the sanitized authentication error.
+Paused, reauthentication-required and cooling accounts are skipped;
+the failed credential gets a 60-second in-process cooldown only while its generation is current.
+Continuations, native Responses passthrough, image and web-search sidecars, and output already sent
+to the client do not use this 401 rotation. A structured validation-required 403 receives a clearer
+error message but does not rotate accounts.
 
 Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter
 events rather than an HTTP status, and the standalone Antigravity image endpoint has its own

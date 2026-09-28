@@ -184,6 +184,6 @@ Anthropic OAuth サイドカーは、opencodex の既存のクロード コー�
 
 ## Codex クォータのネットワーク診断
 
-メイン Codex アカウント行の `quotaRefresh` はクォータ取得の診断情報であり、残量やモデルへのアクセス権を示すものではありません。キャッシュ利用時や取得を行わない場合は省略されることがあります。取得には操作中のシェルではなく、実行中のプロキシサービスの環境が使われます。`proxy` 未設定では既存の環境を維持し、`"auto"` は起動時に Windows の静的プロキシ設定だけを読みます。PAC/WPAD、SOCKS のみの設定、実行中の変更は自動反映されません。TUN での成功だけでは HTTP プロキシ経路の正常性は確認できません。[コマンドと状態の説明（英語）](/reference/configuration/server/#codex-quota-network-diagnostics)を参照してください。
+メイン Codex アカウント行の `quotaRefresh` はクォータ取得の診断情報であり、残量やモデルへのアクセス権を示すものではありません。キャッシュ利用時や取得を行わない場合は省略されることがあります。取得には操作中のシェルではなく、実行中のプロキシサービスの環境が使われます。`proxy` 未設定では既存の環境を維持し、`"auto"` は起動時の Windows または macOS の静的 HTTP/HTTPS 設定を読みます。macOS では継承したプロキシがある場合、読み取りを行いません。macOS では有効な `*.<domain>` を `.<domain>` に変換します。`*.local` は `foo.local` と基底名 `local` を直接接続にしますが、`xlocal` は対象外です。`169.254/16`、`169.254.0.0/16`、`fe80::/10` は診断を出して省略し、リンクローカル IP アドレスはプロキシを使います。IP アドレスと `*` は受け入れますが、その他の CIDR、glob、単純ホスト名の例外では環境を変更せず検出を中止します。PAC/WPAD、SOCKS のみの設定、実行中の変更は自動反映されません。TUN での成功だけでは HTTP プロキシ経路の正常性は確認できません。[コマンドと状態の説明（英語）](/reference/configuration/server/#codex-quota-network-diagnostics)を参照してください。
 
 `dropCodexSafetyBuffering`: プロバイダーの安全性の適用と拒否応答は変更しません。native `codex.response.metadata.headers` WebSocket メタデータと `/responses/compact` は対象外です。

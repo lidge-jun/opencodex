@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { connect, createServer } from "node:tls";
 import { createCertificateAuthority, createLocalInterceptCa, issueServerLeaf } from "../../src/claude/intercept/local-ca";
+import { drainPendingPickerCaUntrust } from "../../src/claude/intercept/picker-ca-cleanup";
 import {
-  ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
-  pickerCaOwnerPath, pickerLeafCertPath, pickerStateDir, PICKER_CA_COMMON_NAME, PICKER_HOST,
+  acknowledgePendingPickerCaUntrust, ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
+  pickerCaOwnerPath, pickerCaPendingUntrustPath, pickerLeafCertPath, pickerStateDir,
+  pendingPickerCaHasLivePublishedOwner, readPendingPickerCaUntrust, PICKER_CA_COMMON_NAME, PICKER_HOST,
 } from "../../src/claude/intercept/picker-ca";
 
 function tempDir(): string { return mkdtempSync(join(tmpdir(), "ocx-picker-ca-")); }
@@ -139,81 +141,374 @@ test("picker authority keeps its private key in process memory and removes a leg
   expect(constraints(readFileSync(pickerCaCertPath(dir), "utf8"))?.dnsNames).toEqual([PICKER_HOST]);
 });
 
-test("a cached authority still removes a restored legacy key and republishes a stale certificate", () => {
+test("a cached authority refuses a different certificate but republishes a missing one", () => {
   const dir = tempDir();
   const stateDir = pickerStateDir(dir);
   const ca = ensurePickerCa(dir);
-  // Another process published a different certificate while a legacy key reappeared on disk.
+  // A different valid certificate needs startup rotation and verified untrust first.
   writeFileSync(join(stateDir, "ca.key"), "legacy-exportable-key\n");
-  writeFileSync(pickerCaCertPath(dir), createCertificateAuthority({
+  const other = createCertificateAuthority({
     commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST],
-  }).certPem);
-  expect(ensurePickerCa(dir).fingerprint).toBe(ca.fingerprint);
-  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ca.certPem);
+  }).certPem;
+  writeFileSync(pickerCaCertPath(dir), other);
+  expect(() => ensurePickerCa(dir)).toThrow("picker_ca_rotation_requires_startup");
+  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(other);
   expect(existsSync(join(stateDir, "ca.key"))).toBe(false);
-  // A certificate that went missing entirely is republished the same way.
+  // A missing certificate has no predecessor to untrust and can be republished under the lock.
   rmSync(pickerCaCertPath(dir));
   expect(ensurePickerCa(dir).fingerprint).toBe(ca.fingerprint);
   expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ca.certPem);
 });
 
 const PICKER_CA_MODULE_URL = pathToFileURL(join(import.meta.dir, "../../src/claude/intercept/picker-ca.ts")).href;
+const LIFECYCLE_LOCK_MODULE_URL = pathToFileURL(join(import.meta.dir, "../../src/client/lifecycle-lock.ts")).href;
 
-// The restart contract is process-scoped: a new process must mint its own authority, not reuse
-// the previous one's certificate. This needs a real second process — the in-process authority
-// cache would otherwise hand the same keypair back.
-test("a second process mints a fresh authority and republishes it", () => {
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    if (existsSync(path)) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`fixture signal missing: ${path}`);
+}
+
+test("one uncontended fresh authority publishes its certificate and owner exactly once", () => {
   const dir = tempDir();
-  const ours = ensurePickerCa(dir);
   const child = Bun.spawnSync({
     cmd: [process.execPath, "-e",
-      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
-      `process.stdout.write(ensurePickerCa(${JSON.stringify(dir)}).fingerprint);`],
+      `import { spyOn } from "bun:test"; import * as fs from "node:fs";\n` +
+      `const renames = spyOn(fs, "renameSync");\n` +
+      `const { ensurePickerCa } = await import(${JSON.stringify(PICKER_CA_MODULE_URL)});\n` +
+      `ensurePickerCa(${JSON.stringify(dir)});\n` +
+      `process.stdout.write(JSON.stringify(renames.mock.calls.map(call => call[1])));`],
     cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
     stdout: "pipe",
     stderr: "pipe",
   });
   expect(child.exitCode).toBe(0);
-  const childFingerprint = child.stdout.toString().trim();
-  expect(childFingerprint).not.toBe(ours.fingerprint);
-  // The newer process's authority is the published one.
-  expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(childFingerprint);
+  const published = JSON.parse(child.stdout.toString()) as string[];
+  expect(published.filter(path => path === pickerCaCertPath(dir))).toHaveLength(1);
+  expect(published.filter(path => path === pickerCaOwnerPath(dir))).toHaveLength(1);
+});
+
+// The restart contract is process-scoped: a new process must mint its own authority, not reuse
+// the previous one's certificate. This needs a real second process — the in-process authority
+// cache would otherwise hand the same keypair back.
+test("a replacement process mints a fresh authority and records the outgoing public root", () => {
+  const dir = tempDir();
+  const first = Bun.spawnSync({
+    cmd: [process.execPath, "-e",
+      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `process.stdout.write(ensurePickerCa(${JSON.stringify(dir)}).fingerprint);`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(first.exitCode).toBe(0);
+  const firstFingerprint = first.stdout.toString().trim();
+  const firstPem = readFileSync(pickerCaCertPath(dir), "utf8");
+  const second = Bun.spawnSync({
+    cmd: [process.execPath, "-e",
+      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `process.stdout.write(ensurePickerCa(${JSON.stringify(dir)}, { rotation: "startup" }).fingerprint);`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(second.exitCode).toBe(0);
+  const secondFingerprint = second.stdout.toString().trim();
+  expect(secondFingerprint).not.toBe(firstFingerprint);
+  expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(secondFingerprint);
+  expect(readPendingPickerCaUntrust(dir)).toEqual({ certPem: firstPem, ...pickerCaFingerprints(firstPem) });
+  expect(readFileSync(pickerCaPendingUntrustPath(dir), "utf8")).not.toContain("PRIVATE KEY");
 });
 
 test("a live foreign owner is never clobbered; a dead one is reclaimed", async () => {
   const dir = tempDir();
   const ours = ensurePickerCa(dir);
   const child = Bun.spawn({
-    cmd: [process.execPath, "-e",
-      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
-      `ensurePickerCa(${JSON.stringify(dir)}); setInterval(() => {}, 60000);`],
+    cmd: [process.execPath, "-e", "setInterval(() => {}, 60000);"],
     cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
     stdout: "pipe",
     stderr: "pipe",
   });
   try {
-    // Wait until the child's authority is published with its owner record.
-    const ownerPath = pickerCaOwnerPath(dir);
-    let childFingerprint = "";
-    for (let i = 0; i < 400; i += 1) {
-      try {
-        const owner = JSON.parse(readFileSync(ownerPath, "utf8")) as { pid?: number; sha256?: string };
-        if (owner.pid === child.pid && typeof owner.sha256 === "string") { childFingerprint = owner.sha256; break; }
-      } catch { /* owner file not written yet */ }
-      await Bun.sleep(10);
-    }
-    expect(childFingerprint).not.toBe("");
-    expect(childFingerprint).not.toBe(ours.fingerprint);
-    // A live foreign process owns the published certificate: this process must not republish its
-    // previously trusted authority over it.
-    ensurePickerCa(dir);
-    expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(childFingerprint);
+    // Simulate a foreign owner's matching publication; the new fresh-owner guard prevents a
+    // second ensurePickerCa process from creating this state while ours is alive.
+    const foreign = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+    const foreignFingerprint = pickerCaFingerprints(foreign.certPem).sha256;
+    writeFileSync(pickerCaCertPath(dir), foreign.certPem);
+    writeFileSync(pickerCaOwnerPath(dir), JSON.stringify({ pid: child.pid, sha256: foreignFingerprint }));
+    expect(() => ensurePickerCa(dir)).toThrow("picker_ca_live_owner");
+    expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(foreign.certPem);
     child.kill();
     await child.exited;
-    // Once the owner is gone the file is stale again and this process reclaims it.
-    ensurePickerCa(dir);
+    // A startup may reclaim after the owner exits, but retains its outgoing public root.
+    ensurePickerCa(dir, { rotation: "startup" });
     expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ours.certPem);
+    expect(readPendingPickerCaUntrust(dir)?.sha256).toBe(foreignFingerprint);
   } finally {
     child.kill();
   }
+});
+
+test("a legacy live PID is reclaimed only when it started after the owner file", () => {
+  if (process.platform !== "darwin") return; // Linux's /proc start ticks are not wall-clock time.
+  const dir = tempDir();
+  const ours = ensurePickerCa(dir);
+  const foreign = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  const ownerPath = pickerCaOwnerPath(dir);
+  writeFileSync(pickerCaCertPath(dir), foreign.certPem);
+  writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, sha256: pickerCaFingerprints(foreign.certPem).sha256 }));
+
+  utimesSync(ownerPath, new Date(0), new Date(0));
+  ensurePickerCa(dir, { rotation: "startup" });
+  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(ours.certPem);
+  expect(readPendingPickerCaUntrust(dir)?.certPem).toBe(foreign.certPem);
+
+  const newerDir = tempDir();
+  ensurePickerCa(newerDir);
+  writeFileSync(pickerCaCertPath(newerDir), foreign.certPem);
+  writeFileSync(pickerCaOwnerPath(newerDir), JSON.stringify({ pid: process.pid, sha256: pickerCaFingerprints(foreign.certPem).sha256 }));
+  const future = new Date(Date.now() + 10_000);
+  utimesSync(pickerCaOwnerPath(newerDir), future, future);
+  expect(() => ensurePickerCa(newerDir, { rotation: "startup" })).toThrow("picker_ca_live_owner");
+  expect(readFileSync(pickerCaCertPath(newerDir), "utf8")).toBe(foreign.certPem);
+});
+
+test("a held picker CA lock never permits publication outside the critical section", async () => {
+  const dir = tempDir();
+  const held = join(dir, "lock-held");
+  const release = join(dir, "lock-release");
+  const lockPath = join(pickerStateDir(dir), "ca.lock.sqlite");
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e",
+      `import { existsSync, writeFileSync } from "node:fs";\n` +
+      `import { withClientLifecycleSync } from ${JSON.stringify(LIFECYCLE_LOCK_MODULE_URL)};\n` +
+      `withClientLifecycleSync(() => {\n` +
+      `  writeFileSync(${JSON.stringify(held)}, "held");\n` +
+      `  const cell = new Int32Array(new SharedArrayBuffer(4));\n` +
+      `  const until = Date.now() + 5000;\n` +
+      `  while (!existsSync(${JSON.stringify(release)}) && Date.now() < until) Atomics.wait(cell, 0, 0, 20);\n` +
+      `}, { lockPath: ${JSON.stringify(lockPath)} });`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    await waitForFile(held);
+    expect(() => ensurePickerCa(dir)).toThrow("client_lifecycle_busy");
+    expect(existsSync(pickerCaCertPath(dir))).toBe(false);
+    expect(existsSync(pickerCaOwnerPath(dir))).toBe(false);
+  } finally {
+    writeFileSync(release, "release");
+    await child.exited;
+    child.kill();
+  }
+  expect(ensurePickerCa(dir).fingerprint).toBe(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256);
+});
+
+test("two competing processes leave one matching public certificate and owner", async () => {
+  const dir = tempDir();
+  const start = join(dir, "start");
+  const release = join(dir, "release");
+  const workers = [0, 1].map(index => {
+    const result = join(dir, `result-${index}.json`);
+    const child = Bun.spawn({
+      cmd: [process.execPath, "-e",
+        `import { existsSync, writeFileSync } from "node:fs";\n` +
+        `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+        `while (!existsSync(${JSON.stringify(start)})) await Bun.sleep(5);\n` +
+        `try {\n` +
+        `  const ca = ensurePickerCa(${JSON.stringify(dir)}, { rotation: "startup" });\n` +
+        `  writeFileSync(${JSON.stringify(result)}, JSON.stringify({ ok: true, sha256: ca.fingerprint, pid: process.pid }));\n` +
+        `  while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(5);\n` +
+        `} catch (error) {\n` +
+        `  writeFileSync(${JSON.stringify(result)}, JSON.stringify({ ok: false, message: String(error) }));\n` +
+        `}`],
+      cwd: dir,
+      env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { child, result };
+  });
+  try {
+    writeFileSync(start, "start");
+    for (const worker of workers) await waitForFile(worker.result);
+    const results = workers.map(worker => JSON.parse(readFileSync(worker.result, "utf8")) as {
+      ok: boolean; sha256?: string; pid?: number;
+    });
+    expect(results.filter(result => result.ok)).toHaveLength(1);
+    const winner = results.find(result => result.ok)!;
+    const owner = JSON.parse(readFileSync(pickerCaOwnerPath(dir), "utf8")) as {
+      pid: number; startTime: string | null; sha256: string;
+    };
+    expect(owner).toMatchObject({ pid: winner.pid, sha256: winner.sha256 });
+    if (process.platform === "darwin" || process.platform === "linux") expect(owner.startTime).toBeTruthy();
+    expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(owner.sha256);
+    // Contention alone can make the loser fail. A later process must independently see and
+    // refuse the live published owner, rather than relying on the racing failure.
+    const contender = Bun.spawnSync({
+      cmd: [process.execPath, "-e",
+        `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+        `try { ensurePickerCa(${JSON.stringify(dir)}, { rotation: "startup" }); process.stdout.write("unexpected success"); }\n` +
+        `catch (error) { process.stdout.write(String(error)); }`],
+      cwd: dir,
+      env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(contender.exitCode).toBe(0);
+    expect(contender.stdout.toString()).toContain("picker_ca_live_owner");
+    expect(pickerCaFingerprints(readFileSync(pickerCaCertPath(dir), "utf8")).sha256).toBe(owner.sha256);
+  } finally {
+    writeFileSync(release, "release");
+    for (const worker of workers) {
+      await worker.child.exited;
+      worker.child.kill();
+    }
+  }
+});
+
+test("pending untrust contains one canonical public PEM and clears only on an exact acknowledgement", () => {
+  const dir = tempDir();
+  const ours = ensurePickerCa(dir);
+  const old = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  writeFileSync(pickerCaCertPath(dir), old.certPem);
+  expect(ensurePickerCa(dir, { rotation: "startup" }).fingerprint).toBe(ours.fingerprint);
+  const pending = readPendingPickerCaUntrust(dir)!;
+  expect(Object.keys(JSON.parse(readFileSync(pickerCaPendingUntrustPath(dir), "utf8"))).sort())
+    .toEqual(["certPem", "sha1", "sha256"]);
+  expect(pending).toEqual({ certPem: old.certPem, ...pickerCaFingerprints(old.certPem) });
+  expect(readFileSync(pickerCaPendingUntrustPath(dir), "utf8")).not.toContain("PRIVATE KEY");
+  expect(() => ensurePickerCa(dir)).toThrow("picker_ca_pending_untrust");
+  expect(acknowledgePendingPickerCaUntrust(dir, { ...pending, sha1: "0".repeat(40) }, { ok: true })).toBe(false);
+  expect(readPendingPickerCaUntrust(dir)).toEqual(pending);
+  expect(acknowledgePendingPickerCaUntrust(dir, pending, { ok: false })).toBe(false);
+  expect(readPendingPickerCaUntrust(dir)).toEqual(pending);
+  expect(acknowledgePendingPickerCaUntrust(dir, pending, { ok: true })).toBe(true);
+  expect(readPendingPickerCaUntrust(dir)).toBeNull();
+  expect(ensurePickerCa(dir).fingerprint).toBe(ours.fingerprint);
+});
+
+test("failed untrust leaves the pending record byte-for-byte intact", async () => {
+  const dir = tempDir();
+  ensurePickerCa(dir);
+  const old = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  writeFileSync(pickerCaCertPath(dir), old.certPem);
+  ensurePickerCa(dir, { rotation: "startup" });
+  const path = pickerCaPendingUntrustPath(dir);
+  const before = readFileSync(path);
+  const sha1 = pickerCaFingerprints(old.certPem).sha1;
+  const calls: string[] = [];
+  const drained = await drainPendingPickerCaUntrust(dir, async args => {
+    calls.push(args[0]!);
+    return args[0] === "find-certificate"
+      ? { code: 0, stdout: `SHA-1 hash: ${sha1}\n`, stderr: "" }
+      : { code: 1, stdout: "", stderr: "" };
+  }, "darwin");
+  expect(drained).toBe(false);
+  expect(calls).toContain("remove-trusted-cert");
+  expect(readFileSync(path)).toEqual(before);
+});
+
+test("cached ensure repairs a missing owner so a peer cannot rotate a live CA", async () => {
+  const dir = tempDir();
+  const ready = join(dir, "ready");
+  const release = join(dir, "release");
+  const child = Bun.spawn({
+    cmd: [process.execPath, "-e",
+      `import { existsSync, unlinkSync, writeFileSync } from "node:fs";\n` +
+      `import { ensurePickerCa, pickerCaOwnerPath } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `ensurePickerCa(${JSON.stringify(dir)});\n` +
+      `unlinkSync(pickerCaOwnerPath(${JSON.stringify(dir)}));\n` +
+      `ensurePickerCa(${JSON.stringify(dir)});\n` +
+      `writeFileSync(${JSON.stringify(ready)}, "ready");\n` +
+      `while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(5);`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe", stderr: "pipe",
+  });
+  try {
+    await waitForFile(ready);
+    expect(existsSync(pickerCaOwnerPath(dir))).toBe(true);
+    const published = readFileSync(pickerCaCertPath(dir), "utf8");
+    const peer = Bun.spawnSync({
+      cmd: [process.execPath, "-e",
+        `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+        `try { ensurePickerCa(${JSON.stringify(dir)}, { rotation: "startup" }); process.stdout.write("rotated"); }\n` +
+        `catch (error) { process.stdout.write(String(error)); }`],
+      cwd: dir,
+      env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(peer.exitCode).toBe(0);
+    expect(peer.stdout.toString()).toContain("picker_ca_live_owner");
+    expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(published);
+  } finally {
+    writeFileSync(release, "release");
+    await child.exited;
+  }
+});
+
+test("a failed certificate replacement retains the public predecessor record and published PEM", () => {
+  const dir = tempDir();
+  const first = Bun.spawnSync({
+    cmd: [process.execPath, "-e",
+      `import { ensurePickerCa } from ${JSON.stringify(PICKER_CA_MODULE_URL)};\n` +
+      `ensurePickerCa(${JSON.stringify(dir)});`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(first.exitCode).toBe(0);
+  const priorPem = readFileSync(pickerCaCertPath(dir), "utf8");
+  const failed = Bun.spawnSync({
+    cmd: [process.execPath, "-e",
+      `import { spyOn } from "bun:test"; import * as fs from "node:fs";\n` +
+      `const rename = fs.renameSync;\n` +
+      `spyOn(fs, "renameSync").mockImplementation((from, to) => {\n` +
+      `  if (to === ${JSON.stringify(pickerCaCertPath(dir))}) throw new Error("injected CA rename failure");\n` +
+      `  return rename(from, to);\n` +
+      `});\n` +
+      `const { ensurePickerCa } = await import(${JSON.stringify(PICKER_CA_MODULE_URL)});\n` +
+      `try { ensurePickerCa(${JSON.stringify(dir)}, { rotation: "startup" }); process.stdout.write("unexpected success"); }\n` +
+      `catch (error) { process.stdout.write(String(error)); }`],
+    cwd: dir,
+    env: { ...process.env, HOME: dir, OPENCODEX_HOME: dir, TMPDIR: dir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(failed.exitCode).toBe(0);
+  expect(failed.stdout.toString()).toContain("injected CA rename failure");
+  expect(readFileSync(pickerCaCertPath(dir), "utf8")).toBe(priorPem);
+  expect(readPendingPickerCaUntrust(dir)).toEqual({ certPem: priorPem, ...pickerCaFingerprints(priorPem) });
+  expect(pendingPickerCaHasLivePublishedOwner(dir, readPendingPickerCaUntrust(dir)!)).toBe(false);
+});
+
+test("a malformed pending record blocks publication and an actively published pending root is deferred", () => {
+  const invalidDir = tempDir();
+  mkdirSync(pickerStateDir(invalidDir), { recursive: true });
+  writeFileSync(pickerCaPendingUntrustPath(invalidDir), "{malformed");
+  expect(() => ensurePickerCa(invalidDir, { rotation: "startup" })).toThrow("picker_ca_pending_untrust_invalid");
+  expect(existsSync(pickerCaCertPath(invalidDir))).toBe(false);
+
+  const dir = tempDir();
+  const ca = ensurePickerCa(dir);
+  const pending = { certPem: ca.certPem, ...pickerCaFingerprints(ca.certPem) };
+  writeFileSync(pickerCaPendingUntrustPath(dir), JSON.stringify(pending));
+  expect(pendingPickerCaHasLivePublishedOwner(dir, pending)).toBe(true);
+  const owner = JSON.parse(readFileSync(pickerCaOwnerPath(dir), "utf8")) as Record<string, unknown>;
+  writeFileSync(pickerCaOwnerPath(dir), JSON.stringify({ ...owner, startTime: "recycled-pid" }));
+  if (process.platform === "darwin" || process.platform === "linux") {
+    expect(pendingPickerCaHasLivePublishedOwner(dir, pending)).toBe(false);
+  }
+  expect(() => ensurePickerCa(dir, { rotation: "startup" })).toThrow("picker_ca_pending_untrust");
+  expect(readPendingPickerCaUntrust(dir)).toEqual(pending);
 });

@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast ve omo'yu opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -24,6 +24,8 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekild
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
+| Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows'ta) | JSON | dosya değişince hemen | anahtarsız geri döngü |
 
 Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
 
@@ -324,3 +326,17 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Kilo
+
+Kilo yalnızca `~/.config/kilo` altındaki ilk mevcut genel dosyada `provider.opencodex` yazar (`XDG_CONFIG_HOME` bu dizini taşır; hiçbir aday yoksa `kilo.jsonc` oluşturulur). Başka bir aday dosya da `provider.opencodex` tanımlıyorsa durum çakışma bildirir ve Uygula işlemi reddedilir. Diğer anahtarlar değişmez. Uygula dosyanın tamamını yeniden yazar; yorumlar ve sondaki virgüller korunmaz. Kilo’da `opencodex/<model>` seçin.
+
+Başka bir aday çakışsa veya ayrıştırılamasa bile Devre Dışı Bırak, kaydedilen dosyadaki OpenCodex'e ait bloğu kaldırabilir; diğer aday dosya değişmez.
+
+```bash
+ocx integration client enable --client kilo
+```
+
+## Factory Droid
+
+Factory Droid, `~/.factory/settings.json` dosyasını (Windows'ta `%USERPROFILE%\.factory\settings.json`) kullanır. `ocx integration client enable --client droid` komutuyla açıkça etkinleştirin, ardından `/model` içinde özel bir model seçin. Yönetilen satırlar anahtarsızdır ve yalnızca geri döngü bağlantısında çalışır. Devre dışı bırakma yönetilen satırları kaldırır; Undo kaydedilen baytları geri yükler. Eski `config.json` dosyasında OpenCodex satırları varsa veya `settings.local.json`, `customModels` değerini geçersiz kılıyorsa etkinleştirmeden önce çakışmayı giderin. [Factory BYOK belgelerine](https://docs.factory.ai/model-independence/byok) bakın.

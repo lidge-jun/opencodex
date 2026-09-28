@@ -19,6 +19,7 @@ import {
   getLoginStatus,
   isPublicOAuthProvider,
   listOAuthProviders,
+  OAUTH_PROVIDERS,
   publicOAuthAuthenticationErrorMessage,
   startLoginFlow,
   submitManualLoginCode,
@@ -197,6 +198,13 @@ function metaMuseConsentRequired(provider: string, principal: ManagementContext[
     error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
     code: "oauth_consent_required",
   }, 403);
+}
+
+function genericOAuthProviderConfig(provider: string, config: ManagementContext["config"]) {
+  const configured = config.providers[provider];
+  if (configured) return configured;
+  const definition = OAUTH_PROVIDERS[provider];
+  return definition?.resolveProviderConfig?.(config) ?? definition?.providerConfig;
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -384,7 +392,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
-    const { kiroAutoSelection } = await import("../../oauth/generic-account-failover");
+    const { isGenericFailoverProvider, kiroAutoSelection } = await import("../../oauth/generic-account-failover");
+    const effectiveProvider = genericOAuthProviderConfig(provider, config);
+    const supportsPause = effectiveProvider !== undefined
+      && isGenericFailoverProvider(provider, effectiveProvider);
     const {
       oauthAccountHealthFields,
       projectOAuthAccountHealth,
@@ -404,6 +415,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
           return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
+            ...(supportsPause ? { paused: full?.paused === true } : {}),
             ...(provider === "kiro" && full ? kiroAutoSelection(full) : {}) };
         }),
       };
@@ -449,8 +461,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
-    const { setActiveAccount } = await import("../../oauth/store");
-    if (!(await setActiveAccount(provider, body.accountId))) return jsonResponse({ error: "account not found" }, 404);
+    const { getAccountCredentialWithStatus, setActiveAccount } = await import("../../oauth/store");
+    const current = getAccountCredentialWithStatus(provider, body.accountId);
+    if (!current) return jsonResponse({ error: "account not found" }, 404);
+    if (current.paused) return jsonResponse({ error: "account is paused" }, 409);
+    if (!(await setActiveAccount(provider, body.accountId))) {
+      const latest = getAccountCredentialWithStatus(provider, body.accountId);
+      if (!latest) return jsonResponse({ error: "account not found" }, 404);
+      return jsonResponse({ error: latest.paused ? "account is paused" : "account selection changed" }, 409);
+    }
     const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
     forgetGenericFailoverRoster(provider);
     // Seed the rotation cursor on the operator's pick, or a sticky round-robin ring hands the
@@ -470,6 +489,47 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
+  }
+
+  if (url.pathname === "/api/oauth/accounts/pause" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (typeof body.accountId !== "string" || body.accountId.length === 0) {
+      return jsonResponse({ error: "missing accountId" }, 400);
+    }
+    if (typeof body.paused !== "boolean") return jsonResponse({ error: "paused must be a boolean" }, 400);
+
+    const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
+    const effectiveProvider = genericOAuthProviderConfig(provider, config);
+    if (!effectiveProvider || !isGenericFailoverProvider(provider, effectiveProvider)) {
+      return jsonResponse({ error: "account pause is not supported for this OAuth provider" }, 400);
+    }
+
+    const { setAccountPaused } = await import("../../oauth/store");
+    const result = await setAccountPaused(provider, body.accountId, body.paused);
+    if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
+
+    if (result.activeAccountChanged) {
+      const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
+      seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+      const { clearModelCache } = await import("../../codex/model-cache");
+      const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
+      clearModelCache(provider);
+      clearGatherRoutedModelsInflight();
+      const { clearProviderQuotaCache } = await import("../../providers/quota");
+      clearProviderQuotaCache();
+    }
+
+    return jsonResponse({
+      ok: true,
+      provider,
+      accountId: body.accountId,
+      paused: body.paused,
+      activeAccountId: result.activeAccountId,
+      activeAccountChanged: result.activeAccountChanged,
+    });
   }
 
   // The unified pool-settings contract (#695 wp5c). The three legacy paths keep working and

@@ -1,9 +1,9 @@
 ---
 title: 集成
-description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo 和 Cline CLI；每个客户端都有独立开关，且每次写入前都会备份。
+description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo 和 Factory Droid；每个客户端都有独立开关，且每次写入前都会备份。
 ---
 
-**Integrations** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 15 个客户端都采用这种方式，各有独立开关：
+**Integrations** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 17 个客户端都采用这种方式，各有独立开关：
 
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|
@@ -22,6 +22,8 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 保存后立即生效——Raycast 监视该文件 | 无——仅回环 |
 | omo | `~/.omo/agent/models.json` | JSON | 新会话 | 回环占位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 及同目录下的 `models.json` | JSON 文件对 | 停止并重启 Cline 后 | 回环占位符 |
+| Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 可迁移目录；均不存在时创建 `kilo.jsonc`） | JSONC | 新会话 | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows 上) | JSON | 文件变更时立即生效 | 无密钥回环 |
 
 生成的目录只包含各提供商选择中已启用的模型。下载文件和托管集成都遵循这一规则，Pi 和 Aside 也不例外。管理模型列表仍显示完整阵容，以便启用更多模型。
 
@@ -214,6 +216,21 @@ Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操�
 
 下载文件 `cline-config-bundle.json` 包含两个原生文档成员：对应 `providers.json` 的 `settings`，以及对应 `models.json` 的 `catalog`。它本身不是 Cline 设置文件。建议使用集成命令，以获得带日志的合并和回滚。此生成集成不支持远程准入接线，需要免认证的回环访问。
 
+## Kilo
+
+Kilo CLI、VS Code 和 JetBrains 共用一份全局配置。此集成只在 `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json` 中写入 `provider.opencodex`。`XDG_CONFIG_HOME` 可以迁移该目录；如果候选文件均不存在，则创建 `kilo.jsonc`。不会修改项目配置。
+
+Kilo 会合并所有这些全局文件。如果另一个候选文件也定义了 `provider.opencodex`，状态会列出冲突文件，应用和替换都会被拒绝。启用集成前，请从那些文件中移除 `provider.opencodex`。即使发生这种冲突，仍可禁用已归 OpenCodex 所有的配置块。无法读取或不安全的候选文件也会阻止写入。
+
+仅 `provider.opencodex` 属于此集成，采用 OpenCode V1 结构（`npm`、`options`、`models`）；不会输出 OpenCode V2 的 `providers` 键。`$schema`、`model`、`enabled_providers`、MCP 等键仍由用户管理。应用后，在 Kilo 中选择 `opencodex/<provider/model>`。
+
+回环连接使用 `{env:OPENCODEX_KILO_API_KEY}` 作为 `options.apiKey`。非回环绑定将认证移到 `options.headers["x-opencodex-api-key"]`，且不会写入真实密钥。应用时会将整个全局文件重写为格式化 JSON，因此其他键中的注释和尾随逗号不会保留。Kilo 不参与自动目录刷新；更改路由模型选择后，请明确刷新此集成。
+
+```bash
+ocx integration client enable --client kilo
+ocx export --client kilo --out ./kilo.jsonc
+```
+
 ## GitHub Copilot 应用
 
 GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提供方。这需要手动配置客户端，Integrations 标签页没有对应的开关；它也不同于上游 `github-copilot` 提供方，后者使用 Copilot 订阅作为 opencodex 的后端。
@@ -238,3 +255,7 @@ GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提�
 应用通过 `GET /v1/models` 发现模型，并通过 `POST /v1/chat/completions` 发送请求。这些请求经过 opencodex 的常规模型路由，因此与其他客户端一样会应用提供方凭据、OAuth 账户和组合路由。支持的请求字段见[代理格式参考](/reference/proxy-formats/)。
 
 如果应用提示没有模型，请确认 Base URL 以 `/v1` 结尾，而不是 `/v1/chat/completions`，并确认 `/v1/models` 返回非空的 `data` 数组。如果 opencodex 监听的不是回环地址，请在应用的 API key 字段中填写数据准入密钥（[远程访问](/reference/configuration/server/#remote-access)中说明的令牌，或由仪表盘生成的 `ocx_…` 密钥）。应用会将其作为 `Authorization: Bearer` 发送；`/v1/chat/completions` 仅将其用于代理准入，不会转发到上游。详见[认证矩阵](/reference/proxy-formats/#authentication-matrix)。
+
+## Factory Droid
+
+Factory Droid 使用 `~/.factory/settings.json`（Windows 上为 `%USERPROFILE%\.factory\settings.json`）。使用 `ocx integration client enable --client droid` 明确启用，然后在 `/model` 中选择自定义模型。托管条目不含密钥，且仅支持回环连接。禁用会移除托管条目；Undo 会恢复保存的原始字节。如果旧版 `config.json` 含有 OpenCodex 条目，或 `settings.local.json` 覆盖了 `customModels`，请先解决冲突再启用。参见 [Factory BYOK 文档](https://docs.factory.ai/model-independence/byok)。

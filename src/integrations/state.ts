@@ -33,11 +33,15 @@ import {
 } from "./ownership-policy";
 import {
   INTEGRATION_CLIENTS,
+  boundIntegrationConfigPath,
+  assertDroidPathsUnambiguous,
+  assertDroidRecordedSettingsUnambiguous,
   resolveIntegrationPaths,
   unresolvedPathHintFor,
   type IntegrationClientId,
 } from "./registry";
 import { resolveIntegrationTarget, type IntegrationTarget } from "./target";
+import { inspectKiloCandidates } from "./kilo-candidates";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 
 export type IntegrationState = "absent" | "current" | "stale" | "conflict" | "unsafe";
@@ -49,6 +53,7 @@ export type StateReason =
   /** A container we would have to write through holds a non-object value. */
   | "blocked-container"
   | "ambiguous-selector"
+  | "candidate-conflict"
   /** A path selector we cannot resolve, e.g. a relative OPENCLAW_CONFIG_PATH. */
   | "unresolvable-path";
 
@@ -60,6 +65,10 @@ export interface IntegrationStatus {
   appliedAt?: string;
   lastOpId?: string;
   reason?: StateReason;
+  /** Other Kilo global candidates defining provider.opencodex. */
+  conflictPaths?: string[];
+  /** Kilo candidate that could not be inspected; may differ from the owned target. */
+  candidateFailurePath?: string;
   /**
    * The store this client reads instead of `configPath`.
    *
@@ -328,7 +337,13 @@ export function classifyIntegration(input: {
     }
     throw error;
   }
-  if (!hasOurFragments(input.parsed, input.contribution)) return { state: "absent" };
+  // A catalog can shrink to zero while the record still owns earlier rows.
+  // Presence for disable must include those recorded paths, independent of the
+  // current export roster; the ownership fingerprint is checked below.
+  if (!hasOurFragments(input.parsed, input.contribution)
+    && !(input.record?.fragmentPaths.some(path => readPath(input.parsed, path) !== undefined))) {
+    return { state: "absent" };
+  }
 
   /*
    * Fragments the desired contribution carries beyond the paths this record names. Both
@@ -520,7 +535,9 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
-    const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home);
+    const context = exportContextOf(input);
+    const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home, context);
+    if (input.clientId === "droid" && input.resolvedPaths) assertDroidPathsUnambiguous(paths.detectDir, context);
     installed = io.statKind(paths.detectDir) === "dir";
     if (input.clientId === "cline") io = createClineIO(io, paths.configPath, store);
     /*
@@ -530,8 +547,12 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
      * would let the badge and the switch disagree.
      */
     record = store.readRecords()[input.clientId] ?? null;
+    const recordedPath = boundIntegrationConfigPath({
+      clientId: input.clientId, record, resolvedPath: paths.configPath,
+      statKind: io.statKind, env: input.env, home: input.home,
+    });
     effective = resolveIntegrationTarget({
-      clientId: input.clientId, configPath: paths.configPath, io, record, env: input.env, home: input.home,
+      clientId: input.clientId, configPath: recordedPath, io, record, env: input.env, home: input.home,
     });
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
@@ -558,6 +579,20 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   }
 
   const configPath = effective.configPath;
+  if (input.clientId === "kilo") {
+    const candidates = inspectKiloCandidates({ io, selectedPath: configPath, env: input.env, home: input.home });
+    if (candidates.kind !== "ok") return {
+      clientId: input.clientId,
+      state: candidates.kind === "conflict" ? "conflict" : "unsafe",
+      installed,
+      configPath,
+      reason: candidates.kind === "conflict" ? "candidate-conflict" : candidates.why,
+      ...(candidates.kind === "conflict" ? { conflictPaths: candidates.paths } : {}),
+      ...(candidates.kind === "unsafe" ? { candidateFailurePath: candidates.path } : {}),
+      ...(record && record.configPath === configPath ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
+      ...retention,
+    };
+  }
   const loaded = loadTarget(io, configPath);
   if (!loaded.ok) {
     return {
@@ -572,8 +607,13 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
 
   const parsed = input.clientId === "cline"
     ? parseClineDocument(loaded.before)
-    : parseConfig(loaded.before, effective.format);
+    : parseConfig(loaded.before, effective.format, EXPORT_CLIENTS[input.clientId].jsonc ? { jsonc: true } : undefined);
   const contribution = effective.buildContribution(exportContextOf(input));
+  if (input.clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0
+    && (!record || record.configPath !== configPath)) {
+    return { clientId: input.clientId, state: "unsafe", installed, configPath,
+      reason: "unresolvable-path", ...retention };
+  }
   const { state, reason } = classifyIntegration({
     fileText: loaded.before,
     fileIsRegular: true,
@@ -584,6 +624,14 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     clientId: input.clientId,
     format: effective.format,
   });
+  if (input.clientId === "droid" && record && (state === "current" || state === "stale")) {
+    try { assertDroidRecordedSettingsUnambiguous(spec.detectDir(input.env, input.home), parsed, record); }
+    catch (error) {
+      if (!(error instanceof ClientPathError)) throw error;
+      return { clientId: input.clientId, state: "unsafe", installed, configPath,
+        reason: "unresolvable-path", ...retention };
+    }
+  }
 
   return {
     clientId: input.clientId,

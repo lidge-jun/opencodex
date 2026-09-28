@@ -64,11 +64,11 @@ test("tunnel argv uses a loopback forward and the confirmed host-key policy", ()
   }
 });
 
-test("exec argv quotes the remote command and clears forwarding", () => {
+test("exec argv emits only sh bare, quotes arguments, and clears forwarding", () => {
   const knownHostsFile = tempPath("exec");
   const argv = buildExecArgv({
     alias: "beta.example.test",
-    argv: ["printf", "it's ready"],
+    argv: ["sh", "it's ready"],
     knownHostsFile,
   });
   expect(argv).toContain("-T");
@@ -76,7 +76,7 @@ test("exec argv quotes the remote command and clears forwarding", () => {
   expectCommonTrustOptions(argv, "yes", knownHostsFile);
   expect(argv).toContain("ClearAllForwardings=yes");
   expect(argv.slice(-3, -1)).toEqual(["--", "beta.example.test"]);
-  expect(argv[argv.length - 1]).toBe(`'printf' 'it'"'"'s ready'`);
+  expect(argv[argv.length - 1]).toBe(`sh 'it'"'"'s ready'`);
 });
 
 test("probe argv uses accept-new only with its temporary known_hosts file", () => {
@@ -130,16 +130,36 @@ test("known_hosts option paths are absolute and safely quoted", () => {
   }
 });
 
-test("quoteRemote escapes single quotes and rejects NUL", () => {
-  expect(quoteRemote(["it's"])).toBe(`'it'"'"'s'`);
-  expect(() => quoteRemote(["bad\0argument"])).toThrow(LinkSshArgumentError);
+test("quoteRemote allows only sh in command position and rejects NUL", () => {
+  expect(quoteRemote(["sh", "it's", "-c"])).toBe(`sh 'it'"'"'s' '-c'`);
+  for (const command of ["", "printf", "1", ".", "-x", "sh;echo bad", "sh\n", "sh\0bad"]) {
+    expect(() => quoteRemote([command, "safe"])).toThrow(LinkSshArgumentError);
+  }
+  expect(() => quoteRemote(["sh", "bad\0argument"])).toThrow(LinkSshArgumentError);
 });
 
 test("remote ocx argv runs ocx through a single-quoted sh PATH prelude", () => {
   expect(REMOTE_OCX_SCRIPT).toBe('PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"');
   expect(remoteOcxArgv(["link", "port"])).toEqual(["sh", "-c", REMOTE_OCX_SCRIPT, "ocx", "link", "port"]);
   const argv = buildExecArgv({ alias: "delta.example.test", argv: remoteOcxArgv(["link", "issue", "--alias", "it's x", "--json"]), knownHostsFile: tempPath("remote-ocx") });
-  expect(argv.at(-1)).toBe(`'sh' '-c' 'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"' 'ocx' 'link' 'issue' '--alias' 'it'"'"'s x' '--json'`);
+  expect(argv.at(-1)).toBe(`sh '-c' 'PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"; exec ocx "$@"' 'ocx' 'link' 'issue' '--alias' 'it'"'"'s x' '--json'`);
+});
+
+test.skipIf(process.platform !== "win32")("PowerShell parses the remote command as sh invocation", () => {
+  const remote = quoteRemote(remoteOcxArgv(["link", "port"]));
+  const script = [
+    "$tokens = $null; $errors = $null",
+    "$ast = [System.Management.Automation.Language.Parser]::ParseInput($env:OCX_REMOTE_COMMAND, [ref]$tokens, [ref]$errors)",
+    "if ($errors.Count -ne 0) { Write-Error ($errors | Out-String); exit 1 }",
+    "$commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))",
+    "if ($commands.Count -ne 1 -or $commands[0].GetCommandName() -cne 'sh') { Write-Error 'remote command did not dispatch sh'; exit 1 }",
+    "Write-Output $commands[0].GetCommandName()",
+  ].join("; ");
+  const result = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], {
+    env: { ...process.env, OCX_REMOTE_COMMAND: remote },
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString().trim()).toBe("sh");
 });
 
 function fakeOcx(dir: string, label: string): void {
@@ -170,6 +190,19 @@ test.skipIf(process.platform === "win32")("an ocx the remote PATH already resolv
   expect(result.stdout.toString().split("\n")[0]).toBe("first");
 });
 
+test.skipIf(process.platform === "win32")("the constructed remote command preserves POSIX argument bytes", () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-link-remote-bytes-"));
+  roots.push(home);
+  const bin = join(home, ".bun", "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "ocx"), "#!/bin/sh\nprintf '%s\\0' \"$@\"\n", { mode: 0o755 });
+  const args = ["it's x", "two\nlines", "火🔥", "x;$(echo no)", ""];
+  const remote = quoteRemote(remoteOcxArgv(args));
+  const result = Bun.spawnSync(["/bin/sh", "-c", remote], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toEqual(new TextEncoder().encode(args.join("\0") + "\0"));
+});
+
 test("ssh PATH appends helper directories once and leaves Windows untouched", () => {
   expect(linkSshPath({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: "/Users/test" }, "darwin"))
     .toBe("/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:/Users/test/.bun/bin:/Users/test/.local/bin");
@@ -189,6 +222,47 @@ function fakeSpawn(captured: Array<Record<string, unknown>>): typeof Bun.spawn {
     return { pid: 7, stdout: closed(), stderr: closed(), stdin: undefined, exited: Promise.resolve(0), kill() {} };
   }) as unknown as typeof Bun.spawn;
 }
+
+function byteSpawn(stdoutBytes: Uint8Array, stderrBytes: Uint8Array, capturedStdin: Uint8Array[] = []): typeof Bun.spawn {
+  const stream = (bytes: Uint8Array) => new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+  return ((_argv: string[], _options: Record<string, unknown>) => ({
+    pid: 7,
+    stdout: stream(stdoutBytes),
+    stderr: stream(stderrBytes),
+    stdin: { async write(value: string | Uint8Array) { capturedStdin.push(typeof value === "string" ? new TextEncoder().encode(value) : value); }, async end() {} },
+    exited: Promise.resolve(1),
+    kill() {},
+  })) as unknown as typeof Bun.spawn;
+}
+
+test("runner decodes capped non-UTF-8 stderr for a bounded redacted hint and keeps key stdin separate", async () => {
+  const secret = `ocx_data_${"a".repeat(40)}`;
+  const stderr = new Uint8Array([
+    ...new TextEncoder().encode(`noise\nssh: ${secret} https://example.test/path?key=hidden `),
+    0xa1, 0xad,
+    ...new TextEncoder().encode("\n"),
+  ]);
+  const stdin: Uint8Array[] = [];
+  const runner = createSshRunner({ spawn: byteSpawn(new TextEncoder().encode(""), stderr, stdin) });
+  const result = await runner.run(["ssh"], { stdin: secret });
+  expect(result.stderr).toContain("\ufffd");
+  const hint = sshFailureHint(result.stderr);
+  expect(hint).toContain("ssh: ocx_data_[redacted] https://example.test/path");
+  expect(hint).not.toContain(secret);
+  expect(hint).not.toContain("key=hidden");
+  expect(Array.from(hint ?? "").length).toBeLessThanOrEqual(160);
+  expect(stdin).toEqual([new TextEncoder().encode(secret)]);
+});
+
+test("runner still rejects invalid UTF-8 stdout", async () => {
+  const runner = createSshRunner({ spawn: byteSpawn(new Uint8Array([0xa1, 0xad]), new TextEncoder().encode("diagnostic")) });
+  await expect(runner.run(["ssh"])).rejects.toMatchObject({ code: "decode" });
+});
+
+test("runner enforces stderr byte limit before replacement decoding", async () => {
+  const runner = createSshRunner({ spawn: byteSpawn(new Uint8Array(), new Uint8Array([0xa1, 0xad])) });
+  await expect(runner.run(["ssh"], { maxOutputBytes: 1 })).rejects.toMatchObject({ code: "output_limit" });
+});
 
 test("the runner spawns commands and tunnels with the augmented environment", async () => {
   const captured: Array<Record<string, unknown>> = [];

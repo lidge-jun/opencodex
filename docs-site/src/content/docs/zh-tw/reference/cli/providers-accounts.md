@@ -142,6 +142,22 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 不解析帳號 id 即清除 Codex 帳號的手動選擇，即使存在名為 `auto` 的帳號仍有效。僅適用於 Codex 池；其他提供者類型沒有可還原的自動選擇。
 
+### `ocx account pause|resume <provider> <id|alias|main> [--json]`
+
+暫停或恢復 Codex 帳號池或通用 OAuth 供應商池中的單一帳號，包括
+`google-antigravity`。在 Codex 池中，`main` 僅代表 Codex 內建帳號；通用 OAuth 帳號必須用 id 或唯一別名識別。
+已暫停的通用 OAuth 帳號不會參與請求選帳、429 輪替或主動 Token 刷新，也不能手動選取。
+若暫停目前使用中的帳號，系統會在有其他可用帳號時切換過去。若全部帳號都已暫停，
+需要該池的請求會回覆 403，直到恢復其中一個帳號。
+
+通用 OAuth 供應商可用帳號 id，或唯一且完全相符／不區分大小寫的別名識別帳號。
+JSON 回應會提供帳號 id、暫停狀態與目前 active 帳號 id。
+
+```bash
+ocx account pause google-antigravity <account-id-or-alias>
+ocx account resume google-antigravity <account-id-or-alias>
+```
+
 ### `ocx account refresh <provider> [--json]`
 
 對於 Codex 池，請使用 `ocx account refresh openai [--json]`。它強制重新整理帳號配額並印出可用的週／月百分比與重置時間；缺失的配額資料被回報為未知，而非 0%。其 JSON 封裝為 `{ accounts: AccountRow[] }`，每個 Codex 列上有 `quota`。
