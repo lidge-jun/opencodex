@@ -1,5 +1,5 @@
 /**
- * What a provider save keeps (#5563): the five operator compatibility settings survive an
+ * What a provider save keeps (#5563): the eight operator compatibility settings survive an
  * unrelated POST overwrite with the same name, and none of them, nor the stored key pool, follow
  * the provider to a new destination.
  *
@@ -170,7 +170,7 @@ describe("an unrelated POST overwrite keeps each compatibility setting on the ne
       const { seed, probe } = CASES[field];
       const name = `relay-${field.toLowerCase()}`;
       await withServer({ [name]: { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay", ...seed } }, async url => {
-        // The add/edit form sends none of the five settings; the edit here is the default model.
+        // The add/edit form sends none of the eight settings; the edit here is the default model.
         const save = await send(url, "/api/providers", "POST", {
           name,
           provider: { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay", defaultModel: MODEL },
@@ -224,6 +224,34 @@ describe("an overwrite that moves the provider carries none of it", () => {
       const saved = loadConfig().providers.relay!;
       for (const field of PROVIDER_COMPAT_CARRY_FIELDS) expect(saved[field]).toEqual(stored[field]);
       expect(saved.apiKeyPool?.some(entry => entry.id === stored.apiKeyPool![0]!.id)).toBe(true);
+    });
+  });
+
+  test("POST changing only authMode drops the three retry policies", async () => {
+    await withServer({ relay: { ...stored, authMode: "key" } }, async url => {
+      const save = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { adapter: "openai-chat", baseUrl: BASE_URL, authMode: "oauth", apiKey: "sk-old" },
+      });
+      expect(save.status).toBe(200);
+      const saved = loadConfig().providers.relay!;
+      expect(saved.authMode).toBe("oauth");
+      expect(saved.baseUrl).toBe(BASE_URL);
+      expect(saved).not.toHaveProperty("retryOn429");
+      expect(saved).not.toHaveProperty("transientRetryOn5xx");
+      expect(saved).not.toHaveProperty("retryOnReset");
+    });
+  });
+
+  test("PATCH naming only baseUrl keeps the three retry policies", async () => {
+    await withServer({ relay: stored }, async url => {
+      const save = await send(url, "/api/providers?name=relay", "PATCH", { baseUrl: "https://other-relay.example/v1" });
+      expect(save.status).toBe(200);
+      const saved = loadConfig().providers.relay!;
+      expect(saved.baseUrl).toBe("https://other-relay.example/v1");
+      expect(saved.retryOn429).toEqual(stored.retryOn429);
+      expect(saved.transientRetryOn5xx).toEqual(stored.transientRetryOn5xx);
+      expect(saved.retryOnReset).toEqual(stored.retryOnReset);
     });
   });
 
