@@ -312,11 +312,51 @@ export function wrapperProcessesAlive(
     .map(entry => entry.pid);
 }
 
-function unreadableWrapperCandidates(processes: readonly WindowsProcessEntry[]): number[] {
-  return processes
-    .filter(entry => entry.pid !== process.pid && !entry.commandLine?.trim()
-      && /^(?:wscript|cscript|cmd)\.exe$/i.test(entry.name ?? ""))
-    .map(entry => entry.pid);
+/**
+ * A wscript/cscript/cmd process whose command line could not be read. It may be this home's
+ * wrapper, and nothing can prove otherwise. Only processes tied to the approved proxy by
+ * ancestry count: a non-admin CIM query returns no command line for other users' and elevated
+ * processes, so treating every unreadable cmd.exe on the machine as a wrapper would make the
+ * guarded stop unreachable on an ordinary desktop.
+ */
+function isUnreadableWrapperCandidate(entry: WindowsProcessEntry): boolean {
+  return !entry.commandLine?.trim() && /^(?:wscript|cscript|cmd)\.exe$/i.test(entry.name ?? "");
+}
+
+/** Unreadable wrapper candidates among pid's ancestors, nearest first. */
+export function unreadableAncestorWrapperPids(pid: number, processes: readonly WindowsProcessEntry[]): number[] {
+  const byPid = new Map(processes.map(entry => [entry.pid, entry]));
+  const found: number[] = [];
+  const seen = new Set<number>();
+  let current = pid;
+  for (let depth = 0; depth < ANCESTOR_DEPTH_LIMIT; depth += 1) {
+    const entry = byPid.get(current);
+    if (!entry || seen.has(current)) break;
+    seen.add(current);
+    const parent = entry.parentPid;
+    if (parent === null || parent <= 0) break;
+    const parentEntry = byPid.get(parent);
+    if (parentEntry && isUnreadableWrapperCandidate(parentEntry)) found.push(parent);
+    current = parent;
+  }
+  return found;
+}
+
+/**
+ * Unreadable wrapper candidates that are the former manager process or descend from it. After
+ * the approved child exits, such a survivor can still respawn it, so post-stop it is unknown.
+ */
+export function unreadableWrappersOfManager(managerPid: number, processes: readonly WindowsProcessEntry[]): number[] {
+  const byPid = new Map(processes.map(entry => [entry.pid, entry]));
+  return processes.filter(entry => {
+    if (!isUnreadableWrapperCandidate(entry)) return false;
+    let current: number | null = entry.pid;
+    for (let depth = 0; current !== null && current > 0 && depth < ANCESTOR_DEPTH_LIMIT; depth += 1) {
+      if (current === managerPid) return true;
+      current = byPid.get(current)?.parentPid ?? null;
+    }
+    return false;
+  }).map(entry => entry.pid);
 }
 
 function unknown(reason: string): GuardedManagerTarget {
@@ -338,7 +378,7 @@ function inspectWindowsSchedulerManager(
   const paths = wrapperPaths(io);
   const ancestors = ancestorWrapperPids(approvedPid, processes, paths);
   const strays = wrapperProcessesAlive(processes, paths);
-  if (unreadableWrapperCandidates(processes).length > 0) {
+  if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
     return unknown("a possible scheduler wrapper has an unreadable command line");
   }
   const state = io.winTaskState();
@@ -428,7 +468,7 @@ export function inspectWindowsGuardedManager(
     // A stopped service cannot respawn anything, but a detached wrapper can.
     const processes = io.winProcs();
     if (processes === null) return unknown("the Windows process list could not be read");
-    if (unreadableWrapperCandidates(processes).length > 0) {
+    if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
       return unknown("a possible scheduler wrapper has an unreadable command line");
     }
     return wrapperProcessesAlive(processes, wrapperPaths(io)).length === 0
@@ -438,7 +478,7 @@ export function inspectWindowsGuardedManager(
   // scheduler absent + winsw nonexistent — still have to rule out a detached wrapper.
   const processes = io.winProcs();
   if (processes === null) return unknown("the Windows process list could not be read");
-  if (unreadableWrapperCandidates(processes).length > 0) {
+  if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
     return unknown("a possible scheduler wrapper has an unreadable command line");
   }
   return wrapperProcessesAlive(processes, wrapperPaths(io)).length === 0
@@ -453,6 +493,8 @@ export interface WindowsGuardedStopDeps {
   winTaskState?: () => WindowsTaskState;
   winScriptPath?: () => string;
   winLauncherPath?: () => string;
+  /** The bound manager process the pre-stop proof tied to the approved proxy, when there was one. */
+  formerManagerPid?: number;
 }
 
 /**
@@ -481,6 +523,8 @@ export function observeWindowsGuardedManagerStopped(
     if (state === "unknown") return "unknown";
     if (state === "running") return "active";
   }
-  if (unreadableWrapperCandidates(procs).length > 0) return "unknown";
+  if (deps.formerManagerPid !== undefined && unreadableWrappersOfManager(deps.formerManagerPid, procs).length > 0) {
+    return "unknown";
+  }
   return "inactive";
 }

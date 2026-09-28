@@ -94,9 +94,10 @@ stop a Task Scheduler task only when its registered definition, running state, a
 ancestor prove it owns the approved proxy. A WinSW service must prove its installed binary
 path and service PID ancestry. After stopping either manager, the CLI signals the approved
 proxy separately and verifies that the task is no longer running, no wrapper survives, and
-WinSW is stopped. A surviving `wscript.exe`, `cscript.exe`, or `cmd.exe` process with
-an unreadable command line leaves wrapper ownership unknown, so the guarded stop
-cannot report success. Missing or unreadable evidence blocks the guarded stop.
+WinSW is stopped. A `wscript.exe`, `cscript.exe`, or `cmd.exe` process with an
+unreadable command line in the approved proxy's supervision chain (or surviving under the
+stopped manager) leaves wrapper ownership unknown, so the guarded stop cannot report success.
+Missing or unreadable evidence blocks the guarded stop.
 
 ### `ocx restart`
 

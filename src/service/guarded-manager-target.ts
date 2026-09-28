@@ -170,6 +170,7 @@ export async function observeGuardedManagerStopped(
         scheduler: deps.scheduler,
         winsw: deps.winsw,
         ...(deps.win ?? {}),
+        ...(manager.kind === "bound" ? { formerManagerPid: manager.managerPid } : {}),
       }, deps.platform === undefined);
     }
   } catch { return "unknown"; }
