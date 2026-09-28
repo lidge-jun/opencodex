@@ -91,6 +91,8 @@ Windows package version is declared in the module. Unknown builds refuse activat
 HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
 described in the [transport inventory](../transports/inventory.md#native-desktop-proxy-egress).
 Invalid proxy routes refuse rather than falling back to direct egress.
+Native routing verification binds both the actual listener address family and port; the companion
+is IPv4-only. Ambiguous localhost aliases cannot qualify, and listener identity changes revoke observation.
 
 `relay-listener.ts` forwards HTTP with the existing upstream-header filter, cookies and
 streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The

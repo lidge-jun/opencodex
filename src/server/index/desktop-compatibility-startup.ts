@@ -12,12 +12,13 @@ interface StartupIo {
   load?: () => Promise<RuntimeModule>;
   warn?: (message: string) => void;
   boundPort?: number;
+  boundHostname?: string;
   loopbackPort?: number;
 }
 /** Core-safe gate: off installs do not load the optional runtime, read credentials or start timers. */
 export function scheduleDesktopCompatibilityStartup(config: OcxConfig, io: StartupIo = {}): { shutdown(): Promise<void> } {
   let stopped = false, module: RuntimeModule | undefined;
-  const unbind = io.boundPort === undefined ? () => {} : bindNativeCompatibilityOwner({ config, port: io.boundPort, loopbackPort: io.loopbackPort });
+  const unbind = io.boundPort === undefined || io.boundHostname === undefined ? () => {} : bindNativeCompatibilityOwner({ config, hostname: io.boundHostname, port: io.boundPort, loopbackPort: io.loopbackPort });
   const enabled = config.desktopCompatibility?.startOnProxyStart === true && (io.platform ?? process.platform) === "win32"
     && !(io.testGuard ?? isTestHomeGuardArmed()) && !(io.sibling ?? siblingOfLivePort() !== null)
     && config.runtimeRole !== "client";

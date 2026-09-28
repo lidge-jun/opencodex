@@ -935,6 +935,8 @@ stop the service and close Codex first. Renewal prepares a new untrusted certifi
 new fingerprint before registering it. An uncertain action is not automatically retried.
 Certificates are restricted to TLS server authentication. If status shows `renewal-required`,
 stop the service and close Codex, then renew the older certificate before starting again.
+The native API URL must match the proxy's actual listener address and port. IPv4 and IPv6
+loopback addresses are not interchangeable here; ambiguous `localhost` aliases are refused.
 
 The service preserves its PAC address and local connection ports for reuse after a restart.
 With the same trusted certificate, an already configured app can reconnect through its cached

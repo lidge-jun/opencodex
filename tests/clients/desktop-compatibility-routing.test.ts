@@ -5,10 +5,35 @@ import { join } from "node:path";
 import { createNativeRoutingVerifier, matchesNativeCompatibilityRouting } from "../../src/codex/desktop-compatibility/routing-preflight";
 import { bindNativeCompatibilityOwner, nativeCompatibilityOwner, type NativeCompatibilityOwner } from "../../src/codex/desktop-compatibility/routing-binding";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-const owner: NativeCompatibilityOwner = { port: 12001, loopbackPort: 12002, config: { port: 10100, providers: {} } };
+const owner: NativeCompatibilityOwner = { hostname: "127.0.0.1", port: 12001, loopbackPort: 12002, config: { port: 10100, providers: {} } };
 const text = 'model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:12001/v1"\n';
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
+
+test("address family matches the bound listener instead of any loopback alias", () => {
+  const ipv6 = text.replace("127.0.0.1", "[::1]");
+  expect(matchesNativeCompatibilityRouting(ipv6, owner)).toBe(false);
+  expect(matchesNativeCompatibilityRouting(text.replace("127.0.0.1", "localhost"), owner)).toBe(false);
+  expect(matchesNativeCompatibilityRouting(text, { ...owner, hostname: "0.0.0.0" })).toBe(true);
+  expect(matchesNativeCompatibilityRouting(text, { ...owner, hostname: "192.0.2.10" })).toBe(false);
+  const v6Owner = { ...owner, hostname: "::1" };
+  expect(matchesNativeCompatibilityRouting(ipv6, v6Owner)).toBe(true);
+  expect(matchesNativeCompatibilityRouting(text, v6Owner)).toBe(false);
+  expect(matchesNativeCompatibilityRouting(text.replace(":12001", ":12002"), v6Owner)).toBe(true);
+  expect(matchesNativeCompatibilityRouting(ipv6.replace(":12001", ":12002"), v6Owner)).toBe(false);
+  // Mutable desired config does not replace the socket's captured address.
+  expect(matchesNativeCompatibilityRouting(ipv6, { ...owner, config: { ...owner.config, hostname: "::1" } })).toBe(false);
+});
+
+test("changing the actual listener identity revokes a prior observation", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-desktop-listener-change-")); roots.push(root);
+  writeFileSync(join(root, "config.toml"), text);
+  const live = { ...owner }, verify = createNativeRoutingVerifier(root, () => live);
+  expect(verify()).toBe(true);
+  live.hostname = "0.0.0.0";
+  expect(matchesNativeCompatibilityRouting(text, live)).toBe(true);
+  expect(verify()).toBe(false);
+});
 test("the actual bound listener and companion port are accepted, not a stale configured port", () => {
   expect(matchesNativeCompatibilityRouting(text, owner)).toBe(true);
   expect(matchesNativeCompatibilityRouting(text.replace(":12001", ":12002"), owner)).toBe(true);

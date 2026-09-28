@@ -12,7 +12,7 @@ const ROUTING_KEYS = ["providers", "defaultProvider", "defaultModelAliases", "cu
   "blockedModelRedirects", "shadowCallIntercept", "protocols", "memoryModels"] as const satisfies readonly (keyof OcxConfig)[];
 function routingDigest(text: string, owner: NativeCompatibilityOwner): string {
   const projection = Object.fromEntries(ROUTING_KEYS.map(key => [key, owner.config[key]]));
-  const serialized = JSON.stringify([owner.port, owner.loopbackPort, projection], (_key, value) =>
+  const serialized = JSON.stringify([owner.hostname, owner.port, owner.loopbackPort, projection], (_key, value) =>
     record(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
   if (Buffer.byteLength(serialized) > 1048576) throw new Error("Routing snapshot too large");
   return createHash("sha256").update(text).update("\0").update(serialized).digest("hex");
@@ -33,9 +33,14 @@ export function matchesNativeCompatibilityRouting(text: string, owner: NativeCom
     if ((effective.model_provider ?? "openai") !== "openai" || effective.forced_login_method === "api") return false;
     if (typeof effective.openai_base_url !== "string") return false;
     const url = new URL(effective.openai_base_url);
-    if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || url.username || url.password
+    if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname) || url.username || url.password
       || url.search || url.hash || !["/v1", "/v1/"].includes(url.pathname) || !url.port) return false;
-    return [owner.port, owner.loopbackPort].some(port => Number.isInteger(port) && Number(port) > 0 && Number(port) === Number(url.port));
+    const port = Number(url.port), matchesPort = (value: number | undefined) => Number.isInteger(value) && Number(value) > 0 && value === port;
+    // The companion always binds IPv4. localhost can resolve to another address family.
+    if (matchesPort(owner.loopbackPort) && url.hostname === "127.0.0.1") return true;
+    if (!matchesPort(owner.port)) return false;
+    return url.hostname === "127.0.0.1" ? ["127.0.0.1", "0.0.0.0"].includes(owner.hostname)
+      : ["::1", "[::1]", "::", "[::]"].includes(owner.hostname);
   } catch { return false; }
 }
 export function createNativeRoutingVerifier(codexHome: string, readOwner = nativeCompatibilityOwner) {

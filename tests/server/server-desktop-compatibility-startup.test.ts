@@ -4,6 +4,15 @@ import { createDesktopCompatibilityService } from "../../src/codex/desktop-compa
 import { createDesktopCompatibilityRuntime } from "../../src/codex/desktop-compatibility/runtime";
 import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
+import { nativeCompatibilityOwner } from "../../src/codex/desktop-compatibility/routing-binding";
+
+test("startup captures the actual bound hostname and clears that owner on shutdown", async () => {
+  const config = { ...getDefaultConfig(), hostname: "192.0.2.10" };
+  const handle = scheduleDesktopCompatibilityStartup(config, { boundPort: 12001, boundHostname: "127.0.0.1", loopbackPort: 12002, testGuard: true });
+  try { expect(nativeCompatibilityOwner()).toMatchObject({ hostname: "127.0.0.1", port: 12001, loopbackPort: 12002 }); }
+  finally { await handle.shutdown(); }
+  expect(nativeCompatibilityOwner()).toBeNull();
+});
 
 test("startup preference is absent by default, strict for writes and safely disabled on malformed disk input", () => {
   expect(getDefaultConfig().desktopCompatibility).toBeUndefined();
