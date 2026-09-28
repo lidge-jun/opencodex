@@ -36,6 +36,7 @@ import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegac
 export interface WindowsProcessEntry {
   pid: number;
   parentPid: number | null;
+  name: string | null;
   commandLine: string | null;
 }
 
@@ -86,7 +87,7 @@ function runPowerShell(command: string): string {
 
 /**
  * One Win32_Process snapshot covering every identity question in this module:
- * parent chains for the bound proof, and command lines for the wrapper scan.
+ * parent chains for the bound proof, and names and command lines for the wrapper scan.
  * A null return means the enumeration itself could not run — callers fail closed,
  * because an unreadable process table is not evidence that no wrapper survives.
  */
@@ -94,7 +95,7 @@ export function windowsProcessList(): WindowsProcessEntry[] | null {
   if (process.platform !== "win32") return null;
   try {
     const output = runPowerShell(
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
     );
     const trimmed = output.trim();
     if (!trimmed) return [];
@@ -103,13 +104,14 @@ export function windowsProcessList(): WindowsProcessEntry[] | null {
     const entries: WindowsProcessEntry[] = [];
     for (const row of rows) {
       if (typeof row !== "object" || row === null) continue;
-      const record = row as { ProcessId?: unknown; ParentProcessId?: unknown; CommandLine?: unknown };
+      const record = row as { ProcessId?: unknown; ParentProcessId?: unknown; Name?: unknown; CommandLine?: unknown };
       const pid = Number(record.ProcessId);
       const parent = Number(record.ParentProcessId);
       if (!Number.isSafeInteger(pid) || pid <= 0) continue;
       entries.push({
         pid,
         parentPid: Number.isSafeInteger(parent) && parent > 0 ? parent : null,
+        name: typeof record.Name === "string" ? record.Name : null,
         commandLine: typeof record.CommandLine === "string" ? record.CommandLine : null,
       });
     }
@@ -310,6 +312,13 @@ export function wrapperProcessesAlive(
     .map(entry => entry.pid);
 }
 
+function unreadableWrapperCandidates(processes: readonly WindowsProcessEntry[]): number[] {
+  return processes
+    .filter(entry => entry.pid !== process.pid && !entry.commandLine?.trim()
+      && /^(?:wscript|cscript|cmd)\.exe$/i.test(entry.name ?? ""))
+    .map(entry => entry.pid);
+}
+
 function unknown(reason: string): GuardedManagerTarget {
   return { kind: "unknown", reason };
 }
@@ -329,6 +338,9 @@ function inspectWindowsSchedulerManager(
   const paths = wrapperPaths(io);
   const ancestors = ancestorWrapperPids(approvedPid, processes, paths);
   const strays = wrapperProcessesAlive(processes, paths);
+  if (unreadableWrapperCandidates(processes).length > 0) {
+    return unknown("a possible scheduler wrapper has an unreadable command line");
+  }
   const state = io.winTaskState();
   if (state === "unknown") return unknown("the registered task's running state could not be proven");
   if (state === "not-running") {
@@ -416,6 +428,9 @@ export function inspectWindowsGuardedManager(
     // A stopped service cannot respawn anything, but a detached wrapper can.
     const processes = io.winProcs();
     if (processes === null) return unknown("the Windows process list could not be read");
+    if (unreadableWrapperCandidates(processes).length > 0) {
+      return unknown("a possible scheduler wrapper has an unreadable command line");
+    }
     return wrapperProcessesAlive(processes, wrapperPaths(io)).length === 0
       ? { kind: "absent" }
       : unknown("a surviving scheduler wrapper could not be tied to an installed manager");
@@ -423,6 +438,9 @@ export function inspectWindowsGuardedManager(
   // scheduler absent + winsw nonexistent — still have to rule out a detached wrapper.
   const processes = io.winProcs();
   if (processes === null) return unknown("the Windows process list could not be read");
+  if (unreadableWrapperCandidates(processes).length > 0) {
+    return unknown("a possible scheduler wrapper has an unreadable command line");
+  }
   return wrapperProcessesAlive(processes, wrapperPaths(io)).length === 0
     ? { kind: "absent" }
     : unknown("a surviving scheduler wrapper could not be tied to an installed manager");
@@ -463,5 +481,6 @@ export function observeWindowsGuardedManagerStopped(
     if (state === "unknown") return "unknown";
     if (state === "running") return "active";
   }
+  if (unreadableWrapperCandidates(procs).length > 0) return "unknown";
   return "inactive";
 }

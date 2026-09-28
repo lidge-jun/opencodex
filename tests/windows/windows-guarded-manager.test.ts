@@ -28,8 +28,8 @@ const VBS = HOME + "\\opencodex-service-launcher.vbs";
 const CMD = HOME + "\\opencodex-service.cmd";
 const WINSW_EXE = HOME + "\\winsw\\opencodex-winsw.exe";
 
-const proc = (pid: number, parentPid: number | null, commandLine: string | null): WindowsProcessEntry =>
-  ({ pid, parentPid, commandLine });
+const proc = (pid: number, parentPid: number | null, commandLine: string | null,
+  name: string | null = null): WindowsProcessEntry => ({ pid, parentPid, name, commandLine });
 
 // proxy 42 <- cmd 30 (runs the .cmd) <- wscript 20 (runs the .vbs) <- svchost 2
 const SUPERVISED: WindowsProcessEntry[] = [
@@ -131,6 +131,23 @@ describe("windows guarded manager target", () => {
       win: { winTaskState: () => "not-running" as const, winProcs: () => [proc(2, 0, "svchost.exe")] },
     }));
     expect(target).toEqual({ kind: "absent" });
+  });
+
+  test("an unreadable wrapper command line blocks pre-stop absence and binding", () => {
+    const unreadable = [proc(2, 0, "svchost.exe"), proc(20, 2, null, "wscript.exe")];
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { winTaskState: () => "not-running" as const, winProcs: () => unreadable },
+    })).kind).toBe("unknown");
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      scheduler: schedulerAbsent, win: { winProcs: () => unreadable },
+    })).kind).toBe("unknown");
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      scheduler: schedulerAbsent, winsw: () => "stopped" as const,
+      win: { winProcs: () => unreadable },
+    })).kind).toBe("unknown");
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { winProcs: () => [...SUPERVISED, proc(55, 2, null, "cscript.exe")] },
+    })).kind).toBe("unknown");
   });
 
   test("a stray wrapper with an inert task is still live supervision", () => {
@@ -299,6 +316,32 @@ describe("windows post-stop manager observation", () => {
     expect(observeWindowsGuardedManagerStopped({
       ...base, winProcs: () => [proc(2, 0, "svchost.exe")], winTaskState: () => "unknown" as const,
     })).toBe("unknown");
+  });
+
+  test("an unreadable surviving wrapper keeps the stopped manager unknown", () => {
+    for (const name of ["wscript.exe", "cscript.exe", "CMD.EXE"]) {
+      // The approved child has exited, but its former wrapper can still respawn it.
+      const processes = [proc(2, 0, "svchost.exe"), proc(20, 2, null, name)];
+      expect(observeWindowsGuardedManagerStopped({
+        scheduler: schedulerPresent,
+        winsw: winswAbsent,
+        winTaskState: () => "not-running",
+        winProcs: () => processes,
+        winScriptPath: () => CMD,
+        winLauncherPath: () => VBS,
+      })).toBe("unknown");
+    }
+    expect(observeWindowsGuardedManagerStopped({
+      scheduler: schedulerAbsent,
+      winsw: winswAbsent,
+      winProcs: () => [proc(2, 0, "svchost.exe"), proc(20, 2, "", "cmd.exe")],
+    })).toBe("unknown");
+    expect(observeWindowsGuardedManagerStopped({
+      scheduler: schedulerPresent,
+      winsw: winswAbsent,
+      winTaskState: () => "not-running",
+      winProcs: () => [proc(2, 0, "svchost.exe"), proc(20, 2, null, "calc.exe")],
+    })).toBe("inactive");
   });
 
   test("unreadable probes stay unknown", () => {
