@@ -241,7 +241,7 @@ test("offers a provider-wide selector for a configured provider with no catalog 
   expect(sourceCheckbox("lonely/*")).toBeDefined();
 });
 
-test("the scoped combo disclosure stays strategy-neutral", async () => {
+test("the scoped combo disclosure covers retry to multiple targets", async () => {
   await render();
   await choose("model", "gateway/cheap");
   await choose("sources", "Selected sources only");
@@ -253,6 +253,9 @@ test("the scoped combo disclosure stays strategy-neutral", async () => {
   // promise configured order or first-answer selection.
   expect(comboNote).not.toContain("in order");
   expect(comboNote).toContain("routing strategy");
+  expect(comboNote).toContain("retryable failure");
+  expect(comboNote).toContain("same full-conversation request");
+  expect(comboNote).toContain("one or more target providers");
 });
 
 test("failed save retains the draft and allows retry", async () => {
@@ -296,9 +299,13 @@ test("discloses that the selected provider receives the full conversation", asyn
   const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
   expect(comboNote).toContain("combo combo/compact");
   expect(comboNote).toContain("(gateway, openai-apikey)");
-  // The runtime tries one target at a time and stops at the first answer; the panel used to
-  // promise fan-out to every target, which an operator would budget latency and cost for.
-  expect(comboNote).toContain("in order and uses the first that answers");
+  // The combo selects a target by its routing strategy, and after a retryable failure it
+  // may retry the same full-conversation request on another target, so the note must disclose
+  // that one or more targets can receive the conversation without assuming fixed target order.
+  expect(comboNote).not.toContain("in order");
+  expect(comboNote).toContain("routing strategy");
+  expect(comboNote).toContain("after a retryable failure");
+  expect(comboNote).toContain("one or more target providers can receive the conversation");
   expect(comboNote).not.toContain("every target");
   await choose("model", "Use conversation model");
   expect(container.querySelector('[role="note"]')).toBeNull();
@@ -313,7 +320,7 @@ test("names the targets of a combo reached through an alias", async () => {
   expect(note).toContain(`combo ${ALIASED_COMBO.model}`);
   expect(note).toContain("(xai, gateway)");
   expect(note).not.toContain("its configured target providers");
-  expect(note).toContain("in order and uses the first that answers");
+  expect(note).toContain("one or more target providers can receive the conversation");
 });
 
 test("still calls a prefixed combo a combo when the combo list is unavailable", async () => {
