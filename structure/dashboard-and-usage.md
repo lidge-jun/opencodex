@@ -517,12 +517,11 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 `compactionRouting` is a persisted configuration setting. Its model and optional effort follow the
 [Responses trigger contract](transports/responses-failover.md#compaction-routing-overrides). Dashboard Overview
-provides model and effort selectors with an explicit Save action, a standing note that the selected
-model's provider receives the entire conversation, and a warning naming that provider once a model
-is chosen; for a combo selector the warning lists the combo's target providers from `GET /api/combos`
-and states that failover targets receive the conversation too. `GET /api/settings` returns
-the override or null; `PUT /api/settings` accepts a complete validated object or null to clear it.
-Save failure restores live settings and deletion provenance; the dashboard retains the draft for retry.
+provides labeled model, trigger, source-scope and effort selectors and warns which provider (or combo targets,
+via `GET /api/combos`) receives the full conversation. The source-scope picker edits `sourceModels` as exact
+model or `provider/*` selectors, keeps saved selectors missing from the catalog visible, and refuses an empty
+selection because the schema would drop the override. `GET /api/settings` returns the override or null;
+`PUT /api/settings` accepts a validated object or null to clear it; a failed save keeps the draft for retry.
 
 `src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
 priority and standalone binaries resolving the copied directory beside `ocx`. Runtime package

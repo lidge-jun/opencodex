@@ -40,7 +40,7 @@ import {
   isHostedToolUnsupportedForModel,
 } from "../../responses/hosted-tool-policy";
 import { getConfigDir } from "../paths";
-import { COMPACTION_TRIGGERS } from "./compaction-triggers";
+import { COMPACTION_TRIGGERS, validCompactionSourceModels } from "./compaction-triggers";
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {
@@ -49,6 +49,8 @@ export function isUsableApiKeySecret(value: unknown): value is string {
 
 export const compactionRoutingSchema = z.object({
   model: z.string().trim().min(1),
+  sourceModels: z.array(z.string()).refine(validCompactionSourceModels,
+    "sourceModels requires unique exact selectors or provider/* patterns").optional(),
   reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
   triggers: z.array(z.enum(COMPACTION_TRIGGERS)).nonempty()
     .refine(values => new Set(values).size === values.length, "triggers must not repeat a value")
