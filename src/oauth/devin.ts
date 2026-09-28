@@ -335,7 +335,12 @@ async function rereadDevinCliCredential(
   if (outcome.kind !== "ok" || outcome.file.apiKey === stored.access) return undefined;
   const apiBaseUrl = validateDevinApiBaseUrl(outcome.file.apiServerUrl);
   if (apiBaseUrl === undefined) return undefined;
-  if (findDevinCredentialOwner("devin", outcome.file.apiKey) !== undefined) return undefined;
+  // A detached alias rekey can already hold this account's new key. Only a
+  // different account's key is a conflict; the locked write checks again.
+  for (const slot of ["devin", ...devinAliasCredentialSlots("devin")]) {
+    if (listAccounts(slot).some(({ id, credential }) =>
+      id !== currentAccountId && credential.access === outcome.file.apiKey)) return undefined;
+  }
   let minted: Record<string, unknown> | undefined;
   try {
     const timeout = AbortSignal.timeout(DEVIN_IDENTITY_MINT_TIMEOUT_MS);

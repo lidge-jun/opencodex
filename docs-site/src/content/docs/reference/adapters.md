@@ -560,8 +560,10 @@ configuration that names the old id is rewritten at startup.
   OpenCodex marks that account for reauthentication and can use another signed-in account for
   the turn. Run `ocx login devin` again for a revoked browser-login key. A CLI-imported account
   can follow a later `devin auth login` key rotation when the CLI host and account identity
-  validate; if the CLI file is temporarily unreadable or the identity check is unavailable,
-  retry after it recovers. A paused account stays paused during this recovery and returns 403.
+  validate. A legacy `devin-cli` slot for that same account may already hold the new key;
+  a different account holding it blocks adoption. If the CLI file is temporarily unreadable or
+  the identity check is unavailable, retry after it recovers. A paused account stays paused
+  during this recovery and returns 403.
 - Only the credential is local when the CLI import path is used. The turn itself goes to
   Cognition either way, so the import and browser login paths differ in nothing but where the
   credential came from. Install the CLI with

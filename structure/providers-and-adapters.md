@@ -94,9 +94,10 @@ as a login failure.
 Devin's local-CLI forced refresh validates the CLI tenant host before probing its key with a
 bounded `GetUserJwt` call. It adopts a changed key only when the minted identity matches the
 stored slot and the key and identity are unowned across Devin and alias accounts at the locked
-store write. The same account id in a legacy alias slot is not a competing owner. The
-generation check still protects concurrent edits. A losing adoption or unreadable CLI
-file leaves the account unflagged; a paused account returns 403 with its stored key intact.
+store write. The same account id in a legacy alias slot is not a competing owner,
+even when that alias already holds the rotated key; another account holding the key
+still blocks adoption. The generation check still protects concurrent edits. A losing adoption or
+unreadable CLI file leaves the account unflagged; a paused account returns 403 with its stored key intact.
 The account actually sent supplies the generation fence; a rotated bearer always travels
 with its own profile ARN and region. Reactive rotation follows the stored two-account
 quorum, while refusal-aware first admission follows the proactive preference setting.

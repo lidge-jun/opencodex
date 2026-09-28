@@ -207,21 +207,38 @@ test("a CLI-imported account adopts the key a later `devin auth login` wrote", a
   expect(row?.credential.expires).toBe(Number.MAX_SAFE_INTEGER);
 });
 
-test("a legacy alias copy of the same account does not block CLI key rotation", async () => {
+test("a legacy alias copy of the same account already holding the rotated key does not block adoption", async () => {
   await saveCliImport(DEAD);
   const current = cliAccount()!;
   await replaceProviderAccountSet("devin-cli", {
     activeAccountId: current.id,
     accounts: [{ ...current, credential: {
-      ...current.credential, accountId: "uid-rotated", email: "rotated@example.com",
+      ...current.credential, access: ROTATED, refresh: ROTATED,
+      accountId: "uid-rotated", email: "rotated@example.com",
     } }],
   });
   writeCliFile(ROTATED);
 
   expect(await (await run()).text()).toContain("served by rotated");
+  expect(sentKeys).toEqual([DEAD, ROTATED]);
   expect(cliAccount()?.credential.access).toBe(ROTATED);
-  expect(getAccountSet("devin-cli")?.accounts[0]?.credential.access).toBe(DEAD);
+  expect(getAccountSet("devin-cli")?.accounts[0]?.credential.access).toBe(ROTATED);
   expect(cliAccount()?.needsReauth).not.toBe(true);
+});
+
+test("a distinct legacy alias account holding the rotated key blocks adoption", async () => {
+  await saveCliImport(DEAD);
+  await saveCredential("devin-cli", {
+    access: ROTATED, refresh: ROTATED, expires: Number.MAX_SAFE_INTEGER,
+    source: "oauth", apiBaseUrl: "https://server.codeium.com",
+  });
+  writeCliFile(ROTATED);
+
+  await (await run()).text();
+  expect(sentKeys).not.toContain(ROTATED);
+  expect(mintCalls).toBe(0);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
+  expect(cliAccount()?.needsReauth).toBe(true);
 });
 
 test("a distinct legacy alias account still blocks an owned CLI identity", async () => {
