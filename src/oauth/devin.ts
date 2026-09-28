@@ -279,10 +279,8 @@ export async function loginDevin(
  * not contradict the slot's recorded accountId or email, and no other stored
  * account may own the key or that identity.
  *
- * A slot imported from the CLI records no identity (its token has none to
- * give), so its first adoption rests on the last two rules alone: it is by
- * definition "whatever the CLI is signed into", and the adopted credential
- * records the minted identity, which makes every later adoption strict.
+ * A CLI-imported slot has no bound identity. It cannot adopt a changed key;
+ * explicit `ocx login devin` is required after its first rotation.
  */
 /** An identity probe must not hold the per-account refresh lock for the mint's full 30s. */
 const DEVIN_IDENTITY_MINT_TIMEOUT_MS = 5_000;
@@ -333,6 +331,8 @@ async function rereadDevinCliCredential(
   // or briefly locked; like a failed identity mint, that says nothing about the key.
   if (outcome.kind === "unreadable" || outcome.kind === "incomplete") throw new DevinIdentityProbeUnavailableError();
   if (outcome.kind !== "ok" || outcome.file.apiKey === stored.access) return undefined;
+  // Without a stored identity, the CLI file may now belong to another user.
+  if (!stored.accountId && !normalizedEmail(stored.email)?.includes("@")) return undefined;
   const apiBaseUrl = validateDevinApiBaseUrl(outcome.file.apiServerUrl);
   if (apiBaseUrl === undefined) return undefined;
   // A detached alias rekey can already hold this account's new key. Only a

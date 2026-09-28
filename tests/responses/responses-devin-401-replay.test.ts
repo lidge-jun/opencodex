@@ -188,27 +188,33 @@ test("a lone revoked account surfaces the login instruction", async () => {
   expect(sentKeys).toEqual([]);
 });
 
-test("a CLI-imported account adopts the key a later `devin auth login` wrote", async () => {
+test("an identity-less CLI import rejects a rotated key and needs reauth", async () => {
   await saveCliImport(DEAD);
   writeCliFile(ROTATED);
 
-  const response = await run();
-
-  expect(response.status).toBe(200);
-  expect(await response.text()).toContain("served by rotated");
-  expect(sentKeys).toEqual([DEAD, ROTATED]);
+  const body = await (await run()).json() as { error: { message: string } };
+  expect(body.error.message).toBe("Not logged in to devin. Run: ocx login devin");
+  expect(sentKeys).toEqual([DEAD]);
+  expect(mintCalls).toBe(0);
   const row = cliAccount();
-  expect(row?.needsReauth).not.toBe(true);
-  expect(row?.credential.access).toBe(ROTATED);
-  // The minted identity is recorded, so the next adoption for this slot is strict.
-  expect(row?.credential.accountId).toBe("uid-rotated");
-  expect(row?.credential.email).toBe("rotated@example.com");
-  expect(row?.credential.source).toBe("local-cli");
-  expect(row?.credential.expires).toBe(Number.MAX_SAFE_INTEGER);
+  expect(row?.needsReauth).toBe(true);
+  expect(row?.credential.access).toBe(DEAD);
+});
+
+test("a CLI file belonging to another user cannot replace a bound account", async () => {
+  await saveCliImport(DEAD, { accountId: "uid-original", email: "original@example.com" });
+  writeCliFile(ROTATED); // Mints uid-rotated, a different Devin user.
+
+  const body = await (await run()).json() as { error: { message: string } };
+  expect(body.error.message).toBe("Not logged in to devin. Run: ocx login devin");
+  expect(sentKeys).toEqual([DEAD]);
+  expect(mintCalls).toBe(1);
+  expect(cliAccount()?.needsReauth).toBe(true);
+  expect(cliAccount()?.credential.access).toBe(DEAD);
 });
 
 test("a legacy alias copy of the same account already holding the rotated key does not block adoption", async () => {
-  await saveCliImport(DEAD);
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
   const current = cliAccount()!;
   await replaceProviderAccountSet("devin-cli", {
     activeAccountId: current.id,
@@ -246,7 +252,7 @@ test("a distinct legacy alias account still blocks an owned CLI identity", async
     access: LIVE, refresh: LIVE, expires: Number.MAX_SAFE_INTEGER,
     accountId: "uid-rotated", source: "oauth", apiBaseUrl: "https://server.codeium.com",
   });
-  await saveCliImport(DEAD);
+  await saveCliImport(DEAD, { email: "rotated@example.com" });
   writeCliFile(ROTATED);
 
   await (await run()).text();
@@ -274,7 +280,7 @@ test.each([
 
 test("a CLI key another stored account already owns is not adopted", async () => {
   await saveDevin(ROTATED, "other");
-  await saveCliImport(DEAD);
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
   writeCliFile(ROTATED);
 
   await (await run()).text();
@@ -284,20 +290,20 @@ test("a CLI key another stored account already owns is not adopted", async () =>
 });
 
 test.each([
-  ["a key Cognition refuses with 401", async () => { mintedIdentity = {}; await saveCliImport(DEAD); }],
+  ["a key Cognition refuses with 401", async () => { mintedIdentity = {}; await saveCliImport(DEAD, { accountId: "uid-rotated" }); }],
   ["a key Cognition refuses with 403", async () => {
     mintFailure = () => new Response("", { status: 403 });
-    await saveCliImport(DEAD);
+    await saveCliImport(DEAD, { accountId: "uid-rotated" });
   }],
   ["a minted token without auth_uid", async () => {
     mintedIdentity = { [ROTATED]: { email: "rotated@example.com" } };
-    await saveCliImport(DEAD);
+    await saveCliImport(DEAD, { accountId: "uid-rotated" });
   }],
   ["a slot whose recorded accountId differs", async () => { await saveCliImport(DEAD, { accountId: "uid-before" }); }],
   ["a slot whose recorded email differs", async () => { await saveCliImport(DEAD, { email: "before@example.com" }); }],
   ["an identity another stored account owns", async () => {
     await saveDevin(LIVE, "uid-rotated");
-    await saveCliImport(DEAD);
+    await saveCliImport(DEAD, { email: "rotated@example.com" });
   }],
 ])("the CLI key is not adopted for %s", async (_label, arrange) => {
   await arrange();
@@ -315,7 +321,7 @@ test.each([
   ["a 429", () => new Response("", { status: 429 })],
   ["a network failure", () => { throw new TypeError("fetch failed"); }],
 ])("an identity probe that fails with %s does not flag the account", async (_label, failure) => {
-  await saveCliImport(DEAD);
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
   writeCliFile(ROTATED);
   mintFailure = failure;
 
@@ -333,7 +339,7 @@ test.each([
 });
 
 test("a credential file caught mid-write does not flag the account", async () => {
-  await saveCliImport(DEAD);
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
   // Half-written by `devin auth login`: the key line is there, the server line is not yet.
   writeFileSync(home.path("devin-credentials.toml"), `windsurf_api_key = "${ROTATED}"\n`);
 
@@ -350,33 +356,25 @@ test("a credential file caught mid-write does not flag the account", async () =>
   expect(cliAccount()?.credential.access).toBe(ROTATED);
 });
 
-test("concurrent identity-less CLI slots cannot both adopt one rotated key", async () => {
+test("concurrent identity-less CLI slots both require explicit reauth", async () => {
   await saveCliImport(DEAD);
   const first = await getValidAccessTokenSnapshot("devin");
   await saveCliImport(DEAD_OTHER);
   const second = await getValidAccessTokenSnapshot("devin");
   expect(first.accountId).not.toBe(second.accountId);
   writeCliFile(ROTATED);
-  const bothMinted = Promise.withResolvers<void>();
-  const releaseMint = Promise.withResolvers<void>();
-  holdMint = async () => {
-    if (mintCalls === 2) bothMinted.resolve();
-    await releaseMint.promise;
-  };
-  const refreshes = Promise.allSettled([
+  const outcomes = await Promise.allSettled([
     forceRefreshOAuthAccessSnapshot(first), forceRefreshOAuthAccessSnapshot(second),
   ]);
-  await bothMinted.promise;
-  releaseMint.resolve();
-  const outcomes = await refreshes;
   const rows = getAccountSet("devin")!.accounts;
-  expect(outcomes.filter(outcome => outcome.status === "fulfilled")).toHaveLength(1);
-  expect(rows.filter(row => row.credential.access === ROTATED)).toHaveLength(1);
-  expect(rows.every(row => row.needsReauth !== true)).toBe(true);
+  expect(outcomes.every(outcome => outcome.status === "rejected")).toBe(true);
+  expect(rows.filter(row => row.credential.access === ROTATED)).toHaveLength(0);
+  expect(rows.every(row => row.needsReauth === true)).toBe(true);
+  expect(mintCalls).toBe(0);
 });
 
 test.each([false, true])("an account paused during 401 refresh returns 403 (stream=%s)", async stream => {
-  await saveCliImport(DEAD);
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
   const accountId = cliAccount()!.id;
   writeCliFile(ROTATED);
   const mintStarted = Promise.withResolvers<void>();
@@ -412,6 +410,15 @@ test("a slot whose recorded identity matches adopts the rotated key", async () =
   expect(await (await run()).text()).toContain("served by rotated");
   expect(cliAccount()?.credential.access).toBe(ROTATED);
   expect(mintCalls).toBe(1);
+});
+
+test("a slot bound only by matching email adopts the rotated key", async () => {
+  await saveCliImport(DEAD, { email: "  Rotated@Example.com " });
+  writeCliFile(ROTATED);
+
+  expect(await (await run()).text()).toContain("served by rotated");
+  expect(cliAccount()?.credential.access).toBe(ROTATED);
+  expect(cliAccount()?.credential.accountId).toBe("uid-rotated");
 });
 
 test("a turn whose 401 lands after another turn already failed the account over still fails over", async () => {
