@@ -1265,3 +1265,37 @@ describe("runWithImageBridge — runTurn adapter", () => {
     expect(parsed._cursorConversationId).toBe("conv-from-first-turn");
   });
 });
+
+describe.each(["runTurn", "parseStream"] as const)("image-loop provider identity — %s", mode => {
+  test("forwards the routed provider identity to every bridge iteration", async () => {
+    const seen: (string | undefined)[] = [];
+    let iteration = 0;
+    const eventsFor = (): AdapterEvent[] => iteration++ === 0
+      ? imageCallEvents
+      : [{ type: "text_delta", text: "finished" }, { type: "done" }];
+    const adapter: ProviderAdapter = {
+      name: "provider-identity-fixture",
+      buildRequest: async (_parsed, incoming) => {
+        seen.push(incoming.providerName);
+        return { url: "https://example.invalid/model", method: "POST", headers: {}, body: "{}" };
+      },
+      fetchResponse: async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      parseStream: async function* (): AsyncGenerator<AdapterEvent> { for (const e of eventsFor()) yield e; },
+      ...(mode === "runTurn" ? {
+        runTurn: async (_parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void) => {
+          seen.push(incoming.providerName);
+          for (const e of eventsFor()) emit(e);
+        },
+      } : {}),
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter,
+      plan,
+      incomingMeta: { headers: new Headers(), providerName: "github-copilot", translatorBudget: createTestTranslatorBudget() },
+    });
+    await response.text();
+    expect(seen.length).toBe(2);
+    expect(seen).toEqual(["github-copilot", "github-copilot"]);
+  });
+});
