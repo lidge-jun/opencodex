@@ -1123,11 +1123,7 @@ enum AttachPlan {
     Ask,
 }
 
-fn attach_plan(
-    consent: ownership::Consent,
-    answer: &resolve::Resolved,
-    mode: Mode,
-) -> AttachPlan {
+fn attach_plan(consent: ownership::Consent, answer: &resolve::Resolved, mode: Mode) -> AttachPlan {
     // The wire warning is the same sentence the CLI prints; it is appended verbatim so
     // this surface and `ocx status` never describe the same mismatch differently.
     let skew_note = || {
@@ -2075,17 +2071,17 @@ mod tests {
             attach_plan(Consent::AskFirstTime, &answer, Mode::Launch),
             AttachPlan::Ask
         ));
-        assert_eq!(
-            answer.skew_warning(),
-            Some("CLI 2.61.0 does not match")
-        );
+        assert_eq!(answer.skew_warning(), Some("CLI 2.61.0 does not match"));
     }
 
     #[test]
     fn guest_details_carry_the_skew_warning() {
         // Held and Refuse stay guests either way, but the phase detail must name the
         // mismatch instead of hiding it in the proxy's own log.
-        let answer = skewed_answer(VersionRelation::ProxyNewer, "CLI 2.61.0 does not match the running proxy 2.62.0");
+        let answer = skewed_answer(
+            VersionRelation::ProxyNewer,
+            "CLI 2.61.0 does not match the running proxy 2.62.0",
+        );
         match attach_plan(Consent::Held, &answer, Mode::Launch) {
             AttachPlan::Guest(detail) => {
                 assert!(detail.contains("does not match the running proxy"))

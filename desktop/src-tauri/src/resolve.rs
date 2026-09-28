@@ -490,10 +490,7 @@ mod tests {
             .resolved()
             .expect("a document")
             .clone();
-        assert_eq!(
-            resolved.runtime_relation(),
-            VersionRelation::ProxyNewer
-        );
+        assert_eq!(resolved.runtime_relation(), VersionRelation::ProxyNewer);
         assert_eq!(
             resolved.skew_warning(),
             Some("CLI 2.61.0 does not match the running proxy 2.62.0")
