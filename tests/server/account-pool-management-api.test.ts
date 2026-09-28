@@ -179,6 +179,28 @@ describe("Anthropic account pool strategy management API", () => {
     if (testDir) removeTreeWithRetry(testDir);
   });
 
+  test("both settings GETs flag malformed stored Anthropic routes without treating them as valid", async () => {
+    const path = join(testDir, "config.json");
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const malformed = [{ name: "broken", match: "[", accounts: ["removed-id"] }];
+    stored.anthropicAccountPool = { enabled: true, routes: malformed };
+    writeFileSync(path, JSON.stringify(stored), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const unified = await fetch(new URL("/api/pool/settings?provider=anthropic", server.url));
+      const legacy = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
+      expect(unified.status).toBe(200);
+      expect(legacy.status).toBe(200);
+      const unifiedBody = await unified.json() as Record<string, unknown>;
+      const legacyBody = await legacy.json() as Record<string, unknown>;
+      expect(unifiedBody.routes).toBeNull();
+      expect(legacyBody.routes).toBeNull();
+      expect(unifiedBody.routesError).toEqual(expect.any(String));
+      expect(legacyBody.routesError).toBe(unifiedBody.routesError);
+      expect(JSON.parse(readFileSync(path, "utf8")).anthropicAccountPool.routes).toEqual(malformed);
+    } finally { await server.stop(true); }
+  });
+
   test("both Anthropic settings writers preserve, replace and clear model routes", async () => {
     let server = startServer(0);
     const routes = [{ name: "sonnet", match: "claude-sonnet-*", accounts: ["removed-id"] }];
@@ -815,7 +837,8 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
         const res = await fetch(new URL(`/api/pool/settings?provider=${provider}`, server.url));
         expect(res.status).toBe(200);
         const dto = await res.json() as Record<string, unknown>;
-        // Same key set for every kind. An unsupported field is a declared null, not an absence,
+        // Valid and absent routes keep the fixed key set; routesError appears only for malformed stored rules.
+        // An unsupported field is a declared null, not an absence,
         // which is the whole difference between a consolidation and a fourth contract.
         expect(Object.keys(dto).sort()).toEqual([
           "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount",

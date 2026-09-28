@@ -2,6 +2,7 @@ import { isGenericFailoverProvider } from "./generic-account-failover";
 import { parseAccountPoolStickyLimit, parseAccountPoolStrategy, parseCodexAccountPoolStrategy } from "./pool-kernel";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { AnthropicModelRoute } from "../types/config";
+import { readAnthropicModelRoutes } from "./anthropic-model-routes";
 
 /**
  * Which pool-settings contract a provider speaks (#695, slice 1).
@@ -83,6 +84,8 @@ export interface PoolSettingsDto {
   quotaWindow: string | null;
   maxConcurrentPerAccount: number | null;
   routes: AnthropicModelRoute[] | null;
+  /** Present only when stored Anthropic routes fail validation on read. */
+  routesError?: string;
 }
 
 
@@ -176,7 +179,7 @@ export function unifiedPoolSettingsDto(
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(pool.autoSwitchThreshold) ?? 80,
       quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
       maxConcurrentPerAccount: null,
-      routes: pool.routes ?? null,
+      ...readAnthropicModelRoutes(pool.routes),
     };
   }
   const failover = config.providers?.[provider]?.oauthAccountFailover ?? {};

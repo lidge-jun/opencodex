@@ -8,6 +8,7 @@ export interface AnthropicRouteDecision {
 }
 
 type ParseResult = { ok: true; routes: AnthropicModelRoute[] } | { ok: false; error: string };
+export type AnthropicRoutesRead = { routes: AnthropicModelRoute[] | null; routesError?: string };
 const MAX_ROUTES = 32;
 const MAX_ACCOUNTS = 32;
 const MAX_TEXT = 128;
@@ -48,6 +49,13 @@ export function parseAnthropicModelRoutes(raw: unknown): ParseResult {
     routes.push({ name: row.name, match: row.match, accounts: [...row.accounts], ...(row.fallback === undefined ? {} : { fallback: row.fallback }) });
   }
   return { ok: true, routes };
+}
+
+/** A malformed hand edit stays on disk for correction, but must never look valid to readers. */
+export function readAnthropicModelRoutes(raw: unknown): AnthropicRoutesRead {
+  if (raw === undefined) return { routes: null };
+  const parsed = parseAnthropicModelRoutes(raw);
+  return parsed.ok ? { routes: parsed.routes } : { routes: null, routesError: parsed.error };
 }
 
 function matches(pattern: string, modelId: string): boolean {

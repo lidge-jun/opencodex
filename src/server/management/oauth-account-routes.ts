@@ -1,4 +1,4 @@
-import { parseAnthropicModelRoutes } from "../../oauth/anthropic-model-routes";
+import { parseAnthropicModelRoutes, readAnthropicModelRoutes } from "../../oauth/anthropic-model-routes";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -659,7 +659,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       strategy: normalizeAccountPoolStrategy(pool.strategy),
       stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
       quotaWindow: normalizeAccountPoolQuotaWindow(pool.quotaWindow),
-      routes: pool.routes ?? null,
+      ...readAnthropicModelRoutes(pool.routes),
       experimental: true,
     });
   }
