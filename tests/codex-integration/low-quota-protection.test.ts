@@ -355,7 +355,13 @@ describe("low quota protection", () => {
       persist: async () => { writes++; await new Promise<void>(resolve => { resolveSave = resolve; }); },
     });
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    const flushStartedAt = performance.now();
     await registration.flush();
+    const flushElapsedMs = performance.now() - flushStartedAt;
+    // The production deadline is 500 ms. Allow scheduler jitter, but an immediate
+    // return (or an unref'd deadline that never waits) must not satisfy this case.
+    expect(flushElapsedMs).toBeGreaterThanOrEqual(400);
+    expect(flushElapsedMs).toBeLessThan(3_000);
     expect(writes).toBe(1);
     expect(registration.listEvents(1)[0]?.status).toBe("pending");
     resolveSave?.();
@@ -368,6 +374,14 @@ describe("low quota protection", () => {
     observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 90 });
     await new Promise(resolve => setTimeout(resolve, 300));
     expect(writes).toBe(1);
+  });
+
+  test("flush returns promptly when no pause save is pending", async () => {
+    const registration = register(configWith(protection()));
+    const flushStartedAt = performance.now();
+    await registration.flush();
+    expect(performance.now() - flushStartedAt).toBeLessThan(400);
+    expect(registration.hasPendingSave()).toBe(false);
   });
 
   test("closing before the queued save starts cancels it without a config write", async () => {
