@@ -131,17 +131,17 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 
 ### 儲存供應商時會保留什麼
 
-以既有供應商的名稱呼叫 `POST /api/providers`，會以根據請求建立的列取代已儲存的列。儀表板的新增/編輯表單無法傳送所有欄位，因此儲存時會保留請求省略的部分已儲存欄位。其中五個記錄的是某個上游的行為：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`。
+以既有供應商的名稱呼叫 `POST /api/providers`，會以根據請求建立的列取代已儲存的列。儀表板的新增/編輯表單無法傳送所有欄位，因此儲存時會保留請求省略的部分已儲存欄位。其中八個記錄的是某個上游的行為：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx`, `retryOnReset`。
 
-| 儲存 | 五項設定 | 已儲存的 `apiKeyPool` |
+| 儲存 | 八項設定 | 已儲存的 `apiKeyPool` |
 | --- | --- | --- |
 | 目的地相同，欄位省略 | 保留已儲存的值，包括明確的 `[]` 或 `false` | 保留 |
 | 新目的地，欄位省略 | 不保留；可能套用新目的地的登錄檔預設值 | 不保留 |
 | 請求中傳送了該欄位 | 請求中的值 | 請求中的值 |
 
-目的地指轉接器、base URL（比較協定與主機時不分大小寫，忽略結尾斜線），以及請求有指定時的驗證模式。把供應商移到其他目的地時，描述舊上游的五項設定和為舊上游核發的金鑰池都不會帶過去。儲存絕不會把舊列的其餘部分合併進新列。
+目的地指轉接器、base URL（比較協定與主機時不分大小寫，忽略結尾斜線），以及請求有指定時的驗證模式。把供應商移到其他目的地時，描述舊上游的八項設定和為舊上游核發的金鑰池都不會帶過去。儲存絕不會把舊列的其餘部分合併進新列。
 
-`PATCH /api/providers?name=<provider>` 只修改它指定的欄位，無論目的地為何都保留其他所有已儲存欄位。它接受全部五項設定，`null` 表示清除。對於兩個推理清單，空陣列會作為明確的退出選項儲存，而不會被刪除。
+`PATCH /api/providers?name=<provider>` 只修改它指定的欄位，無論目的地為何都保留其他所有已儲存欄位。它接受全部八項設定，`null` 表示清除。對於兩個推理清單，空陣列會作為明確的退出選項儲存，而不會被刪除。
 
 ## 供應商診斷對外安全
 

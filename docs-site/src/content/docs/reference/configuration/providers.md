@@ -324,17 +324,17 @@ The concurrency slot stays occupied until the upstream request finishes, includi
 
 ### What a provider save keeps
 
-`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Five of them record how one upstream behaves: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat` and `omitReasoningEffortWithToolsModels`.
+`POST /api/providers` with the name of an existing provider replaces the stored row with one built from the request. The dashboard's add/edit form cannot send every field, so the save keeps some stored fields the request omits. Eight of them record how one upstream behaves: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`, `retryOn429`, `transientRetryOn5xx` and `retryOnReset`.
 
-| Save | The five settings | Stored `apiKeyPool` |
+| Save | The eight settings | Stored `apiKeyPool` |
 | --- | --- | --- |
 | Same destination, field omitted | Stored value kept, including an explicit `[]` or `false` | Kept |
 | New destination, field omitted | Not kept; registry defaults for the new destination may apply | Not kept |
 | Field sent in the request | The request's value | The request's value |
 
-The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the five settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
+The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the eight settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
 
-`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all five settings; `null` clears one. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
+`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all eight settings; `null` clears one. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication
