@@ -3256,6 +3256,7 @@ export const fr: Record<TKey, string> = {
   "connection.sessionLogout": "Se déconnecter de la session distante",
   "connection.sessionLoggingOut": "Déconnexion de la session distante…",
   "connection.sessionLogoutFailed": "Impossible de fermer la session distante. La session actuelle a été conservée.",
+  "connection.forgetRememberedAdminToken": "Oublier le jeton administrateur enregistré",
   "usage.source.connected": "Source : utilisation du hub",
   "usage.source.local": "Source : usage.jsonl local",
   "usage.scope.label": "Portée de l'utilisation",

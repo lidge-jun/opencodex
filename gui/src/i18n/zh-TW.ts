@@ -3253,6 +3253,7 @@ export const zhTW: Record<TKey, string> = {
   "connection.sessionLogout": "登出遠端工作階段",
   "connection.sessionLoggingOut": "正在登出遠端工作階段…",
   "connection.sessionLogoutFailed": "無法登出遠端工作階段。目前的工作階段已保留。",
+  "connection.forgetRememberedAdminToken": "忘記已儲存的管理員權杖",
   "usage.source.connected": "來源：Hub 使用量",
   "usage.source.local": "來源：本機 usage.jsonl",
   "usage.scope.label": "使用量範圍",

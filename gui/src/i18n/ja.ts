@@ -3289,6 +3289,7 @@ export const ja: Record<TKey, string> = {
   "connection.sessionLogout": "リモートセッションからログアウト",
   "connection.sessionLoggingOut": "リモートセッションからログアウト中…",
   "connection.sessionLogoutFailed": "リモートセッションからログアウトできませんでした。現在のセッションは維持されています。",
+  "connection.forgetRememberedAdminToken": "保存した管理者トークンを削除",
   "usage.source.connected": "Source: hub usage",
   "usage.source.local": "Source: local usage.jsonl",
   "usage.scope.label": "Usage scope",

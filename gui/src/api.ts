@@ -9,8 +9,8 @@ import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiT
 export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
-// Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/settings
-// also resolves the Codex runtime and startup health, which made the token prompt hang.
+// Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/combos
+// avoids resolving the Codex runtime and startup health, which made the token prompt hang.
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/combos";
 const SESSION_REBOOTSTRAP_TIMEOUT_MS = 10_000;
 const RESOLUTION_WATCHDOG_MS = 15_000;

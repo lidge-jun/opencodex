@@ -8,6 +8,11 @@ export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
 export type AdminTokenVerifier = (token: string) => Promise<AdminTokenValidation>;
 
 const REMEMBERED_ADMIN_TOKEN_KEY = "opencodex.remembered-admin-token";
+export const REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT = "opencodex-remembered-admin-token-changed";
+
+function notifyRememberedAdminTokenChanged(): void {
+  window.dispatchEvent(new window.Event(REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT));
+}
 
 /**
  * Opt-in plaintext persistence in localStorage: this is what makes sign-in
@@ -21,6 +26,7 @@ export function getRememberedAdminToken(): string | null {
 
 export function clearRememberedAdminToken(): void {
   try { localStorage.removeItem(REMEMBERED_ADMIN_TOKEN_KEY); } catch { /* storage may be disabled */ }
+  notifyRememberedAdminTokenChanged();
 }
 
 /**
@@ -176,6 +182,7 @@ export function promptForAdminToken(
         if (result === "accepted") {
           if (remember.checked) {
             try { localStorage.setItem(REMEMBERED_ADMIN_TOKEN_KEY, token); } catch { /* storage may be disabled */ }
+            notifyRememberedAdminTokenChanged();
           } else {
             clearRememberedAdminToken();
           }

@@ -33,9 +33,10 @@ automatiquement `~/.opencodex/admin-api-token`).
 
 Lorsqu'un tableau de bord distant exige cet identifiant, il présente un formulaire de mot de passe standard,
 ce qui permet au gestionnaire de mots de passe du navigateur de proposer son enregistrement et son
-remplissage automatique. Le tableau de bord lui-même ne conserve le jeton qu'en mémoire et ne l'écrit ni
-dans `localStorage` ni dans `sessionStorage` ; son enregistrement dépend entièrement du navigateur ou du
-gestionnaire de mots de passe.
+remplissage automatique. Par défaut, le tableau de bord ne conserve le jeton qu'en mémoire. Choisir
+**Mémoriser sur cet appareil** autorise le stockage du jeton complet en clair dans `localStorage`. Tout
+script de même origine et toute personne ayant accès à l'appareil peuvent le lire : ne l'activez pas sur un
+appareil partagé. **Oublier le jeton administrateur enregistré**, à côté de Déconnexion, supprime cette valeur.
 
 ## Barre de résumé des quotas
 

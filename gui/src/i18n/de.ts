@@ -3267,6 +3267,7 @@ export const de: Record<TKey, string> = {
   "connection.sessionLogout": "Remote-Sitzung abmelden",
   "connection.sessionLoggingOut": "Remote-Sitzung wird abgemeldet…",
   "connection.sessionLogoutFailed": "Die Remote-Sitzung konnte nicht abgemeldet werden. Die aktuelle Sitzung bleibt bestehen.",
+  "connection.forgetRememberedAdminToken": "Gespeichertes Admin-Token vergessen",
   "usage.source.connected": "Source: hub usage",
   "usage.source.local": "Source: local usage.jsonl",
   "usage.scope.label": "Usage scope",

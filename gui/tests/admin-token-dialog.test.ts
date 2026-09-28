@@ -114,7 +114,7 @@ test("checked remember box persists the accepted token for standalone sign-in", 
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
   const form = dialog.querySelector<HTMLFormElement>("form")!;
   const password = form.elements.namedItem("password") as HTMLInputElement;
-  const remember = form.elements.namedItem("opencodex-admin-token-dialog-remember") as HTMLInputElement;
+  const remember = form.elements.namedItem("remember") as HTMLInputElement;
 
   expect(remember.type).toBe("checkbox");
   password.value = "stored-token";

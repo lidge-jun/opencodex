@@ -3271,6 +3271,7 @@ export const vi: Record<TKey, string> = {
   "connection.sessionLogout": "Đăng xuất phiên từ xa",
   "connection.sessionLoggingOut": "Đang đăng xuất phiên từ xa…",
   "connection.sessionLogoutFailed": "Không thể đăng xuất phiên từ xa. Phiên hiện tại vẫn được giữ nguyên.",
+  "connection.forgetRememberedAdminToken": "Quên mã thông báo quản trị đã lưu",
   "usage.source.connected": "Nguồn: mức sử dụng hub",
   "usage.source.local": "Nguồn: usage.jsonl cục bộ",
   "usage.scope.label": "Phạm vi sử dụng",

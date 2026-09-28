@@ -405,7 +405,7 @@ test("the watchdog never bounds the prompt: slow user input stacks no dialogs an
 });
 
 test("a hung remembered-token verification is bounded and falls back to the prompt", async () => {
-  // verifyAdminToken used to await rawFetch with no bound: a /api/settings that never
+  // verifyAdminToken used to await rawFetch with no bound: an /api/combos request that never
   // settled wedged resolutionInFlight (and every /api waiter) for the page lifetime —
   // the whole-resolution watchdog only races reBootstrapSessionToken. The bounded fetch
   // must turn the hang into "unavailable": stored token preserved, prompt reached.
@@ -418,7 +418,7 @@ test("a hung remembered-token verification is bounded and falls back to the prom
   const keepalive = setTimeout(() => {}, 1_000);
   localStorage.setItem("opencodex.remembered-admin-token", "remembered-token");
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (pathnameOf(input) === "/api/settings") return hangUntilAborted(init?.signal);
+    if (pathnameOf(input) === "/api/combos") return hangUntilAborted(init?.signal);
     return new Response("unauthorized", { status: 401 });
   }) as typeof fetch;
   await installMockAuthFetch(mockFetch);

@@ -3288,6 +3288,7 @@ export const zh: Record<TKey, string> = {
   "connection.sessionLogout": "退出远程会话",
   "connection.sessionLoggingOut": "正在退出远程会话…",
   "connection.sessionLogoutFailed": "无法退出远程会话，当前会话已保留。",
+  "connection.forgetRememberedAdminToken": "忘记已保存的管理员令牌",
   "usage.source.connected": "Source: hub usage",
   "usage.source.local": "Source: local usage.jsonl",
   "usage.scope.label": "Usage scope",

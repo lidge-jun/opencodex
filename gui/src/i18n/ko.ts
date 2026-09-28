@@ -3289,6 +3289,7 @@ export const ko: Record<TKey, string> = {
   "connection.sessionLogout": "원격 세션 로그아웃",
   "connection.sessionLoggingOut": "원격 세션에서 로그아웃하는 중…",
   "connection.sessionLogoutFailed": "원격 세션에서 로그아웃하지 못했습니다. 현재 세션은 그대로 유지했습니다.",
+  "connection.forgetRememberedAdminToken": "저장된 관리자 토큰 삭제",
   "usage.source.connected": "출처: 허브 사용량",
   "usage.source.local": "출처: 로컬 usage.jsonl",
   "usage.scope.label": "사용량 범위",

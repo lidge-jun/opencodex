@@ -3347,6 +3347,7 @@ export const en = {
   "connection.sessionLogout": "Log out remote session",
   "connection.sessionLoggingOut": "Logging out remote session…",
   "connection.sessionLogoutFailed": "Could not log out the remote session. The current session was kept.",
+  "connection.forgetRememberedAdminToken": "Forget remembered admin token",
   "usage.source.connected": "Source: hub usage",
   "usage.source.local": "Source: local usage.jsonl",
   "usage.scope.label": "Usage scope",

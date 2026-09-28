@@ -16,7 +16,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconTrash} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
@@ -32,6 +32,7 @@ import { hostOs, isDesktopShell, isExternalLink, openDesktopUpdatePage } from ".
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
 import { watchMacTitlebarMetrics, windowChromeHandlers } from "./lib/window-chrome";
+import { clearRememberedAdminToken, getRememberedAdminToken, REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT } from "./admin-token-dialog";
 
 type Theme = "light" | "dark" | "system";
 
@@ -142,6 +143,7 @@ export default function App() {
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
   const [remoteWorkspaceAvailableState, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
+  const [rememberedAdminTokenPresent, setRememberedAdminTokenPresent] = useState(() => Boolean(getRememberedAdminToken()));
   /*
    * Results from the two sidebar orbs used to be `alert()`, which the app's webview draws
    * nowhere, so a refused stop and a completed one looked identical: nothing happened.
@@ -163,6 +165,16 @@ export default function App() {
     };
     window.addEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
     return () => window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
+  }, []);
+
+  useEffect(() => {
+    const syncRememberedAdminToken = () => setRememberedAdminTokenPresent(Boolean(getRememberedAdminToken()));
+    window.addEventListener(REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT, syncRememberedAdminToken);
+    window.addEventListener("storage", syncRememberedAdminToken);
+    return () => {
+      window.removeEventListener(REMEMBERED_ADMIN_TOKEN_CHANGED_EVENT, syncRememberedAdminToken);
+      window.removeEventListener("storage", syncRememberedAdminToken);
+    };
   }, []);
 
   useEffect(() => {
@@ -359,6 +371,11 @@ export default function App() {
     else report(t("connection.sessionLogoutFailed"), "err");
   };
 
+  const handleForgetRememberedAdminToken = () => {
+    clearRememberedAdminToken();
+    setRememberedAdminTokenPresent(false);
+  };
+
   /*
    * The brand is the control users reach for first when they want out of a deep page,
    * and it used to be an inert <div>: clicking the logo did nothing, so a user on
@@ -414,6 +431,12 @@ export default function App() {
             <button type="button" className="sidebar-orb" onClick={() => { void handleSessionLogout(); }} disabled={sessionLoggingOut}
               aria-label={t(sessionLoggingOut ? "connection.sessionLoggingOut" : "connection.sessionLogout")} title={t("connection.sessionLogout")}>
               <IconX />
+            </button>
+          )}
+          {rememberedAdminTokenPresent && (
+            <button type="button" className="sidebar-orb" onClick={handleForgetRememberedAdminToken}
+              aria-label={t("connection.forgetRememberedAdminToken")} title={t("connection.forgetRememberedAdminToken")}>
+              <IconTrash />
             </button>
           )}
           <button type="button" className="sidebar-orb sidebar-orb--danger" onClick={handleStop} disabled={stopping}
@@ -496,6 +519,12 @@ export default function App() {
                   aria-label={t(sessionLoggingOut ? "connection.sessionLoggingOut" : "connection.sessionLogout")}
                   title={t("connection.sessionLogout")}>
                   <IconX />
+                </button>
+              )}
+              {rememberedAdminTokenPresent && (
+                <button type="button" className="sidebar-orb" onClick={handleForgetRememberedAdminToken}
+                  aria-label={t("connection.forgetRememberedAdminToken")} title={t("connection.forgetRememberedAdminToken")}>
+                  <IconTrash />
                 </button>
               )}
               <button type="button" className="sidebar-orb sidebar-orb--danger"
