@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDevinAdapter, mapOcxMessagesToDevin } from "../../src/adapters/devin";
+import { createDevinAdapter, mapOcxMessagesToDevin, resolveDevinContextWindowForTests } from "../../src/adapters/devin";
 import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { buildGetChatMessageRequestForTests, type ChatHistoryItem } from "../../src/adapters/devin/cloud-direct/chat";
 import { normalizeDevinToolParameters } from "../../src/adapters/devin/cloud-direct/tool-schema";
@@ -227,6 +227,17 @@ describe("oversized history classification", () => {
   });
 });
 
+describe("selected Devin context window", () => {
+  test("the selected row supplies the window, with configured context and input caps", () => {
+    const row = { contextWindow: 200_000, familyUid: "swe-1-6" };
+    expect(resolveDevinContextWindowForTests({ adapter: "devin", baseUrl: "" }, "swe-1-6", row)).toBe(200_000);
+    expect(resolveDevinContextWindowForTests({ adapter: "devin", baseUrl: "", contextWindow: 180_000,
+      modelContextWindows: { "swe-1-6": 170_000 }, modelMaxInputTokens: { "swe-1-6": 160_000 },
+    }, "swe-1-6", row)).toBe(160_000);
+    expect(resolveDevinContextWindowForTests({ adapter: "devin", baseUrl: "" }, "swe-1-6")).toBeUndefined();
+  });
+});
+
 describe("adapter surfaces an oversized history as context_length_exceeded", () => {
   const apiKey = "ocx-devin-overflow-fixture";
   const host = "https://server.codeium.com";
@@ -266,6 +277,13 @@ describe("adapter surfaces an oversized history as context_length_exceeded", () 
   test("1.2 MB of history against a 200k window", async () => {
     const events = await turn("word ".repeat(240_000));
     expect(events.at(-1)).toMatchObject({ type: "error", status: 400, code: "context_length_exceeded", errorType: "invalid_request_error", retryable: false });
+  });
+
+  test("selected catalog window classifies at 95% and leaves a smaller refusal as 400", async () => {
+    const atThreshold = await turn("word ".repeat(190_000));
+    expect(atThreshold.at(-1)).toMatchObject({ type: "error", status: 400, code: "context_length_exceeded" });
+    const belowThreshold = await turn("word ".repeat(189_999));
+    expect(belowThreshold.at(-1)).toMatchObject({ type: "error", status: 400, code: "invalid_argument" });
   });
 
   test("a short turn with the same refusal stays invalid_argument", async () => {

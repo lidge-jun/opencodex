@@ -347,6 +347,25 @@ function resolveDevinMaxOutputTokens(
 /** Pure test seam; runtime uses the same resolver immediately before dispatch. */
 export const resolveDevinMaxOutputTokensForTests = resolveDevinMaxOutputTokens;
 
+/** The classifier reads the selected UID's catalog input window, capped by configured limits. */
+function resolveDevinContextWindow(
+  provider: OcxProviderConfig,
+  modelUid: string,
+  catalogRow?: Pick<ModelCatalogEntry, "contextWindow" | "familyUid">,
+): number | undefined {
+  const familyBase = catalogRow?.familyUid ? devinFamilyBaseId(catalogRow.familyUid) : undefined;
+  const limits = [
+    positiveTokenCount(catalogRow?.contextWindow),
+    devinModelTokenHint(provider.modelContextWindows, modelUid, familyBase),
+    positiveTokenCount(provider.contextWindow),
+    devinModelTokenHint(provider.modelMaxInputTokens, modelUid, familyBase),
+  ].filter((value): value is number => value !== undefined);
+  return limits.length > 0 ? Math.min(...limits) : undefined;
+}
+
+/** Pure test seam for configured caps and selected-row lookup. */
+export const resolveDevinContextWindowForTests = resolveDevinContextWindow;
+
 export class DevinMissingCredentialError extends Error {
   constructor() {
     super("Devin live transport requires a Devin API key. Run ocx login devin to sign in with your Cognition/Devin account.");
@@ -703,7 +722,7 @@ export function createDevinAdapter(
       let stopReason: string | undefined;
       // Kept outside the try so the catch can tell an oversized history from a bad request.
       let producedOutput = false;
-      let maxInputTokens: number | undefined;
+      let contextWindow: number | undefined;
       let messages: ChatHistoryItem[] = [];
       let tools: ToolDef[] | undefined;
 
@@ -715,6 +734,7 @@ export function createDevinAdapter(
 
       try {
         // Read the selected UID's catalog row, not the picker's collapsed base.
+        contextWindow = resolveDevinContextWindow(provider, modelUid, catalog?.byUid.get(modelUid));
         messages = mapOcxMessagesToDevin(parsed);
         tools = mapOcxToolsToDevin(parsed.context.tools);
         const maxOutputTokens = resolveDevinMaxOutputTokens(
@@ -833,7 +853,7 @@ export function createDevinAdapter(
         // Converting it to an adapter event would make it an ordinary untyped upstream error.
         if (error instanceof SendBudgetExhaustedError) throw error;
         if (error instanceof CloudChatError && isDevinHistoryOverflow({
-          code: error.code, producedOutput, contextWindow: maxInputTokens, messages, tools,
+          code: error.code, producedOutput, contextWindow, messages, tools,
         })) {
           emit({ ...devinContextOverflowEvent(), ...(usage ? { usage } : {}) });
           return;
