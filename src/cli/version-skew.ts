@@ -14,11 +14,26 @@ import { parseStrictSemver, type StrictSemver } from "../lib/strict-semver";
 /** Placeholder versions that mean "unknown", not "different". */
 const PLACEHOLDERS = new Set(["unknown", "0.0.0"]);
 
+/**
+ * Which side of the comparison runs newer, so a consumer does not reparse the warning to
+ * find the direction. `"match"` is a real, non-placeholder equality; placeholders and a
+ * missing proxy version are `"unknown"`, and `"incomparable"` covers versions that
+ * differ but do not order under strict semver. The desktop shell reads this field to
+ * keep a takeover from silently downgrading a newer runtime.
+ */
+export type VersionRelation =
+  | "match"
+  | "cli-newer"
+  | "proxy-newer"
+  | "incomparable"
+  | "unknown";
+
 export interface VersionSkew {
   readonly cliVersion: string;
   /** Version the live proxy reported, or null when nothing is live or it reported none. */
   readonly proxyVersion: string | null;
   readonly skewed: boolean;
+  readonly relation: VersionRelation;
   /** Operator-facing explanation; null when there is nothing to report. */
   readonly warning: string | null;
 }
@@ -58,12 +73,17 @@ function compareVersions(cli: StrictSemver, proxy: StrictSemver): number {
  */
 export function computeVersionSkew(cliVersion: string, proxyVersion: string | undefined): VersionSkew {
   const proxy = proxyVersion ?? null;
-  if (proxy === null || PLACEHOLDERS.has(proxy) || PLACEHOLDERS.has(cliVersion) || proxy === cliVersion) {
-    return { cliVersion, proxyVersion: proxy, skewed: false, warning: null };
+  if (proxy === null || PLACEHOLDERS.has(proxy) || PLACEHOLDERS.has(cliVersion)) {
+    return { cliVersion, proxyVersion: proxy, skewed: false, relation: "unknown", warning: null };
+  }
+  if (proxy === cliVersion) {
+    return { cliVersion, proxyVersion: proxy, skewed: false, relation: "match", warning: null };
   }
   const cliSemver = parseStrictSemver(cliVersion);
   const proxySemver = parseStrictSemver(proxy);
   const order = cliSemver && proxySemver ? compareVersions(cliSemver, proxySemver) : 0;
+  const relation: VersionRelation =
+    order > 0 ? "cli-newer" : order < 0 ? "proxy-newer" : "incomparable";
   const advice = order > 0
     ? "the running proxy is older than this CLI. Restart the proxy using the intended current installation. "
       // `restart`, not `repair`: a version skew leaves the service DEFINITION unchanged, and
@@ -77,6 +97,7 @@ export function computeVersionSkew(cliVersion: string, proxyVersion: string | un
     cliVersion,
     proxyVersion: proxy,
     skewed: true,
+    relation,
     warning: `CLI ${cliVersion} does not match the running proxy ${proxy} — ${advice}`,
   };
 }

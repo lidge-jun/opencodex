@@ -287,6 +287,11 @@ effective port, and the identity-checked liveness verdict. `--json` emits one ve
 document (`schema: "ocx-resolve/1"`) with `cliVersion`, `configHome`, `port`
 (`effective`, `configured`, and `source`), and `liveness` (`status`, `pid`, `port`,
 `source`, plus `version`, `role`, and `hostname` when the live proxy reports them).
+When a proxy is live the document also carries `versionSkew` — the same comparison
+`ocx status` and `ocx doctor` surface — with `cliVersion`, `proxyVersion`, `skewed`,
+a `relation` of `match`, `cli-newer`, `proxy-newer`, `incomparable`, or `unknown`,
+and the operator-facing `warning`. Shells read `relation` rather than reparsing the
+warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the listener.
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
