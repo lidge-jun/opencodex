@@ -275,7 +275,22 @@ async function startRestartedProxy(
     }
     if (outcome.status === "skipped") return recoveringLiveRestart
       ? { ok: false, phase: "replacement" } : { ok: true, mode: "skipped" };
-    if (outcome.status === "started") return { ok: true, mode: "started" };
+    if (outcome.status === "started") {
+      if (!previous) return { ok: true, mode: "started" };
+      // Recovery after a live restart: the start path counts any healthy proxy it finds as
+      // started, and the ORIGINAL process reappearing would satisfy it. Success needs an
+      // identity-verified replacement — a different runtime PID on the original port —
+      // observed in a fresh window; anything else fails closed as a missed replacement.
+      let confirm: ProxyRestartDiscovery;
+      try {
+        confirm = await (io.recheckAfterFailedStart?.() ?? io.findLive());
+      } catch (error) {
+        return { ok: false, phase: "replacement", error };
+      }
+      return confirm.status === "live" && isProxyReplacement(previous, confirm.live)
+        ? { ok: true, mode: "started" }
+        : { ok: false, phase: "replacement" };
+    }
     if (attempt === 0) originalError = outcome.error;
     // Beat first: a child that was just launched may still be binding, and post-health
     // steps may have thrown on an already-live proxy. Re-observe before deciding: live

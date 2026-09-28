@@ -22,7 +22,8 @@ describe("restart discovery deadline", () => {
       recheckAfterFailedStart: () => recheckRestartFailedStart(end => {
         freshEnd = end;
         return discoverStableProxyForRestart({
-          findLive: async () => null,
+          // Absent after the exited first child; the second launch's confirmation sees it.
+          findLive: async () => launches >= 2 ? { pid: 20, port: 10100, source: "runtime" } : null,
           waitBetweenChecks: async () => {},
           expired: () => Date.now() >= end,
         });

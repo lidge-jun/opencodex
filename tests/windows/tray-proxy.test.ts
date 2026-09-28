@@ -138,9 +138,35 @@ describe("tray proxy coordinator", () => {
       requestInPlaceRestart: async () => ({ accepted: true }),
       waitForReplacement: async () => null,
       reobserveAfterReplacement: async () => ({ status: "absent" }),
+      // The recovery start is confirmed only by a different runtime PID on the original port.
+      recheckAfterFailedStart: async () => ({ status: "live", live: { pid: 20, port: 10100, source: "runtime" } }),
     });
     expect(result).toEqual({ ok: true, mode: "started" });
     expect(forced).toEqual([true]);
+  });
+
+  test("a recovery start is never confirmed by the original pid reappearing", async () => {
+    const previous: ProxyRestartLive = { pid: 10, port: 10100, source: "runtime" };
+    const calls: string[] = [];
+    for (const confirmation of [
+      { status: "live", live: previous },
+      { status: "absent" },
+      { status: "live", live: { pid: 20, port: 10100, source: "config" } },
+    ] as const) {
+      const result = await runProxyRestart({
+        findLive: async () => ({ status: "live", live: previous }),
+        // The start path reports started because it found a healthy proxy: the old one.
+        startWhenStopped: async () => { calls.push("start"); return { status: "started" }; },
+        requestInPlaceRestart: async () => ({ accepted: true }),
+        waitForReplacement: async () => null,
+        reobserveAfterReplacement: async () => ({ status: "absent" }),
+        recheckAfterFailedStart: async () => confirmation,
+        waitBetweenAttempts: async () => {},
+      });
+      expect(result).toEqual({ ok: false, phase: "replacement" });
+    }
+    // One start per run and never a second one over the reappeared process.
+    expect(calls).toEqual(["start", "start", "start"]);
   });
 
   test("a skipped recovery cannot report a vanished proxy as success", async () => {
@@ -318,7 +344,10 @@ describe("tray proxy coordinator", () => {
         // finds nothing: the old process died without publishing a replacement.
         return observations === 1
           ? { status: "live", live: previous }
-          : { status: "absent" };
+          : observations === 2
+            ? { status: "absent" }
+            // The recovery start's confirmation sees the fresh replacement.
+            : { status: "live", live: { pid: 20, port: 10100, source: "runtime" } };
       },
       startWhenStopped: async () => { calls.push("start"); return { status: "started" }; },
       requestInPlaceRestart: async () => { calls.push("request"); return { accepted: true }; },
@@ -524,6 +553,7 @@ describe("tray proxy coordinator", () => {
       waitForReplacement: async () => null,
       waitBetweenAttempts: async () => {},
       reobserveAfterReplacement: async () => { calls.push("reobserve"); return { status: "absent" }; },
+      recheckAfterFailedStart: async () => ({ status: "live", live: { pid: 20, port: 10100, source: "runtime" } }),
     });
     expect(result).toEqual({ ok: true, mode: "started" });
     expect(calls).toEqual(["findLive", "reobserve", "start"]);
