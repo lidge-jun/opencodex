@@ -972,6 +972,13 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
   no API key and no key field is offered for it. An API key saved on this row by other means is never
   handed to the harness — key billing belongs to the `anthropic-apikey` preset.
+- **In the dashboard:** the Add provider picker lists this preset under **Paid**, with the API rows,
+  and marks it with a **Subscription CLI** badge instead of **Free** — keyless here means the CLI
+  owns the account, not that the traffic is free. Selecting it shows a warning in place of the key
+  field: this is not an API-key path, it drives the signed-in CLI (`claude -p`) and bills that
+  subscription, and a key entered for it is never used. The Providers workspace counts and filters
+  it as paid and shows **Subscription CLI** as its auth mode. Any provider with
+  `"adapter": "claude-cli"` is treated the same way.
 - **One sign-in serves the whole proxy:** the harness reads the Claude Code sign-in of the user
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;

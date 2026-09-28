@@ -1295,6 +1295,7 @@
   "provider-registry-parity.test.ts": "providers",
   "provider-send-path-import.test.ts": "server",
   "provider-static-model-discovery.test.ts": "providers",
+  "provider-subscription-cli.test.ts": "gui",
   "provider-workspace-auth.test.ts": "gui",
   "provider-workspace-data.test.ts": "gui",
   "provider-workspace-rail.test.ts": "gui",

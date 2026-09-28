@@ -23,6 +23,8 @@
  * over free.
  */
 
+import { isSubscriptionCliProvider } from "./subscription-cli";
+
 /**
  * Shape of a single provider value as it appears in the proxy config map.
  * The provider name is the Record key, not a field here.
@@ -164,10 +166,13 @@ export function isAccountProvider(name: string, p: WorkspaceProvider): boolean {
 /**
  * Free pricing (badge / filter / sort): `freeTier`, keyless free (`keyOptional`),
  * local runtimes, or loopback. Forward passthrough is NOT free — those are
- * account providers. Does **not** imply ready-without-key — use
- * `binProviderStatus` for readiness.
+ * account providers, and a subscription CLI row (`claude-cli`) is NOT free either:
+ * its `keyOptional` means the CLI owns the credential and bills the user's
+ * subscription, so it sorts, filters and groups with the paid API rows. Does **not**
+ * imply ready-without-key — use `binProviderStatus` for readiness.
  */
 export function isFreeProvider(p: WorkspaceProvider): boolean {
+  if (isSubscriptionCliProvider(p)) return false;
   return p.freeTier === true
     || p.keyOptional === true
     || p.authMode === "local"
