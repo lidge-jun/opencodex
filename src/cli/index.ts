@@ -74,11 +74,14 @@ import { parseStartOptions, StartArgsError } from "./start-args";
 
 import {
   discoverStableProxyForRestart,
-  isProxyReplacement,
+  reobserveRestartReplacement,
+  restartStartOutcome,
+  waitForProxyReplacement,
   runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
   type ProxyRestartResult,
+  type ProxyRestartStartOutcome,
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
@@ -741,7 +744,7 @@ function detachedStartEnvironment(): NodeJS.ProcessEnv {
   return withProcessRuntimeProvenance(env);
 }
 
-async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Promise<boolean> {
+async function handleEnsure(options: { existingIsSuccess?: boolean; onSpawn?: (child: ReturnType<typeof spawn>) => void } = {}): Promise<boolean> {
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
   if (!owner.live && !(await markCrossHomeSibling())) reconcileStartupJournal();
   // A later ensure can find this home's sibling alive; the other port still owns shared clients.
@@ -790,6 +793,7 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     windowsHide: true,
     env: detachedStartEnvironment(),
   });
+  options.onSpawn?.(child);
   child.unref();
 
   const port = (await waitForProxy())?.port;
@@ -861,24 +865,8 @@ async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> 
 
 const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
 
-async function waitForProxyReplacement(
-  previous: ProxyRestartLive,
-  deadlineAt: number,
-): Promise<ProxyRestartLive | null> {
-  while (Date.now() < deadlineAt) {
-    const live = await findLiveProxy({ deadlineAt });
-    if (Date.now() >= deadlineAt) return null;
-    // Modern /healthz publishes a PID. Require a different, identity-verified process;
-    // merely seeing the old port online again is not proof that restart completed.
-    if (isProxyReplacement(previous, live)) {
-      return live;
-    }
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs > 0) await Bun.sleep(Math.min(250, remainingMs));
-  }
-  return null;
-}
-
+/** Reserve confirmation time within the shared restart deadline. */
+const RESTART_REOBSERVE_RESERVE_MS = 10_000;
 function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
   if (result.phase === "identity") {
     console.error("❌ Refusing to restart because the running proxy identity could not be attested.");
@@ -903,7 +891,7 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
 }
 
 async function handleProxyRestart(
-  startWhenStopped: () => Promise<boolean | "skipped">,
+  startWhenStopped: () => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
   const result = await runProxyRestart({
@@ -913,7 +901,13 @@ async function handleProxyRestart(
     }),
     startWhenStopped,
     requestInPlaceRestart: previous => requestBoundSystemRestart(previous, deadlineAt),
-    waitForReplacement: previous => waitForProxyReplacement(previous, deadlineAt),
+    waitForReplacement: previous => waitForProxyReplacement(previous, deadlineAt - RESTART_REOBSERVE_RESERVE_MS, end => findLiveProxy({ deadlineAt: end })),
+    reobserveAfterReplacement: previous => reobserveRestartReplacement(previous, deadlineAt, end =>
+      discoverStableProxyForRestart({
+        findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }),
+        waitBetweenChecks: () => Bun.sleep(250),
+        expired: () => Date.now() >= end,
+      })),
   });
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
@@ -921,15 +915,24 @@ async function handleProxyRestart(
 }
 
 async function handleTrayProxyRestart(): Promise<void> {
-  await handleProxyRestart(() => handleTrayProxyStart(false));
+  // A service start has no child handle here; its failed result is ambiguous.
+  await handleProxyRestart(async () => (await handleTrayProxyStart(false))
+    ? { status: "started" }
+    : { status: "failed", launch: "unknown" });
 }
 
-async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
+async function handleRestartStartWhenStopped(): Promise<ProxyRestartStartOutcome> {
   if (!codexAutoStartEnabled(loadConfig())) {
     console.log("Codex autostart is disabled; no proxy was started.");
-    return "skipped";
+    return { status: "skipped" };
   }
-  return handleEnsure({ existingIsSuccess: false });
+  let child: ReturnType<typeof spawn> | null = null;
+  try {
+    const started = await handleEnsure({ existingIsSuccess: false, onSpawn: spawned => { child = spawned; } });
+    return restartStartOutcome(started, child);
+  } catch (error) {
+    return restartStartOutcome(false, child, error);
+  }
 }
 
 /**
