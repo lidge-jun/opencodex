@@ -409,14 +409,15 @@ function pickNextFillFirstAnthropicAccount(
   config: OcxConfig,
   afterId: string,
   eligible: string[],
+  decision: AnthropicRouteDecision | null,
 ): string | null {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
   const available = window === "weekly" ? eligible.filter(id => !exhausted5h(id)) : eligible;
   const candidates = available.length > 0 ? available : eligible;
   if (candidates.length === 0) return null;
-  const ordered = [...candidates].sort((a, b) => a.localeCompare(b));
+  const ordered = decision ? candidates : [...candidates].sort((a, b) => a.localeCompare(b));
   const set = getAccountSet(PROVIDER);
-  const stableAll = set
+  const stableAll = decision ? [...decision.accounts] : set
     ? [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b))
     : ordered;
   const startIdx = stableAll.indexOf(afterId);
@@ -449,7 +450,7 @@ function pickAlternateAnthropicAccount(
     return peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
   }
   if (strategy === "fill-first") {
-    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
+    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible, decision);
   }
   return pickLowestUsage(config, excludeId, now, decision);
 }
@@ -515,14 +516,14 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number, decision:
   }
 
   if (!active || !set) {
-    const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+    const ordered = decision ? eligible : [...eligible].sort((a, b) => a.localeCompare(b));
     for (const id of ordered) {
       if (isActiveUnderFillFirstThreshold(config, id)) return id;
     }
     return ordered[0] ?? null;
   }
 
-  return pickNextFillFirstAnthropicAccount(config, active, eligible);
+  return pickNextFillFirstAnthropicAccount(config, active, eligible, decision);
 }
 
 /**

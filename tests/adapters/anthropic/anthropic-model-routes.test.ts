@@ -185,3 +185,13 @@ test("disabled routes do not change the historical active-account selection", as
   expect(resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision).toBeNull();
   expect(resolveAnthropicAccountForSession("session", cfg).accountId).toBe(ids[0]);
 });
+
+test("fill-first uses declared route order when the active account is outside the route", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.strategy = "fill-first";
+  cfg.anthropicAccountPool!.routes![0]!.accounts = [ids[2]!, ids[1]!];
+  const decision = resolveAnthropicModelRoute(cfg, "claude-sonnet-4-5").decision!;
+  const choice = resolveAnthropicAccountForSession("fresh", cfg, Date.now(), decision);
+  expect(choice.accountId).toBe(ids[2]);
+});
