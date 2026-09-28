@@ -85,7 +85,7 @@ test("transport failures back off, success clears failures, and replacement cred
   expect(calls).toBe(5); // Successful query reset the exponential delay.
 });
 
-test("same-key dispatch stays single-flight until body validation; another key can proceed", async () => {
+test("same-key callers join the settled result while different keys dispatch independently", async () => {
   let finish!: (response: Response) => void;
   let calls = 0;
   globalThis.fetch = Object.assign(async () => {
@@ -93,20 +93,21 @@ test("same-key dispatch stays single-flight until body validation; another key c
     if (calls === 1) return new Promise<Response>(resolve => { finish = resolve; });
     return good();
   }, { preconnect: originalFetch.preconnect });
-  const first = fetchCodexUsage("race-fixture", {});
-  expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
+  const first = fetchCodexUsage<{ proof: string }>("race-fixture", {});
+  const joined = fetchCodexUsage<{ proof: string }>("race-fixture", {});
+  expect(calls).toBe(1);
+  const other = await fetchCodexUsage<{ proof: string }>("other-credential", {});
+  if (other?.kind !== "owner") throw new Error("different key did not dispatch");
+  other.settle(true, { proof: "other" });
   finish(good());
-  const read = await first;
-  expect(read?.response.ok).toBe(true);
-  expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
-  const other = await fetchCodexUsage("other-credential", {});
-  other?.settle(true);
+  const owner = await first;
+  if (owner?.kind !== "owner") throw new Error("first call did not own dispatch");
+  const whileParsing = fetchCodexUsage<{ proof: string }>("race-fixture", {});
   expect(calls).toBe(2);
-  read?.settle(false); // An unusable 200 keeps failure pacing.
-  expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
-  now += 300_000;
-  (await fetchCodexUsage("race-fixture", {}))?.settle(true);
-  expect(calls).toBe(3);
+  owner.settle(true, { proof: "fresh" });
+  expect(await joined).toEqual({ kind: "joined", result: { proof: "fresh" } });
+  expect(await whileParsing).toEqual({ kind: "joined", result: { proof: "fresh" } });
+  expect(calls).toBe(2);
 });
 
 test("malformed pool 200 keeps pacing until its due time", async () => {
@@ -128,11 +129,14 @@ test("oversized Retry-After is bounded by the existing 24-hour ceiling", async (
     calls++;
     return new Response("{}", { status: 429, headers: { "Retry-After": "999999999" } });
   }, { preconnect: originalFetch.preconnect });
-  await fetchCodexUsage("bounded", {});
+  const first = await fetchCodexUsage("bounded", {});
+  if (first?.kind !== "owner") throw new Error("first call did not dispatch");
+  first.settle(false);
   now += 86_400_000 - 1;
   expect(await fetchCodexUsage("bounded", {})).toBeNull();
   now++;
-  await fetchCodexUsage("bounded", {});
+  const due = await fetchCodexUsage("bounded", {});
+  expect(due?.kind).toBe("owner");
   expect(calls).toBe(2);
 });
 
@@ -145,11 +149,19 @@ test("a full cache never evicts an active read", async () => {
     if (calls === 258) return good();
     return new Response("{}", { status: 503 });
   }, { preconnect: originalFetch.preconnect });
-  const active = fetchCodexUsage("active", {});
-  for (let i = 0; i < 256; i++) await fetchCodexUsage(`key-${i}`, {});
-  expect(await fetchCodexUsage("active", {})).toBeNull();
+  const active = fetchCodexUsage<{ proof: string }>("active", {});
+  for (let i = 0; i < 256; i++) {
+    const read = await fetchCodexUsage(`key-${i}`, {});
+    if (read?.kind !== "owner") throw new Error("capacity test did not dispatch");
+    read.settle(false);
+  }
+  const joined = fetchCodexUsage<{ proof: string }>("active", {});
+  expect(calls).toBe(257);
   finish(good());
-  (await active)?.settle(true);
-  expect((await fetchCodexUsage("active", {}))?.response.ok).toBe(true);
+  const owner = await active;
+  if (owner?.kind !== "owner") throw new Error("active read lost ownership");
+  owner.settle(true, { proof: "active" });
+  expect(await joined).toEqual({ kind: "joined", result: { proof: "active" } });
+  expect((await fetchCodexUsage("active", {}))?.kind).toBe("owner");
   expect(calls).toBe(258);
 });

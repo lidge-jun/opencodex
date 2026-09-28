@@ -20,7 +20,8 @@ earlier three-tier implementation. The replacement contract and its verification
 
 Ordinary main/pool WHAM queries share `src/codex/quota-query-backoff.ts`: transport and non-auth
 HTTP failures and unusable HTTP 200 bodies defer later queries (including forced refreshes) for
-5, 10, 20, 40, then 60 minutes. Only one read per key is admitted through body validation.
+5, 10, 20, 40, then 60 minutes. Same-key callers join one read through body validation and
+receive its settled result; a post-reset read has a separate proof epoch.
 A valid Retry-After can extend the delay under the existing bounded cooldown parser. Usable usage clears
 failure pacing; 401/403 retain the existing authentication recovery policy. Keys are scoped to
 configuration home, config generation and credential generation; no credentials are retained.

@@ -1,4 +1,5 @@
 import { fetchCodexUsage } from "../quota-query-backoff";
+import type { CodexUsageOwner } from "../quota-query-backoff";
 import { parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
@@ -16,7 +17,7 @@ import { nonEmptyPlan } from "./runtime-config";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
 import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
-import { MAIN_TERMINAL_AUTH_CODES, readMainAuthErrorCode, nextQuotaDispatchSequence, isQuotaDispatchCurrent, publishQuotaDispatch } from "./pool-quota-probe";
+import { MAIN_TERMINAL_AUTH_CODES, readMainAuthErrorCode, currentQuotaDispatchSequence, nextQuotaDispatchSequence, isQuotaDispatchCurrent, publishQuotaDispatch } from "./pool-quota-probe";
 
 /**
  * Last reset-credit count this process parsed for the main account, tagged with the
@@ -153,7 +154,7 @@ export async function fetchMainAccountInfoAttempt(
   }
   try {
     const operation = async () => ({
-      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh),
+      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh, nativeMainSharedClaimHeld),
       identityGeneration: captureMainAccountIdentityGeneration(),
     });
     if (nativeMainSharedClaimHeld) return await operation();
@@ -186,6 +187,8 @@ export async function fetchMainAccountInfoWhileOwned(
    * promoting a background poll into operator intent below.
    */
   explicitRefresh: boolean = forceRefresh,
+  /** Reset-credit consume needs a fresh post-spend observation, not an earlier read. */
+  postReset = false,
 ): Promise<MainAccountInfoFetchResult> {
   const writerGeneration = captureConfigGeneration();
   reconcileMainCodexAccountRuntimeState();
@@ -217,123 +220,138 @@ export async function fetchMainAccountInfoWhileOwned(
   const quotaSignal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
   let quotaPhase: "request" | "body" | "decode" | "publish" = "request";
   let quotaRefreshGeneration = captureMainAccountIdentityGeneration();
-  let usageRead: Awaited<ReturnType<typeof fetchCodexUsage>> = null;
-  let usableUsage = false;
-  try {
-    const dispatchSequence = nextQuotaDispatchSequence();
-    usageRead = await fetchCodexUsage(`main:${writerGeneration}:${mainQuotaCredentialGeneration}`, {
-      headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
-      signal: quotaSignal,
-    });
-    if (!usageRead) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
-    const resp = usageRead.response;
-    quotaPhase = "publish";
-    if (!resp.ok) {
-      const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
+  const readState: { owner?: CodexUsageOwner<MainAccountInfoFetchResult>; usable: boolean } = { usable: false };
+  const read = async (): Promise<MainAccountInfoFetchResult> => {
+    try {
+      let dispatchSequence = 0;
+      const resetEpoch = postReset ? `:post-reset:${currentQuotaDispatchSequence()}` : "";
+      const admission = await fetchCodexUsage<MainAccountInfoFetchResult>(
+        `main:${writerGeneration}:${mainQuotaCredentialGeneration}${resetEpoch}`, {
+        headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
+        signal: quotaSignal,
+      }, () => { dispatchSequence = nextQuotaDispatchSequence(); });
+      if (!admission) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+      if (admission.kind === "joined") {
+        const current = mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
+          && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)
+          && writerGeneration === captureConfigGeneration();
+        if (!current) return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
+          credentialChecked: true, hasCredential: true };
+        if (explicitRefresh && (admission.result.quotaRefresh?.status === "ok"
+          || admission.result.quotaRefresh?.status === "not_reported")) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        return admission.result;
+      }
+      readState.owner = admission;
+      const resp = admission.response;
+      quotaPhase = "publish";
+      if (!resp.ok) {
+        const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
+        const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
+        if (retried) return retried;
+        if (!isQuotaDispatchCurrent(dispatchSequence)) {
+          return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
+            credentialChecked: true, hasCredential: true };
+        }
+        if (terminalAuthFailure) {
+          // Account for this attempt's own synchronous invalidation, never prior external drift.
+          const diagnosticStillLive = isMainAccountIdentityGenerationLive(quotaRefreshGeneration);
+          clearMainAccountInfoCache();
+          if (diagnosticStillLive) quotaRefreshGeneration = captureMainAccountIdentityGeneration();
+          markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
+        }
+        return {
+          info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true,
+          quotaRefresh: { status: "http_error", httpStatus: resp.status },
+          quotaRefreshGeneration,
+        };
+      }
+      quotaPhase = "body";
+      const data = (await resp.json()) as WhamUsageResponse;
+      quotaPhase = "publish";
       const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
       if (retried) return retried;
+      quotaPhase = "decode";
+      if (data === null || typeof data !== "object" || Array.isArray(data)) {
+        throw new Error("Invalid WHAM usage object");
+      }
+      // Check after body/retry awaits and before any cache, credits, policy or
+      // Reserve publication. Returning cached state supplies no fresh recovery proof.
       if (!isQuotaDispatchCurrent(dispatchSequence)) {
         return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: true, hasCredential: true };
       }
-      if (terminalAuthFailure) {
-        // Account for this attempt's own synchronous invalidation, never prior external drift.
-        const diagnosticStillLive = isMainAccountIdentityGenerationLive(quotaRefreshGeneration);
-        clearMainAccountInfoCache();
-        if (diagnosticStillLive) quotaRefreshGeneration = captureMainAccountIdentityGeneration();
-        markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
+      quotaPhase = "publish";
+      // A delayed response from a replaced bearer cannot revoke a newer Reserve grant,
+      // even in the same workspace or after an A→B→A credential transition.
+      if (mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
+        && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)) {
+        observeMainReserveRevocation(data, mainQuotaWriter);
       }
+      quotaPhase = "decode";
+      const plan = nonEmptyPlan(data.plan_type) ?? nonEmptyPlan(cached?.plan) ?? nonEmptyPlan(getMainAccountPlan());
+      const usage = { ...data, ...(plan ? { plan_type: plan } : {}) };
+      const quota = parseUsageQuota(usage);
+      const policyQuota = parseMainPolicyUsageQuota(usage);
+      quotaPhase = "publish";
+      const freshResetCredits = quota?.resetCredits;
+      // Tag the count with the identity it was read from, so a later response that omits the
+      // summary can restore the badge without ever crossing an account boundary.
+      rememberMainResetCredits(requestAccountId, freshResetCredits);
+      const result = {
+        email: data.email ?? null,
+        plan,
+        quota,
+        ts: Date.now(),
+      };
+      setMainAccountInfoCache(result);
+      // Only an explicit refresh may retract a reauth quarantine. A 200 from
+      // /wham/usage proves the token authenticates to the usage endpoint; it does not
+      // prove the account can serve Responses traffic, which is a different backend path
+      // and still answers 403 for a workspace the token may no longer select (#327).
+      // Letting the background poll clear the flag put such an account straight back into
+      // rotation: the next request failed the same way and re-marked it, so needsReauth
+      // never settled and the dashboard kept showing nothing — the symptom #327 reported.
+      // An explicit refresh is an operator asking to re-evaluate, normally right after
+      // signing in again, so it stays authoritative.
+      if (explicitRefresh) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+      // Mirror main quota + plan into the shared stores so the rotation engine can
+      // score and auto-switch the main account exactly like a pool account (Option A).
+      setMainAccountPlan(result.plan);
+      if (result.quota) {
+        setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota);
+      }
+      publishQuotaDispatch(dispatchSequence);
+      readState.usable = quota !== null;
+      return {
+        info: result,
+        quotaRefresh: { status: quota ? "ok" : "not_reported" },
+        quotaRefreshGeneration,
+        credentialChecked: true,
+        hasCredential: true,
+        ...(quota ? { freshQuota: quota } : {}),
+        ...(quota && mainQuotaWriter && isMainQuotaWriterLive(mainQuotaWriter)
+          && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
+          && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)
+          ? { resetRecoveryProof: { writer: mainQuotaWriter, credentialGeneration: mainQuotaCredentialGeneration, dispatchSequence } }
+          : {}),
+        ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
+      };
+    } catch (error) {
+      const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
+      if (retried) return retried;
+      let status: CodexQuotaRefreshOutcome["status"] = "internal_error";
+      if ((quotaPhase === "request" || quotaPhase === "body") && quotaSignal.aborted) status = "timeout";
+      else if (quotaPhase === "request") status = "network_error";
+      else if (quotaPhase === "body") status = error instanceof SyntaxError ? "invalid_response" : "network_error";
+      else if (quotaPhase === "decode") status = "invalid_response";
       return {
         info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true,
-        quotaRefresh: { status: "http_error", httpStatus: resp.status },
+        quotaRefresh: { status },
         quotaRefreshGeneration,
       };
     }
-    quotaPhase = "body";
-    const data = (await resp.json()) as WhamUsageResponse;
-    quotaPhase = "publish";
-    const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
-    if (retried) return retried;
-    quotaPhase = "decode";
-    if (data === null || typeof data !== "object" || Array.isArray(data)) {
-      throw new Error("Invalid WHAM usage object");
-    }
-    // Check after body/retry awaits and before any cache, credits, policy or
-    // Reserve publication. Returning cached state supplies no fresh recovery proof.
-    if (!isQuotaDispatchCurrent(dispatchSequence)) {
-      return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
-        credentialChecked: true, hasCredential: true };
-    }
-    quotaPhase = "publish";
-    // A delayed response from a replaced bearer cannot revoke a newer Reserve grant,
-    // even in the same workspace or after an A→B→A credential transition.
-    if (mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
-      && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)) {
-      observeMainReserveRevocation(data, mainQuotaWriter);
-    }
-    quotaPhase = "decode";
-    const plan = nonEmptyPlan(data.plan_type) ?? nonEmptyPlan(cached?.plan) ?? nonEmptyPlan(getMainAccountPlan());
-    const usage = { ...data, ...(plan ? { plan_type: plan } : {}) };
-    const quota = parseUsageQuota(usage);
-    const policyQuota = parseMainPolicyUsageQuota(usage);
-    quotaPhase = "publish";
-    const freshResetCredits = quota?.resetCredits;
-    // Tag the count with the identity it was read from, so a later response that omits the
-    // summary can restore the badge without ever crossing an account boundary.
-    rememberMainResetCredits(requestAccountId, freshResetCredits);
-    const result = {
-      email: data.email ?? null,
-      plan,
-      quota,
-      ts: Date.now(),
-    };
-    setMainAccountInfoCache(result);
-    // Only an explicit refresh may retract a reauth quarantine. A 200 from
-    // /wham/usage proves the token authenticates to the usage endpoint; it does not
-    // prove the account can serve Responses traffic, which is a different backend path
-    // and still answers 403 for a workspace the token may no longer select (#327).
-    // Letting the background poll clear the flag put such an account straight back into
-    // rotation: the next request failed the same way and re-marked it, so needsReauth
-    // never settled and the dashboard kept showing nothing — the symptom #327 reported.
-    // An explicit refresh is an operator asking to re-evaluate, normally right after
-    // signing in again, so it stays authoritative.
-    if (explicitRefresh) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-    // Mirror main quota + plan into the shared stores so the rotation engine can
-    // score and auto-switch the main account exactly like a pool account (Option A).
-    setMainAccountPlan(result.plan);
-    if (result.quota) {
-      setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter, policyQuota);
-    }
-    publishQuotaDispatch(dispatchSequence);
-    usableUsage = quota !== null;
-    return {
-      info: result,
-      quotaRefresh: { status: quota ? "ok" : "not_reported" },
-      quotaRefreshGeneration,
-      credentialChecked: true,
-      hasCredential: true,
-      ...(quota ? { freshQuota: quota } : {}),
-      ...(quota && mainQuotaWriter && isMainQuotaWriterLive(mainQuotaWriter)
-        && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
-        && matchesMainQuotaCredential(tokens.access_token, tokens.account_id)
-        ? { resetRecoveryProof: { writer: mainQuotaWriter, credentialGeneration: mainQuotaCredentialGeneration, dispatchSequence } }
-        : {}),
-      ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
-    };
-  } catch (error) {
-    const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
-    if (retried) return retried;
-    let status: CodexQuotaRefreshOutcome["status"] = "internal_error";
-    if ((quotaPhase === "request" || quotaPhase === "body") && quotaSignal.aborted) status = "timeout";
-    else if (quotaPhase === "request") status = "network_error";
-    else if (quotaPhase === "body") status = error instanceof SyntaxError ? "invalid_response" : "network_error";
-    else if (quotaPhase === "decode") status = "invalid_response";
-    return {
-      info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true,
-      quotaRefresh: { status },
-      quotaRefreshGeneration,
-    };
-  } finally {
-    usageRead?.settle(usableUsage);
-  }
+  };
+  let outcome: MainAccountInfoFetchResult | undefined;
+  try { outcome = await read(); return outcome; }
+  finally { readState.owner?.settle(readState.usable, outcome); }
 }

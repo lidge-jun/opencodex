@@ -5247,6 +5247,10 @@ describe("codex-auth API", () => {
     await refreshAccounts();
     expect(warmups).toBe(0);
     used = 0;
+    // A malformed 200 is paced; a replacement credential gets its own query key.
+    saveCodexAccountCredential(accountId, {
+      ...getCodexAccountCredential(accountId)!, accessToken: "quota-access-recovered",
+    }, { validationPending: true });
     clearAccountQuota();
     await listCodexAuthAccounts(config, false);
     expect(warmups).toBe(0); // Passive reads never spend inference.
@@ -6289,83 +6293,64 @@ describe("manual reset cooldown recovery (#3973)", () => {
     }
   });
 
-  // Adapt #3995/e172453052's two-flight convergence to fresh-before-old scheduling.
-  test("reset publishes a fourth usage request before two old current-generation flights complete", async () => {
+  test("post-reset usage has fresh proof while a same-generation replay joins its owner", async () => {
     const config = setup();
     const oldCredential = getCodexAccountCredential("manual-a")!;
     const oldGeneration = readCodexAccountRecord("manual-a")!.generation;
     const firstStarted = gate(); const release401 = gate(); const secondStarted = gate(); const secondFinish = gate();
-    const replayStarted = gate(); const replayFinish = gate(); const freshStarted = gate();
-    const latches = [firstStarted, release401, secondStarted, secondFinish, replayStarted, replayFinish, freshStarted];
     const pending: Promise<unknown>[] = [];
     const urls: string[] = []; const usageBearers: Array<string | null> = [];
-    let usageCalls = 0; let consumeCalls = 0; let completedOldResponses = 0;
+    let usageCalls = 0;
     let rejectDeadline!: (error: Error) => void;
     const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
-    // Failure bound only: success is synchronized on dispatch latches, never elapsed time.
-    const timeout = setTimeout(() => rejectDeadline(new Error("mock dispatch did not reach its expected phase")), watchdogMs(10_000));
+    const timeout = setTimeout(() => rejectDeadline(new Error("mock dispatch did not settle")), watchdogMs(10_000));
+    const within = <T>(promise: Promise<T>) => Promise.race([promise, deadline]);
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input); urls.push(url);
-      if (url === CONSUME) { consumeCalls += 1; return Response.json({ code: "reset" }); }
+      if (url === CONSUME) return Response.json({ code: "reset" });
       if (url !== USAGE) throw new Error("unexpected mock URL");
       usageBearers.push(new Headers(init?.headers).get("Authorization"));
       switch (++usageCalls) {
-        case 1:
-          firstStarted.release(); await release401.promise;
-          return new Response("{}", { status: 401 });
-        case 2:
-          secondStarted.release(); await secondFinish.promise; completedOldResponses += 1;
+        case 1: firstStarted.release(); await release401.promise; return new Response("{}", { status: 401 });
+        case 2: secondStarted.release(); await secondFinish.promise;
           return Response.json({ ...usage(88), rate_limit_reset_credits: { available_count: 66 } });
-        case 3:
-          replayStarted.release(); await replayFinish.promise; completedOldResponses += 1;
-          return Response.json({ ...usage(99), rate_limit_reset_credits: { available_count: 77 } });
-        case 4:
-          freshStarted.release(); return Response.json(usage(12));
-        default: throw new Error("unexpected mock usage dispatch");
+        case 3: return Response.json(usage(12));
+        default: throw new Error("duplicate same-key usage dispatch");
       }
     }) as typeof fetch;
     try {
       const first = listCodexAuthAccounts(config, true); pending.push(first);
       void first.catch(rejectDeadline);
-      await Promise.race([firstStarted.promise, deadline]);
-      // A fresh external generation starts its own ordinary flight while P's old 401 is held.
+      await within(firstStarted.promise);
       saveCodexAccountCredential("manual-a", { ...oldCredential, accessToken: "converged-access", refreshToken: "converged-refresh" });
       expect(readCodexAccountRecord("manual-a")!.generation).toBe(oldGeneration + 1);
       const second = listCodexAuthAccounts(config, true); pending.push(second);
       void second.catch(rejectDeadline);
-      await Promise.race([secondStarted.promise, deadline]);
+      await within(secondStarted.promise);
       release401.release();
-      await Promise.race([replayStarted.promise, deadline]);
-      // Both old flights now use the current generation; neither response has completed.
-      expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access"]);
-      expect(completedOldResponses).toBe(0);
+      // The 401 replay joins the already-running new-generation read.
+      secondFinish.release();
+      const [firstRows, secondRows] = await within(Promise.all([first, second]));
+      expect(firstRows.find(account => account.id === "manual-a")?.quota?.weeklyPercent).toBe(88);
+      expect(secondRows.find(account => account.id === "manual-a")?.quota?.weeklyPercent).toBe(88);
+      expect(usageCalls).toBe(2);
       const reset = consume(config); pending.push(reset);
-      void reset.catch(rejectDeadline);
-      await Promise.race([freshStarted.promise, deadline]);
-      const response = await Promise.race([reset, deadline]);
+      const response = await within(reset);
       expect(response?.status).toBe(200);
       expect(await response?.json()).toEqual({ code: "reset", remaining: 2 });
-      expect(completedOldResponses).toBe(0);
+      expect(getAccountQuota("manual-a")).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
       expect(getCodexQuotaHealthSnapshot("manual-a", "shared")).toBeNull();
-      const fresh = structuredClone(getAccountQuota("manual-a"));
-      expect(fresh).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
-      secondFinish.release(); replayFinish.release();
-      await Promise.all([first, second]);
-      expect(completedOldResponses).toBe(2);
-      expect(getAccountQuota("manual-a")).toEqual(fresh);
-      expect(getCodexQuotaHealthSnapshot("manual-a", "shared")).toBeNull();
-      expect(consumeCalls).toBe(1); expect(usageCalls).toBe(4);
-      expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access", "Bearer converged-access"]);
-      expect(urls).toEqual([USAGE, USAGE, USAGE, CONSUME, USAGE]);
+      expect(usageCalls).toBe(3);
+      expect(usageBearers).toEqual([`Bearer ${oldCredential.accessToken}`, "Bearer converged-access", "Bearer converged-access"]);
+      expect(urls).toEqual([USAGE, USAGE, CONSUME, USAGE]);
     } finally {
       clearTimeout(timeout);
-      for (const latch of latches) latch.release();
-      const results = await Promise.allSettled(pending);
+      release401.release(); secondFinish.release();
+      await Promise.allSettled(pending);
       globalThis.fetch = originalFetch;
-      for (const result of results) if (result.status === "rejected") throw result.reason;
     }
-  }, 60_000);
+  });
 
   test("main Q-first/P-last publication preserves post-reset cache, credits and hard-lock readiness", async () => {
     const config = makeConfig({ codexMainAccountHardLock: true });
@@ -6418,27 +6403,29 @@ describe("manual reset cooldown recovery (#3973)", () => {
     } finally { oldFinish.release(); await old; }
   });
 
-  test("a newer failed main read does not outrank an older successful publication", async () => {
+  test("concurrent same-key main reads share one published quota result", async () => {
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
       tokens: { access_token: "publication-main-token", account_id: "publication-main-account" },
     }));
     reconcileMainCodexAccountRuntimeState();
     const started = gate(); const finish = gate(); let reads = 0;
     const urls = mock(() => { throw new Error("consume is not expected"); }, async () => {
-      if (++reads === 1) { started.release(); await finish.promise; return Response.json(usage()); }
-      return new Response("fixture unavailable", { status: 503 });
+      reads++;
+      started.release(); await finish.promise; return Response.json(usage());
     });
-    const old = fetchMainAccountInfoSnapshot(true);
+    const first = fetchMainAccountInfoSnapshot(true);
     try {
       await started.promise;
-      expect((await fetchMainAccountInfoSnapshot(true)).quotaRefresh).toEqual({ status: "http_error", httpStatus: 503 });
+      const joined = fetchMainAccountInfoSnapshot(true);
+      expect(reads).toBe(1);
       finish.release();
-      expect((await old).quotaRefresh).toEqual({ status: "ok" });
+      expect((await first).quotaRefresh).toEqual({ status: "ok" });
+      expect((await joined).quotaRefresh).toEqual({ status: "ok" });
       expect(getMainAccountInfoCache()?.quota).toMatchObject({ weeklyPercent: 12, resetCredits: 2 });
       expect(getMainPolicyQuota()?.weeklyPercent).toBe(12);
       expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: true }).state).toBe("ready");
-      expect(urls).toEqual([USAGE, USAGE]);
-    } finally { finish.release(); await old; }
+      expect(urls).toEqual([USAGE]);
+    } finally { finish.release(); await first; }
   });
 
   test("main reset usage does not erase an existing reauth quarantine", async () => {

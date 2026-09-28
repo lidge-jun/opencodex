@@ -70,7 +70,8 @@ then queries to confirm recovery; time alone never unlocks the account. Without 
 background recovery uses capped 5/10/20/40/60-minute backoff while the account remains blocked. Ordinary main/pool usage queries
 share failure backoff (5, 10, 20, 40, then 60 minutes) for transport failures, non-auth HTTP failures, and unusable 200 bodies,
 including forced refreshes; `Retry-After` can extend that wait. Existing 401/403 authentication
-handling remains unchanged. Only usable usage clears backoff; an in-flight read defers same-key queries. Replaced credentials have separate
+handling remains unchanged. Only usable usage clears backoff; concurrent same-key queries share the
+settled result of one read. Replaced credentials have separate
 retry state, and stale snapshots are never marked fresh. These delays are process-local.
 
 **Downgrade note:** Before running an older version, remove only `nextFiveHourResetAt` and
