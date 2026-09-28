@@ -69,6 +69,12 @@ package-local Bun and CLI pair selected by the trusted install or repair invocat
 credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an
 older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
 
+Service launchers reject recorded and newly discovered paths inside shell-local `fnm`, `nvm`,
+`mise`, `asdf`, or `volta` multishell directories. Systemd, launchd, and Windows definitions
+remove those entries from their rendered PATH while keeping other environment values. Launchd
+repair compares the full plist after normalizing its previous PATH: a PATH cleanup or any other
+definition change reloads the live job through the guarded eviction and bootstrap path.
+
 Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
 versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
 `OPENCODEX_BUN_PATH` whose durable runtime source is `override`; bundled and process fallbacks are

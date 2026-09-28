@@ -1,6 +1,6 @@
 import { accessSync, constants as fsConstants, existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
+import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { atomicWriteFileStreamed } from "../config/atomic-write";
 import { resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
@@ -60,6 +60,33 @@ export function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bu
   };
 }
 
+/** Shell-local version-manager bins disappear when the installing shell exits. */
+export function isTransientServiceLauncherPath(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  const pathTools = platform === "win32" ? win32 : posix;
+  return pathTools.normalize(path).replace(/\\/g, "/").split("/").some(component =>
+    /^(?:asdf|fnm|mise|nvm|volta)_multishells?$/i.test(component));
+}
+
+export function filterTransientServicePath(
+  path: string,
+  pathDelimiter = delimiter,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return path.split(pathDelimiter).filter(entry => !isTransientServiceLauncherPath(entry, platform)).join(pathDelimiter);
+}
+
+export function serviceLauncherPathDiagnostic(
+  state: ServiceInstallState | null = readServiceInstallState(),
+  platform: NodeJS.Platform = process.platform,
+  repairing = false,
+): string | null {
+  const launcher = state?.launcherPath;
+  if (!launcher || !isTransientServiceLauncherPath(launcher, platform)) return null;
+  return `STALE temporary launcher path (${launcher}) from a shell-local version manager — `
+    + (repairing ? "replacing it with a durable launcher or package-local Bun runtime"
+      : "run 'ocx service repair' to replace it with a durable launcher or package-local Bun runtime");
+}
+
 /**
  * The stable `ocx` launcher to bake into a systemd unit, or null to fall back to the
  * Bun + CLI pair.
@@ -99,8 +126,11 @@ export function stableLauncherEntry(deps: {
   isExecutableFile?: (path: string) => boolean;
   pathDelimiter?: string;
   state?: ServiceInstallState | null;
+  platform?: NodeJS.Platform;
 } = {}): string | null {
   const env = deps.env ?? process.env;
+  const platform = deps.platform ?? process.platform;
+  const pathTools = platform === "win32" ? win32 : posix;
   const isExecutableFile = deps.isExecutableFile ?? ((path: string): boolean => {
     try {
       if (!statSync(path).isFile()) return false;
@@ -111,11 +141,12 @@ export function stableLauncherEntry(deps: {
     }
   });
   const recorded = (deps.state === undefined ? readServiceInstallState() : deps.state)?.launcherPath;
-  if (recorded && isAbsolute(recorded) && isExecutableFile(recorded)) return recorded;
+  if (recorded && !isTransientServiceLauncherPath(recorded, platform)
+    && pathTools.isAbsolute(recorded) && isExecutableFile(recorded)) return recorded;
   const entries = (env.PATH ?? "").split(deps.pathDelimiter ?? delimiter);
   for (const entry of entries) {
-    if (!entry || !isAbsolute(entry)) continue;
-    const candidate = join(entry, "ocx");
+    if (!entry || isTransientServiceLauncherPath(entry, platform) || !pathTools.isAbsolute(entry)) continue;
+    const candidate = pathTools.join(entry, "ocx");
     if (isExecutableFile(candidate)) return candidate;
   }
   return null;

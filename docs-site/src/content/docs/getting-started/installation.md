@@ -49,6 +49,12 @@ ocx --version
 opencodex --version
 ```
 
+If you install the background service from a shell using fnm, nvm, mise, asdf, or volta,
+OpenCodex leaves shell-local multishell directories out of the service PATH. On Linux it
+selects a durable `ocx` launcher when available; otherwise it uses the package's Bun
+runtime. Run `ocx service repair` after an older service was installed from a temporary
+multishell directory. On macOS, repair reloads launchd when it changes the saved plist.
+
 ## Standalone binary (no npm)
 
 Release downloads also include a standalone `ocx` binary for supported macOS, Linux, and Windows

@@ -1542,6 +1542,7 @@
     "service-tier-capability.test.ts": "service",
     "service-wsl-home-ownership.test.ts": "service",
     "service.test.ts": "service",
+    "service-multishell-path.test.ts": "service",
     "session-affinity.test.ts": "server",
     "session-lane-recall-harness.test.ts": "server",
     "settings-desktop-switch-apply.test.ts": "config",

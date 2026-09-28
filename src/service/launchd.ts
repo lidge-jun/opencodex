@@ -12,7 +12,7 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./guards";
 import { resolveServiceListenPort, buildServiceShellCommand, buildServiceLauncherShellCommand, installedServiceListenPort, resolvedProxyEnv } from "./health";
-import { SERVICE_MANAGED_ENV, LABEL, cliEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, LABEL, cliEntry, filterTransientServicePath, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, type ServiceInstallState, writeServiceInstallState, readServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 import { readTextOrNull } from "./windows-taskxml";
 
@@ -39,7 +39,7 @@ export function buildPlist(
   const runtime = deps.runtime ?? durableBunRuntime();
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   const log = logPath();
-  const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "darwin");
   const codexHome = process.env.CODEX_HOME?.trim();
   const codexSqliteHome = currentCodexSqliteHomeAbsolute();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
@@ -90,6 +90,11 @@ ${envLines}
  */
 const PLIST_PATH_ENTRY = /^(\s*<key>PATH<\/key><string>)([^\n]*)(<\/string>)$/m;
 
+function filterPlistPathVariable(plist: string): string {
+  return plist.replace(PLIST_PATH_ENTRY, (_match, open: string, value: string, close: string) =>
+    `${open}${filterTransientServicePath(value, ":", "darwin")}${close}`);
+}
+
 /**
  * The rendered plist with the PREVIOUS definition's `PATH` put back — or null when `PATH`
  * is not the only difference.
@@ -114,14 +119,17 @@ const PLIST_PATH_ENTRY = /^(\s*<key>PATH<\/key><string>)([^\n]*)(<\/string>)$/m;
  * re-install still updates it.
  */
 export function reusePreviousPlistPathVariable(previous: string, rendered: string): string | null {
+  if (previous === rendered) return null;
   const prev = PLIST_PATH_ENTRY.exec(previous);
   const next = PLIST_PATH_ENTRY.exec(rendered);
-  if (!prev || !next || prev[2] === next[2]) return null;
+  if (!prev || !next) return null;
+  const normalizedPrevious = filterPlistPathVariable(previous);
+  const previousPath = filterTransientServicePath(prev[2] ?? "", ":", "darwin");
   // A function replacer, not a `$1` template: a PATH entry containing `$&` or `$1` would
   // otherwise be re-expanded into the file.
   const adopted = rendered.replace(PLIST_PATH_ENTRY, (_match, open: string, _value: string, close: string) =>
-    `${open}${prev[2] ?? ""}${close}`);
-  return adopted === previous ? adopted : null;
+    `${open}${previousPath}${close}`);
+  return adopted === normalizedPrevious ? normalizedPrevious : null;
 }
 
 /**

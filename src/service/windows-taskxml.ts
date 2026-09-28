@@ -8,7 +8,7 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
 import { resolveServiceListenPort, resolvedProxyEnv } from "./health";
-import { cliEntry, serviceLogPath, currentCodexSqliteHomeAbsolute } from "./state";
+import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute } from "./state";
 
 function windowsBatchValue(value: string): string {
   return value
@@ -62,7 +62,7 @@ export function buildWindowsServiceScript(
   // Provenance rides along with the entry: a second durableBunRuntime() call here could
   // resolve differently from the binary the caller actually baked.
   const { bun, bunRuntimeSource, cli } = entry;
-  const path = process.env.PATH ?? "";
+  const path = filterTransientServicePath(process.env.PATH ?? "", ";", "win32");
   const lines = [
     "@echo off",
     "setlocal EnableExtensions DisableDelayedExpansion",
