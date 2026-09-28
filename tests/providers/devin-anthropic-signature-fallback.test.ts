@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { createDevinAdapter } from "../../src/adapters/devin";
-import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
+import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { devinCacheIdentity, invalidateSessionIdentity } from "../../src/adapters/devin/cloud-direct/chat";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { encodeDevinSignature } from "../../src/adapters/devin/reasoning-signature";
@@ -42,11 +42,11 @@ describe("Devin Anthropic signature fallback", () => {
     return { thinking: byNum.get(11), signature: byNum.get(12) };
   }
 
-  async function run(signature: string, modelId: string, observed?: AdapterEvent[]): Promise<AdapterEvent[]> {
+  async function run(signature: string, modelId: string, observed?: AdapterEvent[], userText = "go"): Promise<AdapterEvent[]> {
     const parsed = parseRequest({
       model: `devin/${modelId}`,
       input: [
-        { role: "user", content: [{ type: "input_text", text: "go" }] },
+        { role: "user", content: [{ type: "input_text", text: userText }] },
         { type: "reasoning", id: "rs", summary: [], encrypted_content: encodeReasoningEnvelope({ txt: "summarised thought", sig: signature }) },
         { type: "function_call", call_id: "call_1", name: "get_time", arguments: "{}" },
         { type: "function_call_output", call_id: "call_1", output: "12:00" },
@@ -100,6 +100,20 @@ describe("Devin Anthropic signature fallback", () => {
     expect(assistantSignature(requests[1]!)).toEqual({ thinking: "summarised thought", signature: undefined });
     expect(events.some(e => e.type === "error")).toBe(false);
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+  });
+
+  test("a signed refusal at 95% of the catalog window retries unsigned before overflow classification", async () => {
+    const modelId = "claude-opus-5-5-medium";
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, Buffer.concat([
+      encodeString(1, modelId), encodeString(22, modelId), encodeVarintField(18, 200_000), encodeVarintField(4, 0),
+    ])), apiKey, host));
+    responses = ["refuse", "ok"];
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), modelId, undefined, "word ".repeat(190_000));
+    expect(requests).toHaveLength(2);
+    expect(assistantSignature(requests[0]!).signature).toBe("EpcBClaude");
+    expect(assistantSignature(requests[1]!).signature).toBeUndefined();
+    expect(events).toContainEqual({ type: "text_delta", text: "ok" });
+    expect(events.some(e => e.type === "error" && e.code === "context_length_exceeded")).toBe(false);
   });
 
   test("a refusal after reasoning alone is still retried, and the refused attempt's reasoning never reaches the client", async () => {
