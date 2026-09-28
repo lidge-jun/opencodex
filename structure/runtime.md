@@ -2,6 +2,18 @@
 
 The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
+## Blocked-model redirects
+
+`src/router.ts` applies `blockedModelRedirects` bare keys to the resolved native model after
+provider, account and alias selection. Ordinary values remain one same-provider upstream model
+substitution, including slash-valued targets. Only a target explicitly naming a different
+configured provider enters recursive routing; qualified source keys are considered for that
+extension before bare keys. Cross-provider edges share one visited set and five-edge budget
+through provider, alias, combo and policy resolution. Exact account selectors reject any
+cross-provider target and retain the pinned account for legacy substitutions. The selected
+route and decision trace describe the final provider/model while policy candidates retain their
+selection evidence and combo routes retain their kind and redirect reason.
+
 ## Resolved static model policy
 
 `src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Fast observation, persistence and cost provenance follow the [response-tier authority contract](transports/responses.md#response-tier-observation-authority); outbound Fast policy is unchanged. Policy/combo

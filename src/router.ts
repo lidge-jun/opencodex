@@ -549,6 +549,20 @@ export function comboRouteDecisionTrace(
 // Codex uses a small number of control-plane model ids that are not part of the public GPT/o
 // naming families. Keep this exact: a broad `codex-*` rule could capture a third-party model.
 const CODEX_INTERNAL_OPENAI_MODELS = new Set(["codex-auto-review"]);
+const MAX_BLOCKED_MODEL_REDIRECT_EDGES = 5;
+
+interface BlockedModelRedirectState {
+  visited: Set<string>;
+  edges: number;
+}
+
+function crossProviderRedirectTarget(config: OcxConfig, providerName: string, value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const slash = value.indexOf("/");
+  if (slash <= 0) return undefined;
+  const targetProvider = value.slice(0, slash);
+  return targetProvider !== providerName && hasOwnProvider(config.providers, targetProvider) ? value : undefined;
+}
 
 function isBareOpenAiFamilyModel(modelId: string): boolean {
   return !modelId.includes("/")
@@ -562,8 +576,32 @@ function routeResult(
   modelId: string,
   routeKind: RouteDecisionKind,
   routeReason: string,
+  redirectState: BlockedModelRedirectState,
 ): RouteResult {
-  const redirected = resolveBlockedModelRedirect(config, modelId);
+  const qualified = resolveBlockedModelRedirect(config, `${providerName}/${modelId}`);
+  const bare = resolveBlockedModelRedirect(config, modelId);
+  const crossTarget = config && (
+    crossProviderRedirectTarget(config, providerName, qualified)
+    ?? crossProviderRedirectTarget(config, providerName, bare)
+  );
+  if (crossTarget && config) {
+    if (routeKind === "explicit-account") {
+      throw new Error("Blocked model redirect cannot leave a pinned account route");
+    }
+    const source = `${providerName}/${modelId}`;
+    if (redirectState.visited.has(source)) {
+      throw new Error(`Blocked model redirect cycle detected: ${source}`);
+    }
+    if (redirectState.edges >= MAX_BLOCKED_MODEL_REDIRECT_EDGES) {
+      throw new Error(`Blocked model redirect exceeded maximum redirect depth (${MAX_BLOCKED_MODEL_REDIRECT_EDGES})`);
+    }
+    redirectState.visited.add(source);
+    redirectState.edges += 1;
+    const targetRoute = routeModelInternal(config, crossTarget, true, undefined, false, false, redirectState);
+    return { ...targetRoute, routeReason: "blocked-model-redirect" };
+  }
+  // Existing bare mappings remain one post-resolution, same-provider substitution.
+  const redirected = bare;
   const effectiveModelId = redirected ?? modelId;
   const effectiveRouteReason = redirected ? "blocked-model-redirect" : routeReason;
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
@@ -628,6 +666,7 @@ function routeModelInternal(
   policyEvidence?: PolicyRequestEvidence,
   allowCompactionNativeFallback = false,
   preview = false,
+  redirectState: BlockedModelRedirectState = { visited: new Set<string>(), edges: 0 },
 ): RouteResult {
   const slash = modelId.indexOf("/");
   // Policy namespace is system-reserved: an explicit `policy/<id>` or a
@@ -654,12 +693,20 @@ function routeModelInternal(
     }
     const selected = evaluation.candidates[evaluation.selectedIndex]!;
     const concrete = `${selected.provider}/${selected.model}`;
-    const routed = routeModelInternal(config, concrete, true);
+    const routed = routeModelInternal(config, concrete, true, undefined, false, preview, redirectState);
     return {
       ...routed,
       routeKind: "policy" as const,
-      routeReason: "policy-selected",
-      routeDecision: evaluation.trace,
+      routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "policy-selected",
+      routeDecision: {
+        ...evaluation.trace,
+        selected: {
+          ...evaluation.trace.selected,
+          provider: routed.providerName,
+          model: routed.modelId,
+          reason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : evaluation.trace.selected.reason,
+        },
+      },
     };
   }
   if (slash > 0) {
@@ -683,8 +730,12 @@ function routeModelInternal(
       if (!isCanonicalOpenAiForwardProvider(providerForCanonicalCheck)) {
         throw new NoEnabledOpenAiProviderError(nativeModelId);
       }
+      const accountQualified = resolveBlockedModelRedirect(config, modelId);
+      if (crossProviderRedirectTarget(config, OPENAI_CODEX_PROVIDER_ID, accountQualified)) {
+        throw new Error("Blocked model redirect cannot leave a pinned account route");
+      }
       return {
-        ...routeResult(config, OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId, "explicit-account", "account-namespace"),
+        ...routeResult(config, OPENAI_CODEX_PROVIDER_ID, provider, nativeModelId, "explicit-account", "account-namespace", redirectState),
         // Exact account injection uses the pool credential machinery even when the canonical
         // provider is globally Direct. The fixed id bypasses pool selection entirely.
         codexAccountMode: "pool",
@@ -700,8 +751,8 @@ function routeModelInternal(
       const concrete = `${combo.target.provider}/${combo.target.model}`;
       // The selected target is already a concrete provider/model reference. Resolve it without
       // consulting combo aliases again, otherwise an alias that shadows the target can recurse.
-      const routed = routeModelInternal(config, concrete, true, undefined);
-      return { ...routed, combo, routeKind: "combo" as const, routeReason: "combo-pick" };
+      const routed = routeModelInternal(config, concrete, true, undefined, false, preview, redirectState);
+      return { ...routed, combo, routeKind: "combo" as const, routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
     }
   }
 
@@ -761,7 +812,7 @@ function routeModelInternal(
       // itself a known model (e.g. orcarouter/auto). Route it whole instead of stripping to the
       // remainder, which would send a bare `auto` the upstream cannot resolve.
       if (known.includes(modelId)) {
-        return routeResult(config, provName, prov, modelId, "explicit-provider", "explicit-provider-namespace");
+        return routeResult(config, provName, prov, modelId, "explicit-provider", "explicit-provider-namespace", redirectState);
       }
       // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
       // slash id via an exact known-id lookup; raw full-slash selectors keep working.
@@ -777,6 +828,7 @@ function routeModelInternal(
         nativeModel,
         "explicit-provider",
         "explicit-provider-namespace",
+        redirectState,
       );
     }
     }
@@ -785,7 +837,7 @@ function routeModelInternal(
   if (isBareOpenAiFamilyModel(modelId)) {
     const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
     if (provider && provider.disabled !== true) {
-      return routeResult(config, OPENAI_CODEX_PROVIDER_ID, provider, modelId, "native", "native-family");
+      return routeResult(config, OPENAI_CODEX_PROVIDER_ID, provider, modelId, "native", "native-family", redirectState);
     }
     // Codex chooses a bare native model for compaction even when the operator's
     // ordinary route is a third-party provider. Keep the native reservation
@@ -806,6 +858,7 @@ function routeModelInternal(
           modelId,
           "default-provider",
           "compaction-default-provider",
+          redirectState,
         );
       }
     }
@@ -815,18 +868,18 @@ function routeModelInternal(
   for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.defaultModel === modelId
       || (typeof prov.defaultModel === "string" && encodeRoutedModelId(prov.defaultModel) === modelId)) {
-      return routeResult(config, provName, prov, prov.defaultModel as string, "explicit-provider", "configured-default-model");
+      return routeResult(config, provName, prov, prov.defaultModel as string, "explicit-provider", "configured-default-model", redirectState);
     }
   }
 
-  const patternRoute = routeByKnownModelPattern(config, modelId);
+  const patternRoute = routeByKnownModelPattern(config, modelId, redirectState);
   if (patternRoute) return patternRoute;
 
   for (const [provName, prov] of activeProviderEntries(config)) {
     if (prov.models && Array.isArray(prov.models)) {
       const hit = (prov.models as string[]).find(id => id === modelId || encodeRoutedModelId(id) === modelId);
       if (hit !== undefined) {
-        return routeResult(config, provName, prov, hit, "explicit-provider", "configured-model-list");
+        return routeResult(config, provName, prov, hit, "explicit-provider", "configured-model-list", redirectState);
       }
     }
   }
@@ -846,7 +899,7 @@ function routeModelInternal(
   }
   if (aliasMatches[0]) {
     const match = aliasMatches[0];
-    return routeResult(config, match.provider, config.providers[match.provider], match.model, "explicit-provider", "model-alias");
+    return routeResult(config, match.provider, config.providers[match.provider], match.model, "explicit-provider", "model-alias", redirectState);
   }
 
   if (config.defaultProvider === LEGACY_CHATGPT_PROVIDER_ID) {
@@ -855,7 +908,7 @@ function routeModelInternal(
   if (hasOwnProvider(config.providers, config.defaultProvider)) {
     const defaultProv = config.providers[config.defaultProvider];
     if (defaultProv.disabled === true) throw new Error(`Default provider is disabled: ${config.defaultProvider}`);
-    return routeResult(config, config.defaultProvider, defaultProv, modelId, "default-provider", "default-provider");
+    return routeResult(config, config.defaultProvider, defaultProv, modelId, "default-provider", "default-provider", redirectState);
   }
 
   throw new Error(`No provider configured for model: ${modelId}`);
@@ -921,7 +974,7 @@ export function routeConcreteModel(config: OcxConfig, modelId: string): RouteRes
   return routeModelInternal(config, modelId, true, undefined);
 }
 
-function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResult | undefined {
+function routeByKnownModelPattern(config: OcxConfig, modelId: string, redirectState: BlockedModelRedirectState): RouteResult | undefined {
   for (const { providerNames, prefixes } of MODEL_PROVIDER_PATTERNS) {
     if (prefixes.some(prefix => modelId.startsWith(prefix))) {
       const matchingProvider = Object.entries(config.providers).find(
@@ -929,7 +982,7 @@ function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResu
       );
       if (matchingProvider) {
         const [provName, prov] = matchingProvider;
-        return routeResult(config, provName, prov, modelId, "explicit-provider", "model-pattern");
+        return routeResult(config, provName, prov, modelId, "explicit-provider", "model-pattern", redirectState);
       }
       // Deliberately no "first provider with an Anthropic adapter" fallback here. Picking by
       // object insertion order, without checking `models`, `selectedModels`, `disabledModels` or

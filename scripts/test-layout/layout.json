@@ -1481,6 +1481,7 @@
     "route-decision-trace.test.ts": "server",
     "route-explainability.test.ts": "cli",
     "routed-agent-messages.test.ts": "adapters",
+    "router-blocked-cross-provider.test.ts": "routing",
     "router-combo-failover-classification.test.ts": "routing",
     "router-discarded-baseurl-warning.test.ts": "routing",
     "router-template-baseurl.test.ts": "routing",
