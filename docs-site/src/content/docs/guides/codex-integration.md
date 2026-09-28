@@ -995,7 +995,9 @@ After a Codex update, an unassessed app version refuses correction until its com
 reviewed; reinstalling the certificate does not make an unassessed build supported.
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
-compatibility PAC argument and launches Codex through Windows package activation. It checks the
+compatibility PAC argument only when the current OpenCodex process owns the serving compatibility
+runtime. A stale or foreign endpoint is refused before stopping Codex; replacement of the runtime
+during restart also prevents managed relaunch. The app launches through Windows package activation. It checks the
 package identity and routing argument after launch; unreadable or conflicting main-app routing arguments cause
 a refusal before the restart. This does not enable a compatibility mode, install a certificate,
 or watch and restart the app automatically. Normal launches without that routing argument keep

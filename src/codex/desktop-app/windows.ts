@@ -13,7 +13,7 @@
 import { execFileSync } from "node:child_process";
 import { sep, win32 } from "node:path";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../../lib/windows-elevation";
-import { activateWindowsCodexCompatibility, captureWindowsCompatibilityContext } from "../desktop-compatibility/windows-package-command";
+import { activateWindowsCodexCompatibility, assertWindowsCompatibilityContext, captureWindowsCompatibilityContext } from "../desktop-compatibility/windows-package-command";
 import {
   isUnderRoot,
   type DesktopAppAdapter,
@@ -231,6 +231,7 @@ export const windowsDesktopAppAdapter: DesktopAppAdapter = {
 
   relaunch(exec, install, context): void {
     if (context.codexCompatibilityPacUrl) {
+      assertWindowsCompatibilityContext(context);
       activateWindowsCodexCompatibility(exec, install, context.codexCompatibilityPacUrl);
       return;
     }

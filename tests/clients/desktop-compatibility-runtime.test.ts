@@ -3,7 +3,8 @@ import { createCertificateAuthority } from "../../src/claude/intercept/local-ca"
 import { X509Certificate } from "node:crypto";
 import { createDesktopCompatibilityRuntime } from "../../src/codex/desktop-compatibility/runtime";
 import { UsageRelayController, type UsageIdentity } from "../../src/codex/desktop-compatibility/usage-controller";
-import { desktopCompatibilityRuntimeActive } from "../../src/codex/desktop-compatibility/runtime-ownership";
+import { desktopCompatibilityRuntimeActive, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
+import { captureWindowsCompatibilityContext, assertWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
 import { createDesktopCertificateService } from "../../src/codex/desktop-compatibility/certificate-service";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import type { DesktopConnectionIdentity, DesktopConnectionStore } from "../../src/codex/desktop-compatibility/connection-store";
@@ -135,6 +136,24 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore, build
 }
 
 describe("optional native compatibility runtime", () => {
+  test("only a serving runtime attests PAC preservation and stop/start invalidates the captured generation", async () => {
+    const io = fixture();
+    expect(readDesktopCompatibilityLaunch()).toBeNull();
+    await io.runtime.start();
+    const pacUrl = io.runtime.getPacUrl()!;
+    expect((await fetch(pacUrl)).status).toBe(200);
+    const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pacUrl}` };
+    const captured = captureWindowsCompatibilityContext([root]);
+    expect(captured.codexCompatibilityGeneration).toBe(readDesktopCompatibilityLaunch()!.generation);
+    expect(() => assertWindowsCompatibilityContext(captured)).not.toThrow();
+    const stopping = io.runtime.stop();
+    expect(readDesktopCompatibilityLaunch()).toBeNull();
+    await stopping;
+    await io.runtime.start();
+    expect(io.runtime.getPacUrl()).toBe(pacUrl);
+    expect(() => assertWindowsCompatibilityContext(captured)).toThrow("desktop_compatibility_launch_owner_unverified");
+    expect(() => assertWindowsCompatibilityContext(captureWindowsCompatibilityContext([root]))).not.toThrow();
+  });
   test("observation cancels a pending apply request before its build preflight can finish", async () => {
     let pending = false, entered!: () => void, release!: (value: boolean) => void;
     const waiting = new Promise<void>(resolve => { entered = resolve; });

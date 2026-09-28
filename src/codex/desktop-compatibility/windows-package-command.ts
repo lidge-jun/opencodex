@@ -1,6 +1,7 @@
 import type { DesktopAppInstall, DesktopExec, DesktopProcess } from "../desktop-app/types";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import { WINDOWS_ACTIVATION_SOURCE } from "./windows-activation-source";
+import { readDesktopCompatibilityLaunch } from "./runtime-ownership";
 
 /** Only the feature's loopback PAC endpoint may become a launch argument. */
 export function validatedCompatibilityPacUrl(value: string): string {
@@ -40,7 +41,7 @@ export function compatibilityActivationScript(install: DesktopAppInstall, pacUrl
 }
 
 
-/** Preserve only an already active managed-shape PAC, never arbitrary launch flags. */
+/** Preserve only the current runtime's PAC and lifetime, never trust a URL shape alone. */
 export function captureWindowsCompatibilityContext(processes: readonly DesktopProcess[]): Record<string, string> {
   const members = new Set(processes.map(entry => entry.pid));
   const urls = new Set<string>();
@@ -54,7 +55,18 @@ export function captureWindowsCompatibilityContext(processes: readonly DesktopPr
     }
   }
   if (urls.size > 1) throw new Error("desktop_compatibility_conflicting_launch_context");
-  return urls.size === 1 ? { codexCompatibilityPacUrl: [...urls][0]! } : {};
+  if (urls.size === 0) return {};
+  const pacUrl = [...urls][0]!, owner = readDesktopCompatibilityLaunch();
+  if (!owner || owner.pacUrl !== pacUrl) throw new Error("desktop_compatibility_launch_owner_unverified");
+  return { codexCompatibilityPacUrl: pacUrl, codexCompatibilityGeneration: owner.generation };
+}
+
+/** Recheck after the asynchronous stop ladder: identical endpoints can belong to a new runtime. */
+export function assertWindowsCompatibilityContext(context: Record<string, string>): void {
+  const owner = readDesktopCompatibilityLaunch();
+  if (!owner || owner.pacUrl !== context.codexCompatibilityPacUrl || owner.generation !== context.codexCompatibilityGeneration) {
+    throw new Error("desktop_compatibility_launch_owner_unverified");
+  }
 }
 
 export function activateWindowsCodexCompatibility(exec: DesktopExec, install: DesktopAppInstall, pacUrl: string): { pid: number; packageFullName: string } {

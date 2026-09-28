@@ -13,7 +13,7 @@ import { UsageRelayController, type UsageIdentity } from "./usage-controller";
 import { createUsageControlledFetch } from "./usage-controlled-fetch";
 import { startDesktopRelay } from "./relay-listener";
 import { launchWindowsCodexCompatibility } from "./windows-package-launch";
-import { acquireDesktopCompatibilityRuntime } from "./runtime-ownership";
+import { acquireDesktopCompatibilityRuntime, bindDesktopCompatibilityLaunch } from "./runtime-ownership";
 import { createDesktopConnectionStore, type DesktopConnectionStore } from "./connection-store";
 import { createNativeRoutingVerifier } from "./routing-preflight";
 import { createInstalledBuildProbe } from "./installed-build";
@@ -74,8 +74,9 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     if (!io.buildSupported) buildProbe = createInstalledBuildProbe();
     let relay: Awaited<ReturnType<typeof startDesktopRelay>> | undefined, proxy: ConnectProxyHandle | undefined;
     let pac: ReturnType<typeof Bun.serve> | undefined, timer: ReturnType<typeof setInterval> | undefined;
-    let detach: (() => void) | undefined, controller: UsageRelayController | undefined;
+    let detach: (() => void) | undefined, unbindLaunch: (() => void) | undefined, controller: UsageRelayController | undefined;
     const cleanup = async () => {
+      unbindLaunch?.();
       if (timer) clearInterval(timer); detach?.();
       // Abort transport before awaiting stream refresh so a stuck reader cannot retain sockets.
       const results = await Promise.allSettled([pac?.stop(true), proxy?.close(), relay?.close(), controller?.observeOnly(), buildProbe?.close()]);
@@ -134,6 +135,9 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       }, 1000); timer.unref();
       owned = { controller, close: cleanup, fingerprint: authority.fingerprint, deadline, pacUrl: `http://127.0.0.1:${pac.port}/${runId}/proxy.pac` };
       phase = "running";
+      const launchedBy = owned;
+      unbindLaunch = bindDesktopCompatibilityLaunch(owned.pacUrl,
+        () => owned === launchedBy && phase === "running" && Date.now() < deadline);
       detach = registerOptionalShutdownHook("codex-desktop-compatibility", () => { void stop().catch(() => {}); });
       return status();
     } catch (error) {

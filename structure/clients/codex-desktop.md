@@ -15,7 +15,13 @@ this boundary. `tests/clients/desktop-app-restart.test.ts` covers the contract.
 ## Windows launch context
 
 `src/codex/desktop-app/windows.ts` captures an already active loopback compatibility
-PAC from the main package process. Helpers cannot override it and conflicting main
+PAC from the main package process only when its exact URL is registered by the current
+process-local serving runtime. The runtime publishes a fresh generation after its listeners
+bind and revokes it before cleanup. Disk state and URL shape cannot establish this ownership;
+stopped, expired, foreign or unregistered runtimes refuse capture before termination.
+The adapter rechecks the captured generation immediately before package activation, so even
+a replacement runtime serving identical ports cannot inherit the old restart approval.
+Helpers cannot override it and conflicting main
 processes refuse before termination. No other process arguments are carried forward.
 Captured command lines stay internal, outside restart results and diagnostic logs.
 Capture failures return `relaunch_context_failed` and release the restart lock before any process is signalled; the CLI reports that the app was not stopped.
