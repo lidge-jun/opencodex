@@ -118,6 +118,27 @@ afterEach(() => {
 });
 
 describe("fetchProviderQuotaReports", () => {
+  test("direct main omits unpublished usage but reports a published snapshot", async () => {
+    const config = testConfig();
+    config.providers = { openai: { ...config.providers.openai!, codexAccountMode: "direct" } };
+    const info = { email: null, plan: "plus", quota: { weeklyPercent: 64 } };
+    const snapshot = { info, mainIdentityGeneration: 1 };
+    const probe = spyOn(authApi, "fetchMainAccountInfoSnapshot")
+      .mockImplementation(async () => snapshot);
+    try {
+      const published = await fetchProviderQuotaReports(config, true);
+      expect(published.reports.find(row => row.provider === "openai")?.quota.weeklyPercent).toBe(64);
+      probe.mockImplementation(async () => ({ ...snapshot, infoUnpublished: true as const }));
+      const stale = await fetchProviderQuotaReports(config, true);
+      expect(stale.reports.find(row => row.provider === "openai")).toBeUndefined();
+      probe.mockImplementation(async () => snapshot);
+      const refreshed = await fetchProviderQuotaReports(config, true);
+      expect(refreshed.reports.find(row => row.provider === "openai")?.quota.weeklyPercent).toBe(64);
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
   test("provider quota probes have no direct Response.json calls", () => {
     // Probes live in leaves now; the facade alone no longer holds one.
     for (const p of ["quota.ts", "quota/vendor-probes-key.ts", "quota/vendor-probes-oauth.ts", "quota/antigravity.ts"]) expect(readFileSync(repoPath(`src/providers/${p}`), "utf8")).not.toMatch(/\.\s*json\s*\(/);

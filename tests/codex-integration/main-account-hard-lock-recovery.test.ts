@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  fetchMainAccountInfo, listCodexAuthAccounts, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
+  fetchMainAccountInfo, fetchMainAccountInfoSnapshot, listCodexAuthAccounts,
+  registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
 } from "../../src/codex/auth-api";
 import { fetchMainAccountInfoAttempt } from "../../src/codex/auth-api/main-account-probe";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
@@ -445,6 +446,64 @@ describe("main hard-lock background recovery", () => {
       await pending;
     }
   });
+
+  for (const status of [200, 401, 403]) {
+    test.each(["unchanged", "replaced", "unreadable"] as const)(
+      `single delayed ${status} checks the stored credential: %s`, async transition => {
+        const started = deferred<void>();
+        const finish = deferred<void>();
+        const authPath = join(home, "auth.json");
+        const replacement = JSON.parse(readFileSync(authPath, "utf8"));
+        replacement.tokens.access_token += "-rotated";
+        setMainAccountInfoCache({ email: null, plan: "plus", quota: { shortPercent: 99 }, ts: 1 });
+        if (status === 200) markAccountNeedsReauth(MAIN);
+        let reads = 0;
+        globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+          expect(String(input)).toBe(whamUrl);
+          reads++;
+          started.resolve();
+          await finish.promise;
+          return status === 200 ? Response.json({ plan_type: "prolite", rate_limit: {
+            primary_window: { used_percent: 64, limit_window_seconds: 604_800 },
+            secondary_window: null, tertiary_window: null,
+          } }) : Response.json({ error: { code: "invalid_workspace_selected" } }, { status });
+        }, { preconnect: previousFetch.preconnect });
+        const pending = fetchMainAccountInfoSnapshot(true, config());
+        try {
+          await started.promise;
+          if (transition === "replaced") writeFileSync(authPath, JSON.stringify(replacement));
+          if (transition === "unreadable") writeFileSync(authPath, "{");
+          const cached = structuredClone(getMainAccountInfoCache());
+          const policy = getMainPolicyQuota();
+          finish.resolve();
+          const snapshot = await pending;
+          expect(reads).toBe(1);
+          if (transition === "unchanged") {
+            if (status === 200) {
+              expect(getMainAccountInfoCache()?.quota?.weeklyPercent).toBe(64);
+              expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+              expect(isAccountNeedsReauth(MAIN)).toBe(false);
+              expect(snapshot.infoUnpublished).toBeUndefined();
+              expect(snapshot.quotaRefresh?.status).toBe("ok");
+            } else {
+              expect(getMainAccountInfoCache()).toBeNull();
+              expect(isAccountNeedsReauth(MAIN)).toBe(true);
+              expect(snapshot.quotaRefresh).toEqual({ status: "http_error", httpStatus: status });
+            }
+          } else {
+            expect(getMainAccountInfoCache()).toEqual(cached);
+            expect(getMainPolicyQuota()).toEqual(policy);
+            expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+            expect(isAccountNeedsReauth(MAIN)).toBe(status === 200);
+            expect(snapshot.quotaRefresh).toBeUndefined();
+            if (status === 200) expect(snapshot.infoUnpublished).toBe(true);
+          }
+        } finally {
+          finish.resolve();
+          await pending;
+        }
+      });
+  }
 
   for (const status of [401, 403]) {
     for (const phase of ["request", "error-body"] as const) {

@@ -18,6 +18,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
+  TERMINAL_QUOTA_FAILURE,
   hasQuotaRows,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -25,6 +26,7 @@ import {
   report,
   tagNativeMainReport,
   type CodexAuthAccountsSnapshotPromise,
+  type ProviderQuotaProbeResult,
   type ProviderQuotaReport,
 } from "./report-cache";
 import {
@@ -46,9 +48,11 @@ export async function fetchChatGptForwardQuota(
   providerConfig: OcxProviderConfig,
   forceRefresh: boolean,
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
-): Promise<ProviderQuotaReport | null> {
+): Promise<ProviderQuotaProbeResult> {
   if (providerCodexAccountMode(provider, providerConfig) === "direct") {
     const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh, config);
+    // A parsed return from a replaced credential cannot retain an older cached report either.
+    if (snapshot.infoUnpublished) return TERMINAL_QUOTA_FAILURE;
     const quota = providerQuotaFromCodexQuota(snapshot.info.quota);
     if (quota) quota.updatedAt = Date.now();
     return quota

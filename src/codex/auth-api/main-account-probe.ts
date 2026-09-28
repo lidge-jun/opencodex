@@ -116,6 +116,8 @@ export interface MainAccountInfoFetchResult {
 
 export interface MainAccountInfoSnapshot {
   info: MainAccountInfo;
+  /** Ordinary info that was never published and must not become provider quota. */
+  infoUnpublished?: true;
   mainIdentityGeneration: number;
   quotaRefresh?: CodexQuotaRefreshOutcome;
 }
@@ -124,6 +126,7 @@ export async function fetchMainAccountInfoSnapshot(forceRefresh = false, config?
   const result = await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false, forceRefresh, false, config);
   return {
     info: result.info,
+    ...(result.infoUnpublished ? { infoUnpublished: true as const } : {}),
     ...(result.quotaRefresh && result.quotaRefreshGeneration !== undefined
       && isMainAccountIdentityGenerationLive(result.quotaRefreshGeneration)
       ? { quotaRefresh: result.quotaRefresh } : {}),
@@ -241,11 +244,19 @@ export async function fetchMainAccountInfoWhileOwned(
     ? observeMainQuotaCredential(tokens.access_token, tokens.account_id)
     : undefined;
   const mainQuotaCredentialGeneration = getMainQuotaCredentialGeneration();
-  /** Revalidate identity, bearer and its generation after each upstream await. */
-  const credentialIsCurrent = (): boolean => mainQuotaWriter !== undefined
-    && isMainQuotaWriterLive(mainQuotaWriter)
-    && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
-    && matchesMainQuotaCredential(tokens.access_token, tokens.account_id);
+  /** A disk replacement may have no second probe to advance the credential generation. */
+  const credentialIsCurrent = (): boolean => {
+    const current = readCodexTokensResult(undefined, { bounded: true });
+    if (current.status !== "ok") return false;
+    const effectiveAccountId = extractAccountId(current.tokens.id_token, current.tokens.access_token)
+      ?? (current.tokens.account_id || null);
+    if (effectiveAccountId !== current.tokens.account_id || effectiveAccountId !== requestAccountId) return false;
+    observeMainQuotaCredential(current.tokens.access_token, current.tokens.account_id);
+    return mainQuotaWriter !== undefined
+      && isMainQuotaWriterLive(mainQuotaWriter)
+      && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration()
+      && matchesMainQuotaCredential(tokens.access_token, tokens.account_id);
+  };
   // Keep diagnostics separate from authentication and freshness policy. Never serialize errors.
   const quotaSignal = AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS);
   let quotaPhase: "request" | "body" | "decode" | "publish" = "request";
