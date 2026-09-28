@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as authApi from "../../src/codex/auth-api";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
-import { clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
+import { captureMainAccountIdentityGeneration, clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, updateAccountQuota, type StoredAccountQuota } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -122,7 +122,7 @@ describe("fetchProviderQuotaReports", () => {
     const config = testConfig();
     config.providers = { openai: { ...config.providers.openai!, codexAccountMode: "direct" } };
     const info = { email: null, plan: "plus", quota: { weeklyPercent: 64 } };
-    const snapshot = { info, mainIdentityGeneration: 1 };
+    const snapshot = { info, mainIdentityGeneration: captureMainAccountIdentityGeneration() };
     const probe = spyOn(authApi, "fetchMainAccountInfoSnapshot")
       .mockImplementation(async () => snapshot);
     try {
