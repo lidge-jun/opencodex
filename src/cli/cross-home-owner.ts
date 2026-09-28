@@ -14,7 +14,7 @@ import { readClientConnectionState } from "../client/state";
 import { findManagedRegion, resolveGrokHome } from "../grok/inject";
 import { providerTableString } from "../codex/injected-marker";
 import { isLocalAttestationSecret } from "../lib/local-management-attestation";
-import { probePortOwner, proveLiveProxyOwnedByHome, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
+import { loopbackProbeHosts, proveLiveProxyOwnedByHome, proxyIdentityAt, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
 import type { RuntimePortState } from "../config/process-state";
 
 const MAX_HINT_BYTES = 256 * 1024;
@@ -109,12 +109,18 @@ export async function findCrossHomeOwner(options: { homeDir?: string } = {}): Pr
     // A managed client URL is only a location hint. The default home's protected runtime
     // record supplies the identity and proof key that make it ownership evidence.
     if (!defaultRuntime || defaultRuntime.port !== port || defaultRuntime.pid === process.pid) continue;
-    const owner = await probePortOwner(port, {}, START_OWNERSHIP_LIVENESS);
-    if (owner?.pid !== defaultRuntime.pid) continue;
-    if (await proveLiveProxyOwnedByHome(
-      { ...owner, port, source: "runtime" },
-      { readRuntimeFn: () => defaultRuntime },
-    )) return port;
+    // IPv4 and IPv6 loopback listeners are independent on this port, so a pid mismatch
+    // (or a dead answer) on one family does not prove the recorded owner absent. The
+    // recorded hostname is tried first and every loopback candidate gets an identity
+    // and attestation check before the port reports no owner.
+    for (const hostname of loopbackProbeHosts(defaultRuntime.hostname)) {
+      const identity = await proxyIdentityAt(port, { hostname, expectedPid: defaultRuntime.pid }, START_OWNERSHIP_LIVENESS);
+      if (identity?.pid !== defaultRuntime.pid) continue;
+      if (await proveLiveProxyOwnedByHome(
+        { ...identity, hostname, port, source: "runtime" },
+        { readRuntimeFn: () => defaultRuntime },
+      )) return port;
+    }
   }
   return null;
 }

@@ -38,10 +38,10 @@ function fixture() {
   return { root, home, ocx, codex, grok, claude };
 }
 
-function healthServer(pid: number | null, service = "opencodex") {
+function healthServer(pid: number | null, service = "opencodex", listen: { hostname?: string; port?: number } = {}) {
   let port = 0;
   const server = Bun.serve({
-    hostname: "127.0.0.1", port: 0,
+    hostname: listen.hostname ?? "127.0.0.1", port: listen.port ?? 0,
     fetch: req => {
       const headers = new Headers();
       const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
@@ -195,6 +195,46 @@ test("only a distinct live identity in the default-home record counts", async ()
   expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(port);
   writeFileSync(record, JSON.stringify({ pid: process.pid, port, attestationSecret: TEST_ATTESTATION_SECRET }));
   expect(await findCrossHomeOwner({ homeDir: fx.home })).toBeNull();
+});
+
+test("the recorded ::1 owner is found beside an IPv4 listener on the same port", async () => {
+  const fx = fixture();
+  const ownerPid = process.pid + 1;
+  let v6: ReturnType<typeof Bun.serve>;
+  try {
+    v6 = Bun.serve({
+      hostname: "::1", port: 0,
+      fetch: req => {
+        const headers = new Headers();
+        const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
+        const proof = challenge
+          ? createLocalAttestationProof(TEST_ATTESTATION_SECRET, challenge, ownerPid, v6.port)
+          : null;
+        if (proof) headers.set(LOCAL_ATTESTATION_PROOF_HEADER, proof);
+        return Response.json({ service: "opencodex", status: "ok", version: "0.0.0", uptime: 1, pid: ownerPid }, { headers });
+      },
+    });
+  } catch {
+    return; // IPv6 loopback is unavailable on this host.
+  }
+  servers.push(v6);
+  const port = v6.port;
+  // A different opencodex-looking process holds only the IPv4 loopback of the same
+  // port. Its pid mismatch must not mask the recorded ::1 owner.
+  try {
+    healthServer(ownerPid + 1, "opencodex", { hostname: "127.0.0.1", port });
+  } catch { /* the IPv6 bind is dual-stack on this host; the owner still answers */ }
+  const record = join(fx.home, ".opencodex", "runtime-port.json");
+  const writeRecord = (hostname?: string) => writeFileSync(record, JSON.stringify({
+    pid: ownerPid, port, attestationSecret: TEST_ATTESTATION_SECRET,
+    ...(hostname === undefined ? {} : { hostname }),
+  }));
+  writeRecord("::1");
+  expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(port);
+  // A record without a hostname keeps trying every loopback family instead of
+  // stopping at the first IPv4 answer.
+  writeRecord();
+  expect(await findCrossHomeOwner({ homeDir: fx.home })).toBe(port);
 });
 
 test.skipIf(process.platform === "win32")("a FIFO in place of a hint file cannot stall discovery", async () => {
