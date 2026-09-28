@@ -174,6 +174,37 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
+  test("successful but blocked recovery uses capped backoff without extending it on skipped ticks", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const calls = fetchWith(async () => usage(99));
+    try {
+      await runMainAccountHardLockRecovery(config());
+      for (const minutes of [5, 10, 20, 40, 60, 60]) {
+        const count = calls.length;
+        now += minutes * 60_000 - 1;
+        await runMainAccountHardLockRecovery(config());
+        expect(calls).toHaveLength(count);
+        now++;
+        await runMainAccountHardLockRecovery(config());
+        expect(calls).toHaveLength(count + 1);
+      }
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    } finally { clock.mockRestore(); }
+  });
+
+  test("a replacement main credential does not inherit recovery backoff", async () => {
+    const calls = fetchWith(async () => usage(99));
+    await runMainAccountHardLockRecovery(config());
+    writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
+      access_token: bearer() + "replacement", refresh_token: "fixture-new", account_id: accountId,
+    } }));
+    reconcileMainCodexAccountRuntimeState();
+    block();
+    await runMainAccountHardLockRecovery(config());
+    expect(calls).toHaveLength(2);
+  });
+
   test("owned metadata recovery replaces an obsolete short block with the current weekly window", async () => {
     const calls = fetchWith(async () => Response.json({ plan_type: "pro", rate_limit: {
       primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,

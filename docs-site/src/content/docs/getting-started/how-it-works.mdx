@@ -67,7 +67,7 @@ account before the request is forwarded upstream. The rule is intentionally spli
 
 **Quota-query pacing:** Main-account hard-lock recovery waits for the known blocking reset,
 then queries to confirm recovery; time alone never unlocks the account. Without a future reset,
-background recovery waits at least five minutes between reads. Ordinary main/pool usage queries
+background recovery uses capped 5/10/20/40/60-minute backoff while the account remains blocked. Ordinary main/pool usage queries
 share failure backoff (5, 10, 20, 40, then 60 minutes) for transport and non-auth HTTP failures,
 including forced refreshes; `Retry-After` can extend that wait. Existing 401/403 authentication
 handling remains unchanged. Successful queries clear backoff, replaced credentials have separate

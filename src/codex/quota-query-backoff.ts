@@ -3,6 +3,11 @@ import { parseRetryAfterMs } from "./routing/cooldown-math";
 
 const BASE_DELAY_MS = 5 * 60_000;
 const MAX_DELAY_MS = 60 * 60_000;
+
+/** One capped schedule for failed queries and successful-but-blocked recovery. */
+export function nextQuotaQueryDelay(previous = BASE_DELAY_MS / 2): number {
+  return Math.min(previous * 2, MAX_DELAY_MS);
+}
 // Keys contain configuration-home and caller-owned generation identifiers, never credentials.
 const failures = new Map<string, { delay: number; after: number }>();
 
@@ -21,7 +26,7 @@ export async function fetchCodexUsage(
   const failed = (retryAfter?: string | null) => {
     if (failures.get(key) !== attempt) return; // A newer dispatch owns its pacing evidence.
     const now = Date.now();
-    const delay = Math.min((previous?.delay ?? BASE_DELAY_MS / 2) * 2, MAX_DELAY_MS);
+    const delay = nextQuotaQueryDelay(previous?.delay);
     failures.set(key, { delay, after: now + Math.max(delay, parseRetryAfterMs(retryAfter, now) ?? 0) });
   };
   onDispatch?.();

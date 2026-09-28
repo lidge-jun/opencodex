@@ -318,7 +318,10 @@ explicit main selection and stored Direct substitution do not override it. It ne
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
 Only a fresh valid reading below 98%, including 0%, releases a measured block; passing a reset
 timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
-when no future reset is known, owned main recovery reads are spaced at least five minutes apart.
+when no future reset is known or reads remain blocked, main recovery uses the same capped
+5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
+the physical bearer is reconciled before checking the delay, and late results cannot charge
+a replacement credential.
 Only fresh lower usage releases the lock; no inference or reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a

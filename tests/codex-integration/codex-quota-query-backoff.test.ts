@@ -99,3 +99,32 @@ test("a late success cannot erase a newer failed dispatch's backoff", async () =
   expect(await fetchCodexUsage("race-fixture", {})).toBeNull();
   expect(calls).toBe(2);
 });
+
+test("oversized Retry-After is bounded by the existing 24-hour ceiling", async () => {
+  let calls = 0;
+  globalThis.fetch = Object.assign(async () => {
+    calls++;
+    return new Response("{}", { status: 429, headers: { "Retry-After": "999999999" } });
+  }, { preconnect: originalFetch.preconnect });
+  await fetchCodexUsage("bounded", {});
+  now += 86_400_000 - 1;
+  expect(await fetchCodexUsage("bounded", {})).toBeNull();
+  now++;
+  await fetchCodexUsage("bounded", {});
+  expect(calls).toBe(2);
+});
+
+test("a late failure cannot reinstate backoff after a newer success", async () => {
+  let finish!: (response: Response) => void;
+  let calls = 0;
+  globalThis.fetch = Object.assign(async () => {
+    if (++calls === 1) return new Promise<Response>(resolve => { finish = resolve; });
+    return good();
+  }, { preconnect: originalFetch.preconnect });
+  const first = fetchCodexUsage("late-failure", {});
+  await fetchCodexUsage("late-failure", {});
+  finish(new Response("{}", { status: 503 }));
+  await first;
+  expect(await fetchCodexUsage("late-failure", {})).not.toBeNull();
+  expect(calls).toBe(3);
+});

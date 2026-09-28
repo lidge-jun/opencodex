@@ -1,3 +1,4 @@
+import { nextQuotaQueryDelay } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
 import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
@@ -8,7 +9,7 @@ import { readCodexTokens } from "../auth-collision";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
 import { getValidMainAccountToken, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
-import { getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
+import { observeMainQuotaCredential, getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
 import type { OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -71,18 +72,17 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
 }
 
 let mainHardLockRecoveryInFlight: Promise<void> | null = null;
-let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: number } | undefined;
+let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: number; delay: number } | undefined;
 
 /** Metadata-only recovery on the existing sweep; failures retain the observed policy block. */
 export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise<void> {
   if (mainHardLockRecoveryInFlight) return mainHardLockRecoveryInFlight;
   const status = getMainAccountHardLockStatus(config);
-  if (status.state !== "blocked" || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
+  if (status.state !== "blocked") { mainHardLockRecoveryAttempt = undefined; return; }
+  if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
   // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted.
   if (status.resetAt !== undefined && status.resetAt > Date.now()) return;
   const previous = mainHardLockRecoveryAttempt;
-  if (previous?.identity === captureMainAccountIdentityGeneration()
-    && previous.credential === getMainQuotaCredentialGeneration() && previous.after > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -94,7 +94,9 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
     try {
       // Refresh can require an exclusive credential claim: never hold WHAM's shared
       // claim while obtaining a valid token. The runtime lease spans both operations.
-      if (!await getValidMainAccountToken({ preserveReauth: true })) return;
+      const prepared = await getValidMainAccountToken({ preserveReauth: true });
+      if (!prepared) return;
+      observeMainQuotaCredential(prepared.accessToken, prepared.chatgptAccountId);
     } catch (error) {
       if (error instanceof MainAccountTokenRefreshError && error.reason === "reauth"
         && isMainAccountIdentityGenerationLive(identityGeneration)) {
@@ -103,11 +105,18 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
       return;
     }
     if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
+    const credential = getMainQuotaCredentialGeneration();
+    // Reconcile the physical bearer before consulting the previous credential's delay.
+    if (previous?.identity === identityGeneration && previous.credential === credential
+      && previous.after > Date.now()) return;
     const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
-    if (isMainAccountIdentityGenerationLive(identityGeneration) && result.quotaRefresh) {
+    // Never charge a replacement credential for a late result from its predecessor.
+    if (isMainAccountIdentityGenerationLive(identityGeneration)
+      && credential === getMainQuotaCredentialGeneration() && result.quotaRefresh) {
+      const delay = nextQuotaQueryDelay(previous?.identity === identityGeneration
+        && previous.credential === credential ? previous.delay : undefined);
       mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
-        ? { identity: identityGeneration, credential: getMainQuotaCredentialGeneration(),
-          after: Date.now() + MAIN_CACHE_TTL }
+        ? { identity: identityGeneration, credential, delay, after: Date.now() + delay }
         : undefined;
     }
   })().catch(() => {
