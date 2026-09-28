@@ -7,7 +7,9 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -39,6 +41,7 @@ const {
   projectContextCache,
   pruneProjectContextCache,
   setCommandCodeFileOpTimeoutForTests,
+  setCommandCodeBeforeOpenForTests,
 } = await import("../../src/adapters/command-code-project-context");
 
 const MAX_PROJECT_CONTEXT_CACHE_ENTRIES = 128;
@@ -71,6 +74,7 @@ afterEach(() => {
   realpathMock.mockImplementation(realRealpath);
   projectContextCache.clear();
   setCommandCodeFileOpTimeoutForTests(undefined);
+  setCommandCodeBeforeOpenForTests(undefined);
 });
 
 describe("loadCommandCodeProjectContext", () => {
@@ -436,7 +440,7 @@ describe("loadCommandCodeProjectContext", () => {
     const agentsPath = join(root, "AGENTS.md");
     let closeCalls = 0;
     const hangingFile = {
-      stat: async () => ({ isFile: () => true }),
+      stat: async () => statSync(agentsPath),
       read: () => new Promise<never>(() => {}),
       close: async () => {
         closeCalls++;
@@ -517,6 +521,35 @@ describe("loadCommandCodeProjectContext", () => {
       openMock.mockImplementation(realOpen);
       rmSync(outside, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a skill when its intermediate directory becomes an outside symlink before open", async () => {
+    if (process.platform === "win32") return;
+    const root = makeTempDir("ocx-cc-ctx-dir-swap-");
+    const outside = makeTempDir("ocx-cc-ctx-dir-swap-outside-");
+    const skillDir = join(root, ".commandcode", "skills", "swap-skill");
+    const skillFile = join(skillDir, "SKILL.md");
+    const outsideDir = join(outside, "outside-skill");
+    let swapped = false;
+    try {
+      writeSkill(root, ".commandcode/skills", "swap-skill", "inside body");
+      mkdirSync(outsideDir);
+      writeFileSync(join(outsideDir, "SKILL.md"), "outside secret body", "utf8");
+      setCommandCodeBeforeOpenForTests(path => {
+        if (path !== skillFile) return;
+        swapped = true;
+        renameSync(skillDir, join(root, ".commandcode", "skills", "held-skill"));
+        symlinkSync(outsideDir, skillDir, "dir");
+      });
+      const result = await loadCommandCodeProjectContext(root);
+      expect(swapped).toBe(true);
+      expect(result.skills).toBeNull();
+      expect(JSON.stringify(result)).not.toContain("outside secret body");
+    } finally {
+      setCommandCodeBeforeOpenForTests(undefined);
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 

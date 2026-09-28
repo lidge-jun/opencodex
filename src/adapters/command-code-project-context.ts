@@ -25,6 +25,12 @@ const MAX_SKILLS = 16;
 const MAX_SKILL_DIRS_TO_SCAN = 256;
 const COMMAND_CODE_FILE_OP_TIMEOUT_MS = 2_000;
 let fileOpTimeoutForTests: number | undefined;
+let beforeOpenForTests: ((path: string) => void | Promise<void>) | undefined;
+
+/** Test seam for deterministic path replacement between confinement and open. */
+export function setCommandCodeBeforeOpenForTests(hook: typeof beforeOpenForTests): void {
+  beforeOpenForTests = hook;
+}
 
 export function setCommandCodeFileOpTimeoutForTests(timeoutMs: number | undefined): void {
   fileOpTimeoutForTests = timeoutMs;
@@ -134,13 +140,38 @@ function truncateUtf8(text: string, capBytes: number): string {
   return buf.subarray(0, end).toString("utf8") + TRUNCATION_MARKER;
 }
 
-async function readUtf8File(path: string, capBytes: number, deadline: number): Promise<string | null> {
+/** Match the opened inode to a still-canonical path inside cwd before publishing bytes. */
+async function openedFileIsConfined(
+  handle: Awaited<ReturnType<typeof open>>, path: string, cwdCanonical: string, deadline: number,
+): Promise<boolean> {
+  const opened = await withinDeadline(() => handle.stat(), deadline);
+  if (!opened.isFile()) return false;
+  const current = await withinDeadline(() => lstat(path), deadline);
+  if (!current.isFile() || opened.dev !== current.dev || opened.ino !== current.ino) return false;
+  const resolved = await withinDeadline(() => realpath(path), deadline);
+  // The input path was canonical before open. A changed intermediate symlink changes this
+  // result even though O_NOFOLLOW protects only the final component on macOS and Linux.
+  if (!isContainedCanonicalPath(cwdCanonical, resolved)
+    || normalizePathIdentity(resolved) !== normalizePathIdentity(path)) return false;
+  const resolvedInfo = await withinDeadline(() => lstat(resolved), deadline);
+  return resolvedInfo.isFile() && opened.dev === resolvedInfo.dev && opened.ino === resolvedInfo.ino;
+}
+
+async function readUtf8File(path: string, capBytes: number, deadline: number, cwdCanonical: string): Promise<string | null> {
   type FileHandle = Awaited<ReturnType<typeof open>>;
   let fileHandle: FileHandle | undefined;
   const closedHandles = new WeakSet<object>();
+  if (beforeOpenForTests) {
+    try {
+      await withinDeadline(() => Promise.resolve(beforeOpenForTests!(path)), deadline);
+    } catch {
+      return null;
+    }
+  }
   const remaining = deadline - Date.now();
   if (remaining <= 0) return null;
   // O_NONBLOCK prevents a race that swaps a checked regular file for a FIFO.
+  // Windows lacks these POSIX open guards; post-open path/identity checks remain best-effort there.
   const flags = process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   const opened = open(path, flags);
   const closeBestEffort = (handle: FileHandle): Promise<void> => {
@@ -157,10 +188,11 @@ async function readUtf8File(path: string, capBytes: number, deadline: number): P
     const handle = await opened;
     fileHandle = handle;
     try {
-      if (Date.now() >= deadline || !(await handle.stat()).isFile()) return null;
-      if (Date.now() >= deadline) return null;
+      if (Date.now() >= deadline || !await openedFileIsConfined(handle, path, cwdCanonical, deadline)) return null;
       const data = Buffer.alloc(capBytes + 1);
       const { bytesRead } = await handle.read(data, 0, data.length, 0);
+      // Do not return bytes if an intermediate directory changed while the read was pending.
+      if (!await openedFileIsConfined(handle, path, cwdCanonical, deadline)) return null;
       return data.subarray(0, bytesRead).toString("utf8");
     } finally {
       await closeBestEffort(handle);
@@ -210,7 +242,7 @@ async function readMemory(cwd: string, cwdCanonical: string, deadline: number): 
   const path = join(cwd, "AGENTS.md");
   const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
   if (!canonical) return "";
-  const text = await readUtf8File(canonical, MEMORY_CAP_BYTES, deadline);
+  const text = await readUtf8File(canonical, MEMORY_CAP_BYTES, deadline, cwdCanonical);
   if (text === null) return "";
   return truncateUtf8(text, MEMORY_CAP_BYTES);
 }
@@ -219,7 +251,7 @@ async function readTaste(cwd: string, cwdCanonical: string, deadline: number): P
   const path = join(cwd, ".commandcode", "taste", "taste.md");
   const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
   if (!canonical) return null;
-  const text = await readUtf8File(canonical, TASTE_CAP_BYTES, deadline);
+  const text = await readUtf8File(canonical, TASTE_CAP_BYTES, deadline, cwdCanonical);
   if (text === null) return null;
   return truncateUtf8(text, TASTE_CAP_BYTES);
 }
@@ -289,7 +321,7 @@ async function readSkill(skillRoot: string, dirName: string, cwdCanonical: strin
   const path = join(skillRoot, dirName, "SKILL.md");
   const canonical = await confinedCanonicalPath(path, cwdCanonical, deadline, "file");
   if (!canonical) return null;
-  const text = await readUtf8File(canonical, capBytes, deadline);
+  const text = await readUtf8File(canonical, capBytes, deadline, cwdCanonical);
   if (text === null) return null;
   const { name, body } = parseSkillFrontmatter(truncateUtf8(text, capBytes));
   return { name: name ?? dirName, body, bytesRead: Buffer.byteLength(text, "utf8") };
