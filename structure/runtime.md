@@ -2,18 +2,6 @@
 
 The minute sweep checks persisted activation deadlines locally; only missing deadlines trigger metadata discovery. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
-## Blocked-model redirects
-
-`src/router.ts` applies `blockedModelRedirects` bare keys to the resolved native model after
-provider, account and alias selection. Ordinary values remain one same-provider upstream model
-substitution, including slash-valued targets. Only a target explicitly naming a different
-configured provider enters recursive routing; qualified source keys are considered for that
-extension before bare keys. Cross-provider edges share one visited set and five-edge budget
-through provider, alias, combo and policy resolution. Exact account selectors reject any
-cross-provider target and retain the pinned account for legacy substitutions. The selected
-route and decision trace describe the final provider/model while policy candidates retain their
-selection evidence and combo routes retain their kind and redirect reason.
-
 ## Resolved static model policy
 
 `src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Fast observation, persistence and cost provenance follow the [response-tier authority contract](transports/responses.md#response-tier-observation-authority); outbound Fast policy is unchanged. Policy/combo
@@ -26,10 +14,10 @@ evidence remain late and cannot widen a captured static limit.
 Virtual models are the sole model-identity transition: the ordinary and compact paths preserve the
 selected public id in diagnostics, rewrite `route.modelId` to the upstream wire id, and atomically
 replace `route.staticPolicy` before adapter or capability decisions continue. Model aliases are
-resolved before the route result is built, so their policy is already keyed by the native wire id.
+resolved before the route result is built, so their policy is already keyed by the native wire id. `src/router.ts` applies bare `blockedModelRedirects` keys after this resolution; ordinary targets substitute one upstream model id on the selected provider/account, including slash-valued targets, while only targets explicitly naming a different configured provider reroute. Qualified source keys take precedence only for those cross-provider targets.
 Live selector hints obey the [credential-scoped cache contract](catalog.md): a selection change
 cannot reuse the previous credential's roster to choose an alias target. Passive OAuth observation
-neither refreshes credentials nor repairs their storage.
+neither refreshes credentials nor repairs their storage. Cross-provider redirects share one visited set and five-edge budget across alias, provider, combo and policy resolution; pinned account selectors reject provider changes. Decision traces name the final provider/model while policy candidates retain selection evidence and combos retain their route kind and redirect reason.
 
 Routed Meta Muse requests use the registry-owned [Muse effort and header contract](providers-and-adapters.md); `max` reaches the provider through the existing reasoning mapper.
 
