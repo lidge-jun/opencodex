@@ -824,8 +824,16 @@ export function createDevinAdapter(
             }
             // Emitted first so the counts survive a retry that reports no usage or fails early.
             if (refusedUsage) yield refusedUsage;
-            for await (const event of request(unsignedMessages)) {
-              yield event.kind === "usage" && refusedUsage ? addDevinUsage(event, refusedUsage) : event;
+            try {
+              for await (const event of request(unsignedMessages)) {
+                yield event.kind === "usage" && refusedUsage ? addDevinUsage(event, refusedUsage) : event;
+              }
+            } catch (retryError) {
+              if (retryError instanceof SendBudgetExhaustedError) {
+                incoming.onRecoveryWithheld?.({ reason: "retry-send-budget" });
+                throw error;
+              }
+              throw retryError;
             }
             return;
           } finally {

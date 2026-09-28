@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { createDevinAdapter } from "../../src/adapters/devin";
+import type { IncomingMeta } from "../../src/adapters/base";
 import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { devinCacheIdentity, invalidateSessionIdentity } from "../../src/adapters/devin/cloud-direct/chat";
 import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { encodeDevinSignature } from "../../src/adapters/devin/reasoning-signature";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { parseRequest } from "../../src/responses/parser";
@@ -42,7 +44,7 @@ describe("Devin Anthropic signature fallback", () => {
     return { thinking: byNum.get(11), signature: byNum.get(12) };
   }
 
-  async function run(signature: string, modelId: string, observed?: AdapterEvent[], userText = "go"): Promise<AdapterEvent[]> {
+  async function run(signature: string, modelId: string, observed?: AdapterEvent[], userText = "go", meta: Pick<IncomingMeta, "sendBudget" | "onRecoveryWithheld"> = {}): Promise<AdapterEvent[]> {
     const parsed = parseRequest({
       model: `devin/${modelId}`,
       input: [
@@ -55,7 +57,7 @@ describe("Devin Anthropic signature fallback", () => {
     parsed.modelId = modelId;
     const adapter = createDevinAdapter({ adapter: "devin", apiKey, baseUrl: host });
     const events: AdapterEvent[] = [];
-    await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: createTranslatorBudget() }, event => { events.push(event); observed?.push(event); });
+    await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: createTranslatorBudget(), ...meta }, event => { events.push(event); observed?.push(event); });
     return events;
   }
 
@@ -114,6 +116,38 @@ describe("Devin Anthropic signature fallback", () => {
     expect(assistantSignature(requests[1]!).signature).toBeUndefined();
     expect(events).toContainEqual({ type: "text_delta", text: "ok" });
     expect(events.some(e => e.type === "error" && e.code === "context_length_exceeded")).toBe(false);
+  });
+
+  test("an unsigned retry denied by the send budget preserves the signed invalid_argument", async () => {
+    responses = ["refuse", "ok"];
+    const withheld: string[] = [];
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    }, "devin-signature-refusal");
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), "claude-opus-5-5-medium", undefined, "go", {
+      sendBudget: budget,
+      onRecoveryWithheld: event => { withheld.push(event.reason); },
+    });
+    expect(requests).toHaveLength(1);
+    expect(budget.used).toBe(1);
+    expect(withheld).toEqual(["retry-send-budget"]);
+    expect(events.find(e => e.type === "error")).toMatchObject({ type: "error", code: "invalid_argument", status: 400 });
+  });
+
+  test("a budget-withheld unsigned retry still classifies a full signed history as context overflow", async () => {
+    const modelId = "claude-opus-5-5-medium";
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, Buffer.concat([
+      encodeString(1, modelId), encodeString(22, modelId), encodeVarintField(18, 200_000), encodeVarintField(4, 0),
+    ])), apiKey, host));
+    responses = ["refuse", "ok"];
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    }, "devin-signature-overflow");
+    const events = await run(encodeDevinSignature("EpcBClaude", "anthropic"), modelId, undefined, "word ".repeat(190_000), { sendBudget: budget });
+    expect(requests).toHaveLength(1);
+    expect(events.find(e => e.type === "error")).toMatchObject({ type: "error", code: "context_length_exceeded", status: 400 });
   });
 
   test("a refusal after reasoning alone is still retried, and the refused attempt's reasoning never reaches the client", async () => {
