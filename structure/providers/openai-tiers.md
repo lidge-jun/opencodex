@@ -21,7 +21,8 @@ earlier three-tier implementation. The replacement contract and its verification
 Ordinary main/pool WHAM queries share `src/codex/quota-query-backoff.ts`: transport and non-auth
 HTTP failures and unusable HTTP 200 bodies defer later queries (including forced refreshes) for
 5, 10, 20, 40, then 60 minutes. Same-key callers join one read through body validation and
-receive its settled result; a post-reset read has a separate proof epoch.
+receive its settled result; only a confirmed reset-credit consume selects the separate post-reset
+proof epoch. Holding a native-main shared claim by itself does not bypass pacing.
 A valid Retry-After can extend the delay under the existing bounded cooldown parser. Usable usage clears
 failure pacing; 401/403 retain the existing authentication recovery policy. Keys are scoped to
 configuration home, config generation and credential generation; no credentials are retained.
@@ -327,8 +328,9 @@ timestamp alone does not. The minute sweep waits locally until the latest known 
 when no future reset is known or reads remain blocked, main recovery uses the same capped
 5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
 the physical bearer is reconciled before checking the delay, and late results cannot charge
-a replacement credential. A longer valid Retry-After also delays profile and token preparation
-until the next eligible query time.
+a replacement credential. A longer valid Retry-After from any main usage reader is checked for the
+current credential before the recovery worker takes a profile lease or prepares a token; a replacement
+credential has a separate key and may proceed immediately.
 Only fresh lower usage releases the lock; no inference or reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a

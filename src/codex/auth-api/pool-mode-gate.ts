@@ -90,8 +90,9 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
   const identity = captureMainAccountIdentityGeneration();
   const credential = getMainQuotaCredentialGeneration();
   const previous = mainHardLockRecoveryAttempt;
-  if (previous?.identity === identity && previous.credential === credential
-    && previous.after > Date.now()) return;
+  const queryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
+  if ((previous?.identity === identity && previous.credential === credential
+    && previous.after > Date.now()) || queryAfter > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -118,16 +119,29 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
     // Reconcile the physical bearer before consulting the previous credential's delay.
     if (previous?.identity === identityGeneration && previous.credential === credential
       && previous.after > Date.now()) return;
+    const currentQueryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
+    if (currentQueryAfter > Date.now()) {
+      mainHardLockRecoveryAttempt = { identity: identityGeneration, credential,
+        delay: previous?.identity === identityGeneration && previous.credential === credential ? previous.delay : 0,
+        after: currentQueryAfter };
+      return;
+    }
     const result = await fetchMainAccountInfoAttempt(true, 1, lease, false, false);
     // Never charge a replacement credential for a late result from its predecessor.
     if (isMainAccountIdentityGenerationLive(identityGeneration)
-      && credential === getMainQuotaCredentialGeneration() && result.quotaRefresh) {
-      const delay = nextQuotaQueryDelay(previous?.identity === identityGeneration
-        && previous.credential === credential ? previous.delay : undefined);
-      const queryAfter = nextCodexUsageQueryAt(`main:${writerGeneration}:${credential}`) ?? 0;
-      mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
-        ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
-        : undefined;
+      && credential === getMainQuotaCredentialGeneration()) {
+      const queryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
+      const previousDelay = previous?.identity === identityGeneration && previous.credential === credential
+        ? previous.delay : 0;
+      if (result.quotaRefresh) {
+        const delay = nextQuotaQueryDelay(previousDelay || undefined);
+        mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked"
+          ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter) }
+          : undefined;
+      } else if (queryAfter > Date.now()) {
+        mainHardLockRecoveryAttempt = { identity: identityGeneration, credential,
+          delay: previousDelay, after: queryAfter };
+      }
     }
   })().catch(() => {
     // Best-effort background metadata read; no cooldown/pause or policy clearing on failure.

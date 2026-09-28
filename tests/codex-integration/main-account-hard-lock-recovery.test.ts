@@ -174,6 +174,35 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
+  test("an ordinary Retry-After prevents recovery token preparation until credential replacement", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      writeMain(true);
+      block();
+      const calls = fetchWith(async url => url === tokenUrl
+        ? Response.json({ access_token: bearer(), refresh_token: "fixture-rotated", expires_in: 86_400 })
+        : new Response("{}", { status: 429, headers: { "Retry-After": "900" } }));
+      await fetchMainAccountInfo(true);
+      for (let tick = 0; tick < 14; tick++) {
+        now += 60_000;
+        await runMainAccountHardLockRecovery(config());
+      }
+      // An expired physical token would require token-endpoint work if the lease were entered.
+      expect(calls).toEqual([whamUrl]);
+      writeMain();
+      block();
+      globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+        calls.push(String(input));
+        expect(getNativeMainProfileRequestCount()).toBe(1);
+        return usage(0);
+      }, { preconnect: previousFetch.preconnect });
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl, whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { clock.mockRestore(); }
+  });
+
   test.each(["900", "999999999"])("Retry-After %s prevents recovery preparation before the deadline", async header => {
     let now = Date.now();
     const clock = spyOn(Date, "now").mockImplementation(() => now);

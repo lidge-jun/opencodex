@@ -4217,6 +4217,20 @@ describe("codex-auth API", () => {
     expect(config.pausedCodexAccountIds).toBeUndefined();
   });
 
+  test("repeated main bulk-pause reads honor failed-query pacing under a shared claim", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "bulk-main-access", account_id: "bulk-main-account" },
+    }));
+    const config = makeConfig();
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response(null, { status: 503 }); }) as typeof fetch;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const req = new Request("http://localhost/api/codex-auth/accounts/pause-exhausted", { method: "PUT" });
+      expect((await handleCodexAuthAPI(req, new URL(req.url), config))?.status).toBe(502);
+    }
+    expect(calls).toBe(1);
+  });
+
   test("bulk pause discards an exhausted result after the account is deleted and recreated", async () => {
     const config = makeConfig({
       codexAccounts: [{ id: "reused", email: "old@example.test", plan: "plus", isMain: false }],

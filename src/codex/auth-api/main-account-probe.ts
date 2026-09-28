@@ -142,6 +142,7 @@ export async function fetchMainAccountInfoAttempt(
   existingNativeMainLease?: AdmissionLease,
   nativeMainSharedClaimHeld = false,
   explicitRefresh: boolean = forceRefresh,
+  postReset = false,
 ): Promise<MainAccountInfoFetchResult> {
   const nativeMainLease = existingNativeMainLease ?? tryAcquireNativeMainProfileClaim();
   if (!nativeMainLease) {
@@ -154,7 +155,7 @@ export async function fetchMainAccountInfoAttempt(
   }
   try {
     const operation = async () => ({
-      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh, nativeMainSharedClaimHeld),
+      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh, postReset),
       identityGeneration: captureMainAccountIdentityGeneration(),
     });
     if (nativeMainSharedClaimHeld) return await operation();
