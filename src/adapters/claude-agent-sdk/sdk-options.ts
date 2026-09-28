@@ -75,6 +75,12 @@ export interface AgentSdkOptionInput {
   toolCatalog?: AgentSdkToolCatalog;
   /** Claude Code build to drive; the one the SDK ships is used when this is absent. */
   executablePath?: string;
+  /**
+   * The spawn hook that makes the turn own the harness process (see `./harness-process.ts`). The
+   * SDK's own cleanup does not wait for the process it started, so without this the turn cannot
+   * tell when the harness is really gone.
+   */
+  spawnHarnessProcess?: Options["spawnClaudeCodeProcess"];
 }
 
 /**
@@ -94,6 +100,8 @@ export interface AgentSdkOptionInput {
  *   working directory and git state to the model, and neither is part of the request the client sent.
  * - The tool catalog is served from THIS process (`type: "sdk"`), so no extra executable, no argv
  *   and no temp file is involved in advertising it.
+ * - `spawnClaudeCodeProcess` replaces the SDK's local spawn so the runner owns the child: the SDK
+ *   reports the exit on a bounded wait, which is not the same as the process being gone.
  */
 export function buildAgentSdkTurnOptions(input: AgentSdkOptionInput): Options {
   const { provider, parsed, toolCatalog } = input;
@@ -112,6 +120,7 @@ export function buildAgentSdkTurnOptions(input: AgentSdkOptionInput): Options {
     stderr: input.onStderr,
     ...(effort !== undefined ? { effort } : {}),
     ...(input.executablePath !== undefined ? { pathToClaudeCodeExecutable: input.executablePath } : {}),
+    ...(input.spawnHarnessProcess !== undefined ? { spawnClaudeCodeProcess: input.spawnHarnessProcess } : {}),
     ...(toolCatalog !== undefined
       ? {
           mcpServers: {

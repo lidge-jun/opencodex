@@ -40,6 +40,7 @@ import {
 } from "../coding-agent/protocol";
 import { redactSecrets } from "../coding-agent/turn";
 import { buildChildEnv } from "./env";
+import { createHarnessProcessSupervisor, type HarnessSpawnFn } from "./harness-process";
 import type { ClaudeCliProfile } from "./profiles";
 import { buildAgentSdkTurnOptions } from "./sdk-options";
 
@@ -69,7 +70,7 @@ export interface ClaudeAgentSdkToolBridge {
   instance: McpServer;
 }
 
-/** Per-turn injectables: the SDK loader, PATH discovery, and the two ceilings. */
+/** Per-turn injectables: the SDK loader, PATH discovery, the two ceilings, and the owned child. */
 export interface ClaudeAgentSdkDeps {
   loadSdk?: ClaudeAgentSdkLoader;
   which?: WhichFn;
@@ -79,6 +80,10 @@ export interface ClaudeAgentSdkDeps {
   timeoutMs?: number;
   /** How long to wait for an aborted turn to settle before answering the client (ms). */
   reapTimeoutMs?: number;
+  /** Grace between SIGTERM and SIGKILL for the harness child (ms). */
+  killGraceMs?: number;
+  /** Test seam for the owned harness process; the default uses `node:child_process`. */
+  spawnHarnessProcess?: HarnessSpawnFn;
   /** Creates the turn neutral working directory. Test seam; the default uses the system temp dir. */
   makeScratchDir?: () => Promise<string>;
   /** Removes that directory once the harness is gone. */
@@ -248,6 +253,18 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     return;
   }
 
+  // The harness is owned here rather than by the SDK, because the SDK's cleanup is bounded short of
+  // the process it started: `query.return()` settling is not evidence that the child is gone, and the
+  // turn must not delete its scratch cwd or answer the client underneath a live process. The two
+  // things the SDK's own spawn did for the child that a custom spawner has to keep - the stderr pump
+  // and the real exit - are in `./harness-process.ts`.
+  const harness = createHarnessProcessSupervisor({
+    onStderr,
+    reapTimeoutMs,
+    ...(deps.killGraceMs !== undefined ? { killGraceMs: deps.killGraceMs } : {}),
+    ...(deps.spawnHarnessProcess !== undefined ? { spawn: deps.spawnHarnessProcess } : {}),
+  });
+
   const options = buildAgentSdkTurnOptions({
     provider,
     parsed,
@@ -255,6 +272,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     env: buildChildEnv(profile as ClaudeCliProfile, apiKey),
     abortController,
     onStderr,
+    spawnHarnessProcess: harness.spawn,
     ...(executablePath !== undefined ? { executablePath } : {}),
     ...(toolBridge !== undefined
       ? {
@@ -536,17 +554,29 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     ]);
   }
   if (reapTimer) clearTimeout(reapTimer);
+  // The SDK's cleanup waited on its own bounded clock, not on the process: it schedules SIGTERM two
+  // seconds out and SIGKILL five seconds after that, with both timers unref'd. The child is
+  // terminated here - bounded TERM, grace, KILL - and awaited through its real `close`, so the
+  // scratch cwd is removed and the request released only once the harness is confirmed gone.
+  await harness.terminate();
   // The harness is gone; nothing of the operator is left in there.
   await (deps.removeScratchDir ?? removeScratchDir)(scratchDir).catch(() => undefined);
 
   if (terminalEmitted) return;
-  const stderr = redactSecrets(boundedStderr(stderrChunks), profile.tokenEnv, apiKey);
+  const harnessStderr = boundedStderr(stderrChunks);
+  const stderr = redactSecrets(harnessStderr, profile.tokenEnv, apiKey);
   if (incoming.abortSignal?.aborted) {
     emitOnce({ type: "error", message: `${profile.label} turn was aborted.`, retryable: false });
   } else if (streamError !== undefined) {
+    // An exit error used to arrive with the SDK's own stderr tail, and only the SDK local spawn this
+    // adapter replaced ever filled that tail. The harness's stderr reaches this turn through its own
+    // sink now, so the one message that reports a dead harness keeps the evidence instead of losing it.
+    const message = harnessStderr.length > 0 && !streamError.includes(harnessStderr)
+      ? `${streamError}: ${harnessStderr}`
+      : streamError;
     emitOnce({
       type: "error",
-      message: redactSecrets(streamError, profile.tokenEnv, apiKey),
+      message: redactSecrets(message, profile.tokenEnv, apiKey),
       status: 502,
       errorType: "upstream_error",
       code: streamProtocolCode ?? "claude_agent_sdk_error",

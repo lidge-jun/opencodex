@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { Readable, Writable } from "node:stream";
 import {
   buildChildEnv,
   CLAUDE_CLI_QUIET_ENV,
@@ -36,7 +39,7 @@ interface FakeSdk {
   options: Record<string, unknown>[];
   /** The prompt frames the runner wrote, per turn (drained from the async iterable). */
   prompts: unknown[][];
-  state: { started: number; returned: number };
+  state: { started: number; returned: number; harness?: unknown };
 }
 
 /**
@@ -46,16 +49,28 @@ interface FakeSdk {
  * `park: true` models the capture-only leg: the harness stopped producing frames and is waiting on
  * a tool call nothing will answer, which is exactly the state the runner has to end from its side.
  */
-function fakeSdk(frames: readonly unknown[], behavior: { park?: boolean } = {}): FakeSdk {
+function fakeSdk(frames: readonly unknown[], behavior: { park?: boolean; spawnHarness?: boolean } = {}): FakeSdk {
   const options: Record<string, unknown>[] = [];
   const prompts: unknown[][] = [];
-  const state = { started: 0, returned: 0 };
+  const state: { started: number; returned: number; harness?: unknown } = { started: 0, returned: 0 };
   let release: (() => void) | undefined;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const module: ClaudeAgentSdkModule = {
     query: params => {
       state.started += 1;
       options.push(params.options);
+      if (behavior.spawnHarness === true) {
+        // The SDK's contract: a custom spawner is handed the command the SDK resolved and returns the
+        // process object. Calling it here exercises the runner's ownership of that child without a
+        // real Claude Code binary on the machine.
+        const spawnHarness = params.options.spawnClaudeCodeProcess as (request: unknown) => unknown;
+        state.harness = spawnHarness({
+          command: "claude",
+          args: ["--output-format", "stream-json"],
+          env: {},
+          signal: new AbortController().signal,
+        });
+      }
       const collected: unknown[] = [];
       prompts.push(collected);
       const prompt = params.prompt;
@@ -757,5 +772,112 @@ describe("claude-agent-sdk serves the client's catalog through a capture-only MC
     const adapter = createClaudeAgentSdkAdapter(provider(), { loadSdk: async () => sdk.module });
     const events = await run(adapter, withTools(["alpha"]));
     expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "protocol_error", retryable: false });
+  });
+});
+
+/**
+ * The harness process a proxied turn starts, and what the turn does with it.
+ *
+ * The SDK's cleanup is bounded twice over: `Query.performCleanup` waits 2000 ms for
+ * `transport.waitForExit()`, and the transport schedules SIGTERM 2000 ms after close with SIGKILL
+ * 5000 ms after that, both timers unref'd. `query.return()` resolving is therefore not evidence that
+ * the harness is gone - and a turn that deleted its scratch cwd on that signal would leave the
+ * process, its pipes and its working directory behind. These cases pin the turn to the process: a
+ * bounded TERM -> grace -> KILL ladder, awaited through the child's real `close`.
+ */
+interface FakeHarnessChild extends EventEmitter {
+  pid: number;
+  stdin: Writable;
+  stdout: Readable;
+  stderr: Readable;
+  killed: boolean;
+  exitCode: number | null;
+  signalCode: string | null;
+  kill: (signal?: string) => boolean;
+}
+
+function fakeHarnessChild(options: { terminatesOn?: "SIGTERM" | "SIGKILL"; stderr?: string } = {}) {
+  const terminatesOn = options.terminatesOn ?? "SIGKILL";
+  const child = new EventEmitter() as FakeHarnessChild;
+  child.pid = 4711;
+  child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+  child.stdout = new Readable({ read() { /* the harness's stdout belongs to the SDK, not the test */ } });
+  child.stderr = new Readable({ read() { /* data is emitted directly below */ } });
+  child.killed = false;
+  child.exitCode = null;
+  child.signalCode = null;
+  const signals: string[] = [];
+  let closed = false;
+  child.kill = (signal?: string) => {
+    signals.push(signal ?? "SIGTERM");
+    // A stuck harness shrugs off SIGTERM; only the signal it does not survive ends it, and even then
+    // the process reports that end asynchronously through `close`, which is what the turn must await.
+    if (signal === terminatesOn && !closed) {
+      child.killed = true;
+      const ending = signal ?? "SIGTERM";
+      setTimeout(() => {
+        if (options.stderr !== undefined) child.stderr.emit("data", Buffer.from(options.stderr));
+        closed = true;
+        child.signalCode = ending;
+        child.emit("exit", null, ending);
+        child.emit("close", null, ending);
+      }, 3);
+    }
+    return true;
+  };
+  return { child, signals, closed: () => closed };
+}
+
+describe("claude-agent-sdk owns the harness process it starts", () => {
+  test("a TERM-resistant harness is killed and awaited before the scratch cwd goes", async () => {
+    const harness = fakeHarnessChild();
+    const removed: string[] = [];
+    let closedAtRemoval: boolean | undefined;
+    const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+      killGraceMs: 20,
+      reapTimeoutMs: 200,
+      makeScratchDir: async () => "/tmp/ocx-owned-harness",
+      removeScratchDir: async dir => {
+        closedAtRemoval = harness.closed();
+        removed.push(dir);
+      },
+    });
+
+    const events = await run(adapter, parsed());
+
+    // The SDK is handed the hook, so the turn owns the process instead of reading the SDK's clock.
+    expect(typeof sdk.options[0]!.spawnClaudeCodeProcess).toBe("function");
+    // The turn still completes: the ladder is teardown, not another failure path.
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    // TERM first, KILL only once the grace window passed with the process still alive.
+    expect(harness.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    // The cwd is released on evidence: `query.return()` had already resolved while this child was
+    // still running, which is exactly the state the SDK leaves behind.
+    expect(removed).toEqual(["/tmp/ocx-owned-harness"]);
+    expect(closedAtRemoval).toBe(true);
+  });
+
+  test("the harness's stderr still reaches the turn through the owned pipe", async () => {
+    // The SDK's local spawn - the one the hook replaces - was the only thing that read the child's
+    // stderr and handed it to `Options.stderr`. Owning the process means owning that pipe as well, or
+    // a harness that dies reports nothing about why.
+    const harness = fakeHarnessChild({ terminatesOn: "SIGTERM", stderr: "harness exploded before any frame" });
+    const sdk = fakeSdk([initFrame()], { spawnHarness: true });
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
+      killGraceMs: 20,
+      reapTimeoutMs: 200,
+      makeScratchDir: async () => "/tmp/ocx-owned-harness-stderr",
+      removeScratchDir: async () => undefined,
+    });
+
+    const events = await run(adapter, parsed());
+
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "protocol_error", retryable: false });
+    expect(String((events.at(-1) as { message: string }).message)).toContain("harness exploded before any frame");
   });
 });
