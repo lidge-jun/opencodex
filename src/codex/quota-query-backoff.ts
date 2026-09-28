@@ -10,7 +10,7 @@ export function nextQuotaQueryDelay(previous = BASE_DELAY_MS / 2): number {
   return Math.min(previous * 2, MAX_DELAY_MS);
 }
 
-type Attempt = { delay: number; after: number; retryAfterUntil?: number; inFlight: boolean; pending?: Promise<unknown>; resolve?: (result: unknown) => void };
+type Attempt = { delay: number; after: number; retryAfterUntil?: number; poolAccountId?: string; inFlight: boolean; pending?: Promise<unknown>; resolve?: (result: unknown) => void };
 // Keys contain configuration-home and caller-owned generation identifiers, never credentials.
 const attempts = new Map<string, Attempt>();
 const scopedKey = (key: string) => `${getConfigDir()}\0${key}`;
@@ -29,10 +29,21 @@ export interface CodexUsageOwner<T> {
 export type CodexUsageRead<T> = CodexUsageOwner<T> | { kind: "joined"; result: T };
 
 export interface CodexUsageSchedule {
+  /** Opaque pool identity for removal cleanup; never logged or persisted. */
+  poolAccountId?: string;
   /** Recovery claims already have their own five-minute admission interval. */
   recoveryProbe?: true;
   /** The sweep's clock also drives its quota-query deadline. */
   now?: () => number;
+}
+
+/** Removal invalidates even active reads, so their late settlements cannot restore pacing. */
+export function pruneRemovedCodexPoolUsageAccounts(configuredIds: ReadonlySet<string>): void {
+  const homePrefix = `${getConfigDir()}\0`;
+  for (const [key, attempt] of attempts) {
+    if (key.startsWith(homePrefix) && attempt.poolAccountId
+      && !configuredIds.has(attempt.poolAccountId)) attempts.delete(key);
+  }
 }
 
 /** Shared by main, pool and 401-replay usage reads. Cache bypass does not bypass pacing. */
@@ -59,7 +70,9 @@ export async function fetchCodexUsage<T>(
   }
   let resolve!: (result: unknown) => void;
   const pending = new Promise<unknown>(done => { resolve = done; });
-  const attempt: Attempt = { delay: previous?.delay ?? BASE_DELAY_MS / 2, after: 0, inFlight: true, pending, resolve };
+  const attempt: Attempt = { delay: previous?.delay ?? BASE_DELAY_MS / 2, after: 0,
+    ...(schedule.poolAccountId ? { poolAccountId: schedule.poolAccountId } : {}),
+    inFlight: true, pending, resolve };
   attempts.set(key, attempt);
   let response: Response | undefined;
   const settle = (usable: boolean, result?: T) => {
@@ -72,6 +85,7 @@ export async function fetchCodexUsage<T>(
         const delay = schedule.recoveryProbe ? BASE_DELAY_MS : nextQuotaQueryDelay(previous?.delay);
         const retryAfter = parseRetryAfterMs(response?.headers.get("retry-after"), at) ?? 0;
         attempts.set(key, { delay, after: at + Math.max(delay, retryAfter),
+          ...(attempt.poolAccountId ? { poolAccountId: attempt.poolAccountId } : {}),
           ...(retryAfter > 0 ? { retryAfterUntil: at + retryAfter } : {}), inFlight: false });
       }
     }

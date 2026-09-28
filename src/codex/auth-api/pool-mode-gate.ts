@@ -1,4 +1,4 @@
-import { nextCodexUsageQueryAt, nextQuotaQueryDelay } from "../quota-query-backoff";
+import { nextCodexUsageQueryAt, nextQuotaQueryDelay, pruneRemovedCodexPoolUsageAccounts } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
 import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
@@ -200,6 +200,7 @@ export async function primeCodexPoolQuotas(
   // retry the restored credential is entitled to.
   const runtimeConfig = getRuntimeConfig(config);
   const configuredPoolIds = new Set((runtimeConfig.codexAccounts ?? []).map(account => account.id));
+  pruneRemovedCodexPoolUsageAccounts(configuredPoolIds);
   for (const accountId of poolQuotaPrimeAttemptedAt.keys()) {
     if (!configuredPoolIds.has(accountId)) poolQuotaPrimeAttemptedAt.delete(accountId);
   }

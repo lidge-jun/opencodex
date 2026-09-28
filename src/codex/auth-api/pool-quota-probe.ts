@@ -265,7 +265,8 @@ export async function recoverPoolQuotaFrom401(ctx: {
     },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
   }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation),
-  ctx.recoveryProbeNow === undefined ? undefined : { recoveryProbe: true, now: () => ctx.recoveryProbeNow! });
+  ctx.recoveryProbeNow === undefined ? { poolAccountId: accountId }
+    : { poolAccountId: accountId, recoveryProbe: true, now: () => ctx.recoveryProbeNow! });
   if (!replayRead) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
   if (replayRead.kind === "joined") {
     if (!isCodexAccountGenerationLive(accountId, refreshed.generation)
@@ -403,7 +404,8 @@ export async function fetchFreshPoolAccountQuota(
         headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
         signal: AbortSignal.timeout(8000),
       }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation),
-      recoveryProbeNow === undefined ? undefined : { recoveryProbe: true, now: () => recoveryProbeNow });
+      recoveryProbeNow === undefined ? { poolAccountId: accountId }
+        : { poolAccountId: accountId, recoveryProbe: true, now: () => recoveryProbeNow });
       if (!admission) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
       if (admission.kind === "joined") return isCodexAccountGenerationLive(accountId, generation)
         && quotaProbeEvidence.mayPublish?.() !== false
