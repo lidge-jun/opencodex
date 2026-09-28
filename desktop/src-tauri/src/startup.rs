@@ -1154,13 +1154,14 @@ fn attach_plan(consent: ownership::Consent, answer: &resolve::Resolved, mode: Mo
                 if answer.runtime_relation() == resolve::VersionRelation::ProxyNewer =>
             {
                 AttachPlan::Guest(format!(
-                    "a runtime was already listening and runs a newer OpenCodex than this app bundles ({}, this app {}), so taking it over would downgrade it; this app is a guest on it and asked nothing",
+                    "a runtime was already listening and runs a newer OpenCodex than this app bundles ({}, this app {}), so taking it over would downgrade it; this app is a guest on it and asked nothing{}",
                     answer
                         .liveness
                         .version
                         .as_deref()
                         .unwrap_or("an unknown version"),
-                    answer.cli_version
+                    answer.cli_version,
+                    skew_note()
                 ))
             }
             // A recovery runs with nobody watching; a prompt would surface a window the person
@@ -2047,6 +2048,7 @@ mod tests {
                     assert!(detail.contains("newer OpenCodex"));
                     assert!(detail.contains("downgrade"));
                     assert!(detail.contains("2.62.0"));
+                    assert!(detail.contains(" (skew)"));
                 }
                 AttachPlan::Ask => panic!("a newer runtime must not be offered a downgrade"),
             }
@@ -2057,7 +2059,10 @@ mod tests {
             &skewed_answer(VersionRelation::ProxyNewer, "skew"),
             Mode::Recover,
         ) {
-            AttachPlan::Guest(detail) => assert!(detail.contains("downgrade")),
+            AttachPlan::Guest(detail) => {
+                assert!(detail.contains("downgrade"));
+                assert!(detail.contains(" (skew)"));
+            }
             AttachPlan::Ask => panic!("a recovery must not prompt"),
         }
     }

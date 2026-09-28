@@ -296,9 +296,9 @@ failing closed on an unreadable one, on a corrupt anchor and on paths that disag
 weaker implementation of a question core already answers is the mistake this tree has made before.
 The bundled CLI answers ownership and takeover compatibility through `ocx resolve --json`.
 It also answers how the live runtime's version compares to the bundled CLI's
-(`versionSkew.relation`), and the shell acts on the direction instead of reparsing the
+(`versionSkew.relation`; future relation strings read as unknown without discarding the live answer), and the shell acts on the direction instead of reparsing the
 warning: `proxy-newer` makes a supported takeover a downgrade, so the run attaches as a
-guest with the skew named rather than asking consent to it. Every other guest path — held
+guest with the versions, downgrade risk and verbatim CLI warning rather than asking consent to it. Every other guest path — held
 consent, an unreadable owner, a blocked takeover, a declined prompt, a recovery — appends
 the CLI's warning to its phase detail, and the consent panel shows it beside the subject.
 Unknown ownership never means "nobody owns it". A supported offer shows the endpoint, home

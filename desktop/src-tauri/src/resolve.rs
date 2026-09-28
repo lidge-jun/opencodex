@@ -86,7 +86,8 @@ impl Default for Takeover {
 /// Which side of the CLI-versus-runtime comparison runs newer.
 ///
 /// The strings are the wire values the CLI emits; `Unknown` also stands in for an
-/// absent `versionSkew` document, which is what every CLI older than this field sends.
+/// absent `versionSkew` document or a future relation string. Unknown display metadata
+/// must not discard an otherwise valid live-runtime answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VersionRelation {
@@ -94,6 +95,7 @@ pub enum VersionRelation {
     CliNewer,
     ProxyNewer,
     Incomparable,
+    #[serde(other)]
     Unknown,
 }
 
@@ -502,6 +504,21 @@ mod tests {
             .clone();
         assert_eq!(resolved.runtime_relation(), VersionRelation::Unknown);
         assert_eq!(resolved.skew_warning(), None);
+    }
+
+    #[test]
+    fn a_future_version_relation_keeps_the_live_answer() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","versionSkew":{"cliVersion":"2.61.0","proxyVersion":"2.62.0","skewed":true,"relation":"future-comparison","warning":"upgrade the CLI"}"#
+        );
+        let resolution = read(Some(0), document.as_bytes(), b"");
+        let resolved = resolution.resolved().expect("a live answer");
+        assert_eq!(resolved.runtime_relation(), VersionRelation::Unknown);
+        assert_eq!(resolved.skew_warning(), Some("upgrade the CLI"));
+        assert!(matches!(live_verdict(&resolution), LiveVerdict::Attach));
+        assert!(!may_start(&resolution));
     }
 
     #[test]
