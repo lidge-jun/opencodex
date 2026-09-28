@@ -88,6 +88,14 @@ one-line message. Exit codes are identical with and without `--json`: 0 on succe
 79 when only Codex history cleanup did not complete, and 80 when the shared teardown was deferred
 and is still owed.
 
+For a desktop-approved takeover, `ocx stop --json` also accepts the complete set of
+`--expect-*` values supplied by `ocx resolve --json`. On Windows, this guarded stop can
+stop a Task Scheduler task only when its registered definition, running state, and wrapper
+ancestor prove it owns the approved proxy. A WinSW service must prove its installed binary
+path and service PID ancestry. After stopping either manager, the CLI signals the approved
+proxy separately and verifies that the task is no longer running, no wrapper survives, and
+WinSW is stopped. Missing or unreadable evidence blocks the guarded stop.
+
 ### `ocx restart`
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its

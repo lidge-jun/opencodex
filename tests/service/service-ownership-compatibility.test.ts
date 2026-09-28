@@ -149,7 +149,10 @@ describe("guarded service-manager binding", () => {
   });
 
   test("post-stop manager status refuses loaded and unreadable jobs", async () => {
-    const manager = { kind: "bound" as const, pid: 42, managerPid: 7, backend: "launchd" as const };
+    const manager = {
+      kind: "bound" as const, pid: 42, managerPid: 7,
+      backend: "launchd" as const, childNeedsSeparateStop: false as const,
+    };
     for (const [state, expected] of [
       ["not-loaded", "inactive"],
       ["loaded-current", "active"],
