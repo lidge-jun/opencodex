@@ -31,7 +31,9 @@ const RETRY_POLICY_VALIDATORS = {
  * them afterwards: the disk row equals its baseline, so the three-way merge keeps the value the
  * save wrote.
  *
- * These settings record how one upstream behaves. An overwrite that keeps the destination
+ * `hideRawReasoning` is an operator display policy, so every overwrite of the same provider name
+ * carries it when omitted, even when the destination changes. The compatibility settings below
+ * record how one upstream behaves. An overwrite that keeps the destination
  * carries each one the request omits, including an explicit `[]` or `false`. An overwrite that
  * moves the provider to another destination carries none of them: they describe the previous
  * upstream, and registry enrichment already fills what is known about the new one. The same
@@ -55,7 +57,10 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
+export const PROVIDER_DISPLAY_CARRY_FIELDS = ["hideRawReasoning"] as const satisfies readonly (keyof OcxProviderConfig)[];
+
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
+type ProviderDisplayCarryField = typeof PROVIDER_DISPLAY_CARRY_FIELDS[number];
 
 /** The only `reasoningWireFormat` value the adapters understand. */
 export const PROVIDER_REASONING_WIRE_FORMATS: readonly NonNullable<OcxProviderConfig["reasoningWireFormat"]>[] = [
@@ -67,13 +72,13 @@ export const PROVIDER_REASONING_WIRE_FORMATS: readonly NonNullable<OcxProviderCo
  * omitted this" and "the registry supplied it" look the same.
  */
 export interface ProviderOverwriteSample {
-  readonly submitted: ReadonlySet<ProviderCompatCarryField>;
+  readonly submitted: ReadonlySet<ProviderCompatCarryField | ProviderDisplayCarryField>;
   readonly namesAuthMode: boolean;
 }
 
 export function sampleProviderOverwrite(provider: object): ProviderOverwriteSample {
   return {
-    submitted: new Set(PROVIDER_COMPAT_CARRY_FIELDS.filter(field => Object.hasOwn(provider, field))),
+    submitted: new Set([...PROVIDER_COMPAT_CARRY_FIELDS, ...PROVIDER_DISPLAY_CARRY_FIELDS].filter(field => Object.hasOwn(provider, field))),
     namesAuthMode: Object.hasOwn(provider, "authMode"),
   };
 }
@@ -109,7 +114,8 @@ export function providerOverwriteKeepsDestination(
 }
 
 /**
- * Carry the stored compatibility settings the request omitted. `live` must be the row read after
+ * Carry the stored display policy on every overwrite, then the omitted compatibility settings
+ * only when the destination is unchanged. `live` must be the row read after
  * the route's DNS await, so a PATCH that saved one of them during the wait is kept.
  */
 export function carryProviderCompatFields(
@@ -117,8 +123,14 @@ export function carryProviderCompatFields(
   live: OcxProviderConfig | undefined,
   sample: ProviderOverwriteSample,
 ): void {
-  if (!live || !providerOverwriteKeepsDestination(candidate, live, sample)) return;
+  if (!live) return;
   const target = candidate as unknown as Record<string, unknown>;
+  for (const field of PROVIDER_DISPLAY_CARRY_FIELDS) {
+    if (sample.submitted.has(field)) continue;
+    const stored = live[field];
+    if (stored !== undefined) target[field] = stored;
+  }
+  if (!providerOverwriteKeepsDestination(candidate, live, sample)) return;
   for (const field of PROVIDER_COMPAT_CARRY_FIELDS) {
     if (sample.submitted.has(field)) continue;
     const stored = live[field];
@@ -146,6 +158,8 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   }
   const fold = provider.foldDeveloperRoleToSystem;
   if (fold !== undefined && typeof fold !== "boolean") return "foldDeveloperRoleToSystem must be a boolean";
+  const hideRawReasoning = provider.hideRawReasoning;
+  if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
   const wire = provider.reasoningWireFormat;
   if (wire !== undefined && !PROVIDER_REASONING_WIRE_FORMATS.includes(wire as never)) {
     return `reasoningWireFormat must be one of: ${PROVIDER_REASONING_WIRE_FORMATS.join(", ")}`;
@@ -181,6 +195,13 @@ export function applyProviderCompatPatchFields(
     if (value === null) delete next.foldDeveloperRoleToSystem;
     else if (typeof value === "boolean") next.foldDeveloperRoleToSystem = value;
     else return { error: "foldDeveloperRoleToSystem must be a boolean" };
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "hideRawReasoning")) {
+    const value = rawBody.hideRawReasoning;
+    if (value === null) delete next.hideRawReasoning;
+    else if (typeof value === "boolean") next.hideRawReasoning = value;
+    else return { error: "hideRawReasoning must be a boolean" };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "reasoningWireFormat")) {
