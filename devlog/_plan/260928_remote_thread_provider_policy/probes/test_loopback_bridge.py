@@ -80,6 +80,11 @@ class LoopbackFixtureRelay:
                     await destination.pong(message.data)
                 else:
                     break
+            # Forward the peer's close so the other side sees the same code
+            # instead of hanging on a connection that already ended.
+            close_code = getattr(source, "close_code", None) or 1000
+            if not destination.closed:
+                await destination.close(code=close_code)
 
         tasks = [asyncio.create_task(pump(upstream, downstream, True)),
                  asyncio.create_task(pump(downstream, upstream, False))]
