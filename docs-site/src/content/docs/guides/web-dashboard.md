@@ -35,6 +35,8 @@ password manager can offer to save and autofill it. By default, the dashboard ke
 in memory. Selecting **Remember on this device** opts in to storing the full token as plaintext in
 `localStorage`. Any same-origin script and anyone with access to the device can read it, so do not
 enable it on a shared device. **Forget remembered admin token**, beside Logout, removes that value.
+The remembered value is stored per server, scoped by server origin and transport, and is only
+re-sent to the server it was saved for.
 
 ### Finding the admin token
 

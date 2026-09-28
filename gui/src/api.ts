@@ -1,4 +1,10 @@
-import { clearRememberedAdminToken, getRememberedAdminToken, promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
+import {
+  clearRememberedAdminToken,
+  getRememberedAdminToken,
+  promptForAdminToken,
+  rememberedAdminTokenScope,
+  type AdminTokenVerifier,
+} from "./admin-token-dialog";
 import { createBoundedFetch } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
@@ -34,7 +40,7 @@ interface TargetRuntime {
   promptCancelled: boolean;
 }
 
-type AdminTokenPrompt = (verifyToken: AdminTokenVerifier) => Promise<string | null>;
+type AdminTokenPrompt = (verifyToken: AdminTokenVerifier, scope: string) => Promise<string | null>;
 type RebootstrapResult = { kind: "minted"; token: string } | { kind: "unavailable" } | { kind: "failed" };
 
 let installed = false;
@@ -262,14 +268,13 @@ async function reBootstrapSessionToken(plane: ApiPlane): Promise<RebootstrapResu
   finally { bounded.clear(); }
 }
 
-async function verifyAdminToken(plane: ApiPlane, token: string): ReturnType<AdminTokenVerifier> {
+async function verifyAdminToken(plane: ApiPlane, target: ApiTarget, token: string): ReturnType<AdminTokenVerifier> {
   if (!rawFetch) return "unavailable";
   const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
-    const state = runtime(plane);
     const [input, init] = withAuth(
       plane,
-      `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`,
+      `${target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`,
       { cache: "no-store", signal: bounded.signal },
       token,
     );
@@ -287,6 +292,11 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
     const body = (async () => {
       const current = state.session.token;
       if (current && current !== failedToken) return current;
+      // Capture the target this resolution belongs to: the remembered credential is
+      // scoped to it, and both the silent verification and the prompt must send it to
+      // that server even if targets are reconfigured mid-resolution.
+      const target = state.target;
+      const scope = rememberedAdminTokenScope(target);
       let watchdog: ReturnType<typeof setTimeout> | undefined;
       const renewed = await Promise.race([
         reBootstrapSessionToken(plane),
@@ -301,24 +311,24 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
         state.promptCancelled = true;
         return null;
       }
-      const remembered = getRememberedAdminToken();
+      const remembered = getRememberedAdminToken(scope);
       if (remembered) {
         if (remembered === failedToken) {
           // The stored token just caused this 401: it is revoked. Clear it
           // now so it cannot linger until the next visit.
-          clearRememberedAdminToken();
+          clearRememberedAdminToken(scope);
         } else {
-          const verdict = await verifyAdminToken(plane, remembered);
+          const verdict = await verifyAdminToken(plane, target, remembered);
           if (verdict === "accepted") {
             state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
             return remembered;
           }
-          if (verdict === "rejected") clearRememberedAdminToken();
+          if (verdict === "rejected") clearRememberedAdminToken(scope);
           // "unavailable" (network/server error) leaves the stored token
           // intact: a transient outage must not delete a valid credential.
         }
       }
-      const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
+      const prompted = await requestAdminToken(token => verifyAdminToken(plane, target, token), scope);
       if (prompted) {
         updateSession(state, { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin });
         return prompted;
