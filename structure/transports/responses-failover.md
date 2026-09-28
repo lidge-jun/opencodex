@@ -1,6 +1,6 @@
 # Responses Failover And Replay
 
-`src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher.
+`src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher. Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](../providers/openai-tiers.md#public-provider-contract).
 It requires explicit configuration and normalized attempt evidence, preserves ordinary requests,
 and refuses cancellation, committed semantic output, tool effects, protected failures, exhausted
 send budgets and repeated recovery. Its Devin `invalid_argument` exception is separately opted in;

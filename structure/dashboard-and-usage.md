@@ -1,6 +1,6 @@
 # Dashboard Surfaces And Usage
 
-Dashboard page contracts, usage accounting and request metrics, and the management settings that
+Dashboard page contracts, usage accounting and request metrics, and the management settings that Quota-query failure pacing and scheduled hard-lock recovery follow the [shared WHAM contract](providers/openai-tiers.md#public-provider-contract).
 back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are
 in [GUI and management API](gui-and-management-api.md).
 

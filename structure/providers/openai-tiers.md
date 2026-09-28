@@ -18,6 +18,15 @@ earlier three-tier implementation. The replacement contract and its verification
 
 ## Public provider contract
 
+Ordinary main/pool WHAM queries share `src/codex/quota-query-backoff.ts`: transport and non-auth
+HTTP failures defer later queries (including forced refreshes) for 5, 10, 20, 40, then 60 minutes.
+A valid Retry-After can extend the delay under the existing bounded cooldown parser. Success clears
+failure pacing; 401/403 retain the existing authentication recovery policy. Keys are scoped to
+configuration home, config generation and credential generation; no credentials are retained.
+Deferred calls publish neither fresh quota nor dispatch proof and do not advance quota timestamps.
+The bounded process-local failure cache resets on restart. Reserve and login probes are separate.
+
+
 | Provider id | Product route | Credential owner | Account selection |
 | --- | --- | --- | --- |
 | `openai` | Codex login | current caller/main login plus the hardened Codex account store | `codexAccountMode` is `"pool"` or `"direct"`; missing mode defaults to Pool |
@@ -308,8 +317,9 @@ It blocks newly admitted identity-matched main-account requests. Pool alternativ
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
 Only a fresh valid reading below 98%, including 0%, releases a measured block; passing a reset
-timestamp alone does not. While blocked, the existing once-per-minute background sweep refreshes
-owned main usage, with bounded/coalesced reads and no inference or reset-credit consumption. Failed,
+timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
+when no future reset is known, owned main recovery reads are spaced at least five minutes apart.
+Only fresh lower usage releases the lock; no inference or reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a
 monthly-only plan or explicit primary-monthly evidence. Previously unobserved usage is unknown, not

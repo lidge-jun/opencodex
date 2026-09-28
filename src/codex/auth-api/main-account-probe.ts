@@ -1,3 +1,4 @@
+import { fetchCodexUsage } from "../quota-query-backoff";
 import { parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
@@ -218,10 +219,11 @@ export async function fetchMainAccountInfoWhileOwned(
   let quotaRefreshGeneration = captureMainAccountIdentityGeneration();
   try {
     const dispatchSequence = nextQuotaDispatchSequence();
-    const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+    const resp = await fetchCodexUsage(`main:${writerGeneration}:${mainQuotaCredentialGeneration}`, {
       headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
       signal: quotaSignal,
     });
+    if (!resp) return { info: cached ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
     quotaPhase = "publish";
     if (!resp.ok) {
       const terminalAuthFailure = await isTerminalMainAuthResponse(resp, isMainAccountTokenVerifiablyLive());
