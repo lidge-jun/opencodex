@@ -1546,6 +1546,7 @@
   "server-xai-oauth-401-replay.test.ts": "server",
   "server-xai-responses-streaming.test.ts": "server",
   "service-auth-qualified-localhost.test.ts": "service",
+  "service-child-ownership.test.ts": "service",
   "service-claim.test.ts": "service",
   "service-ownership-compatibility.test.ts": "service",
   "service-ownership-handover.test.ts": "service",
