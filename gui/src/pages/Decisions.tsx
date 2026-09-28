@@ -24,6 +24,7 @@ interface ProviderRow {
   name: string;
   adapter: string;
   baseUrl: string;
+  defaultModel?: string;
   hasApiKey?: boolean;
   disabled?: boolean;
 }
@@ -105,7 +106,7 @@ const kindLabel = (kind: string, support: KindSupport | undefined) => {
 export default function Decisions({ apiBase }: { apiBase: string }) {
   const t = useT();
   const [notice, setNotice] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
-  const [busy, setBusy] = useState<{ kind: "connect" | "contract"; name: string } | null>(null);
+  const [busy, setBusy] = useState<{ kind: "connect" | "contract" | "adopt"; name: string } | null>(null);
   const [query, setQuery] = useState("");
   const [discovery, setDiscovery] = useState<DiscoveryPayload | null>(null);
   const [discovering, setDiscovering] = useState(false);
@@ -184,6 +185,27 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
     }
   };
 
+  const adopt = async (finding: DiscoveryFinding) => {
+    const key = `${finding.provider}/${finding.model}`;
+    setBusy({ kind: "adopt", name: key });
+    setNotice(null);
+    try {
+      const res = await fetch(`${apiBase}/api/decision-adopt?provider=${encodeURIComponent(finding.provider)}&model=${encodeURIComponent(finding.model)}`, { method: "POST" });
+      const data = await readJsonOrThrow<{ ok?: boolean; name?: string; alreadyConfigured?: boolean; error?: string }>(res, t("dec.loadFail"));
+      setNotice({
+        tone: data?.ok === true ? "ok" : "err",
+        text: data?.ok === true
+          ? t(data.alreadyConfigured === true ? "dec.adoptExists" : "dec.adopted", { name: data.name ?? "" })
+          : (data?.error ?? t("dec.probeFail")),
+      });
+      if (data?.ok === true) resource.refresh();
+    } catch (error) {
+      setNotice({ tone: "err", text: error instanceof Error && error.message ? error.message : t("dec.probeFail") });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const reasonText = (reason: string) => {
     if (reason === "provider_not_configured") return t("dec.reasonNoProvider");
     if (reason === "no_endpoint") return t("dec.reasonNoEndpoint");
@@ -201,6 +223,14 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
   const configured = new Set(providers.map(row => row.name));
   const addable = presets.filter(preset => preset.adapter === DECISION_ADAPTER && !configured.has(preset.id));
   const active = activeDecisionRow(providers);
+  /**
+   * Destination+model pairs that already have a row. A gateway can resell several decision models
+   * behind one endpoint, so the endpoint alone is not the identity: a row that pins no model counts
+   * as the model its preset defaults to.
+   */
+  const adoptedPairs = new Set(decisionRows.map(row => (
+    `${row.baseUrl}|${row.defaultModel ?? presetsById.get(row.name)?.defaultModel ?? ""}`
+  )));
 
   const statusCell = (row: ProviderRow) => {
     if (row.disabled === true) return <span className="badge badge-disabled">{t("dec.disabled")}</span>;
@@ -323,6 +353,7 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
                   <th>{t("dec.colPricing")}</th>
                   <th>{t("dash.col.baseUrl")}</th>
                   <th>{t("dec.colKinds")}</th>
+                  <th>{t("dec.colActions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -338,6 +369,22 @@ export default function Decisions({ apiBase }: { apiBase: string }) {
                       {finding.probed
                         ? ["choice", "score"].map(kind => kindLabel(kind, finding.kinds?.[kind])).join(" · ")
                         : reasonText(finding.reason ?? "")}
+                    </td>
+                    <td>
+                      {finding.probed && finding.ok === true && !adoptedPairs.has(`${finding.endpoint ?? ""}|${finding.model}`)
+                        ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => void adopt(finding)}
+                            disabled={busy?.kind === "adopt" && busy.name === `${finding.provider}/${finding.model}`}
+                          >
+                            {busy?.kind === "adopt" && busy.name === `${finding.provider}/${finding.model}`
+                              ? t("dec.adopting")
+                              : t("dec.adopt")}
+                          </button>
+                        )
+                        : "—"}
                     </td>
                   </tr>
                 ))}

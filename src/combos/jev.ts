@@ -604,7 +604,7 @@ function destinationFromRow(
   const rowKey = resolveProviderApiKey(provider.apiKey)?.trim();
   const apiKey = rowKey ?? (baseUrl === JEV_API_URL ? environmentKey : undefined);
   if (!apiKey) return null;
-  return { providerId, baseUrl, model: jevDecisionModel(providerId), apiKey };
+  return { providerId, baseUrl, model: jevDecisionModel(providerId, provider), apiKey };
 }
 
 export function resolveJevDecisionDestination(config: OcxConfig): JevDecisionDestination | null {
@@ -645,9 +645,13 @@ export function resolveJevDecisionDestination(config: OcxConfig): JevDecisionDes
  * publishes `jev-1.13` / `jev-1.13-free` only — so the registry entry, not this file, owns the
  * per-destination default.
  */
-function jevDecisionModel(providerId: string): string {
+function jevDecisionModel(providerId: string, provider?: OcxProviderConfig): string {
   const override = process.env[JEV_MODEL_ENV_KEY]?.trim();
   if (override) return override;
+  // A row's own model wins: an adopted destination is named after the model it was discovered
+  // under, and no registry entry exists for a name the operator (or the search) just invented.
+  const configured = provider?.defaultModel;
+  if (typeof configured === "string" && configured.trim().length > 0) return configured.trim();
   const entry = getProviderRegistryEntry(providerId);
   const model = entry?.defaultModel ?? entry?.models?.[0];
   return typeof model === "string" && model.trim().length > 0 ? model.trim() : JEV_MODEL;

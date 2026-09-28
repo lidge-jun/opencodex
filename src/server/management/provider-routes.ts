@@ -75,6 +75,8 @@ import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cac
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { JEV_MODEL, probeJevDecisionContract, resolveJevDecision } from "../../combos/jev";
+import { resolveProviderApiKey } from "../../providers/api-key-resolve";
+import { systemOneEndpoint } from "./decision-discovery";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -1860,6 +1862,70 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ...(probe.answeredBy ? { answeredBy: probe.answeredBy } : {}),
       kinds: probe.kinds,
     });
+  }
+
+  // Adopt a discovered decision model as a destination row. The search already proved the
+  // endpoint answers the contract, so this only has to write a row that points at it: the source
+  // row's own credential reference is copied verbatim (never re-resolved) so an environment-key
+  // setup keeps pointing at its file, and the discovered model is pinned as the row's model.
+  if (url.pathname === "/api/decision-adopt" && req.method === "POST") {
+    const providerId = url.searchParams.get("provider")?.trim() ?? "";
+    const model = url.searchParams.get("model")?.trim() ?? "";
+    const requestedName = url.searchParams.get("name")?.trim() ?? "";
+    if (!providerId || !model) return jsonResponse({ error: "provider and model are required" }, 400);
+    const source = config.providers[providerId];
+    if (!source || source.disabled === true) return jsonResponse({ error: "provider not configured" }, 404);
+    const endpoint = systemOneEndpoint(source.baseUrl);
+    if (!endpoint) return jsonResponse({ error: "provider has no System One endpoint" }, 409);
+    if (!resolveProviderApiKey(source.apiKey)?.trim()) {
+      return jsonResponse({ error: "provider has no credential to copy" }, 409);
+    }
+    // Two models of one gateway share an endpoint but not a destination: the row pins its model,
+    // so the default name falls back to a model-qualified one instead of colliding.
+    const modelSlug = model.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const names = requestedName
+      ? [requestedName]
+      : [`jev-${providerId}`, `jev-${providerId}-${modelSlug}`];
+    let name = names[0]!;
+    for (const candidate of names) {
+      if (!isValidProviderName(candidate)) return jsonResponse({ error: "invalid destination name" }, 400);
+      const existing = config.providers[candidate];
+      if (!existing) { name = candidate; break; }
+      if (existing.adapter === "jev-decision" && systemOneEndpoint(existing.baseUrl) === endpoint) {
+        if (existing.defaultModel === undefined || existing.defaultModel === model) {
+          return jsonResponse({ ok: true, name: candidate, baseUrl: endpoint, model, alreadyConfigured: true });
+        }
+        name = candidate;
+        continue;
+      }
+      if (candidate === names[names.length - 1]) {
+        return jsonResponse({ error: `provider "${candidate}" already exists` }, 409);
+      }
+    }
+    if (config.providers[name]) {
+      return jsonResponse({ error: `provider "${name}" already exists` }, 409);
+    }
+    const row: typeof source = {
+      ...(source.proxy ? { proxy: source.proxy } : {}),
+      ...(source.noProxy ? { noProxy: source.noProxy } : {}),
+      ...(source.allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+      adapter: "jev-decision",
+      baseUrl: endpoint,
+      authMode: "key",
+      apiKey: source.apiKey,
+      ...(source.apiKeyPool ? { apiKeyPool: source.apiKeyPool } : {}),
+      defaultModel: model,
+      liveModels: false,
+    };
+    let validationError: string | undefined;
+    withConfigMutationLockSync(() => {
+      const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: row } });
+      if (!validation.ok) { validationError = validation.error; return; }
+      config.providers[name] = row;
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+    });
+    if (validationError) return jsonResponse({ error: validationError }, 400);
+    return jsonResponse({ ok: true, name, baseUrl: endpoint, model });
   }
 
   if (url.pathname === "/api/providers" && req.method === "DELETE") {
