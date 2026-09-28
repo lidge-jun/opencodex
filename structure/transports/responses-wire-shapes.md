@@ -6,8 +6,10 @@ For translated routed compaction, `src/responses/compaction-images.ts` replaces 
 tool-result images with a short reopening note only when a later nonempty `final_answer` message
 exists. This structural boundary does not prove the image was analyzed: text and source references
 remain, and the note asks the next model to reopen unresolved visual evidence. Pending images and
-commentary-only or unphased histories stay intact. The request-local copy leaves raw/stored history,
-normal generation and native compaction unchanged. Both routed v1 and v2 pass through this boundary;
+commentary-only or unphased histories stay intact. Sidecar preparation projects parsed messages before
+vision planning. The projection does not rewrite `_rawBody` or stored history; later vision preprocessing
+may rewrite the request-local raw body for transport safety. Normal generation and native compaction
+stay unchanged. Both routed v1 and v2 pass through this boundary;
 raw Responses gateways retain their existing text-only compaction conversion.
 
 ## Direct MCP calls in code mode
