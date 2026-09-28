@@ -351,20 +351,21 @@ async function chooseListenPort(
 }
 
 async function findProxyOwnerBeforeJournalRecovery(
-  options: { probeConfiguredPort?: boolean } = {},
+  options: { probeConfiguredPort?: boolean; deferPidCleanup?: boolean } = {},
 ): Promise<{ live: LiveProxy | null; pidSnapshot: number | null }> {
   const pidSnapshot = readPidFileValue();
   const hasRuntimeOwner = readRuntimePort() !== null;
   const shouldProbe = pidSnapshot !== null || hasRuntimeOwner || options.probeConfiguredPort === true;
   // A negative answer lets the caller walk past a proxy it was supposed to find and
-  // deletes this home's stale pid record. Journal recovery follows cross-home discovery.
+  // deletes this home's stale pid record. Supervised starts defer that write to the
+  // lease-held owner recheck; journal recovery follows cross-home discovery.
   // One 750ms probe is not enough evidence for that (#5004) — a transport
   // failure is indistinguishable from an empty port, and the reported Windows duplicate
   // came from exactly that answer on a proxy the previous command had just found healthy.
   const live = shouldProbe ? await findLiveProxy(START_OWNERSHIP_LIVENESS) : null;
   if (live) return { live, pidSnapshot };
 
-  removePidIfValueIs(pidSnapshot);
+  if (!options.deferPidCleanup) removePidIfValueIs(pidSnapshot);
   return { live: null, pidSnapshot };
 }
 
@@ -422,7 +423,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;
   // A restart replacement waits out its draining parent instead of refusing it, and bounds its handoff log (restart-handoff.ts).
   const restartParent = { restartParentPid: takeRestartHandoffMarkers(process.env), requestedPort, ocxService: process.env.OCX_SERVICE };
-  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true }), restartParent);
+  const owner = await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: supervisedServiceChild }), restartParent);
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
     const decision = decideStartWithLiveOwner({
@@ -457,6 +458,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
     stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
     recover: async () => {
+      if (!owner.live && supervisedServiceChild) removePidIfValueIs(owner.pidSnapshot);
       if (!owner.live && !siblingStart) siblingStart = await markCrossHomeSibling();
       if (!siblingStart) reconcileStartupJournal();
       return siblingStart;

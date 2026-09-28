@@ -57,6 +57,7 @@ describe("connected-client start ownership fence", () => {
     const fence = start.indexOf("recoverStartStateUnderOwnershipLease(");
     expect(fence).toBeGreaterThan(start.indexOf("probeOwnerPastRestartParent("));
     expect(fence).toBeLessThan(start.indexOf("markCrossHomeSibling()"));
+    expect(fence).toBeLessThan(start.indexOf("removePidIfValueIs(owner.pidSnapshot)"));
     expect(fence).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
     expect(fence).toBeLessThan(start.indexOf('if (clientState.kind === "connected")'));
     expect(fence).toBeLessThan(start.indexOf("bindAndPublishStartOwnership("));

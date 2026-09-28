@@ -117,7 +117,7 @@ listener bind. The supervised-child classification is kept from the first check;
 recorded owner is read fresh under the lease, so a desktop claim committed between checks
 cannot be overwritten by PID or runtime publication. Before either runtime branch,
 `recoverStartStateUnderOwnershipLease` (`src/cli/start-owner-fence.ts`) holds that same
-lease and rechecks the owner before cross-home sibling detection or startup journal recovery;
+lease and rechecks the owner before stale PID cleanup, cross-home sibling detection, or startup journal recovery;
 an owner claim committed during the early probe cannot be followed by shared Codex writes.
 The connected-client branch, which returns into `startClientRuntime` before the server path,
 takes the same lease through `startClientRuntimeUnderOwnershipLease`
