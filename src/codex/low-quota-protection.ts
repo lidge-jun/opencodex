@@ -32,7 +32,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
   let retryDelay: number | undefined;
   let saveFlight: Promise<void> | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let lastPause: EventBase | null = null;
+  const pendingPauseEvents = new Map<string, EventBase>();
 
   function event(base: EventBase,
     delivery: LowQuotaEvent["delivery"], status: LowQuotaEvent["status"]): void {
@@ -48,7 +48,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     saveTimer = setTimeout(() => {
       saveTimer = null;
       if (closed || ownerGeneration !== generation) {
-        if (lastPause) event(lastPause, "pause-save", "cancelled");
+        for (const base of pendingPauseEvents.values()) event(base, "pause-save", "cancelled");
         return;
       }
       void runSave();
@@ -60,21 +60,25 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     if (saveFlight) return saveFlight;
     cancelTimer();
     const ownerGeneration = generation;
+    const saving = new Map(pendingPauseEvents);
     dirty = false;
     saveFlight = Promise.resolve().then(() => {
       if (closed || ownerGeneration !== generation) {
-        if (lastPause) event(lastPause, "pause-save", "cancelled");
+        for (const base of saving.values()) event(base, "pause-save", "cancelled");
         return;
       }
       return persist(config);
     }).then(() => {
       if (!closed && ownerGeneration === generation) {
         attempts = 0;
-        if (lastPause) event(lastPause, "pause-save", "delivered");
+        for (const [key, base] of saving) {
+          event(base, "pause-save", "delivered");
+          if (pendingPauseEvents.get(key) === base) pendingPauseEvents.delete(key);
+        }
       }
     }, () => {
       if (closed || ownerGeneration !== generation) return;
-      if (lastPause) event(lastPause, "pause-save", "failed");
+      for (const base of saving.values()) event(base, "pause-save", "failed");
       console.warn("[codex-low-quota] pause persistence failed");
       dirty = true;
       retryDelay = RETRY_DELAYS_MS[attempts++];
@@ -93,7 +97,8 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     closed = true;
     generation++;
     cancelTimer();
-    if (dirty && lastPause) event(lastPause, "pause-save", "cancelled");
+    if (dirty) for (const base of pendingPauseEvents.values()) event(base, "pause-save", "cancelled");
+    pendingPauseEvents.clear();
     for (const episode of episodes.values()) {
       if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
     }
@@ -114,7 +119,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       ]);
       if (timeout) clearTimeout(timeout);
       if (!completed || Date.now() >= deadline) {
-        if (lastPause) event(lastPause, "pause-save", "failed");
+        for (const base of pendingPauseEvents.values()) event(base, "pause-save", "failed");
         console.warn("[codex-low-quota] pause persistence flush timed out");
         break;
       }
@@ -161,7 +166,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       if (policy.actions.pause && !isCodexAccountPaused(config, accountId) && !episode.pausedByUs) {
         setCodexAccountPaused(config, accountId, true);
         episode.pausedByUs = true;
-        lastPause = base;
+        pendingPauseEvents.set(key, base);
         dirty = true;
         attempts = 0;
         retryDelay = undefined;

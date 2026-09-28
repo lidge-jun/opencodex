@@ -322,4 +322,17 @@ describe("low quota protection", () => {
     expect(events[0]?.accountId).toBe("account-119");
     expect(events.at(-1)?.accountId).toBe("account-20");
   });
+
+  test("one coalesced save reports durability for both paused accounts", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    let writes = 0;
+    const registration = register(config, { persist: () => { writes++; } });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 90 });
+    expect(writes).toBe(0);
+    await registration.flush();
+    expect(writes).toBe(1);
+    expect(new Set(listLowQuotaEvents(100).filter(event => event.status === "delivered")
+      .map(event => event.accountId))).toEqual(new Set([ACCOUNT_A, ACCOUNT_B]));
+  });
 });
