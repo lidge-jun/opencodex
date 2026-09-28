@@ -50,6 +50,14 @@ function splitTypeArray(node: Schema, types: unknown[]): Schema {
     && (!Array.isArray(rest.enum) || rest.enum.includes(null))
     && (!Object.hasOwn(rest, 'const') || rest.const === null);
   const existing = Array.isArray(node.anyOf) ? node.anyOf : undefined;
+  // Boolean constraints apply to every type, including null. A bare null branch
+  // would bypass them, so keep the type split and the outer schema conjunctive.
+  if (allowsNull && ['not', 'allOf', 'oneOf', 'if', 'then', 'else'].some((key) => key in rest)) {
+    return {
+      ...annotations,
+      allOf: [splitTypeArray({ type: types }, types), existing ? { ...rest, anyOf: existing } : rest],
+    };
+  }
   // Folding merges each branch into the outer keywords, which is only exact when
   // they never disagree: `{maxLength: 5, anyOf: [{maxLength: 50}]}` folded would
   // loosen the outer limit. On a disagreement keep both constraints under allOf,

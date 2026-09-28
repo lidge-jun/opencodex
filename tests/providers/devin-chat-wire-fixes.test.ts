@@ -195,6 +195,25 @@ describe("Gemini tool schema type arrays", () => {
     });
   });
 
+  test("outer not and oneOf still constrain the null branch", () => {
+    expect(normalizeDevinToolParameters("gemini-x", {
+      type: ["string", "null"], not: { type: "null" },
+    })).toEqual({
+      allOf: [
+        { anyOf: [{ type: "string" }, { type: "null" }] },
+        { not: { type: "null" } },
+      ],
+    });
+    expect(normalizeDevinToolParameters("gemini-x", {
+      type: ["string", "null"], oneOf: [{ type: "string" }, { const: "x" }],
+    })).toEqual({
+      allOf: [
+        { anyOf: [{ type: "string" }, { type: "null" }] },
+        { oneOf: [{ type: "string" }, { const: "x" }] },
+      ],
+    });
+  });
+
   test("draft-7 dependencies: schema values are rewritten, name lists are left alone", () => {
     const out = normalizeDevinToolParameters("gemini-x", {
       type: "object",
