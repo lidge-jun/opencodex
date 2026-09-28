@@ -531,11 +531,10 @@ function applyProviderPatchFields(
     touched = true;
   }
   if (Object.hasOwn(rawBody, "modelContextTiers")) {
-    const value = rawBody.modelContextTiers;
-    const error = contextTierRecordConfigError(value, true);
+    const error = contextTierRecordConfigError(rawBody.modelContextTiers, true);
     if (error) return { error };
-    if (value === null) delete next.modelContextTiers;
-    else next.modelContextTiers = Object.assign(Object.create(null), next.modelContextTiers ?? {}, value);
+    if (rawBody.modelContextTiers === null) delete next.modelContextTiers;
+    else next.modelContextTiers = Object.assign(Object.create(null), next.modelContextTiers ?? {}, rawBody.modelContextTiers);
     touched = true;
   }
   if (Object.hasOwn(rawBody, "modelContextWindows")) {
@@ -1222,7 +1221,6 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
-    const submittedModelContextTiers = Object.hasOwn(prov, "modelContextTiers");
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
@@ -1320,11 +1318,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
         : { ...existing.modelContextWindows };
     }
-    if (existing?.modelContextTiers) {
-      prov.modelContextTiers = submittedModelContextTiers
-        ? Object.assign(Object.create(null), existing.modelContextTiers, prov.modelContextTiers ?? {})
-        : { ...existing.modelContextTiers };
-    }
+    if (existing?.modelContextTiers) prov.modelContextTiers = Object.hasOwn(prov, "modelContextTiers")
+      ? Object.assign(Object.create(null), existing.modelContextTiers, prov.modelContextTiers ?? {})
+      : { ...existing.modelContextTiers };
     if (existing?.modelAutoCompactTokenLimits) {
       prov.modelAutoCompactTokenLimits = submittedModelAutoCompactTokenLimits
         ? { ...existing.modelAutoCompactTokenLimits, ...(prov.modelAutoCompactTokenLimits ?? {}) }
