@@ -1788,6 +1788,7 @@
   "windows-elevation.test.ts": "windows",
   "windows-guarded-manager.test.ts": "windows",
   "windows-popup-fix.test.ts": "windows",
+  "windows-process-priority.test.ts": "windows",
   "windows-scheduler-install-verification.test.ts": "windows",
   "windows-secret-acl.test.ts": "windows",
   "windows-service-mutation-lock.test.ts": "windows",

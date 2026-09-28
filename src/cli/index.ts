@@ -2,6 +2,7 @@
 import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
 import { isSupervisedServiceChild, serviceChildOwnershipDecisionForClassifiedChild } from "../service/service-child-ownership";
 import { SERVICE_MANAGED_ENV } from "../service/state";
+import { raiseWindowsProxyPriority } from "../service/windows-process-priority";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -541,6 +542,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         // Port selection is check-then-bind. The lease prevents every cooperating start or
         // updater from turning that check into a different ownership decision.
         let port = await chooseListenPort(requestedPort, { sibling: siblingStart });
+        raiseWindowsProxyPriority();
         const serverModule = await import("../server");
         const readinessGate = createReadinessGate();
         const localAttestationSecret = createLocalAttestationSecret();

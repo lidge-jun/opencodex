@@ -83,6 +83,11 @@ override only raises: the 750 ms default and the 1500 ms stop/start budgets keep
 `1000` lengthens only the default probe. Unset, empty, fractional, negative, zero, or larger values
 are ignored and the shipped ceilings apply.
 
+On Windows the proxy also raises its own process to ABOVE_NORMAL priority when it starts, so a host
+saturated by other NORMAL-priority work (antivirus scans, encoders, emulators) does not leave its
+event loop waiting for CPU past these ceilings. The change is best-effort; set
+`OCX_DISABLE_PRIORITY_BOOST=1` in the proxy's environment to keep it at NORMAL.
+
 ## Exit codes and confirmation
 
 Successful commands exit 0. Invalid usage, unknown commands or resources, failed API operations,
