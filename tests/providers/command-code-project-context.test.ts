@@ -380,6 +380,7 @@ describe("loadCommandCodeProjectContext", () => {
             requestedLength = length;
             return originalRead(buffer, offset, length, position);
           },
+          stat: handle.stat.bind(handle),
           close: handle.close.bind(handle),
         } as Awaited<ReturnType<typeof realOpen>>;
       });
@@ -413,6 +414,7 @@ describe("loadCommandCodeProjectContext", () => {
             totalRead += result.bytesRead;
             return result;
           },
+          stat: handle.stat.bind(handle),
           close: handle.close.bind(handle),
         } as Awaited<ReturnType<typeof realOpen>>;
       });
@@ -787,6 +789,7 @@ describe("projectContextCache eviction", () => {
             }
             return originalRead(buffer, offset, length, position);
           },
+          stat: handle.stat.bind(handle),
           close: handle.close.bind(handle),
         } as Awaited<ReturnType<typeof realOpen>>;
       }
