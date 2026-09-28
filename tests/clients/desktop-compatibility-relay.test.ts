@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
-import { createServer } from "node:https";
+import { createServer, request } from "node:https";
 import { connect } from "node:tls";
 import type { Duplex } from "node:stream";
 import { createCertificateAuthority, issueServerLeaf } from "../../src/claude/intercept/local-ca";
 import { startDesktopRelay } from "../../src/codex/desktop-compatibility/relay-listener";
 import { forwardProxy } from "../helpers/desktop-egress-fixture";
+import { UsageRelayController } from "../../src/codex/desktop-compatibility/usage-controller";
+import { createUsageControlledFetch } from "../../src/codex/desktop-compatibility/usage-controlled-fetch";
 
 for (const route of ["direct", "http", "https", "socks5"] as const) test(`upgraded native app traffic preserves handshake and raw frames through ${route}`, async () => {
   const ca = createCertificateAuthority({ commonName: "relay-fixture", validityDays: 1 });
@@ -50,4 +52,46 @@ for (const route of ["direct", "http", "https", "socks5"] as const) test(`upgrad
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => upstream.close(() => resolve()));
   }
+}, 10000);
+
+for (const mode of ["observe", "apply"] as const) test(`attachment upload stays byte-identical in ${mode} mode`, async () => {
+  const account = { id: "fixture-account", userId: "fixture-user", plan: "pro", structure: "personal" } as const;
+  const controller = new UsageRelayController(account, async () => account, async () => account, Date.now, Date.now() + 600000);
+  if (mode === "apply") {
+    await controller.rewriteJson(JSON.stringify({ account_id: account.id, user_id: account.userId, plan_type: "pro",
+      rate_limit: { allowed: false, limit_reached: true, primary_window: { used_percent: 100, reset_at: 123456 } },
+      spend_control: { reached: false }, credits: { has_credits: false, unlimited: false } }),
+    { method: "GET", pathname: "/backend-api/wham/usage", status: 200 });
+    expect((await controller.activate({ scope: "account-ui-compatibility", accountWideConsent: true })).accepted).toBe(true);
+  }
+  const ca = createCertificateAuthority({ commonName: "attachment-fixture", validityDays: 1 });
+  const contentType = "multipart/form-data; boundary=fixture-upload";
+  const upload = Buffer.concat([Buffer.from('--fixture-upload\r\nContent-Disposition: form-data; name="file"; filename="fixture.bin"\r\nContent-Type: application/octet-stream\r\n\r\n'),
+    Buffer.from([0, 0xff, 0x80, 0x0d, 0x0a]), Buffer.from('첨부 UTF-8 {"rate_limit":{"allowed":false}}\r\n--fixture-upload--\r\n')]);
+  const download = Buffer.concat([Buffer.from([0, 0xff, 0x80]), Buffer.from('{"rate_limit":{"allowed":false,"limit_reached":true}}')]);
+  let captured: { url: string; method?: string; headers: Headers; bytes: Buffer } | undefined;
+  const upstream = (async (input, init) => {
+    captured = { url: String(input), method: init?.method, headers: new Headers(init?.headers), bytes: Buffer.from(await new Response(init?.body).arrayBuffer()) };
+    const headers = new Headers({ "content-type": "application/octet-stream" });
+    headers.append("set-cookie", "fixture-a=one; Secure"); headers.append("set-cookie", "fixture-b=two; Secure");
+    return new Response(download, { status: 201, headers });
+  }) as typeof fetch;
+  const relay = await startDesktopRelay({ leaf: issueServerLeaf(ca, "attachment-fixture", ["chatgpt.com"]), fetchImpl: createUsageControlledFetch(controller, upstream) });
+  try {
+    const response = await new Promise<{ status?: number; cookies?: string[]; bytes: Buffer }>((resolve, reject) => {
+      const client = request({ hostname: "127.0.0.1", port: relay.port, servername: "chatgpt.com", ca: ca.certPem,
+        path: "/backend-api/files", method: "POST", headers: { host: "chatgpt.com", "content-type": contentType,
+          "content-length": upload.length, authorization: "Bearer fixture-token", cookie: "fixture=session" } }, incoming => {
+        const chunks: Buffer[] = []; incoming.on("data", chunk => chunks.push(Buffer.from(chunk))); incoming.once("error", reject);
+        incoming.once("end", () => resolve({ status: incoming.statusCode, cookies: incoming.headers["set-cookie"], bytes: Buffer.concat(chunks) }));
+      });
+      client.once("error", reject); client.setTimeout(5000, () => client.destroy(new Error("fixture timeout"))); client.end(upload);
+    });
+    expect(captured?.url).toBe("https://chatgpt.com/backend-api/files"); expect(captured?.method).toBe("POST");
+    expect(captured?.bytes).toEqual(upload); expect(captured?.headers.get("content-type")).toBe(contentType);
+    expect(captured?.headers.get("authorization")).toBe("Bearer fixture-token"); expect(captured?.headers.get("cookie")).toBe("fixture=session");
+    expect(response.status).toBe(201); expect(response.bytes).toEqual(download);
+    expect(response.cookies).toEqual(["fixture-a=one; Secure", "fixture-b=two; Secure"]);
+    expect(controller.snapshot().mode).toBe(mode); expect(controller.snapshot().outputs).toBe(0);
+  } finally { await relay.close(); await controller.observeOnly(); }
 }, 10000);
