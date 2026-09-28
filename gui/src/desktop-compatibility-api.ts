@@ -1,4 +1,4 @@
-export type CertificateState = "missing" | "invalid" | "expired" | "prepared" | "trusted" | "unknown";
+export type CertificateState = "missing" | "invalid" | "expired" | "renewal-required" | "prepared" | "trusted" | "unknown";
 export interface CompatibilityCertificate {
   supported: boolean; state: CertificateState; fingerprint?: string; expiresAt?: number; renewalDue: boolean; busy: string | null;
 }
@@ -40,7 +40,7 @@ export async function saveCompatibilityStartupSettings(apiBase: string, current:
     headers: { "content-type": "application/json" }, body: JSON.stringify({ startOnProxyStart: enabled, revision: current.revision, confirmed: true }) }))).settings);
 }
 export function parseCompatibilityCertificate(value: unknown): CompatibilityCertificate {
-  if (!object(value) || typeof value.supported !== "boolean" || typeof value.state !== "string" || !["missing", "invalid", "expired", "prepared", "trusted", "unknown"].includes(value.state)
+  if (!object(value) || typeof value.supported !== "boolean" || typeof value.state !== "string" || !["missing", "invalid", "expired", "renewal-required", "prepared", "trusted", "unknown"].includes(value.state)
     || !(value.busy === null || typeof value.busy === "string" && ["prepare", "trust", "remove-trust", "renew"].includes(value.busy))) throw new CompatibilityApiError("invalid_certificate_status");
   if (value.fingerprint !== undefined && (typeof value.fingerprint !== "string" || !/^[A-F0-9]{64}$/.test(value.fingerprint))) throw new CompatibilityApiError("invalid_certificate_status");
   if (value.expiresAt !== undefined && (typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt) || Math.abs(value.expiresAt) > 8.64e15)) throw new CompatibilityApiError("invalid_certificate_status");

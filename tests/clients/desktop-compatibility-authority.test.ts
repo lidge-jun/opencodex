@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, X509Certificate } from "node:crypto";
+import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +35,27 @@ function protector(): AuthorityKeyProtection {
 }
 
 describe("Codex Desktop compatibility authority lifecycle", () => {
+  test("legacy-purpose authority stays removable but must be deliberately renewed before reuse", async () => {
+    const root = directory(), protection = protector(), commonName = `OpenCodex Codex Desktop ${randomUUID()}`;
+    const legacy = createCertificateAuthority({ commonName, validityDays: 30, permittedDnsNames: ["chatgpt.com"] });
+    expect(new X509Certificate(legacy.certPem).keyUsage).toBeUndefined();
+    const clear = Buffer.from(JSON.stringify({ policy: "codex-desktop-chatgpt-only/v1", commonName,
+      certSha256: createHash("sha256").update(legacy.certPem).digest("hex"), keyPem: legacy.keyPem }));
+    const path = join(root, "authority.json");
+    writeFileSync(path, JSON.stringify({ version: 1, protection: "windows-current-user-dpapi", certPem: legacy.certPem,
+      sealed: Buffer.from(await protection.protect(clear)).toString("base64") })); clear.fill(0);
+    const before = readFileSync(path, "utf8");
+    expect(inspectDesktopCompatibilityAuthority(root).status).toBe("renewal-required");
+    await expect(ensureDesktopCompatibilityAuthority({ directory: root, protection })).rejects.toMatchObject({ code: "renewal_required" });
+    await expect(loadDesktopCompatibilityAuthority({ directory: root, protection })).rejects.toMatchObject({ code: "renewal_required" });
+    const removable = await loadDesktopCompatibilityAuthority({ directory: root, protection }, true);
+    expect(readFileSync(path, "utf8")).toBe(before);
+    const renewed = await renewDesktopCompatibilityAuthority({ directory: root, protection }, removable.fingerprint);
+    expect(renewed.fingerprint).not.toBe(removable.fingerprint);
+    expect(new X509Certificate(renewed.authority.certPem).keyUsage).toEqual(["1.3.6.1.5.5.7.3.1"]);
+    expect(inspectDesktopCompatibilityAuthority(root).status).toBe("present");
+  });
+
   test("deliberate renewal replaces one encrypted identity and refuses a stale fingerprint", async () => {
     const root = directory(), protection = protector();
     const first = await ensureDesktopCompatibilityAuthority({ directory: root, protection });

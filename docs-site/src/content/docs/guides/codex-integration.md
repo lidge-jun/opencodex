@@ -933,6 +933,8 @@ does not silently reactivate correction.
 the certificate for reuse; active connections may be interrupted. For renewal or trust removal,
 stop the service and close Codex first. Renewal prepares a new untrusted certificate; review the
 new fingerprint before registering it. An uncertain action is not automatically retried.
+Certificates are restricted to TLS server authentication. If status shows `renewal-required`,
+stop the service and close Codex, then renew the older certificate before starting again.
 
 The service preserves its PAC address and local connection ports for reuse after a restart.
 With the same trusted certificate, an already configured app can reconnect through its cached

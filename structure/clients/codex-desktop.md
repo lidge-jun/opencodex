@@ -33,7 +33,7 @@ real Windows parser/COM service without launching the user's app.
 ## Certificate persistence
 
 `src/codex/desktop-compatibility/certificate-store.ts` is a separately callable store
-for a 30-day authority constrained to `chatgpt.com`, with IP exclusions. An explicit
+for a 30-day authority constrained to `chatgpt.com`, with IP exclusions and a TLS-server-only EKU. An explicit
 feature-owned directory and lifecycle lease protect one atomic envelope. Its public
 certificate is bound to a CurrentUser-DPAPI-protected private payload.
 
@@ -43,6 +43,8 @@ the last seven days. The store does not register certificates, start listeners, 
 compatibility settings or change the running app. A deliberate renewal validates the
 replacement envelope before atomic publication and compares the existing identity again.
 Failure before publication preserves the original removable identity; staging is cleaned.
+An older authority without the server-only EKU reports `renewal-required`: serving and trust
+registration refuse it, while exact trust removal and deliberate renewal remain available.
 
 `src/codex/desktop-compatibility/windows-key-protection.ts` uses trusted PowerShell
 and bounded stdin/stdout, never command-line secrets or plaintext fallback. CurrentUser

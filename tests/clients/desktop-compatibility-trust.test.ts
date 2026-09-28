@@ -4,14 +4,25 @@ import { createCertificateAuthority } from "../../src/claude/intercept/local-ca"
 import type { StoredDesktopAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
 import { createWindowsCertificateTrust, inspectWindowsCertificateTrust, type DesktopCertificateTrust, type TrustOperation } from "../../src/codex/desktop-compatibility/windows-certificate-trust";
 
-function fixture(): StoredDesktopAuthority {
+function fixture(serverAuthOnly = true): StoredDesktopAuthority {
   const commonName = `OpenCodex Codex Desktop ${randomUUID()}`;
-  const authority = createCertificateAuthority({ commonName, validityDays: 1, permittedDnsNames: ["chatgpt.com"], excludeAllIpAddresses: true });
+  const authority = createCertificateAuthority({ commonName, validityDays: 1, permittedDnsNames: ["chatgpt.com"], excludeAllIpAddresses: true, serverAuthOnly });
   const certificate = new X509Certificate(authority.certPem);
   return { authority, commonName, fingerprint: certificate.fingerprint256.replaceAll(":", ""), expiresAt: Date.parse(certificate.validTo), renewalDue: true, reused: false };
 }
 
 describe("exact Windows compatibility certificate trust", () => {
+  test("legacy purpose refuses trust before an OS write but allows exact removal", async () => {
+    const value = fixture(false), calls: TrustOperation[] = []; let state: DesktopCertificateTrust = "trusted";
+    const controller = createWindowsCertificateTrust(value, value.fingerprint, async operation => {
+      calls.push(operation); if (operation === "remove") state = "not-trusted"; return state;
+    });
+    await expect(controller.trust()).rejects.toThrow("desktop_compatibility_authority_renewal_required");
+    expect(calls).toHaveLength(0);
+    expect(await controller.remove()).toBe("not-trusted");
+    expect(calls).toEqual(["inspect", "remove", "inspect"]);
+  });
+
   test("repeated trust and removal do not repeat OS mutations", async () => {
     const value = fixture(), calls: TrustOperation[] = []; let state: DesktopCertificateTrust = "not-trusted";
     const controller = createWindowsCertificateTrust(value, value.fingerprint, async (operation, publicDer, fingerprint) => {

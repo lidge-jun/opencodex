@@ -22,6 +22,14 @@ function fixture() {
 }
 
 describe("compatibility certificate setup service", () => {
+  test("legacy-purpose status stays renewal-required even when its old OS root is trusted", async () => {
+    const io = fixture(); io.present(); await io.service.trust(fingerprint);
+    io.setStored({ status: "renewal-required", fingerprint, certPem: "public-fixture", expiresAt: 123456, renewalDue: false });
+    expect((await io.service.status()).state).toBe("renewal-required");
+    expect((await io.service.renew(fingerprint)).state).toBe("prepared");
+    expect(io.calls).toContain("load-removal");
+  });
+
   test("renewal verifies removal before replacement and leaves the new root untrusted", async () => {
     const io = fixture(); io.present();
     const result = await io.service.renew(fingerprint);

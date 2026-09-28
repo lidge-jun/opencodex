@@ -1,7 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey, randomUUID, X509Certificate } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { createCertificateAuthority, type LocalInterceptCa } from "../../claude/intercept/local-ca";
+import { createCertificateAuthority, isServerAuthOnlyCertificate, type LocalInterceptCa } from "../../claude/intercept/local-ca";
 import { withClientLifecycle } from "../../client/lifecycle-lock";
 import { hardenSecretDirAsync, hardenSecretPathAsync } from "../../lib/windows-secret-acl";
 import { windowsAuthorityKeyProtection, type AuthorityKeyProtection } from "./windows-key-protection";
@@ -14,7 +14,7 @@ const DAY = 86_400_000;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 export class DesktopAuthorityError extends Error {
-  constructor(readonly code: "unsafe_path" | "unreadable" | "expired" | "protection_failed" | "fingerprint_changed") {
+  constructor(readonly code: "unsafe_path" | "unreadable" | "expired" | "renewal_required" | "protection_failed" | "fingerprint_changed") {
     super(`desktop_compatibility_authority_${code}`); this.name = "DesktopAuthorityError";
   }
 }
@@ -38,7 +38,7 @@ export interface StoredDesktopAuthority {
 
 export type DesktopAuthorityInspection =
   | { status: "missing" | "invalid" }
-  | { status: "present" | "expired"; certPem: string; fingerprint: string; expiresAt: number; renewalDue: boolean };
+  | { status: "present" | "expired" | "renewal-required"; certPem: string; fingerprint: string; expiresAt: number; renewalDue: boolean };
 
 /** Read-only public metadata for status: no key decryption, ACL write, lock or generation. */
 export function inspectDesktopCompatibilityAuthority(directory: string, now = Date.now()): DesktopAuthorityInspection {
@@ -54,7 +54,7 @@ export function inspectDesktopCompatibilityAuthority(directory: string, now = Da
       || typeof saved.sealed !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(saved.sealed) || saved.sealed.length > MAX_FILE) return { status: "invalid" };
     const certificate = new X509Certificate(saved.certPem), expiresAt = Date.parse(certificate.validTo);
     if (!certificate.ca || !Number.isFinite(expiresAt)) return { status: "invalid" };
-    return { status: expiresAt <= now ? "expired" : "present", certPem: saved.certPem,
+    return { status: expiresAt <= now ? "expired" : isServerAuthOnlyCertificate(certificate) ? "present" : "renewal-required", certPem: saved.certPem,
       fingerprint: certificate.fingerprint256.replaceAll(":", ""), expiresAt, renewalDue: expiresAt - now <= 7 * DAY };
   } catch { return { status: "invalid" }; }
 }
@@ -87,6 +87,7 @@ function validatedAuthority(certPem: string, keyPem: string, commonName: string,
     if (!Number.isFinite(expiresAt) || !Number.isFinite(startsAt) || startsAt > now
       || expiresAt - startsAt > (VALIDITY_DAYS + 1) * DAY) throw new Error("invalid");
     if (expiresAt <= now && !allowExpired) throw new DesktopAuthorityError("expired");
+    if (!allowExpired && !isServerAuthOnlyCertificate(certificate)) throw new DesktopAuthorityError("renewal_required");
     return { authority: { certPem, keyPem, privateKey, publicKey }, commonName,
       fingerprint: certificate.fingerprint256.replaceAll(":", ""), expiresAt,
       renewalDue: expiresAt - now <= 7 * DAY, reused };
@@ -118,7 +119,7 @@ async function readAuthority(path: string, protection: AuthorityKeyProtection, n
   } finally { cleartext?.fill(0); }
 }
 
-/** Loads only existing state. Expired keys may be loaded solely to remove their OS trust. */
+/** Loads only existing state. Expired or legacy-purpose keys may be loaded solely for trust removal/renewal. */
 export async function loadDesktopCompatibilityAuthority(options: DesktopAuthorityStoreOptions, allowExpiredForRemoval = false): Promise<StoredDesktopAuthority> {
   if (!isAbsolute(options.directory)) throw new DesktopAuthorityError("unsafe_path");
   const now = options.now?.() ?? Date.now();
@@ -161,7 +162,7 @@ async function publishAuthority(options: DesktopAuthorityStoreOptions, expectedF
     } else if (pathPresent(path)) return readAuthority(path, protection, now);
     const commonName = `OpenCodex Codex Desktop ${randomUUID()}`;
     const authority = createCertificateAuthority({ commonName, validityDays: VALIDITY_DAYS,
-      permittedDnsNames: ["chatgpt.com"], excludeAllIpAddresses: true });
+      permittedDnsNames: ["chatgpt.com"], excludeAllIpAddresses: true, serverAuthOnly: true });
     const cleartext = Buffer.from(JSON.stringify({ policy: POLICY, certSha256: digest(authority.certPem), commonName, keyPem: authority.keyPem }));
     let sealed: Uint8Array;
     try { sealed = await protection.protect(cleartext); }

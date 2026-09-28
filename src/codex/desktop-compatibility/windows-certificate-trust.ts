@@ -3,6 +3,7 @@ import { X509Certificate } from "node:crypto";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import type { StoredDesktopAuthority } from "./certificate-store";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
+import { isServerAuthOnlyCertificate } from "../../claude/intercept/local-ca";
 
 export type DesktopCertificateTrust = "trusted" | "not-trusted" | "unknown";
 export type TrustOperation = "inspect" | "trust" | "remove";
@@ -66,6 +67,7 @@ export function createWindowsCertificateTrust(authority: StoredDesktopAuthority,
   const change = (operation: "trust" | "remove") => {
     if (pending) return Promise.reject(new Error("desktop_compatibility_trust_busy"));
     if (operation === "trust" && Date.parse(certificate.validTo) <= Date.now()) return Promise.reject(new Error("desktop_compatibility_authority_expired"));
+    if (operation === "trust" && !isServerAuthOnlyCertificate(certificate)) return Promise.reject(new Error("desktop_compatibility_authority_renewal_required"));
     pending = (async () => {
       const before = await inspect();
       if (before === "unknown") return before;

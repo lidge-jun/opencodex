@@ -69,11 +69,12 @@ test("StrictMode status reads are inert and a fingerprint-bound action needs exp
 });
 
 test.each([
-  ["prepared", false, true], ["trusted", true, true], ["expired", true, true], ["unknown", true, false], ["invalid", false, false],
+  ["prepared", false, true], ["trusted", true, true], ["expired", true, true], ["renewal-required", true, true], ["unknown", true, false], ["invalid", false, false],
 ] as const)("certificate state %s exposes only supported cleanup and renewal actions", async (state, remove, renew) => {
   server(false, state); const container = await mount();
   const labels = [...container.querySelectorAll("button")].map(value => value.textContent);
   expect(labels.includes("Remove trust")).toBe(remove); expect(labels.includes("Renew certificate")).toBe(renew);
+  if (state === "renewal-required") expect(labels.includes("Start observation")).toBe(false);
   expect(requests.filter(value => value.method === "POST")).toHaveLength(0);
 });
 test("a lost write response disables replay until a fresh read proves the actual state", async () => {

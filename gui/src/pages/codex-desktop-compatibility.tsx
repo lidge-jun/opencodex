@@ -9,6 +9,7 @@ import DesktopCompatibilityStartupSetting from "./desktop-compatibility-startup-
 const label = { prepare: "desktopCompat.prepare", trust: "desktopCompat.trust", "remove-trust": "desktopCompat.remove", renew: "desktopCompat.renew",
   start: "desktopCompat.start", stop: "desktopCompat.stop", launch: "desktopCompat.launch", observe: "desktopCompat.observe", apply: "desktopCompat.apply" } as const;
 const errorLabel = { build_unverified: "desktopCompat.blockedByBuild", egress_proxy_invalid: "desktopCompat.blockedByProxy",
+  renewal_required: "desktopCompat.renew",
   native_routing_unverified: "desktopCompat.routingChanged",
   connection_unavailable: "desktopCompat.connectionUnavailable", connection_invalid: "desktopCompat.connectionUnavailable", connection_changed: "desktopCompat.connectionUnavailable",
   app_running: "desktopCompat.closeApp", local_dashboard_confirmation_required: "desktopCompat.localOnly" } as const;
@@ -63,8 +64,8 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     if (idle && cert.fingerprint) {
       if (cert.state === "prepared") actions.push({ target: "certificate", action: "trust", fingerprint: cert.fingerprint });
       // Unknown trust may still need fingerprint-verified cleanup; invalid keys cannot be acted on.
-      if (["trusted", "expired", "unknown"].includes(cert.state)) actions.push({ target: "certificate", action: "remove-trust", fingerprint: cert.fingerprint });
-      if (["prepared", "trusted", "expired"].includes(cert.state)) actions.push({ target: "certificate", action: "renew", fingerprint: cert.fingerprint });
+      if (["trusted", "expired", "renewal-required", "unknown"].includes(cert.state)) actions.push({ target: "certificate", action: "remove-trust", fingerprint: cert.fingerprint });
+      if (["prepared", "trusted", "expired", "renewal-required"].includes(cert.state)) actions.push({ target: "certificate", action: "renew", fingerprint: cert.fingerprint });
     }
     if (idle && cert.state === "trusted") actions.push({ target: "runtime", action: "start" });
     if (running) actions.push({ target: "runtime", action: "launch" }, { target: "runtime", action: "observe" }, { target: "runtime", action: "apply" });

@@ -7,7 +7,7 @@ import { acquireDesktopCertificateMutation, desktopCompatibilityRuntimeActive } 
 
 export interface DesktopCertificateStatus {
   supported: boolean;
-  state: "missing" | "invalid" | "expired" | "prepared" | "trusted" | "unknown";
+  state: "missing" | "invalid" | "expired" | "renewal-required" | "prepared" | "trusted" | "unknown";
   fingerprint?: string;
   expiresAt?: number;
   renewalDue?: boolean;
@@ -54,6 +54,7 @@ export function createDesktopCertificateService(directory = join(getConfigDir(),
     if (!("fingerprint" in stored)) return { supported: true, state: stored.status, busy };
     const trusted = await readTrust(stored).catch(() => "unknown" as const);
     return { supported: true, state: stored.status === "expired" ? "expired"
+      : stored.status === "renewal-required" ? "renewal-required"
       : trusted === "trusted" ? "trusted" : trusted === "not-trusted" ? "prepared" : "unknown",
       fingerprint: stored.fingerprint, expiresAt: stored.expiresAt, renewalDue: stored.renewalDue, trust: trusted, busy };
   }
