@@ -643,12 +643,16 @@ export function sanitizeToolDescriptionForCognitionForTests(description: string)
   return sanitizeToolDescriptionForCognition(description);
 }
 
+/** Description as transmitted on the Cognition wire, also used by overflow estimation. */
+export function prepareToolDescriptionForCognition(description: string): string {
+  const rawDesc = sanitizeToolDescriptionForCognition(description);
+  return rawDesc.length > MAX_TOOL_DESC_LEN
+    ? rawDesc.slice(0, MAX_TOOL_DESC_LEN - 24) + '\n…(truncated for cloud)'
+    : rawDesc;
+}
+
 function encodeToolDef(tool: ToolDef, modelUid: string): Buffer {
-  const rawDesc = sanitizeToolDescriptionForCognition(tool.description ?? '');
-  const desc =
-    rawDesc.length > MAX_TOOL_DESC_LEN
-      ? rawDesc.slice(0, MAX_TOOL_DESC_LEN - 24) + '\n…(truncated for cloud)'
-      : rawDesc;
+  const desc = prepareToolDescriptionForCognition(tool.description ?? '');
   return Buffer.concat([
     encodeString(1, tool.name),
     encodeString(2, desc),

@@ -526,8 +526,9 @@ enable fallback. Devin answers an oversized history with an opaque pre-output
 `invalid_argument`; when the request's estimated size is at or near the model's input window,
 the adapter reports it as `context_length_exceeded` instead, so Codex compacts on an ordinary
 turn and a failed compaction qualifies as a context overflow without any Devin-specific option.
-A smaller request that gets the same code stays a plain `400`. The separately opted-in
-`allowDevinInvalidArgument` case covers only those remaining `invalid_argument` failures, and
+The estimate uses tool descriptions after Cognition sanitization and truncation, matching the
+request sent upstream. A smaller request that gets the same code stays a plain `400`. The
+separately opted-in `allowDevinInvalidArgument` case covers only those remaining `invalid_argument` failures, and
 only on an identified compaction request. The emergency attempt shares the original request's
 send budget and never starts a second recovery attempt.
 

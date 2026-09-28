@@ -16,6 +16,7 @@
  */
 import type { AdapterEvent } from "../../types";
 import type { ChatHistoryItem, ToolDef } from "./cloud-direct";
+import { prepareToolDescriptionForCognition } from "./cloud-direct/chat";
 
 /**
  * Share of the window the estimate must reach. Characters per real token ran
@@ -42,7 +43,7 @@ function requestText(messages: ChatHistoryItem[], tools: ToolDef[] | undefined):
     for (const call of m.tool_calls ?? []) parts.push(call.arguments);
     if (m.thinking) parts.push(m.thinking);
   }
-  for (const tool of tools ?? []) parts.push(tool.description, JSON.stringify(tool.parameters ?? {}));
+  for (const tool of tools ?? []) parts.push(prepareToolDescriptionForCognition(tool.description ?? ""), JSON.stringify(tool.parameters ?? {}));
   return parts.join("\n");
 }
 

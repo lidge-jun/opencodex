@@ -250,6 +250,13 @@ describe("oversized history classification", () => {
     })).toBe(false);
   });
 
+  test("a huge tool description truncated on the wire stays a plain 400", () => {
+    const tools = [{ name: "long", description: "word ".repeat(200_000), parameters: {} }];
+    expect(build(history(1), { tools }).includes(Buffer.from("…(truncated for cloud)"))).toBe(true);
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: 200_000, messages: history(1), tools })).toBe(false);
+    expect(isDevinHistoryOverflow({ ...base, contextWindow: undefined, messages: history(1), tools })).toBe(false);
+  });
+
   test("dense JSON at the window is caught even though its characters per token are low", () => {
     // Measured live: 443k chars of this shape was 200,345 real tokens on swe-1-6.
     let json = "";
@@ -313,10 +320,10 @@ describe("adapter surfaces an oversized history as context_length_exceeded", () 
     removeTreeWithRetry(home);
   });
 
-  async function turn(content: string): Promise<AdapterEvent[]> {
+  async function turn(content: string, tools?: OcxParsedRequest["context"]["tools"]): Promise<AdapterEvent[]> {
     const events: AdapterEvent[] = [];
     await createDevinAdapter({ adapter: "devin", apiKey, baseUrl: host }).runTurn!({
-      modelId: "swe-1-6", stream: true, context: { messages: [{ role: "user", content, timestamp: 1 }] }, options: {},
+      modelId: "swe-1-6", stream: true, context: { messages: [{ role: "user", content, timestamp: 1 }], tools }, options: {},
     }, { headers: new Headers(), translatorBudget: createTranslatorBudget(), abortSignal: AbortSignal.timeout(5_000) }, (e) => { events.push(e); });
     return events;
   }
@@ -335,6 +342,11 @@ describe("adapter surfaces an oversized history as context_length_exceeded", () 
 
   test("a short turn with the same refusal stays invalid_argument", async () => {
     const events = await turn("hi");
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 400, code: "invalid_argument" });
+  });
+
+  test("a truncated huge tool description leaves invalid_argument as a plain 400", async () => {
+    const events = await turn("hi", [{ name: "long", description: "word ".repeat(200_000), parameters: {} }]);
     expect(events.at(-1)).toMatchObject({ type: "error", status: 400, code: "invalid_argument" });
   });
 });
