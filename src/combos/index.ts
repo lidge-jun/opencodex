@@ -61,10 +61,13 @@ export {
   buildJevState,
   JEV_API_URL,
   JEV_MODEL,
+  JEV_MODEL_ENV_KEY,
   JEV_PROVIDER_ID,
   parseJevDecision,
   resolveJevDecision,
+  resolveJevDecisionDestination,
   type JevCandidate,
   type JevDecision,
+  type JevDecisionDestination,
   type ResolveJevDecisionOptions,
 } from "./jev";

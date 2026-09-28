@@ -133,6 +133,24 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "TypeSafe JEV decision service for the optional JEV Combo strategy. This credential-only preset does not publish a directly routable model.",
   },
   {
+    // Verified 2026-09-28 against the live gateway with a zen API key:
+    // POST https://opencode.ai/zen/v1/systemone {model, state, questions} answers with
+    // {model, answers:{...}, usage:{input_tokens,output_tokens}} — the same System One contract the
+    // `jev` preset sends, so the JEV Combo decision call can be routed here instead of direct.
+    id: "jev-opencode",
+    label: "OpenCode JEV",
+    baseUrl: "https://opencode.ai/zen/v1/systemone",
+    adapter: "jev-decision",
+    authKind: "key",
+    credentialOnly: true,
+    dashboardUrl: "https://opencode.ai/auth",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "jev-1.13-free",
+    note: "System One decision service resold by the OpenCode zen gateway for the optional JEV Combo strategy. Credential-only: it publishes no directly routable model.",
+  },
+  {
     id: "baseten",
     label: "Baseten Model APIs",
     baseUrl: "https://inference.baseten.co/v1",

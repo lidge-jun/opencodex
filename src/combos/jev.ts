@@ -4,21 +4,36 @@ import {
   providerRedirectError,
 } from "../lib/provider-outbound";
 import { resolveProviderApiKey } from "../providers/api-key-resolve";
-import { providerMatchesRegistryTransport } from "../providers/registry";
+import { getProviderRegistryEntry } from "../providers/registry";
 import type { OcxComboDefaultEffort, OcxConfig, OcxProviderConfig } from "../types";
 import { JEV_MAX_CANDIDATE_FIELD_CHARS } from "./types";
 
 export const JEV_PROVIDER_ID = "jev";
 export const JEV_API_URL = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-latest";
+/** Env override for the decision model when the configured destination serves another slug. */
+export const JEV_MODEL_ENV_KEY = "JEV_MODEL";
 
 const JEV_TIMEOUT_MS = 4_000;
 const JEV_MAX_CANDIDATES = 64;
 const JEV_MAX_REQUEST_BYTES = 65_536;
 const JEV_MAX_RESPONSE_BYTES = 65_536;
 const JEV_OUTBOUND_DEPENDENCIES = {
-  isCanonicalUrl: (name: string, url: string) => name === JEV_PROVIDER_ID && url === JEV_API_URL,
+  isCanonicalUrl: (name: string, url: string) => isJevDecisionDestinationUrl(name, url),
 };
+
+/**
+ * Registry-owned destination proof for the fake-IP transparency exception.
+ *
+ * The exception must name the FINAL request URL, not merely a provider whose name matches: a row
+ * can be retargeted. A decision destination is now either the TypeSafe row or a reseller row the
+ * registry documents (e.g. `jev-opencode`), so each of them qualifies for its OWN documented URL
+ * and nothing else.
+ */
+function isJevDecisionDestinationUrl(name: string, url: string): boolean {
+  if (url === JEV_API_URL) return name === JEV_PROVIDER_ID;
+  return getProviderRegistryEntry(name)?.baseUrl === url;
+}
 
 const TASK_CHARS = 500;
 const TASK_HEAD_CHARS = 320;
@@ -538,15 +553,84 @@ function fallbackDecision(
   return { ...fallback, gate, latencyMs };
 }
 
-function canonicalJevProvider(config: OcxConfig): OcxProviderConfig {
-  const configured = config.providers[JEV_PROVIDER_ID];
-  if (configured && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured)) return configured;
+function canonicalJevProvider(config: OcxConfig, destination: JevDecisionDestination): OcxProviderConfig {
+  const configured = config.providers[destination.providerId];
+  if (configured?.adapter === "jev-decision") return configured;
   return {
     adapter: "jev-decision",
-    baseUrl: JEV_API_URL,
+    baseUrl: destination.baseUrl,
     authMode: "key",
     liveModels: false,
   };
+}
+
+/**
+ * Where this turn's decision call goes.
+ *
+ * JEV is TypeSafe's System One contract, but the contract is also resold by gateways that answer
+ * it verbatim — OpenCode's zen gateway serves `jev-1.13` on `POST /zen/v1/systemone` with the
+ * same `{model, answers, usage}` shape (verified against the live gateway 2026-09-28). Any ENABLED
+ * provider carrying the `jev-decision` adapter is therefore a candidate; the row named `jev` is
+ * tried first so an install that configures it routes exactly as before. A candidate is only
+ * usable once an API key resolves from its own config or from `TYPESAFE_API_KEY` / `JEV_API_KEY`.
+ */
+export interface JevDecisionDestination {
+  providerId: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
+export function resolveJevDecisionDestination(config: OcxConfig): JevDecisionDestination | null {
+  const providers = config.providers ?? {};
+  const ordered: Array<[string, OcxProviderConfig]> = [];
+  const preferred = providers[JEV_PROVIDER_ID];
+  if (preferred?.adapter === "jev-decision" && preferred.disabled !== true) {
+    ordered.push([JEV_PROVIDER_ID, preferred]);
+  }
+  for (const [id, provider] of Object.entries(providers)) {
+    if (id === JEV_PROVIDER_ID || !provider) continue;
+    if (provider.adapter !== "jev-decision" || provider.disabled === true) continue;
+    ordered.push([id, provider]);
+  }
+  const environmentKey = process.env.TYPESAFE_API_KEY?.trim()
+    || process.env.JEV_API_KEY?.trim();
+  for (const [providerId, provider] of ordered) {
+    const apiKey = resolveProviderApiKey(provider.apiKey)?.trim() || environmentKey;
+    if (!apiKey) continue;
+    const configuredUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
+    return {
+      providerId,
+      baseUrl: configuredUrl.length > 0
+        ? configuredUrl
+        : getProviderRegistryEntry(providerId)?.baseUrl ?? JEV_API_URL,
+      model: jevDecisionModel(providerId),
+      apiKey,
+    };
+  }
+  // Legacy shape: no decision provider row at all. The environment credential alone still drives
+  // the TypeSafe destination the `jev-latest` alias belongs to, exactly as before.
+  if (!environmentKey) return null;
+  return {
+    providerId: JEV_PROVIDER_ID,
+    baseUrl: JEV_API_URL,
+    model: jevDecisionModel(JEV_PROVIDER_ID),
+    apiKey: environmentKey,
+  };
+}
+
+/**
+ * Decision model id: explicit `JEV_MODEL` override, else the destination's registry default,
+ * else the TypeSafe alias. A reseller may not serve `jev-latest` at all — the OpenCode gateway
+ * publishes `jev-1.13` / `jev-1.13-free` only — so the registry entry, not this file, owns the
+ * per-destination default.
+ */
+function jevDecisionModel(providerId: string): string {
+  const override = process.env[JEV_MODEL_ENV_KEY]?.trim();
+  if (override) return override;
+  const entry = getProviderRegistryEntry(providerId);
+  const model = entry?.defaultModel ?? entry?.models?.[0];
+  return typeof model === "string" && model.trim().length > 0 ? model.trim() : JEV_MODEL;
 }
 
 /**
@@ -565,22 +649,15 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
   if (options.candidates.length === 0) return failed("no_choices");
   if (!candidatesFitRequestBounds(options.candidates)) return failed("invalid");
 
-  const configured = options.config.providers[JEV_PROVIDER_ID];
-  if (configured?.disabled === true) return failed("missing_key");
-  const configuredOwnsJev = configured
-    && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured);
-  const apiKey = (
-    configuredOwnsJev ? resolveProviderApiKey(configured.apiKey)?.trim() : undefined
-  ) || process.env.TYPESAFE_API_KEY?.trim()
-    || process.env.JEV_API_KEY?.trim();
-  if (!apiKey) return failed("missing_key");
+  const destination = resolveJevDecisionDestination(options.config);
+  if (!destination) return failed("missing_key");
 
   let requestBody: string;
   try {
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return failed("no_state");
     requestBody = JSON.stringify({
-      model: JEV_MODEL,
+      model: destination.model,
       state,
       questions: buildJevRouteQuestion(options.candidates),
     });
@@ -597,12 +674,12 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
 
   try {
     const response = await post(
-      JEV_PROVIDER_ID,
-      canonicalJevProvider(options.config),
-      JEV_API_URL,
+      destination.providerId,
+      canonicalJevProvider(options.config, destination),
+      destination.baseUrl,
       {
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${destination.apiKey}`,
           "Content-Type": "application/json",
         },
         body: requestBody,
@@ -612,7 +689,7 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
     );
     if (options.signal?.aborted) throw options.signal.reason;
 
-    const redirectError = await providerRedirectError(response, JEV_API_URL);
+    const redirectError = await providerRedirectError(response, destination.baseUrl);
     if (redirectError) return failed("redirect");
     if (!response.ok) {
       try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }
