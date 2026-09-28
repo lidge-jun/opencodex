@@ -40,7 +40,13 @@ import {
 } from "../coding-agent/protocol";
 import { redactSecrets } from "../coding-agent/turn";
 import { buildChildEnv } from "./env";
-import { createHarnessProcessSupervisor, reapHarnessQuarantine, type HarnessSpawnFn, type HarnessTreeKillFn } from "./harness-process";
+import {
+  createHarnessProcessSupervisor,
+  HarnessCapacityError,
+  reapHarnessQuarantine,
+  type HarnessSpawnFn,
+  type HarnessTreeKillFn,
+} from "./harness-process";
 import type { ClaudeCliProfile } from "./profiles";
 import { buildAgentSdkTurnOptions } from "./sdk-options";
 
@@ -551,6 +557,19 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
       if (terminalDecided) break;
     }
   } catch (err) {
+    if (err instanceof HarnessCapacityError) {
+      // The spawn hook refused the process before it existed, so this turn never owned a harness.
+      // That refusal is the bound working: it is reported with its own code and as retryable rather
+      // than flattened into a harness that failed to start.
+      emitOnce({
+        type: "error",
+        message: err.message,
+        status: 503,
+        errorType: "upstream_error",
+        code: err.code,
+        retryable: true,
+      });
+    }
     streamError = err instanceof Error ? err.message : String(err);
     // A translator-budget overflow is a boundedness verdict with its own code; keep it instead of
     // flattening it into the generic SDK error the rest of this branch reports.
@@ -593,7 +612,7 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     // The harness is gone; nothing of the operator is left in there.
     await (deps.removeScratchDir ?? removeScratchDir)(scratchDir).catch(() => undefined);
   }
-  if (!cleanup.confirmed || cleanup.overCapacity) {
+  if (!cleanup.confirmed) {
     // Never silently: an unresolved teardown is the one state a caller cannot see for itself.
     const survivors = cleanup.unresolved
       .map(entry => `${entry.pid ?? "?"}:${entry.reason}${entry.signalFailed ? ":signal-refused" : ""}`)
@@ -601,7 +620,6 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     console.warn(
       "opencodex: claude-agent-sdk harness cleanup unconfirmed ("
       + (survivors.length > 0 ? survivors : "no child named")
-      + (cleanup.overCapacity ? ", cleanup lease unavailable" : "")
       + `; ${cleanup.quarantined} quarantined`
       + `); ${cleanup.allExited ? "the scratch cwd was released" : `leaving ${scratchDir} in place`}`,
     );
@@ -609,9 +627,9 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
 
   // A turn that still owns a process it could not take down has no success to hand over: the client
   // would read the answer as the turn's whole outcome while the harness behind it outlives the turn,
-  // and a client that cancels repeats that without ever seeing why. A teardown outside the bounded
-  // accounting is the same state - unaccounted, therefore not reported as clean.
-  const ownsUnfinishedTeardown = !cleanup.allExited || cleanup.overCapacity;
+  // and a client that cancels repeats that without ever seeing why. The chain that stops it starts at
+  // the spawn hook, which refuses a harness the bound cannot cover in the first place.
+  const ownsUnfinishedTeardown = !cleanup.allExited;
   const deliverTerminal = (): void => {
     if (pendingTerminal === undefined) return;
     if (pendingTerminal.type === "done" && ownsUnfinishedTeardown) {

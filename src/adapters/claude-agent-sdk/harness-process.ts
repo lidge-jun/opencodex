@@ -35,11 +35,13 @@
  * that has not closed, the group is signalled on POSIX even when the leader is gone, and a tree the
  * platform would not signal is reported as an unresolved tree rather than folded into "gone".
  *
- * Finally, ownership has to outlive the turn that started it. A client can cancel the response, and
- * the turn's own admission is core's to return; the harness is not. A bounded cleanup lease is taken
- * while a teardown runs and is handed to the quarantine - together with the survivor - so a process
- * that outlives its turn stays accounted for, bounded, and visible, instead of accumulating behind
- * an admission count that has already been returned.
+ * Finally, ownership has to bound the work and outlive the turn that started it. The bounded cleanup
+ * lease is reserved before the process is spawned, not after the ladder has begun: a harness this
+ * process cannot account for is never started, and a turn that would exceed the bound is refused
+ * instead of adding to the pile. The lease is held until that child's `close` proves the exit, and a
+ * survivor that never closes keeps holding it. A client can cancel the response and core returns the
+ * turn's own admission on that cancel - the harness is not the turn's, so nothing about it comes back
+ * on a timer, on an eviction, or because its local pipes were closed.
  */
 import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions as NodeSpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -98,6 +100,8 @@ export interface HarnessUnresolvedChild {
    * reached it. `unresolved-tree`: the direct process is gone while the tree it led could not be
    * signalled, so a descendant behind it may still be alive - the one case where the working
    * directory must not be released, because nothing here can name what is still using it.
+   * A child that is itself still running keeps `running` rather than the tree verdict: a live process
+   * this turn can name already fails `allExited`, which is the same conclusion by a shorter route.
    */
   reason: "pipes-held" | "running" | "unresolved-tree";
   /** True when a signal the ladder sent was refused for a child that was not already gone. */
@@ -116,10 +120,8 @@ export interface HarnessCleanupOutcome {
   allExited: boolean;
   /** The unresolved remainder; empty exactly when `confirmed`. */
   unresolved: HarnessUnresolvedChild[];
-  /** Survivors handed to the bounded quarantine; owned and visible after this call returns. */
+  /** Survivors handed to the bounded quarantine; each still holds its own cleanup lease. */
   quarantined: number;
-  /** The bounded cleanup lease was already taken: this teardown sits outside the accounting. */
-  overCapacity: boolean;
 }
 
 export interface HarnessProcessSupervisor {
@@ -133,26 +135,37 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 const DEFAULT_REAP_TIMEOUT_MS = 5_000;
 
 /**
- * Ceiling for teardowns that are still running. One lease is held per teardown, from the moment the
- * turn stops to the moment every process it started is confirmed gone - or handed to the quarantine,
- * which keeps holding it. The number is deliberately above any realistic number of concurrent turns
- * on a subscription route: reaching it means this process already owns that many harnesses which did
- * not die, and a teardown that cannot be accounted for must not be reported as a clean one.
+ * How many harness processes this adapter owns at once. The lease is reserved before the spawn, so the
+ * number bounds the work rather than describing it afterwards: the process that would be the next
+ * harness is not started, and its turn is refused with `HARNESS_CAPACITY_CODE` instead of piling on.
+ * The number is deliberately above any realistic concurrency for a subscription route, so reaching it
+ * means harnesses are not dying - and then refusing new work is the honest answer.
  */
 export const MAX_ACTIVE_HARNESS_TEARDOWNS = 32;
 
 /**
- * How long a survivor stays quarantined before it is dropped, with a warning, as unobservable. Two
- * minutes is many turns of SIGKILL retries for a process that already survived the group signal;
- * past that it is not going to be observed by this process, and pinning the bound on it would make
- * the accounting itself the problem.
+ * When a quarantined survivor is old enough to be called out. It is only a warning: the entry and its
+ * lease stay, because a process that has not reported `close` has not been shown to be gone, and the
+ * accounting is the one thing about it this process can still keep true.
  */
-const QUARANTINE_TTL_MS = 120_000;
+const QUARANTINE_STALE_MS = 120_000;
 
-/** How many quarantined teardowns are kept at once; the oldest is evicted first. */
-const MAX_QUARANTINED_TEARDOWNS = 32;
+/** Error code for a turn refused because the bounded harness ownership is exhausted. */
+export const HARNESS_CAPACITY_CODE = "harness_capacity_exhausted";
 
-const harnessTeardownGate = createAdmissionGate("harness_teardowns", MAX_ACTIVE_HARNESS_TEARDOWNS);
+/** Thrown from the spawn hook when no cleanup lease is free; the turn is refused, not started. */
+export class HarnessCapacityError extends Error {
+  readonly code: string = HARNESS_CAPACITY_CODE;
+  constructor(readonly limit: number) {
+    super(
+      `Claude Agent SDK harness capacity reached (${limit} owned processes); refusing to start another`,
+    );
+    this.name = "HarnessCapacityError";
+  }
+}
+
+/** Recreated by the test seam, so a case that fills the bound does not leak it into the next one. */
+let harnessTeardownGate = createAdmissionGate("harness_teardowns", MAX_ACTIVE_HARNESS_TEARDOWNS);
 
 /**
  * One teardown that did not settle, owned here rather than by the turn that started it.
@@ -167,8 +180,8 @@ interface HarnessQuarantineEntry {
   readonly pid: number | undefined;
   readonly reason: HarnessUnresolvedChild["reason"];
   readonly since: number;
-  /** The bounded cleanup lease of the teardown this entry belongs to, if one could be taken. */
-  readonly lease: AdmissionLease | null;
+  /** Set once the age warning has been emitted, so a long-lived survivor is named once, not every turn. */
+  warned: boolean;
 }
 
 const quarantine: HarnessQuarantineEntry[] = [];
@@ -201,22 +214,22 @@ export function reapHarnessQuarantine(now = Date.now()): number {
     const entry = quarantine[index]!;
     const live = entry.children.filter(child => !child.closed);
     if (live.length === 0) {
-      // The survivor closed on its own between turns. The handle was pinned to that process, so
-      // this is an observation and not a pid that could have been recycled. The lease it held comes
-      // back here - that is the whole point of holding it past the turn.
+      // The survivor's `close` arrived between turns, and that is what released its lease: an
+      // observation on a handle pinned to that process, not a pid that could have been recycled.
+      // The entry is only the record now, so it can go.
       quarantine.splice(index, 1);
-      entry.lease?.release();
       continue;
     }
     const ageMs = now - entry.since;
-    if (ageMs > QUARANTINE_TTL_MS) {
+    if (ageMs > QUARANTINE_STALE_MS && !entry.warned) {
+      // Named once. The entry and its lease stay, because a process that has not reported `close`
+      // has not been shown to be gone: returning its capacity here would put the leak back where it
+      // started, this time behind a count that says the harness is free.
+      entry.warned = true;
       console.warn(
-        `opencodex: claude-agent-sdk harness quarantine drops ${entry.pid ?? "?"}:${entry.reason} after `
-        + `${Math.round(ageMs / 1000)}s without an exit; it is out of this process's reach`,
+        `opencodex: claude-agent-sdk harness ${entry.pid ?? "?"}:${entry.reason} is still owned after `
+        + `${Math.round(ageMs / 1000)}s; its capacity stays reserved until it reports an exit`,
       );
-      quarantine.splice(index, 1);
-      entry.lease?.release();
-      continue;
     }
     // The last thing this turn knows how to do, retried where a later turn can see the result. Only
     // the direct handle is signalled: it is pinned to the process that was spawned, so it cannot
@@ -228,10 +241,11 @@ export function reapHarnessQuarantine(now = Date.now()): number {
   return quarantine.length;
 }
 
-/** Test seam: the quarantine is process state, so a case that asserts on it starts from empty. */
+/** Test seam: the accounting is process state, so a case that asserts on it starts from empty. */
 export function resetHarnessQuarantineForTests(): void {
-  for (const entry of quarantine) entry.lease?.release();
+  for (const entry of quarantine) for (const child of entry.children) child.releaseTeardownLease();
   quarantine.length = 0;
+  harnessTeardownGate = createAdmissionGate("harness_teardowns", MAX_ACTIVE_HARNESS_TEARDOWNS);
 }
 
 /**
@@ -258,8 +272,11 @@ function defaultKillProcessTree(signal: NodeJS.Signals, pid: number): boolean {
   try {
     process.kill(-pid, signal);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // ESRCH is the group being empty, not the signal being refused: the group id this spawn created
+    // stays usable while any member lives, so "no such process group" means there is no descendant
+    // left to reach. Reporting it as a failure would mark a settled tree as unreachable.
+    return (err as NodeJS.ErrnoException | undefined)?.code === "ESRCH";
   }
 }
 
@@ -282,6 +299,13 @@ class HarnessChild implements SpawnedProcess {
   private readonly child: ChildProcess;
   private readonly exitEntries = new Set<ExitEntry>();
   private readonly errorEntries = new Set<ErrorEntry>();
+  /**
+   * The bounded cleanup lease reserved for this child before it was spawned. It is returned when the
+   * child's `close` proves it is gone, and it is what keeps a survivor out of the next turn's pile:
+   * the lease is not the turn's, so nothing about the turn ending releases it.
+   */
+  private readonly teardownLease: AdmissionLease | null;
+  private leaseReleased = false;
   private closedFlag = false;
   private exitedFlag = false;
   private signalFailures = 0;
@@ -289,12 +313,13 @@ class HarnessChild implements SpawnedProcess {
   private resolveClosed: () => void = () => undefined;
   private readonly closeBarrier = new Promise<void>(resolve => { this.resolveClosed = resolve; });
 
-  constructor(child: ChildProcess, onStderr: (chunk: string) => void) {
+  constructor(child: ChildProcess, onStderr: (chunk: string) => void, teardownLease: AdmissionLease | null = null) {
     const { stdin, stdout } = child;
     if (stdin === null || stdout === null) {
       throw new Error("the harness process was spawned without piped stdio");
     }
     this.child = child;
+    this.teardownLease = teardownLease;
     this.stdin = stdin;
     this.stdout = stdout;
     // The ladder signals the child as soon as the turn ends, while the SDK may still be writing into
@@ -337,6 +362,16 @@ class HarnessChild implements SpawnedProcess {
   }
 
   /**
+   * Give the reserved capacity back. Called when this child's `close` is observed - the one event
+   * that says the process is gone - and by the test seam that resets the module's accounting.
+   */
+  releaseTeardownLease(): void {
+    if (this.leaseReleased) return;
+    this.leaseReleased = true;
+    this.teardownLease?.release();
+  }
+
+  /**
    * True when the tree could not be signalled while this child was already gone: the descendants
    * behind a dead pid are then neither named nor reachable from here.
    */
@@ -376,9 +411,13 @@ class HarnessChild implements SpawnedProcess {
    * only a failure while the child is not known to be gone - every runtime returns `false` for a pid
    * that no longer exists, which is the outcome the ladder wanted.
    *
-   * The exception is the one that matters: a refused tree call while the direct child is already
-   * gone is not "nothing left to signal". It is a descendant still holding this child's pipes and
-   * using its working directory, with nothing here that can reach it.
+   * The exception is the one that matters: a refused tree call is not "nothing left to signal". It is
+   * a descendant still holding this child's pipes and using its working directory, with nothing here
+   * that can reach it - and that is true whether the parent was already gone when the call was made
+   * or exits later in the ladder. Recording it only in the first case would lose exactly the timing
+   * that matters: TERM and KILL reach no tree, the direct KILL ends the parent, the descendant keeps
+   * the pipes, and the teardown reads `pipes-held` with "everything exited" for a tree it never
+   * touched.
    */
   requestTermination(signal: NodeJS.Signals, killTree: HarnessTreeKillFn | undefined): boolean {
     const pid = this.child.pid;
@@ -390,7 +429,6 @@ class HarnessChild implements SpawnedProcess {
         treeDelivered = false;
       }
     }
-    const directGone = this.gone;
     let directDelivered = false;
     try {
       directDelivered = this.child.kill(signal);
@@ -398,7 +436,7 @@ class HarnessChild implements SpawnedProcess {
       directDelivered = false;
     }
     if (!treeDelivered && !directDelivered && !this.gone) this.signalFailures += 1;
-    if (!treeDelivered && killTree !== undefined && directGone) this.treeFailures += 1;
+    if (!treeDelivered && killTree !== undefined && pid !== undefined) this.treeFailures += 1;
     return treeDelivered || directDelivered;
   }
 
@@ -481,6 +519,7 @@ class HarnessChild implements SpawnedProcess {
   private deliverExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (this.closedFlag) return;
     this.closedFlag = true;
+    this.releaseTeardownLease();
     this.resolveClosed();
     const entries = [...this.exitEntries];
     this.exitEntries.clear();
@@ -500,26 +539,15 @@ async function waitForClose(children: readonly HarnessChild[], ms: number): Prom
 }
 
 /**
- * Hand a teardown's survivors - and its cleanup lease - to the bounded quarantine.
+ * Hand a teardown's survivors to the quarantine.
  *
- * The bound is the point: an unlimited list of processes this process cannot kill would be the same
- * leak with extra steps. When the quarantine is full the oldest entry is dropped with a warning,
- * which releases its lease and stops pretending to observe it; the survivor is still named in that
- * warning, so nothing about it becomes silent.
+ * They arrive holding their own cleanup leases, because a lease belongs to the child it was reserved
+ * for and comes back when that child's `close` proves the exit. That is also why nothing is evicted
+ * here: the spawn hook refuses the process that would exceed the bound, so there is no entry to make
+ * room for, and releasing a live survivor's lease to make room would be the leak again.
  */
-function quarantineSurvivors(
-  children: HarnessChild[],
-  reason: HarnessUnresolvedChild["reason"],
-  lease: AdmissionLease | null,
-): void {
-  while (quarantine.length >= MAX_QUARANTINED_TEARDOWNS) {
-    const evicted = quarantine.shift()!;
-    console.warn(
-      `opencodex: claude-agent-sdk harness quarantine is full; dropping ${evicted.pid ?? "?"}:${evicted.reason}`,
-    );
-    evicted.lease?.release();
-  }
-  quarantine.push({ children, pid: children[0]?.pid, reason, since: Date.now(), lease });
+function quarantineSurvivors(children: HarnessChild[], reason: HarnessUnresolvedChild["reason"]): void {
+  quarantine.push({ children, pid: children[0]?.pid, reason, since: Date.now(), warned: false });
 }
 
 /**
@@ -545,19 +573,32 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
 
   return {
     spawn: request => {
-      const child = new HarnessChild(
-        spawnFn(request.command, request.args, {
-          ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
-          env: request.env,
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-          // POSIX: a process group of its own, so the harness's children are reachable by signal when
-          // the only pid we are handed is the harness's. The child is never `unref`'d, so this changes
-          // which processes a signal reaches, not whether the turn is held to the child.
-          detached: platform !== "win32",
-        }),
-        options.onStderr,
-      );
+      // Reserved before the spawn, not in `terminate` afterwards: the bound has to decide whether
+      // this harness exists at all. A turn that cannot get a lease is refused here, and `sdk-turn.ts`
+      // answers it with `HARNESS_CAPACITY_CODE` instead of starting a process it cannot account for.
+      const lease = harnessTeardownGate.tryAcquire();
+      if (lease === null) throw new HarnessCapacityError(MAX_ACTIVE_HARNESS_TEARDOWNS);
+      let child: HarnessChild;
+      try {
+        child = new HarnessChild(
+          spawnFn(request.command, request.args, {
+            ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
+            env: request.env,
+            stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
+            // POSIX: a process group of its own, so the harness's children are reachable by signal when
+            // the only pid we are handed is the harness's. The child is never `unref`'d, so this changes
+            // which processes a signal reaches, not whether the turn is held to the child.
+            detached: platform !== "win32",
+          }),
+          options.onStderr,
+          lease,
+        );
+      } catch (err) {
+        // A launch failure leaves no process to account for, so the reserved capacity goes back.
+        lease.release();
+        throw err;
+      }
       children.add(child);
       // The SDK documents its forwarded `signal` as the thing to hang teardown on: it aborts only
       // after the graceful stdin-EOF window. It is wired as a second net here rather than passed to
@@ -569,13 +610,8 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
     terminate: async () => {
       const live = [...children].filter(child => !child.closed);
       if (live.length === 0) {
-        return { confirmed: true, allExited: true, unresolved: [], quarantined: 0, overCapacity: false };
+        return { confirmed: true, allExited: true, unresolved: [], quarantined: 0 };
       }
-      // The bounded cleanup lease is taken before the ladder starts, not after it: a client cancel
-      // ends the turn's own admission while this teardown is still running, so the harness needs an
-      // owner that is not the turn. A lease that cannot be taken is reported, never ignored - an
-      // unaccounted teardown is exactly what must not look like a clean one.
-      const lease = harnessTeardownGate.tryAcquire();
       for (const child of live) child.requestTermination("SIGTERM", killTree);
       await waitForClose(live, killGraceMs);
       // The grace window is over, and every child that has not closed is a tree question now rather
@@ -596,21 +632,19 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
         .filter(child => !child.closed)
         .map(child => ({
           pid: child.pid,
-          reason: child.treeUnreachable
-            ? "unresolved-tree" as const
-            : child.exited ? "pipes-held" as const : "running" as const,
+          // A child that is itself still running is the stronger fact and stays named as such; the
+          // tree question only decides what an *exited* child leaves behind, which is exactly the
+          // case where a descendant holding the inherited pipes can outlive its parent unseen.
+          reason: !child.exited
+            ? "running" as const
+            : child.treeUnreachable ? "unresolved-tree" as const : "pipes-held" as const,
           signalFailed: child.signalFailed,
         }));
-      // Whatever is left stays owned. The lease and the child handles move to the quarantine, where
-      // the next turn observes them, so the accounting for this harness does not end with its turn.
-      if (unresolved.length === 0) {
-        lease?.release();
-      } else {
-        quarantineSurvivors(
-          live.filter(child => !child.closed),
-          unresolved[0]!.reason,
-          lease,
-        );
+      // Whatever is left stays owned: each child still holds the lease reserved for it at spawn, and
+      // the handles move to the quarantine where the next turn observes them. Capacity is not
+      // returned here - a child that closed already returned it through its own `close`.
+      if (unresolved.length > 0) {
+        quarantineSurvivors(live.filter(child => !child.closed), unresolved[0]!.reason);
       }
       return {
         confirmed: unresolved.length === 0,
@@ -621,7 +655,6 @@ export function createHarnessProcessSupervisor(options: HarnessProcessSupervisor
         allExited: unresolved.every(entry => entry.reason === "pipes-held"),
         unresolved,
         quarantined: unresolved.length === 0 ? 0 : live.filter(child => !child.closed).length,
-        overCapacity: lease === null,
       };
     },
   };

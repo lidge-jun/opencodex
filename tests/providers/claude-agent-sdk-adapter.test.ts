@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import {
@@ -24,8 +24,11 @@ import { baseScopedEnv } from "../../src/adapters/coding-agent/turn";
 import { CLAUDE_CLI_PROFILE, clearClaudeCliBinaryCache } from "../../src/adapters/claude-agent-sdk/profiles";
 import {
   createHarnessProcessSupervisor,
+  HARNESS_CAPACITY_CODE,
   harnessQuarantineSnapshot,
   harnessTeardownMetrics,
+  HarnessCapacityError,
+  MAX_ACTIVE_HARNESS_TEARDOWNS,
   reapHarnessQuarantine,
   resetHarnessQuarantineForTests,
 } from "../../src/adapters/claude-agent-sdk/harness-process";
@@ -991,7 +994,24 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       allExited: true,
       unresolved: [{ pid: 4711, reason: "pipes-held", signalFailed: false }],
       quarantined: 1,
-      overCapacity: false,
+    });
+  });
+
+  test("a tree that could not be signalled stays uncertain when the parent exits later in the ladder", async () => {
+    // The timing, not the state: TERM reaches no tree because the harness shrugs it off and the tree
+    // call is refused while the parent is still alive; the parent exits inside the KILL window, after
+    // the direct signal, with a descendant holding the inherited pipes. Reading the tree only at the
+    // instant of the signal loses this case - the child is `exited`, nothing recorded the unreached
+    // tree, and the verdict would be `pipes-held` with "everything exited" for a tree never touched.
+    const harness = fakeHarnessChild({ terminatesOn: "SIGKILL", exitWithoutClose: true });
+
+    const outcome = await supervisorFor(harness, { killProcessTree: () => false }).terminate();
+
+    expect(outcome).toEqual({
+      confirmed: false,
+      allExited: false,
+      unresolved: [{ pid: 4711, reason: "unresolved-tree", signalFailed: false }],
+      quarantined: 1,
     });
   });
 
@@ -1009,7 +1029,6 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       allExited: false,
       unresolved: [{ pid: 4711, reason: "unresolved-tree", signalFailed: false }],
       quarantined: 1,
-      overCapacity: false,
     });
     expect(harnessQuarantineSnapshot()).toEqual([{ pid: 4711, reason: "unresolved-tree", ageMs: expect.any(Number) }]);
     // The survivor keeps the bounded cleanup lease, which is the whole point of taking it: the
@@ -1034,6 +1053,98 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
     expect(harnessTeardownMetrics().active).toBe(0);
   });
 
+  test("the bound refuses the next harness instead of accounting for it afterwards", () => {
+    // Capacity is reserved in the spawn hook, so the bound decides whether a process exists at all.
+    // Reporting it after the ladder would describe a pile that was allowed to grow.
+    const held: ReturnType<typeof fakeHarnessChild>[] = [];
+    for (let index = 0; index < MAX_ACTIVE_HARNESS_TEARDOWNS; index += 1) {
+      const harness = fakeHarnessChild({ terminatesOn: "never" });
+      held.push(harness);
+      supervisorFor(harness);
+    }
+    expect(harnessTeardownMetrics().active).toBe(MAX_ACTIVE_HARNESS_TEARDOWNS);
+
+    const refusedHarness = fakeHarnessChild();
+    let refused: unknown;
+    try {
+      supervisorFor(refusedHarness);
+    } catch (err) {
+      refused = err;
+    }
+
+    expect(refused).toBeInstanceOf(HarnessCapacityError);
+    expect((refused as HarnessCapacityError).code).toBe(HARNESS_CAPACITY_CODE);
+    expect(String((refused as Error).message)).toContain(`capacity reached (${MAX_ACTIVE_HARNESS_TEARDOWNS}`);
+    // Nothing was started for the refused turn, and the accounting did not move.
+    expect(refusedHarness.signals).toEqual([]);
+    expect(harnessTeardownMetrics().active).toBe(MAX_ACTIVE_HARNESS_TEARDOWNS);
+  });
+
+  test("an unobservable survivor keeps its capacity past the age warning", async () => {
+    // A process that has not reported `close` has not been shown to be gone. The age bound only says
+    // so out loud: the entry and its lease stay, because returning the capacity would put the leak
+    // back where it started - this time behind a count that says the harness is free.
+    const harness = fakeHarnessChild({ terminatesOn: "never" });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]): void => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const outcome = await supervisorFor(harness).terminate();
+      expect(outcome.quarantined).toBe(1);
+
+      const muchLater = Date.now() + 10 * 60_000;
+      expect(reapHarnessQuarantine(muchLater)).toBe(1);
+      expect(harnessQuarantineSnapshot(muchLater)).toMatchObject([{ pid: 4711, reason: "running" }]);
+      expect(harnessTeardownMetrics().active).toBe(1);
+      expect(warnings.join("\n")).toContain("capacity stays reserved until it reports an exit");
+
+      // Named once, not once per sweep.
+      expect(reapHarnessQuarantine(muchLater + 1_000)).toBe(1);
+      expect(warnings.filter(line => line.includes("capacity stays reserved"))).toHaveLength(1);
+      expect(harnessTeardownMetrics().active).toBe(1);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "a real descendant whose launcher exits is killed with the group, not abandoned",
+    async () => {
+      // No EventEmitter and no injected verdict: a real launcher exits immediately and leaves a real
+      // descendant holding the inherited pipes, and that descendant ignores SIGTERM. The only thing
+      // that can end it is the group KILL - which the previous ladder skipped, because the direct
+      // parent had already exited.
+      const marker = `ocx-descendant-${Math.random().toString(36).slice(2, 10)}`;
+      const descendantAlive = (): boolean => {
+        try {
+          execFileSync("pgrep", ["-f", marker], { stdio: "pipe" });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const supervisor = createHarnessProcessSupervisor({ onStderr: () => undefined, killGraceMs: 200, reapTimeoutMs: 3_000 });
+      try {
+        supervisor.spawn({
+          command: "/bin/sh",
+          args: ["-c", `sh -c 'trap "" TERM; while :; do sleep 0.2; done # ${marker}' & exit 0`],
+          env: {},
+          signal: new AbortController().signal,
+        });
+        await Bun.sleep(150);
+        expect(descendantAlive()).toBe(true);
+
+        const outcome = await supervisor.terminate();
+
+        expect(outcome.confirmed).toBe(true);
+        expect(outcome.allExited).toBe(true);
+        expect(descendantAlive()).toBe(false);
+      } finally {
+        try { execFileSync("pkill", ["-f", marker], { stdio: "pipe" }); } catch { /* already gone */ }
+      }
+    },
+  );
+
   test("a refused signal is reported rather than read as a dead process", async () => {
     const harness = fakeHarnessChild({ terminatesOn: "never", refuseSignals: true });
 
@@ -1044,7 +1155,6 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       allExited: false,
       unresolved: [{ pid: 4711, reason: "running", signalFailed: true }],
       quarantined: 1,
-      overCapacity: false,
     });
   });
 
@@ -1059,7 +1169,6 @@ describe("claude-agent-sdk reports the harness teardown it could not confirm", (
       allExited: false,
       unresolved: [{ pid: 4711, reason: "running", signalFailed: false }],
       quarantined: 1,
-      overCapacity: false,
     });
   });
 });
@@ -1134,25 +1243,65 @@ describe("claude-agent-sdk does not answer the client underneath a live harness"
     }
   });
 
+  test("a turn above the bound is refused before a harness exists", async () => {
+    // The refusal is the bound doing its job, so it is a first-class turn outcome - not a process
+    // that is started and then reported as unaccounted for.
+    const held = Array.from({ length: MAX_ACTIVE_HARNESS_TEARDOWNS }, () => {
+      const harness = fakeHarnessChild({ terminatesOn: "never" });
+      createHarnessProcessSupervisor({
+        onStderr: () => undefined,
+        spawn: () => harness.child as unknown as ChildProcess,
+      }).spawn({ command: "claude", args: [], env: {}, signal: new AbortController().signal });
+      return harness;
+    });
+    expect(held).toHaveLength(MAX_ACTIVE_HARNESS_TEARDOWNS);
+    let spawned = 0;
+    const released: string[] = [];
+    const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      spawnHarnessProcess: () => { spawned += 1; return fakeHarnessChild().child as unknown as ChildProcess; },
+      killHarnessProcessTree: () => false,
+      makeScratchDir: async () => "/tmp/ocx-capacity-refused",
+      removeScratchDir: async dir => { released.push(dir); },
+    });
+
+    const events = await run(adapter, parsed());
+
+    expect(spawned).toBe(0);
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      type: "error", status: 503, code: HARNESS_CAPACITY_CODE, retryable: true,
+    });
+    // The refused turn never owned a harness, so nothing holds its working directory.
+    expect(released).toEqual(["/tmp/ocx-capacity-refused"]);
+  });
+
   test("a cancelled turn hands its harness to the cleanup lease, not to nobody", async () => {
     // The client disconnects, and core returns the turn's own admission on that cancel - that slot is
     // the turn's, and the response body it belongs to is gone. The harness is not the turn's. It is
     // still alive here, so the teardown holds a separate bounded lease until the process is confirmed
     // gone, and the turn slot being back does not mean the process is.
-    let turnSlotAtHarnessEnd: number | undefined;
-    let cleanupLeasesAtHarnessEnd: number | undefined;
-    const harness = fakeHarnessChild({
-      terminatesOn: "SIGKILL",
-      onEnd: () => {
-        turnSlotAtHarnessEnd = getActiveTurnCount();
-        cleanupLeasesAtHarnessEnd = harnessTeardownMetrics().active;
-      },
-    });
-    const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame()], { spawnHarness: true });
+    //
+    // The turn itself is parked: the fake SDK never ends its stream, so the only thing that can end
+    // this turn is the cancellation - and the cancellation has to travel the way it does in the
+    // server, from the bridge's cancel through the adapter's own abort signal.
+    let turnSlotWhileHarnessAlive: number | undefined;
+    let cleanupLeasesWhileHarnessAlive: number | undefined;
+    const harness = fakeHarnessChild({ terminatesOn: "SIGKILL" });
+    const sdk = fakeSdk([initFrame(), textFrame("ok")], { spawnHarness: true, park: true });
     const adapter = createClaudeAgentSdkAdapter(provider(), {
       loadSdk: async () => sdk.module,
       spawnHarnessProcess: () => harness.child as unknown as ChildProcess,
-      killHarnessProcessTree: () => false,
+      // Sampled on the KILL pass: the client's cancel is long past, the harness has shrugged off
+      // SIGTERM and is still running, and the next statement is the direct signal that ends it.
+      killHarnessProcessTree: signal => {
+        if (signal === "SIGKILL") {
+          turnSlotWhileHarnessAlive = getActiveTurnCount();
+          cleanupLeasesWhileHarnessAlive = harnessTeardownMetrics().active;
+        }
+        return false;
+      },
       killGraceMs: 10,
       reapTimeoutMs: 200,
       makeScratchDir: async () => "/tmp/ocx-cancelled-harness",
@@ -1160,11 +1309,14 @@ describe("claude-agent-sdk does not answer the client underneath a live harness"
     });
     const lease = tryAdmitTurn();
     expect(lease).not.toBeNull();
+    const turnAbort = new AbortController();
     const events = channel<AdapterEvent>();
-    const turn = adapter.runTurn!(parsed(), incoming(), event => events.push(event)).finally(() => events.close());
-    const clientCancelled = new AbortController();
+    const turn = adapter.runTurn!(parsed(), incoming(turnAbort.signal), event => events.push(event))
+      .finally(() => events.close());
     const tracked = trackStreamLifetime(
-      bridgeToResponsesSSE(events.stream(), "claude-sonnet-5", undefined, undefined, undefined, () => clientCancelled.abort()),
+      // The bridge's cancel hook is where the server aborts the turn's upstream; the client's own
+      // disconnect reaches it as `reader.cancel()` below.
+      bridgeToResponsesSSE(events.stream(), "claude-sonnet-5", undefined, undefined, undefined, () => turnAbort.abort()),
       new AbortController(),
       () => undefined,
       lease!,
@@ -1175,9 +1327,11 @@ describe("claude-agent-sdk does not answer the client underneath a live harness"
     await reader.cancel();
     await turn;
 
-    // Sampled while the harness was still being reaped, which is after the client's slot went back.
-    expect(turnSlotAtHarnessEnd).toBe(0);
-    expect(cleanupLeasesAtHarnessEnd).toBe(1);
+    // The ladder ran because of the cancellation, not because the harness's frames ran out.
+    expect(harness.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    // Sampled while the harness was still alive, which is after the client's slot went back.
+    expect(turnSlotWhileHarnessAlive).toBe(0);
+    expect(cleanupLeasesWhileHarnessAlive).toBe(1);
     // And once the process is confirmed gone, the bounded account is empty again.
     expect(harnessTeardownMetrics().active).toBe(0);
     expect(harnessQuarantineSnapshot()).toEqual([]);
