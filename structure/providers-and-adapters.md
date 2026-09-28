@@ -249,6 +249,18 @@ An explicit `modelReasoningEffortsAuthoritative` model row overrides the shipped
 rows without that flag do not. `tests/providers/command-code-efforts.test.ts` covers the measured
 rows and wire values; `tests/providers/command-code-provider.test.ts` covers operator overrides.
 
+The native Command Code adapter in `src/adapters/command-code.ts` gates its
+`/alpha/generate` project envelope on the provider's literal `projectContext: "on"`.
+Absent or `"off"` keeps empty `memory`, `taste`, and `skills` and never invokes
+`src/adapters/command-code-project-context.ts`. The loader reads only the proxy process
+working directory's `AGENTS.md`, `.commandcode/taste/taste.md`, and immediate child
+`SKILL.md` files under `.commandcode/skills`, `.agents/skills`, and `.pi/skills`.
+Canonical path containment rejects escapes; every visited directory entry consumes the
+scan budget before filtering; at most 16 skills are selected. Individual files, aggregate
+skill reads, serialized XML, and the full skill-loading interval are bounded. The
+contents are sent to the configured Command Code endpoint when enabled, and missing or
+failed reads degrade to empty fields. A 30-second, 128-entry cache bounds repeated reads.
+
 ## TypeSafe JEV decision provider
 
 `src/providers/registry/entries-extended.ts` owns the canonical `jev` key preset at

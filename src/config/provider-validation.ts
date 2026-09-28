@@ -142,6 +142,15 @@ export function apiKeyTransportConfigError(
   return null;
 }
 
+/** Keep local project-file disclosure specific to the Command Code native adapter. */
+export function projectContextConfigError(provider: Pick<OcxProviderConfig, "adapter" | "projectContext">): string | null {
+  if (provider.projectContext === undefined) return null;
+  if (provider.projectContext !== "off" && provider.projectContext !== "on") {
+    return 'projectContext must be "off" or "on"';
+  }
+  return provider.adapter === "command-code" ? null : "projectContext is supported only by the command-code adapter";
+}
+
 /** Shared strict boundary for the per-provider upstream HTTP-version pin. */
 export function upstreamHttpVersionConfigError(value: unknown): string | null {
   if (value === undefined || value === null) return null;
