@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,6 +74,7 @@ describe("serving runtime census", () => {
     for (const bad of [
       record([], "2.68.0"),
       record(["relative\\path\\ocx.exe"], "2.68.0"),
+      record(["relative/path/ocx.exe"], "2.68.0"),
       record(["ocx.exe"], "2.68.0"),
       record([exe], "not-a-version"),
     ]) {
@@ -243,9 +246,68 @@ describe("deferToNewerServiceRuntime", () => {
     const dir = freshDir();
     const exe = fakeBinary(dir, "OcX-Newer.EXE");
     // A distinct spelling of the same file must collide with the canonical key.
-    expect(servingRuntimeCommandKey([join(dir, ".", "OcX-Newer.EXE")])).toBe(servingRuntimeCommandKey([exe]));
+    const dotted = `${dir}/./OcX-Newer.EXE`;
+    expect(dotted).not.toBe(exe);
+    expect(servingRuntimeCommandKey([dotted])).toBe(servingRuntimeCommandKey([exe]));
     if (process.platform === "win32") {
       expect(servingRuntimeCommandKey([exe.toLowerCase()])).toBe(servingRuntimeCommandKey([exe]));
+      const forwardSlashes = exe.replaceAll("\\", "/");
+      expect(forwardSlashes).not.toBe(exe);
+      expect(servingRuntimeCommandKey([forwardSlashes])).toBe(servingRuntimeCommandKey([exe]));
+    }
+  });
+
+  test.each(["force", "graceful"] as const)("repeated signals share an escalation and clean it up on %s exit", async outcome => {
+    const dir = freshDir();
+    candidateSetup(dir);
+    const child = new EventEmitter() as EventEmitter & { kill: (signal?: string) => boolean };
+    const sent: string[] = [];
+    child.kill = signal => {
+      sent.push(signal ?? "SIGTERM");
+      if (signal === "SIGKILL") queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
+      return true;
+    };
+    const spawn = spyOn(childProcess, "spawn").mockReturnValue(child as never);
+    const before = process.listeners("SIGTERM");
+    const otherBefore = ["SIGINT", "SIGHUP", "exit"].map(name => process.listenerCount(name));
+    const realSetTimeout = globalThis.setTimeout;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expire: (() => void) | undefined;
+    let scheduled = 0;
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms: number) => {
+      if (ms !== 5_000) throw new Error(`unexpected timer ${ms}`);
+      scheduled += 1;
+      expire = fn;
+      timer = realSetTimeout(() => {}, 60_000);
+      return timer;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout");
+    const pending = deferToNewerServiceRuntime("2.67.0", selfCommand, undefined, {
+      dir, exists: () => true,
+      run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }), log: () => {},
+    });
+    try {
+      const handler = process.listeners("SIGTERM").find(value => !before.includes(value));
+      expect(handler).toBeDefined();
+      handler!();
+      handler!();
+      expect(sent).toEqual(["SIGTERM", "SIGTERM"]);
+      expect(scheduled).toBe(1);
+      expect(expire).toBeDefined();
+      if (outcome === "force") expire!();
+      else child.emit("exit", 42, null);
+      expect(await pending).toBe(outcome === "force" ? 137 : 42);
+      expect(sent).toEqual(outcome === "force" ? ["SIGTERM", "SIGTERM", "SIGKILL"] : ["SIGTERM", "SIGTERM"]);
+      expect(clear).toHaveBeenCalledWith(timer);
+      expect(process.listeners("SIGTERM")).toEqual(before);
+      expect(["SIGINT", "SIGHUP", "exit"].map(name => process.listenerCount(name))).toEqual(otherBefore);
+    } finally {
+      child.emit("exit", 1, null);
+      await pending;
+      if (timer) clearTimeout(timer);
+      clear.mockRestore();
+      timers.mockRestore();
+      spawn.mockRestore();
     }
   });
 

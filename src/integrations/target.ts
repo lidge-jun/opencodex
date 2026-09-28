@@ -194,6 +194,9 @@ export function declaredIntegrationTarget(args: {
 }): IntegrationTarget | null {
   const { clientId, configPath, resolvedConfigPath } = args;
   if (configPath === resolvedConfigPath) return configFileTarget(clientId, configPath, null);
+  if (INTEGRATION_CLIENTS[clientId].bindsDriftedRecord?.(configPath, args.env, args.home) === true) {
+    return configFileTarget(clientId, configPath, null);
+  }
   const declared = INTEGRATION_CLIENTS[clientId].currentStore;
   if (!declared) return null;
   try {

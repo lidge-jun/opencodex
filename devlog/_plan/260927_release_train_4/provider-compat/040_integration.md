@@ -21,3 +21,15 @@ Dependency: `wp3`. Recheck every candidate's latest head, base, review state, an
 ## Evidence and final report
 
 Append the current PR number, head SHA, exact check run URL/attempt/conclusion, merge SHA, original-PR closure link, issue disposition links, commands/exit codes, and remaining limitations to `000_plan.md`. The final user report lists each assigned PR and issue, the two carried methods, dev CI result, test scope, risk, and overlap files. If a required check or branch protection is pending, keep the relevant PR open and state its exact status instead of claiming completion.
+
+## wp4 result (2026-09-28)
+
+Deferred PRs stay open with an English disposition naming the blocking contract and re-entry proof, checked by an independent sol audit (FAIL on three overstated claims, PASS after revision):
+
+- #5995 keyless Zen — [comment](https://github.com/lidge-jun/opencodex/pull/5995#issuecomment-5857896648): client identity minting and injected tools without a published third-party contract; needs OpenCode permission, three-turn tool fixture, security review.
+- #3282 Copilot context tier — [comment](https://github.com/lidge-jun/opencodex/pull/3282#issuecomment-5857896879): tier advertised for any configured model; needs per-model verified windows and `modelContextTiers`/`modelContextWindows` interaction on current `dev`.
+- #6003 first-output failover — [comment](https://github.com/lidge-jun/opencodex/pull/6003#issuecomment-5857897106): unbounded body read before rule match; timer armed only after headers; needs bounded read, one pre-dispatch deadline, cancellation fixtures, client-visible signal if required.
+- #4732 registry cache — [comment](https://github.com/lidge-jun/opencodex/pull/4732#issuecomment-5857897341): snapshot traversal predates `snapshot-select.ts`; needs router-only split with benchmark.
+- #3741 Antigravity TLS — [comment](https://github.com/lidge-jun/opencodex/pull/3741#issuecomment-5857897561): transport chosen before the physical-send egress decision (an integration gap; `dev` still fails closed); needs egress integration fixtures, security review with #5083, full exact-head CI.
+
+Closing the carried originals #5927 and #5497 and checking post-merge `dev` CI moved to `wp6`, because both depend on the replacement PRs merging.

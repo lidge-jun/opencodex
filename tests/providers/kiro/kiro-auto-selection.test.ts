@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearGenericFailoverHealth, eligibleFailoverAccounts, kiroAutoSelection,
   quarantineKiroSuspendedAccount, rotateGenericOAuthAccountOnRefusal } from "../../../src/oauth/generic-account-failover";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveCredential, setAccountPaused } from "../../../src/oauth/store";
 import { setCachedProviderAccountQuotaForTests, clearAccountQuotaCache } from "../../../src/providers/quota";
 import { commitKiroAccountUsageState } from "../../../src/providers/kiro-usage";
 import { kiroEvidenceIdentity } from "../../../src/providers/kiro-account-state-disk";
@@ -67,4 +67,18 @@ test("Kiro candidate and list projection agree on family-less exclusion states",
   expect(eligible).toEqual([byName("unknown").id]);
   expect(kiroAutoSelection(byName("suspended"), evalNow + 24 * 60 * 60_000 + 1))
     .toEqual({ autoSelectable: true });
+});
+
+test("a paused Kiro account is excluded from automatic selection and its list projection", async () => {
+  await saveCredential("kiro", { access: "paused-access", refresh: "paused-refresh",
+    expires: Date.now() + 3600_000, accountId: "paused" }, { addAccount: true });
+  const pausedId = getAccountSet("kiro")!.accounts[0]!.id;
+  await saveCredential("kiro", { access: "live-access", refresh: "live-refresh",
+    expires: Date.now() + 3600_000, accountId: "live" }, { addAccount: true });
+  const survivorId = getAccountSet("kiro")!.accounts.find(account => account.id !== pausedId)!.id;
+  await setAccountPaused("kiro", pausedId!, true);
+
+  const account = getAccountSet("kiro")!.accounts.find(row => row.id === pausedId)!;
+  expect(kiroAutoSelection(account)).toEqual({ autoSelectable: false, skipReason: "paused" });
+  expect(eligibleFailoverAccounts("kiro")).toEqual([survivorId]);
 });

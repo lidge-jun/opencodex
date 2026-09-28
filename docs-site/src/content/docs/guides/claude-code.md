@@ -227,6 +227,14 @@ and its subdomains. Its signing key exists only inside the running OpenCodex pro
 OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
 prompt, or later run `ocx claude desktop picker trust`, after each restart.
 
+On restart OpenCodex first removes the previous authority from the keychain. If that removal fails
+(for example because you decline the keychain prompt), the picker stays off for this run so two
+authorities are never trusted side by side. Desktop keeps its network connection: the proxy address
+in its profile still answers, but only as a plain relay that does not read claude.ai traffic, and the
+picker lists Anthropic's own models until the removal succeeds. OpenCodex remembers which certificate
+still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
+picker as unavailable meanwhile.
+
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with
 `ocx claude desktop picker status`; use `ocx claude desktop picker trust` to repeat the trust step,

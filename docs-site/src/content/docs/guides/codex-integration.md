@@ -19,6 +19,7 @@ For bare native Codex models and OpenCodex-generated account-selector rows, the 
 authenticated access program metadata. Bare models use the main Codex account; account-qualified
 models use their selected account. Refreshing the integration updates these rows when upstream
 changes the account's access programs.
+OpenCodex carries the logged-in main account's live model availability prompt onto bare native model rows.
 
 The proxy exposes one bare `openai` Codex-login route with Pool(default) and Direct account modes,
 plus `openai-apikey/<model>` for the configured API key. Pool includes main plus added accounts;

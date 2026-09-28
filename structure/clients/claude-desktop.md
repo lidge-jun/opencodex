@@ -189,7 +189,28 @@ skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA wh
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it; an
 export it cannot read makes trust `unknown`, which never arms. A rotated-out picker certificate is
 removed from the login keychain as its replacement is published, and a failed removal stops the
-picker arming. The relay verifies the upstream
+picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
+`ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
+callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
+certificate is rewritten under the lock so a second process cannot rotate out a live owner's
+authority. The owner record carries the OS process start identity where the platform exposes one,
+so a reused PID does not count as the live owner; an older record without one still counts as live
+unless, on macOS, the PID's process started after the record was written.
+Before a startup rotation replaces `ca.pem`, the outgoing certificate's **public** PEM and its
+SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
+exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
+does. Startup (`runtime.ts` via `picker-ca-cleanup.ts`) drains that record before and after
+rotation: it defers without calling `security` while the recorded certificate is still published by
+a live owner, untrusts a private temporary copy of the public PEM otherwise, and acknowledges the
+exact record only after a confirmed removal, so a failure survives process replacement and is
+retried by the next start. While the drain is incomplete and a Desktop picker profile is applied, the
+lifecycle binds a blind-only CONNECT relay (`interceptHosts: []`, every tunnel blind) on the
+profile's recorded `egressProxyUrl` port instead of the picker: Desktop keeps its network path, no
+TLS is terminated, no trust is added, and the profile row, its previous selection and the retry
+intent stay untouched. A port held by another process is not taken over; the relay start fails with
+a warning and the row stays for the next start. The relay is chosen over restoring the pre-picker
+profile because a restore is an ownership-sensitive Desktop write that would discard the retry
+intent and cannot repair the URL a running Desktop already pinned. The `claude.ai` relay verifies the upstream
 certificate, streams every body and upgrade unchanged, and rewrites only the bootstrap response's
 local Code picker surfaces, `ccd` (what the Desktop Code tab reads) and its `code` fallback, never the
 remote `ccr` (`picker-bootstrap.ts`), failing open to the original bytes; the model list

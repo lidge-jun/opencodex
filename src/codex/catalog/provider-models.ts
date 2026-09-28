@@ -231,7 +231,7 @@ export async function fetchProviderModelsWithAuth(
       // KIRO_OBSERVED_CATALOG_MAX of them. Every observed id still informs routing preference.
       let observedAdded = 0;
       for (const account of getAccountSet("kiro")?.accounts ?? []) {
-        if (account.needsReauth === true) continue;
+        if (account.needsReauth === true || account.paused === true) continue;
         for (const row of readKiroAccountModels(account) ?? []) {
           if (observedAdded >= KIRO_OBSERVED_CATALOG_MAX) break;
           if (!KIRO_PUBLISHABLE_MODEL_ID.test(row.modelId) || ids.includes(row.modelId)) continue;

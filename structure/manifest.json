@@ -450,6 +450,7 @@
       "title": "Background Service And Sidecars",
       "scope": "Service install/repair, platform launchers, tray, and sidecar processes.",
       "documents": [
+        "src/lib/",
         "src/server/",
         "src/service-manager-probe.ts",
         "src/sidecar/",

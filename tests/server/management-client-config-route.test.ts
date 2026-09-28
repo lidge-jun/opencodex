@@ -289,9 +289,9 @@ describe("native Anthropic effort ladder reaches the Aside document", () => {
   });
 });
 describe("GET /api/client-config", () => {
-  for (const hostname of ["0.0.0.0", "::", "192.0.2.40"]) {
-    test(`Raycast export refuses authenticated bind ${hostname} before generating a document`, async () => {
-      const response = await clientConfigApi(baseConfig({ hostname }), "?client=raycast");
+  for (const client of ["raycast", "droid"]) for (const hostname of ["0.0.0.0", "::", "192.0.2.40"]) {
+    test(`${client} export refuses authenticated bind ${hostname} before generating a document`, async () => {
+      const response = await clientConfigApi(baseConfig({ hostname }), `?client=${client}`);
       expect(response.status).toBe(400);
       const body = await response.json() as Record<string, unknown>;
       expect(body.reason).toBe("non_loopback");
@@ -299,6 +299,18 @@ describe("GET /api/client-config", () => {
       expect(body.text).toBeUndefined();
     });
   }
+
+  test("Droid export uses the declared unauthenticated listener", async () => {
+    const response = await clientConfigApi(baseConfig({
+      hostname: "0.0.0.0", unauthenticatedLoopbackListener: { enabled: true, port: 10237 },
+    }), "?client=droid");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+    const rows = (body.config as { customModels: Array<{ baseUrl: string }> }).customModels;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every(row => row.baseUrl === "http://127.0.0.1:10237/v1")).toBe(true);
+    expect(body.text).not.toContain(REAL_LOOKING_KEY);
+  });
 
   test("Raycast export uses the declared unauthenticated listener instead of the management port", async () => {
     const response = await clientConfigApi(baseConfig({

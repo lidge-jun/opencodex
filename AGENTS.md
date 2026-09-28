@@ -14,8 +14,9 @@ Bun-native TypeScript with no separate server compile step.
 - `src/` — proxy runtime: routing, provider adapters, config, management API.
 - `tests/` — Bun tests in domain directories that mirror `src/`
   (`tests/<domain>/*.test.ts`; `providers/` and `adapters/` have one more
-  level for the larger vendors). The map is `scripts/test-layout/layout.json`
-  and `tests/test-layout.test.ts` enforces it: every file resolves to a
+  level for the larger vendors). The explicit map is
+  `scripts/test-layout/layout.json`, with regex seeds and migration state in
+  `scripts/test-layout/seeds.json`; `tests/test-layout.test.ts` enforces that every file resolves to a
   domain and sits in it, and only the two layout guards live at the root.
   Shared helpers in `tests/helpers/`, fixtures in `tests/fixtures/`, broader
   scenarios in `tests/e2e-style/`. Source-oracle tests resolve the repository
@@ -24,7 +25,7 @@ Bun-native TypeScript with no separate server compile step.
   test file lands in its domain directory and needs an entry in both
   `layout.json` `explicit` and `tests/fixtures/test-layout-expected.json`
   (`tests/test-layout-tooling.test.ts` names the missing one); the regex
-  seeds in `layout.json` place a conventionally named file until then.
+  seeds in `seeds.json` place a conventionally named file until then.
   History: `devlog/_fin/260905_test_modularization_and_windows/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `app/` — native macOS WidgetKit extension bundled into the Tauri desktop app;

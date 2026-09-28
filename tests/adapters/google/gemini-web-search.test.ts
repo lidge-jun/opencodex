@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import * as storeModule from "../../../src/oauth/store";
 import { MAX_SIDECAR_RESPONSE_BYTES } from "../../../src/web-search/parse";
 
-let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean; credential?: Record<string, unknown> }>; activeAccountId?: string }> = {};
+let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean; paused?: boolean; credential?: Record<string, unknown> }>; activeAccountId?: string }> = {};
 mock.module("../../../src/oauth/store", () => ({
   ...storeModule,
   getAccountSet: (provider: string) => accountSets[provider] ?? null,
@@ -95,6 +95,7 @@ describe("planWebSearch gemini arm (L8)", () => {
   test.each([
     ["no account set", {}],
     ["needsReauth", { "google-antigravity": { accounts: [{ id: "a1", needsReauth: true, credential: { projectId: "p" } }], activeAccountId: "a1" } }],
+    ["paused", { "google-antigravity": { accounts: [{ id: "a1", paused: true, credential: { projectId: "p" } }], activeAccountId: "a1" } }],
     ["missing projectId", { "google-antigravity": { accounts: [{ id: "a1", credential: {} }], activeAccountId: "a1" } }],
   ] as const)("%s -> fail closed (no plan)", (_name, sets) => {
     accountSets = sets as typeof accountSets;

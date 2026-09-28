@@ -12,8 +12,8 @@ function bodyOf(src: string): string {
 }
 
 function inksOf(body: string): Set<string> {
-  const matches = body.match(/(?:fill|stop-color)\s*[:=]\s*"?#[0-9a-fA-F]{3,8}/g) ?? [];
-  return new Set(matches.map(raw => raw.split(/[:=]/).pop()!.replace(/"/g, "").trim().toLowerCase()));
+  const matches = body.matchAll(/(?:fill|stop-color)\s*[:=]\s*"?(#[0-9a-fA-F]{3,8}|oklch\([^)]+\))/g);
+  return new Set([...matches].map(match => match[1]!.toLowerCase()));
 }
 
 /*

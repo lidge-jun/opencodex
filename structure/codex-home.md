@@ -151,12 +151,11 @@ writes are ignored.
 Recovery-completion provenance is separate from the convergence promise: release retains the owner through the pending recovery and its following stage sweep.
 `tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
-A sibling instance — `ocx start --port <other>` while a live proxy serves the configured port, the
-`"sibling"` outcome of `decideStartWithLiveOwner` in `src/cli/dispatch.ts` — gets past the spend-ledger
+A sibling instance is `ocx start --port <other>` while a live proxy serves the configured port, or a start where the cross-home owner check proves a different live proxy at a managed client destination. It gets past the spend-ledger
 lease only with its own `OPENCODEX_HOME`, and still shares this Codex home, `~/.claude`, `~/.grok` and
 the launchd domain with the live owner. `handleStart` marks the process through
 `src/codex/sibling-start.ts` before the server binds, and the mark is one-way for the process's
-lifetime. It closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
+lifetime. The cross-home check follows same-home discovery and precedes journal reconciliation. It reads the default home's runtime record only for a custom home, plus managed Grok and Codex loopback URLs. It accepts only an identity-checked positive PID different from this process; a sole custom-home start still syncs. The mark closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
 `sibling`, so startup sync, cache invalidation, Grok, the retained catalog writers and the native-main
 lifecycle stand down (the sibling runs the no-op lifecycle, so it never contends for the owner lease;
 its data-plane `auth.json` refresh still runs under the machine-wide exclusive claim). Owner-level

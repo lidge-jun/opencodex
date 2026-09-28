@@ -37,7 +37,7 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import { admissionScopeDenial } from "./admission-model-scope";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
-import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
+import { getValidAccessToken, getOAuthCredentialProjectId, OAuthAccountPausedError } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
@@ -282,6 +282,9 @@ async function tryCcaImageGeneration(
     }
     if (linkedSignal.signal.aborted) {
       return formatErrorResponse(504, "upstream_error", "CCA image generation timed out during authentication");
+    }
+    if (err instanceof OAuthAccountPausedError) {
+      return formatErrorResponse(403, "permission_error", err.message);
     }
     // Missing/revoked credential → 401 (re-login required); transient refresh/network → 502.
     const errName = err instanceof Error ? err.name : "";

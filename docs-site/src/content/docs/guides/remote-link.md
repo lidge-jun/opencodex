@@ -64,7 +64,7 @@ To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disc
 
 ## Troubleshooting
 
-When a step fails, the dashboard shows the reason and, when SSH reported one, the last line of its error output under the message.
+When a step fails, the dashboard shows the reason and, when SSH reported one, a short sanitized hint from its last non-empty error line under the message. Remote-shell errors can appear there even when the remote shell emits non-UTF-8 text; OpenCodex removes terminal controls, link keys and URL queries and limits the hint's length.
 
 - **Could not connect to the SSH host**: the host must accept your SSH key without a password prompt; `ssh -o BatchMode=yes <alias> true` must succeed from a terminal. A `ProxyCommand` helper such as `cloudflared` must be installed in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.bun/bin`, `~/.local/bin` or another directory on the PATH OpenCodex runs with.
 - **ocx was not found on the remote computer**: OpenCodex looks for `ocx` on the PATH of a non-interactive SSH session first, then in `~/.bun/bin`, `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. If it is installed elsewhere, add that directory to PATH in a file the remote shell reads for non-interactive sessions, such as `~/.zshenv` for zsh.

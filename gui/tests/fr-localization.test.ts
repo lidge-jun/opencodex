@@ -146,6 +146,11 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Cline product name and CLI acronym are intentionally preserved.
   "integrations.tab.cline",
   "api.clientConfig.clientCline",
+  "integrations.tab.kilo",
+  "api.clientConfig.clientKilo",
+  // Factory Droid is a product name, identical in every locale.
+  "integrations.tab.droid",
+  "api.clientConfig.clientDroid",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "models.reasoningEffort.ultra",
@@ -218,6 +223,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "logs.protocol.wire.chat",
   "logs.protocol.wire.messages",
   "logs.protocol.hop.ir",
+  // The consolidation phase's name is the ordinary French noun, spelled exactly as in English.
+  // Inventing a synonym would also break the pair with the extract row, whose French label is
+  // "Extraction".
+  "memoryModels.consolidation",
 ]);
 
 function placeholders(value: string): string[] {

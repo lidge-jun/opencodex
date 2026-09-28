@@ -26,12 +26,15 @@ import {
   nativeReasoningEfforts,
   uniqueCatalogModelsForPublicList,
   shouldIncludeAccountBoundNativeOpenAi,
+  catalogModelEfforts,
 } from "../../codex/catalog";
+import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../codex/catalog/native-models";
 import type { ExportModel } from "../../clients/config-export";
 import { providerContextCap } from "../../providers/context-cap";
-import { isVisionReasoningEffort } from "../../reasoning-effort";
+import { isVisionReasoningEffort, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import type { OcxConfig } from "../../types";
+import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
@@ -56,6 +59,21 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   fastRowAvailable?: boolean;
   displayNameOverride?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
+  /**
+   * The modality declaration a per-model editor writes, read from the same sources the runtime
+   * consults. It is separate from the row's own `inputModalities` because that one is the
+   * CATALOG value: an editor that pre-fills from the catalog while writing the declaration shows
+   * one thing and saves another, so its own writes never appear to take.
+   */
+  inputModalitiesDeclared?: string[];
+  /** Exact stored context override, distinct from the effective catalog window. */
+  contextWindowDeclared?: number;
+  /**
+   * True when the provider config actually CHANGES reasoning for this model. A persisted key is
+   * not proof of an operator edit — OpenCodex itself writes the registry ladder into the provider
+   * config — so this compares values against what the model would inherit anyway.
+   */
+  reasoningOverridden?: boolean;
 };
 
 /** Resolve the exact text and source shown for one routed discovered model. */
@@ -74,6 +92,163 @@ export function effectiveManagementDisplayName(
   const providerDisplayName = model.displayName?.trim();
   if (providerDisplayName) return { displayName: providerDisplayName, displayNameSource: "provider" };
   return { displayName: catalogModelSlug(model), displayNameSource: "fallback" };
+}
+
+/**
+ * The modality declaration an editor writes, resolved the way the runtime resolves it: an exact
+ * `modelCapabilities` entry first, then the legacy `modelInputModalities` record, both after the
+ * registry has filled in whatever the saved config predates.
+ */
+export function declaredModelInputModalities(
+  config: OcxConfig,
+  providerName: string,
+  modelId: string,
+): string[] | undefined {
+  const provider = config.providers[providerName];
+  if (!provider) return undefined;
+  const enriched = {
+    ...provider,
+    ...(provider.modelInputModalities ? { modelInputModalities: { ...provider.modelInputModalities } } : {}),
+    ...(provider.modelCapabilities ? { modelCapabilities: { ...provider.modelCapabilities } } : {}),
+  };
+  enrichProviderFromRegistry(providerName, enriched);
+  const declared = enriched.modelCapabilities?.[modelId]?.inputModalities
+    ?? modelRecordValue(enriched.modelInputModalities, modelId);
+  return Array.isArray(declared) && declared.length > 0 ? [...declared] : undefined;
+}
+
+/**
+ * The ladder that actually applies to this model: an explicit declaration wins, then the
+ * registry-enriched provider map, then the pinned native OpenAI table for a resold native id,
+ * then the catalog's own effort hints.
+ *
+ * The registry enrichment is not optional. The catalog reads the enriched provider, so a registry
+ * declaration (google-antigravity's `gemini-3.8-flash`, for one) IS the model's ladder; reading
+ * the saved config alone would report no ladder for a model that has one.
+ *
+ * The catalog's own hints are the one source that costs a file read per lookup. `catalogLadders`
+ * is the batched form of it: a roster projection resolves every routed id once and passes the map
+ * down, instead of asking `catalogModelEfforts` per row and re-parsing the same file each time.
+ * Omitting it keeps the single-model behaviour for every other caller.
+ */
+export type CatalogLadderLookup = ReadonlyMap<string, string[]>;
+
+/** Catalog entries for routed rows carry the Codex-facing `provider/model` slug, never the bare id. */
+function catalogLadder(ladders: CatalogLadderLookup | undefined, providerName: string, modelId: string): string[] | undefined {
+  const slug = routedSlug(providerName, modelId);
+  return ladders ? ladders.get(slug) : catalogModelEfforts([slug]).get(slug);
+}
+
+export function effectiveModelReasoningEfforts(config: OcxConfig, providerName: string, modelId: string, declaredEfforts?: string[], catalogLadders?: CatalogLadderLookup): string[] | undefined {
+  // An empty array is a declaration, not an absence: the operator stored "this model has no
+  // reasoning rungs", and falling through to the inherited ladder here would report a ladder the
+  // row does not have and hand it back to the editor on the next refresh.
+  if (Array.isArray(declaredEfforts)) return declaredEfforts;
+  const provider = config.providers[providerName];
+  if (provider) {
+    const enriched = {
+      ...provider,
+      ...(provider.modelReasoningEfforts ? { modelReasoningEfforts: { ...provider.modelReasoningEfforts } } : {}),
+    };
+    enrichProviderFromRegistry(providerName, enriched);
+    const raw = modelRecordValue(enriched.modelReasoningEfforts, modelId) ?? enriched.reasoningEfforts;
+    // Mirrors `configuredReasoningEfforts`, the reader the wire actually uses: a stored array is a
+    // declaration even when it sanitizes down to nothing, and only a missing entry inherits.
+    if (Array.isArray(raw)) return sanitizeCodexReasoningEfforts(raw) ?? [];
+  }
+  // A provider reselling a native OpenAI id inherits that model's pinned ladder.
+  if (SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId)) {
+    const native = nativeReasoningEfforts(modelId);
+    if (native.length > 0) return native;
+  }
+  const hits = catalogLadder(catalogLadders, providerName, modelId);
+  if (hits && hits.length > 0) return hits;
+  return undefined;
+}
+
+export function effectiveModelDefaultReasoningEffort(config: OcxConfig, providerName: string, modelId: string, declaredDefault?: string, efforts?: string[]): string | undefined {
+  if (declaredDefault) return declaredDefault;
+  const provider = config.providers[providerName];
+  if (provider) {
+    const stored = modelRecordValue(provider.modelDefaultReasoningEfforts, modelId);
+    if (stored) return stored;
+  }
+  if (efforts && efforts.length > 0) {
+    // The default is the ladder's own preference order, not its first entry: a model offering
+    // low..high defaults to medium, and only a ladder that omits it falls back to low.
+    if (efforts.includes("medium")) return "medium";
+    if (efforts.includes("low")) return "low";
+    return efforts[0];
+  }
+  return undefined;
+}
+
+/**
+ * Whether the saved config really overrides reasoning for this model, decided by VALUE rather
+ * than by key presence.
+ *
+ * The distinction is the whole point: OpenCodex writes the registry ladder (and its default) into
+ * the provider config itself, so a bare `hasOwnProperty` test reports every registry-declared
+ * model as hand-edited. An entry that resolves to the same ladder and default the model would
+ * inherit anyway is not an override, and an editor that pre-fills an "override" checkbox from one
+ * claims an edit nobody made.
+ */
+export function reasoningOverrideFor(config: OcxConfig, providerName: string, modelId: string, catalogLadders?: CatalogLadderLookup): boolean {
+  const provider = config.providers[providerName];
+  if (!provider) return false;
+  const owns = (record: Record<string, unknown> | undefined) =>
+    !!record && Object.prototype.hasOwnProperty.call(record, modelId);
+  const ownsEfforts = owns(provider.modelReasoningEfforts as Record<string, unknown> | undefined);
+  const ownsDefault = owns(provider.modelDefaultReasoningEfforts as Record<string, unknown> | undefined);
+  if (!ownsEfforts && !ownsDefault) return false;
+  if (ownsEfforts) {
+    // `undefined` (nothing known) and `[]` (pinned to no rungs) are different facts, and joining
+    // both to "" would report a pinned-empty ladder as no override at all.
+    const ladderKey = (values: string[] | undefined) => (values === undefined ? null : values.join(","));
+    const effective = effectiveModelReasoningEfforts(config, providerName, modelId, undefined, catalogLadders);
+    const inherited = inheritedModelReasoningEfforts(config, providerName, modelId, catalogLadders);
+    if (ladderKey(effective) !== ladderKey(inherited)) return true;
+  }
+  if (ownsDefault) {
+    const effective = effectiveModelDefaultReasoningEffort(config, providerName, modelId);
+    const inherited = inheritedModelDefaultReasoningEffort(config, providerName, modelId, catalogLadders);
+    if (effective !== inherited) return true;
+  }
+  return false;
+}
+
+/** The ladder this model inherits when no per-model override exists. */
+export function inheritedModelReasoningEfforts(config: OcxConfig, providerName: string, modelId: string, catalogLadders?: CatalogLadderLookup): string[] | undefined {
+  const provider = config.providers[providerName];
+  if (!provider) return undefined;
+  const record = provider.modelReasoningEfforts;
+  if (!record || !Object.prototype.hasOwnProperty.call(record, modelId)) {
+    return effectiveModelReasoningEfforts(config, providerName, modelId, undefined, catalogLadders);
+  }
+  const next = { ...record };
+  delete next[modelId];
+  const stripped = { ...provider, modelReasoningEfforts: next };
+  const view = { ...config, providers: { ...config.providers, [providerName]: stripped } };
+  return effectiveModelReasoningEfforts(view, providerName, modelId, undefined, catalogLadders);
+}
+
+/** The default this model inherits when no per-model default override exists. */
+export function inheritedModelDefaultReasoningEffort(config: OcxConfig, providerName: string, modelId: string, catalogLadders?: CatalogLadderLookup): string | undefined {
+  const provider = config.providers[providerName];
+  if (!provider) return undefined;
+  const record = provider.modelDefaultReasoningEfforts;
+  if (!record || !Object.prototype.hasOwnProperty.call(record, modelId)) {
+    return effectiveModelDefaultReasoningEffort(
+      config, providerName, modelId, undefined, effectiveModelReasoningEfforts(config, providerName, modelId, undefined, catalogLadders),
+    );
+  }
+  const next = { ...record };
+  delete next[modelId];
+  const stripped = { ...provider, modelDefaultReasoningEfforts: next };
+  const view = { ...config, providers: { ...config.providers, [providerName]: stripped } };
+  return effectiveModelDefaultReasoningEffort(
+    view, providerName, modelId, undefined, effectiveModelReasoningEfforts(view, providerName, modelId, undefined, catalogLadders),
+  );
 }
 
 /**
@@ -190,6 +365,11 @@ export async function listManagementModelRows(
   // Custom metadata wins when a physical live/static row resolves to the same Codex-facing
   // slug, while a combo keeps the same precedence it has in routing and /v1/models.
   const customNamespaced = new Set(visibleCustomModels.map(c => c.namespaced));
+  // One catalog read for the whole roster. Every `catalogModelEfforts` call parses the catalog
+  // file and scans it once per requested slug, so resolving these per row (and twice per row, as
+  // the guard and the value) re-read the same file thousands of times on a large roster.
+  const routedSlugs = publicModels.filter(m => m.provider !== "combo").map(m => routedSlug(m.provider, m.id));
+  const catalogLadders = catalogModelEfforts([...new Set(routedSlugs)]);
   const dedupedRouted = publicModels.map((m): ManagementModelRow | null => {
     // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
     const namespaced = catalogModelSlug(m);
@@ -197,6 +377,16 @@ export async function listManagementModelRows(
     const contextCap = providerContextCap(config, m.provider);
     const nativeAlias = m.provider === "combo" && m.nativeAlias === true;
     const displayName = effectiveManagementDisplayName(config, m);
+    const routed = m.provider !== "combo";
+    // Resolved once each: the spread below used to evaluate the same helpers again for the guard.
+    const reasoningEfforts = routed
+      ? effectiveModelReasoningEfforts(config, m.provider, m.id, m.reasoningEfforts, catalogLadders)
+      : undefined;
+    const defaultReasoningEffort = routed
+      ? effectiveModelDefaultReasoningEffort(config, m.provider, m.id, m.defaultReasoningEffort, reasoningEfforts)
+      : undefined;
+    const inputModalitiesDeclared = routed ? declaredModelInputModalities(config, m.provider, m.id) : undefined;
+    const contextWindowDeclared = routed ? config.providers[m.provider]?.modelContextWindows?.[m.id] : undefined;
     return {
       ...m,
       ...displayName,
@@ -205,6 +395,14 @@ export async function listManagementModelRows(
         (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
       )),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
+      // A routed row inherits nothing about reasoning or modalities from the row spread above:
+      // the catalog only carries what discovery reported, so the effective answers are resolved
+      // here, where the config and the registry are both in hand.
+      ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+      ...(defaultReasoningEffort !== undefined ? { defaultReasoningEffort } : {}),
+      ...(routed ? { reasoningOverridden: reasoningOverrideFor(config, m.provider, m.id, catalogLadders) } : {}),
+      ...(inputModalitiesDeclared !== undefined ? { inputModalitiesDeclared } : {}),
+      ...(contextWindowDeclared !== undefined ? { contextWindowDeclared } : {}),
     };
   }).filter((row): row is ManagementModelRow => row !== null);
   // Manual OpenAI rows retain their routed selector but replace the bare dashboard row.

@@ -16,6 +16,7 @@ import type { TKey } from "../../i18n/shared";
 import type { VisualIntegrationState } from "./IntegrationStateBadge";
 import {
   FILE_INTEGRATION_CLIENTS,
+  canDisableKiloWithCandidateIssue,
   type FileIntegrationClientId,
   type IntegrationJournalRow,
   type IntegrationStatus,
@@ -155,6 +156,8 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   raycast: "integrations.tab.raycast",
   omo: "integrations.tab.omo",
   cline: "integrations.tab.cline",
+  kilo: "integrations.tab.kilo",
+  droid: "integrations.tab.droid",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */
@@ -519,7 +522,7 @@ function fileRow(status: IntegrationStatus): OverviewRow {
     // of its file state; do the same here so the grid and the count agree.
     state: status.installed ? status.state : "not-installed",
     installed: status.installed,
-    applied: status.installed && isAppliedState(status.state),
+    applied: status.installed && (isAppliedState(status.state) || canDisableKiloWithCandidateIssue(status)),
     detail: status.configPath,
     detailKey: null,
     detailVars: null,

@@ -92,6 +92,33 @@ test("both tabs control an element that exists", () => {
   });
 });
 
+test("a baseline with delimiter-shaped JEV notes resets the target draft", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const first = { ...emptyDraft("collision"), strategy: "jev" as const, targets: [
+    { provider: "provider-a", model: "model-a", weight: 1, modelProfile: "x,provider-b/model-b:1:y" },
+  ] };
+  const second = { ...first, targets: [
+    { provider: "provider-a", model: "model-a", weight: 1, modelProfile: "x" },
+    { provider: "provider-b", model: "model-b", weight: 1, modelProfile: "y" },
+  ] };
+  const render = (baseline: typeof first) => (
+    <LanguageProvider><DetailPanel baseline={baseline} otherIds={[]} otherAliases={[]}
+      providerMap={{}} providerQuotaStates={{}} providers={[]} models={[]}
+      onSaved={() => {}} onSave={async () => ({ ok: true })} onDirtyChange={() => {}} /></LanguageProvider>
+  );
+  try {
+    await act(async () => { root.render(render(first)); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(container.querySelectorAll(".cwi-target-entry textarea")).toHaveLength(1);
+    await act(async () => { root.render(render(second)); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(container.querySelectorAll(".cwi-target-entry textarea")).toHaveLength(2);
+  } finally { await act(async () => root.unmount()); }
+});
+
 test("exactly one panel is exposed at a time", async () => {
   const { container, root } = await mountDetail();
   try {

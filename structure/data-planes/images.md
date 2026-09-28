@@ -33,7 +33,8 @@ one upstream attempt; client cancellation aborts the upstream and pool-only fail
 existing account-health state. Unknown Images subpaths still reach the JSON `/v1/*` 404 guard.
 
 When the OpenAI credential path is unavailable or its authentication fails, `generations` (not
-`edits`) may fall back to Google Antigravity if that provider is logged in. The fallback is
+`edits`) may fall back to Google Antigravity if that provider has an unpaused account. A paused
+active account returns an operator-actionable 403 `permission_error` and is not treated as a login failure. The fallback is
 credential-driven: it exists so an image request reaches a real upstream answer rather than dying on a
 local credential error, and it does not apply when the caller selected an explicit keyed custom
 provider, because a configured pool owns its own authentication failure rather than hiding it behind

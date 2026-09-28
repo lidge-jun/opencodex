@@ -157,8 +157,7 @@ the id unregisters it and the next canonical write drops the row. Configured nat
 like `gpt-5.5` there), and a combo `nativeAlias` cannot target one because schema validation runs
 before registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
 
-Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied
-model ids still follow generic routing. User-selected config and historical usage remain stored.
+Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied model ids still follow generic routing. User-selected config and historical usage remain stored.
 
 Account-gated native ids use authenticated ChatGPT `/models` rosters cached per credential generation with a bounded timeout.
 A bare gated row requires a confirmed eligible account; a selector-qualified row requires its mapped account. Failed discovery
@@ -166,6 +165,7 @@ grants neither. The same snapshot gates Pool selection, so catalog and runtime u
 The roster's per-model `available_access_programs` is projected separately: bare native rows use only confirmed main-account
 metadata, and selector-qualified rows use only their mapped account. An object requires a valid `cyber` string array; malformed values under other program keys are omitted without losing that grant. Explicit `null` stays null; omission stays omitted.
 Failed discovery or credential replacement removes stale access-program metadata. It changes presentation, not routing grants.
+The roster's `availability_nux.message` is trimmed, capped at 2,000 UTF-16 units without leaving a lone surrogate, and projected only onto bare native rows from a confirmed main-account roster that lists the slug. Missing or unconfirmed main metadata writes `null` to clear stale prompts; account-qualified, combo, and native alias rows carry no availability prompt. Pool-account prompts never reach the bare row.
 
 `client_version` arrives on the inbound request and is part of that cache identity, so
 `src/codex/model-entitlements.ts` bounds the work as well as the state: stored versions per account, concurrent

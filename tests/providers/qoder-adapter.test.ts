@@ -161,4 +161,28 @@ describe("qoder adapter", () => {
     await adapter.runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
     expect(events.at(-1)).toMatchObject({ type: "error", status: 429, errorType: "insufficient_quota", code: "insufficient_quota", retryable: false });
   });
+
+  test("shared parser refuses Qoder's seventeenth tool start", async () => {
+    const frames = Array.from({ length: 17 }, (_, index) => JSON.stringify({
+      type: "stream_event", event: { type: "content_block_start", index, content_block: { type: "tool_use", id: `id_${index}`, name: "exec" } },
+    }) + "\n");
+    const adapter = createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => fakeChild(frames) });
+    const budget = createTestTranslatorBudget();
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(parsed(), { headers: new Headers(), translatorBudget: budget }, event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_call_limit", status: 502 });
+    expect(events.some(event => event.type === "tool_call_start" || event.type === "done")).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+  });
+
+  test("Qoder tool identity alone is charged to the shared budget", async () => {
+    const frame = JSON.stringify({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "abcd", name: "exec" } } }) + "\n";
+    const adapter = createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => fakeChild([frame]) });
+    const budget = createTestTranslatorBudget({ maxCallArgumentBytes: 7 });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(parsed(), { headers: new Headers(), translatorBudget: budget }, event => events.push(event));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit", status: 502 });
+    expect(events.some(event => event.type === "tool_call_start" || event.type === "done")).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, overflows: 1 });
+  });
 });

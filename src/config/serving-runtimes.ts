@@ -226,8 +226,8 @@ export interface DeferToNewerRuntimeDeps extends NewerServingRuntimeDeps {
 
 /**
  * Time a delegated child gets to finish shutting down after this parent takes a
- * termination signal, before the parent exits anyway. Keeps a wedged child from
- * pinning the service in "stopping" forever.
+ * termination signal, before escalation to SIGKILL. The parent waits for the child
+ * to exit; repeated signals share one timer, which is cleared when that wait ends.
  */
 const DELEGATED_SIGNAL_GRACE_MS = 5_000;
 
@@ -248,9 +248,12 @@ async function inheritedRunner(command: readonly string[], args: readonly string
     env: process.env,
   });
   const terminateChild = () => { try { child.kill(); } catch { /* already gone */ } };
+  const forceKillChild = () => { try { child.kill("SIGKILL"); } catch { /* already gone */ } };
+  let escalation: ReturnType<typeof setTimeout> | undefined;
   const forward = (signal: NodeJS.Signals) => () => {
     try { child.kill(signal); } catch { /* already gone */ }
-    setTimeout(terminateChild, DELEGATED_SIGNAL_GRACE_MS).unref();
+    escalation ??= setTimeout(forceKillChild, DELEGATED_SIGNAL_GRACE_MS);
+    escalation.unref();
   };
   const onSigint = forward("SIGINT");
   const onSigterm = forward("SIGTERM");
@@ -267,6 +270,7 @@ async function inheritedRunner(command: readonly string[], args: readonly string
       ));
     });
   } finally {
+    if (escalation) clearTimeout(escalation);
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     process.off("SIGHUP", onSighup);

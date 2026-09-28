@@ -383,7 +383,7 @@ kiro      oauth  8b24de70  k***1@examp***.net  -                mo 88%
 
 `ocx account list kiro` marks an account excluded from automatic selection as
 `not-auto-selected(<reason>)`. JSON carries `autoSelectable` and, when false, a closed
-`skipReason` (`needs_reauth`, `suspended`, `cooldown`, or `quota_exhausted`). An active
+`skipReason` (`paused`, `needs_reauth`, `suspended`, `cooldown`, or `quota_exhausted`). An active
 singleton or all-excluded pool may still send. Kiro `providerCredits` comes from measured
 `meteringEvent` values: the last reading within a physical response is retained, and
 separately billed sends add to the request spend. Credits are never estimated from tokens.
@@ -445,6 +445,23 @@ rotate the request to another eligible Pool account. These failure transitions r
 ### `ocx account clear <provider> [--json]`
 
 Clear the manual Codex account selection without resolving an account id, so it works even when an account is literally named `auto`. Codex pools only; other provider types have no automatic selection to restore.
+
+### `ocx account pause|resume <provider> <id|alias|main> [--json]`
+
+Pause or resume one account in the Codex pool or a generic OAuth provider pool, including
+`google-antigravity`. For the Codex pool, `main` identifies only the built-in Codex account;
+generic OAuth accounts must be identified by id or a unique alias. A paused generic OAuth account
+is excluded from request selection, 429 failover, and proactive token refresh, and cannot be
+selected manually. Pausing the active account switches to the next usable account when one exists.
+If every account is paused, requests that need that pool return 403 until an account is resumed.
+
+For a generic OAuth provider, identify the account by id or by a unique exact or case-insensitive
+alias. The JSON response reports the account id, pause state, and active account id.
+
+```bash
+ocx account pause google-antigravity <account-id-or-alias>
+ocx account resume google-antigravity <account-id-or-alias>
+```
 
 ### `ocx account refresh <provider> [--json]`
 

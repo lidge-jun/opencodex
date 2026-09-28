@@ -4,7 +4,7 @@ import {
   countOverviewRows,
   type OverviewSources,
 } from "../src/pages/integrations/overview-clients";
-import type { IntegrationStatus } from "../src/pages/integrations/integration-api";
+import { FILE_INTEGRATION_CLIENTS, type IntegrationStatus } from "../src/pages/integrations/integration-api";
 import type { NativeStatus } from "../src/pages/integrations/native-api";
 
 /**
@@ -234,6 +234,26 @@ test("file clients keep their existing badge and applied semantics", () => {
   expect(counts.stale).toBe(1);
 });
 
+test("an owned Kilo block remains switch-on while a later candidate conflicts", () => {
+  const rows = buildOverviewRows(sources({ clients: [
+    fileStatus({ clientId: "kilo", state: "conflict", reason: "candidate-conflict", lastOpId: "owned-operation" }),
+    fileStatus({ clientId: "hermes", state: "conflict", reason: "foreign-edit", lastOpId: "other-operation" }),
+  ] }));
+  expect(rowById(rows, "kilo")).toMatchObject({ state: "conflict", applied: true });
+  expect(rowById(rows, "hermes").applied).toBe(false);
+
+  const laterUnsafe = buildOverviewRows(sources({ clients: [fileStatus({
+    clientId: "kilo", state: "unsafe", reason: "unparseable", configPath: "/tmp/kilo.jsonc",
+    candidateFailurePath: "/tmp/kilo.json", lastOpId: "owned-operation",
+  })] }));
+  expect(rowById(laterUnsafe, "kilo").applied).toBe(true);
+  const selectedUnsafe = buildOverviewRows(sources({ clients: [fileStatus({
+    clientId: "kilo", state: "unsafe", reason: "unparseable", configPath: "/tmp/config.json",
+    candidateFailurePath: "/tmp/config.json", lastOpId: "owned-operation",
+  })] }));
+  expect(rowById(selectedUnsafe, "kilo").applied).toBe(false);
+});
+
 test("every client counts toward the summary, not just the file clients", () => {
   const rows = buildOverviewRows(sources({
     clients: [fileStatus({ clientId: "opencode", state: "current" })],
@@ -290,8 +310,10 @@ test("every client counts toward the summary, not just the file clients", () => 
 
 test("an unsettled file list renders unknown rows instead of dropping them", () => {
   const built = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
-  expect(built.rows).toHaveLength(20);
+  expect(built.rows).toHaveLength(FILE_INTEGRATION_CLIENTS.length + 5);
   expect(rowById(built, "cline")).toMatchObject({ hash: "integrations/cline", labelKey: "integrations.tab.cline", state: "unknown" });
+  expect(rowById(built, "kilo")).toMatchObject({ hash: "integrations/kilo", labelKey: "integrations.tab.kilo", state: "unknown" });
+  expect(rowById(built, "droid")).toMatchObject({ hash: "integrations/droid", labelKey: "integrations.tab.droid", state: "unknown" });
   expect(rowById(built, "omp").state).toBe("unknown");
   expect(rowById(built, "mcode").state).toBe("unknown");
   expect(rowById(built, "zcode").state).toBe("unknown");

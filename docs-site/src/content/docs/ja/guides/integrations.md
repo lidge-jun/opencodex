@@ -1,9 +1,9 @@
 ---
 title: クライアント統合
-description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI に接続します。クライアントごとにスイッチがあり、書き込み前には必ずバックアップを取ります。
+description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo、Factory Droid に接続します。クライアントごとにスイッチがあり、書き込み前には必ずバックアップを取ります。
 ---
 
-**Integrations** タブは、各クライアントの設定ファイルに opencodex のプロバイダーブロックを書き込み、必要に応じて削除します。次の 15 クライアントは、それぞれのスイッチで管理できます。
+**Integrations** タブは、各クライアントの設定ファイルに opencodex のプロバイダーブロックを書き込み、必要に応じて削除します。次の 17 クライアントは、それぞれのスイッチで管理できます。
 
 | クライアント | 設定ファイル | 形式 | 変更が反映される時点 | 認証情報 |
 |---|---|---|---|---|
@@ -22,6 +22,8 @@ description: ダッシュボードから opencodex を OpenCode、Pi、OMP、Her
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 保存後すぐ。Raycast がファイルを監視 | なし。ループバックのみ |
 | omo | `~/.omo/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | Cline CLI | `~/.cline/data/settings/providers.json` と同階層の `models.json` | JSON のペア | Cline の停止と再起動後 | ループバック用プレースホルダー |
+| Kilo | `~/.config/kilo` 内で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` でディレクトリを変更可能。どれもなければ `kilo.jsonc` を作成） | JSONC | 新しいセッション | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows の場合) | JSON | ファイル変更を即時反映 | キー不要のループバック |
 
 生成されるカタログには、各プロバイダーの選択で有効なモデルのみが含まれます。これはダウンロードと管理対象の統合の両方に適用され、Pi と Aside も対象です。管理画面のモデル一覧にはすべてのモデルが表示されるため、追加のモデルを有効にできます。
 
@@ -216,6 +218,21 @@ Undo は、もともと存在しなかったファイルも含め、**元の両�
 
 ダウンロードされる `cline-config-bundle.json` には、`providers.json` 用の `settings` と `models.json` 用の `catalog` という 2 つのネイティブ文書要素が含まれます。それ自体は Cline の設定ファイルではありません。ジャーナル付きのマージとロールバックには統合コマンドを使ってください。生成された統合はリモートの受け入れ認証に対応せず、認証不要のループバックアクセスが必要です。
 
+## Kilo
+
+Kilo CLI、VS Code、JetBrains は同じグローバル設定を共有します。この統合は `~/.config/kilo` 内の `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json` のうち最初に存在するファイルに `provider.opencodex` を書き込みます。`XDG_CONFIG_HOME` でこのディレクトリを変更できます。候補がなければ `kilo.jsonc` を作成します。プロジェクト設定には書き込みません。
+
+Kilo はこれらのグローバルファイルをすべてマージします。別の候補も `provider.opencodex` を定義する場合、状態に競合ファイルが表示され、適用と置換は拒否されます。有効化する前に、そのファイルから `provider.opencodex` を削除してください。所有済みファイルの無効化は競合があっても実行できます。読み取れない候補や安全に扱えない候補も書き込みを妨げます。
+
+管理対象は OpenCode V1 形式の `provider.opencodex`（`npm`、`options`、`models`）だけです。OpenCode V2 の `providers` は出力しません。`$schema`、`model`、`enabled_providers`、MCP などのキーはユーザーが管理します。適用後、Kilo で `opencodex/<provider/model>` を選択してください。
+
+ループバックでは `options.apiKey` に `{env:OPENCODEX_KILO_API_KEY}` を使います。ループバック以外へのバインドでは認証を `options.headers["x-opencodex-api-key"]` に移し、実際のキーは保存しません。適用時はグローバルファイル全体を整形済み JSON として書き直すため、他のキーのコメントと末尾カンマは保持されません。Kilo は自動カタログ更新の対象外です。ルーティング対象のモデル選択を変更したら、明示的に更新してください。
+
+```bash
+ocx integration client enable --client kilo
+ocx export --client kilo --out ./kilo.jsonc
+```
+
 ## GitHub Copilot アプリ
 
 GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換のモデルプロバイダーとして利用できます。これは手動で設定するクライアントで、Integrations タブのスイッチはありません。また、opencodex がバックエンドとして Copilot サブスクリプションを使う上流の `github-copilot` プロバイダーとは別のものです。
@@ -240,3 +257,7 @@ GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換�
 アプリはモデルの検出に `GET /v1/models`、リクエストの処理に `POST /v1/chat/completions` を使います。リクエストは opencodex の通常のモデルルーティングを通るため、他のクライアントと同じように、プロバイダーの認証情報、OAuth アカウント、コンボが適用されます。受け付けるリクエストフィールドは[プロキシ形式のリファレンス](/reference/proxy-formats/)を参照してください。
 
 モデルが見つからないと表示される場合は、Base URL が `/v1/chat/completions` ではなく `/v1` で終わっていることと、`/v1/models` が空でない `data` 配列を返すことを確認してください。opencodex がループバック以外のアドレスで待ち受けている場合は、アプリの API key 欄にデータ受け入れキー（[リモートアクセス](/reference/configuration/server/#remote-access)に記載されたトークン、またはダッシュボードで生成した `ocx_…` キー）を入力します。アプリはこれを `Authorization: Bearer` として送信します。`/v1/chat/completions` はこれをプロキシの受け入れ認証にだけ使い、上流には転送しません。詳しくは[認証マトリクス](/reference/proxy-formats/#authentication-matrix)を参照してください。
+
+## Factory Droid
+
+Factory Droid は `~/.factory/settings.json`（Windows では `%USERPROFILE%\.factory\settings.json`）を使用します。`ocx integration client enable --client droid` で明示的に有効化し、`/model` でカスタムモデルを選択します。管理対象の行はキーを使わず、ループバックでのみ動作します。無効化すると管理対象の行が削除され、Undo で保存済みのバイト列が復元されます。従来の `config.json` に OpenCodex の行がある場合や、`settings.local.json` が `customModels` を上書きする場合は、有効化する前に競合を解消してください。[Factory BYOK のドキュメント](https://docs.factory.ai/model-independence/byok)も参照してください。

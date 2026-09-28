@@ -108,6 +108,7 @@ export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
 
 export type OAuthActiveTokenObservation =
   | { readonly kind: "available"; readonly snapshot: ObservedOAuthAccessSnapshot }
+  | { readonly kind: "paused" }
   | { readonly kind: "missing" }
   | { readonly kind: "malformed" }
   | { readonly kind: "needs-reauth" }
@@ -418,6 +419,14 @@ export class OAuthLoginRequiredError extends Error {
   }
 }
 
+/** An operator-paused account is temporarily unavailable, not an invalid login. */
+export class OAuthAccountPausedError extends Error {
+  constructor() {
+    super("OAuth account is paused. Resume it in account settings and retry.");
+    this.name = "OAuthAccountPausedError";
+  }
+}
+
 export class OAuthProviderPublicationError extends Error {
   constructor() {
     super("OAuth credential was saved, but the provider entry was not written. Resolve the account namespace collision, then retry login.");
@@ -455,6 +464,7 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
   }
   if (
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
+    || error instanceof OAuthAccountPausedError
     || error instanceof OAuthProviderPublicationError
     // Reauth identity outcomes carry fixed, account-free remediation text. Dropping them to the
     // generic message hides WHICH failure the user must fix (sign in with the selected account).
@@ -531,6 +541,7 @@ export function observeActiveOAuthAccessToken(
   const accountSet = authStore.store[provider];
   const account = accountSet?.accounts.find(candidate => candidate.id === accountSet.activeAccountId);
   if (!account) return { kind: "missing" };
+  if (account.paused === true) return { kind: "paused" };
   if (account.needsReauth) return { kind: "needs-reauth" };
   if (account.credential.expires <= now) return { kind: "expired" };
   if (account.credential.expires <= now + REFRESH_SKEW_MS) return { kind: "near-expiry" };
@@ -562,6 +573,7 @@ async function resolveAccessSnapshotForAccount(
   // request would dispatch on an account already known to need a fresh login.
   const row = getAccountCredentialWithStatus(provider, accountId);
   if (!row) throw new OAuthLoginRequiredError(provider);
+  if (row.paused === true) throw new OAuthAccountPausedError();
   if (requireUsableAccount && row.needsReauth) throw new OAuthLoginRequiredError(provider);
   const cred = row.credential;
   const current = accessSnapshot(provider, accountId, cred, oauthProvider);
@@ -593,8 +605,10 @@ async function resolveAccessSnapshotForAccount(
   };
   const refresh = (async (): Promise<OAuthAccessSnapshot> => {
     const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
-    const persisted = getAccountCredential(provider, accountId);
-    if (!persisted) throw new OAuthLoginRequiredError(provider);
+    const persistedRow = getAccountCredentialWithStatus(provider, accountId);
+    if (!persistedRow) throw new OAuthLoginRequiredError(provider);
+    if (persistedRow.paused === true) throw new OAuthAccountPausedError();
+    const persisted = persistedRow.credential;
     if (persisted.access !== accessToken) {
       throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
     }
@@ -842,7 +856,7 @@ function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCrede
     ...(fresh.kiro === undefined && previous.kiro ? { kiro: previous.kiro } : {}),
   };
 }
-export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const stored=getAccountCredential(provider,accountId);if(!stored)throw new OAuthLoginRequiredError(provider);const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
+export async function refreshXaiAccountWithLock(provider:string,accountId:string,def:OAuthProviderDef,callerCredential:OAuthCredentials,deps:XaiRefreshDeps={}):Promise<string>{const writerGeneration=captureConfigGeneration();const now=deps.now??Date.now;const guard=await(deps.intentLock??createOAuthRefreshIntentLock(provider,accountId)).acquire();try{const row=getAccountCredentialWithStatus(provider,accountId);if(!row)throw new OAuthLoginRequiredError(provider);if(row.paused)throw new OAuthAccountPausedError();const stored=row.credential;const active=getAccountSet(provider)?.activeAccountId===accountId,candidate=authoritative(stored,active,now);if(credentialGeneration(candidate)!==credentialGeneration(callerCredential)&&candidate.expires>now()+REFRESH_SKEW_MS){if(credentialGeneration(candidate)!==credentialGeneration(stored)){const o=await mergeAccountCredential(provider,accountId,candidate,{expectedGeneration:credentialGeneration(stored),afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}}return candidate.access;}if(cached(provider,accountId,candidate,now))throw new OAuthLoginRequiredError(provider);const generation=credentialGeneration(candidate);try{const fresh=merged(await def.refresh(candidate.refresh,deps.signal),candidate);const o=await mergeAccountCredential(provider,accountId,fresh,{expectedGeneration:generation,afterPrePersistRead:deps.afterPrePersistRead});if(o.superseded){if(o.stored.expires>now()+REFRESH_SKEW_MS)return o.stored.access;throw new OAuthLoginRequiredError(provider);}permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));if(candidate.source==="local-cli")console.warn(XAI_LOCAL_CLI_DETACH_WARNING);return fresh.access;}catch(error){if(error instanceof OAuthMutationBusyError){permanentRefreshFailures.delete(verdictKey(provider,accountId,candidate));throw error;}if(!terminal(error))throw error;const failedAt=now();permanentRefreshFailures.set(verdictKey(provider,accountId,candidate),failedAt+XAI_PERMANENT_FAILURE_TTL_MS);sweepExpiredOnWrite(failedAt);await markAccountNeedsReauthIfGeneration(provider,accountId,generation,writerGeneration);throw new OAuthLoginRequiredError(provider);}}finally{guard.release();}}
 
 function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCredentials | undefined {
   if (stored.source !== "local-cli") return undefined;
@@ -1024,8 +1038,11 @@ export async function refreshGenericAccountWithLock(
   logOAuthEvent("OAuth refresh started", { provider, accountId });
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
-    const stored = getAccountCredential(provider, accountId);
-    if (!stored) throw new OAuthLoginRequiredError(provider);
+    // Re-read under the lock: a pause committed while this caller waited must stop the refresh.
+    const row = getAccountCredentialWithStatus(provider, accountId);
+    if (!row) throw new OAuthLoginRequiredError(provider);
+    if (row.paused) throw new OAuthAccountPausedError();
+    const stored = row.credential;
     if (
       credentialGeneration(stored) !== credentialGeneration(callerCredential)
       && stored.expires > Date.now() + REFRESH_SKEW_MS

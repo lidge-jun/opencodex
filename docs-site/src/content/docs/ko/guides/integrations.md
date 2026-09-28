@@ -1,9 +1,9 @@
 ---
 title: 연동
-description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI를 opencodex에 연결합니다. 클라이언트마다 스위치가 하나씩 있으며 기록 전마다 백업합니다.
+description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo와 Factory Droid를 opencodex에 연결합니다. 클라이언트마다 스위치가 하나씩 있으며 기록 전마다 백업합니다.
 ---
 
-**Integrations** 탭은 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 15개 클라이언트는 각각 스위치로 관리합니다.
+**Integrations** 탭은 클라이언트의 설정 파일에 opencodex 프로바이더 블록을 쓰고 다시 제거합니다. 다음 17개 클라이언트는 각각 스위치로 관리합니다.
 
 | 클라이언트 | 설정 파일 | 형식 | 변경 적용 시점 | 자격 증명 |
 |---|---|---|---|---|
@@ -22,6 +22,8 @@ description: 대시보드에서 OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, 
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 저장 즉시 — Raycast가 파일을 감시함 | 없음 — 루프백 전용 |
 | omo | `~/.omo/agent/models.json` | JSON | 새 세션에서 | 루프백 자리표시자 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 및 같은 위치의 `models.json` | JSON 파일 쌍 | Cline을 중지하고 다시 시작한 뒤 | 루프백 자리표시자 |
+| Kilo | `~/.config/kilo`에서 먼저 존재하는 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json` (`XDG_CONFIG_HOME`로 디렉터리 변경 가능, 모두 없으면 `kilo.jsonc` 생성) | JSONC | 새 세션에서 | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows에서) | JSON | 파일 변경 시 즉시 | 키 없는 루프백 |
 
 생성된 카탈로그에는 각 프로바이더 선택에서 활성화된 모델만 들어갑니다. Pi와 Aside를 포함한 다운로드와 관리형 연동 모두에 적용됩니다. 관리 모델 목록에는 전체 모델이 계속 표시되어 추가 모델을 활성화할 수 있습니다.
 
@@ -214,6 +216,21 @@ Undo는 원래 없던 파일까지 포함해 **두 원본 바이트 문자열 �
 
 다운로드되는 `cline-config-bundle.json`에는 두 네이티브 문서 구성 요소가 있습니다. `providers.json`용 `settings`와 `models.json`용 `catalog`입니다. 번들 자체가 Cline 설정 파일은 아닙니다. 저널을 남기는 병합과 롤백에는 연동 명령을 권장합니다. 생성된 연동은 원격 수용 연결을 지원하지 않으며 인증이 없는 루프백 접근이 필요합니다.
 
+## Kilo
+
+Kilo CLI, VS Code, JetBrains는 전역 설정을 공유합니다. 이 연동은 `~/.config/kilo` 아래의 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json` 중 먼저 존재하는 파일에 `provider.opencodex`를 씁니다. `XDG_CONFIG_HOME`로 이 디렉터리를 옮길 수 있습니다. 후보 파일이 없으면 `kilo.jsonc`를 만듭니다. 프로젝트 설정은 수정하지 않습니다.
+
+Kilo는 이 전역 파일을 모두 병합합니다. 다른 후보 파일에도 `provider.opencodex`가 있으면 상태에 충돌 파일을 표시하고 적용과 교체를 거부합니다. 연동을 켜기 전에 해당 파일에서 `provider.opencodex`를 제거하세요. 이미 소유한 파일의 블록은 충돌 중에도 비활성화할 수 있습니다. 읽을 수 없거나 안전하지 않은 후보 파일도 쓰기를 막습니다.
+
+관리하는 부분은 OpenCode V1 형식의 `provider.opencodex`(`npm`, `options`, `models`)뿐입니다. OpenCode V2의 `providers` 키는 내보내지 않습니다. `$schema`, `model`, `enabled_providers`, MCP 등의 키는 사용자가 관리합니다. 적용한 뒤 Kilo에서 `opencodex/<provider/model>`을 선택하세요.
+
+루프백에서는 `options.apiKey`로 `{env:OPENCODEX_KILO_API_KEY}`를 사용합니다. 루프백이 아닌 바인드에서는 인증을 `options.headers["x-opencodex-api-key"]`로 옮기며 실제 키를 저장하지 않습니다. 적용 시 전역 파일 전체를 보기 좋은 JSON으로 다시 쓰므로 다른 키의 주석과 후행 쉼표는 보존되지 않습니다. Kilo는 자동 카탈로그 갱신 대상이 아닙니다. 라우팅 모델 선택을 바꾼 뒤에는 명시적으로 갱신하세요.
+
+```bash
+ocx integration client enable --client kilo
+ocx export --client kilo --out ./kilo.jsonc
+```
+
 ## GitHub Copilot 앱
 
 GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로바이더로 사용할 수 있습니다. Integrations 탭의 스위치가 없는 수동 클라이언트 설정이며, opencodex의 백엔드로 Copilot 구독을 사용하는 upstream `github-copilot` 프로바이더와는 별개입니다.
@@ -238,3 +255,7 @@ GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로�
 앱은 모델 검색에 `GET /v1/models`, 요청 처리에 `POST /v1/chat/completions`를 사용합니다. 요청은 opencodex의 일반 모델 라우팅을 거치므로 다른 클라이언트와 마찬가지로 프로바이더 자격 증명, OAuth 계정, 콤보가 적용됩니다. 허용되는 요청 필드는 [프록시 형식 레퍼런스](/reference/proxy-formats/)를 확인하세요.
 
 모델이 없다고 표시되면 Base URL이 `/v1/chat/completions`가 아니라 `/v1`로 끝나는지, `/v1/models`가 비어 있지 않은 `data` 배열을 반환하는지 확인하세요. opencodex가 루프백이 아닌 주소에서 수신 대기한다면 앱의 API key 입력란에 데이터 수용 키([원격 액세스](/reference/configuration/server/#remote-access)에 설명된 토큰 또는 대시보드에서 생성한 `ocx_…` 키)를 입력하세요. 앱은 이를 `Authorization: Bearer`로 전송하며, `/v1/chat/completions`는 프록시 수용 인증에만 사용하고 upstream으로 전달하지 않습니다. 자세한 내용은 [인증 매트릭스](/reference/proxy-formats/#authentication-matrix)를 확인하세요.
+
+## Factory Droid
+
+Factory Droid는 `~/.factory/settings.json`(Windows에서는 `%USERPROFILE%\.factory\settings.json`)을 사용합니다. `ocx integration client enable --client droid`로 명시적으로 활성화한 다음 `/model`에서 사용자 지정 모델을 선택하세요. 관리되는 항목에는 키가 없으며 루프백에서만 동작합니다. 비활성화하면 관리되는 항목이 제거되고, Undo는 저장된 원본 바이트를 복원합니다. 기존 `config.json`에 OpenCodex 항목이 있거나 `settings.local.json`이 `customModels`를 덮어쓰면 활성화 전에 충돌을 해결하세요. [Factory BYOK 문서](https://docs.factory.ai/model-independence/byok)를 참고하세요.

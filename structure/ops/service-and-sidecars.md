@@ -24,6 +24,15 @@ Only proven absence enters registration. A query failure refuses the bare comman
 guidance, because treating `unknown` as absent can rerun elevated `schtasks /create` against an
 existing task. Explicit `ocx service install` remains the operator-owned registration request.
 
+`src/config/serving-runtimes.ts` records successfully serving installs and lets only a
+non-sibling service start defer to a verified strictly newer recorded command. Candidate
+probes are newest-recorded first, capped at four three-second attempts; a failed probe
+falls through within that cap, and a failed launch leaves this install serving. The
+foreground parent forwards SIGINT, SIGTERM and SIGHUP until the child exits, shares one
+five-second SIGKILL escalation timer across repeated signals, and clears that timer and
+its handlers on settlement. Signal exits preserve `128 + signalNumber`. A parent killed
+without running handlers is not covered by this forwarding mechanism.
+
 > Decision record: [ADR-0028](../decisions/ADR-0028-background-service-command-selection.md)
 
 ## Windows npm tray update badge
@@ -233,9 +242,12 @@ The service loads the optional `compactionRouting` block from persisted configur
 [Responses ingress](../transports/responses-failover.md#compaction-routing-overrides) applies it to individual compaction
 requests whose trigger the block names.
 
-Standalone binaries use `src/lib/standalone.ts` to detect the Bun `$bunfs` runtime and
-`src/service/state.ts` to compose durable service commands as `<execPath> start`, without a
-source-tree CLI path. The copied `gui/dist` directory is located by `src/server/gui-static.ts`;
+Standalone binaries use `src/lib/standalone.ts` to recognize hostless `file:` module URLs
+whose decoded pathname begins at Bun's `$bunfs` or Windows `~BUN` virtual root. The helper
+decodes one URL layer, so encoded Windows tildes work while network-host and nested source
+paths do not impersonate a bundled module. `src/service/state.ts` composes durable service
+commands as `<execPath> start`, without a source-tree CLI path. The copied `gui/dist`
+directory is located by `src/server/gui-static.ts`;
 `OPENCODEX_GUI_DIST` remains an explicit override.
 
 ## Bun updater ownership transaction

@@ -400,6 +400,8 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
 export async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
   const probedAccountId = getAccountSet(provider)?.activeAccountId;
   if (!probedAccountId) return null;
+  // A paused account is excluded from every automatic upstream use; a key mint is one.
+  if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;
   const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
   // An imported or pasted credential has no account token and never will: it is
   // capability, not provider id, that decides whether a probe is possible.

@@ -55,6 +55,7 @@ export function kiroSkipReasonKey(account: {
 }, provider: string): TKey | null {
   if (provider !== "kiro" || account.autoSelectable !== false) return null;
   if (account.skipReason === "needs_reauth") return null;
+  if (account.skipReason === "paused") return null;
   if (account.skipReason === "cooldown" && account.health?.status === "cooldown") return null;
   if (account.skipReason === "suspended") return "kiroSelection.suspended";
   if (account.skipReason === "quota_exhausted") return "kiroSelection.quotaExhausted";

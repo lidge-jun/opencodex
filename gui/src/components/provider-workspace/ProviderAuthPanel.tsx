@@ -179,7 +179,7 @@ function safeCockpitImportResult(value: unknown): CockpitImportResult | null {
 
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
-  switchingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
+  switchingAccountId = null, pausingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
   codexController, onUpdateProvider,
 }: {
   item: WorkspaceItem;
@@ -189,6 +189,7 @@ export default function ProviderAuthPanel({
   keys?: ApiKeyRow[];
   accountLoadState?: AccountLoadState;
   switchingAccountId?: string | null;
+  pausingAccountId?: string | null;
   busy?: boolean;
   loginHint?: LoginHint | null;
   authHandlers?: ProviderAuthHandlers;
@@ -536,6 +537,7 @@ export default function ProviderAuthPanel({
                 {accounts.map(account => {
                   const label = oauthAccountDisplayLabel(accounts, account, t);
                   const switching = switchingAccountId === account.id;
+                  const pausing = pausingAccountId === account.id;
                   const healthStatus = account.health?.status;
                   const showReauth = accountShowsReauth(account);
                   const inCooldown = oauthHealthIsCooldown(healthStatus);
@@ -546,11 +548,11 @@ export default function ProviderAuthPanel({
                   <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
-                      onClick={() => { if (!account.active && !showReauth && !inCooldown && !switchingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
+                      onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
                       aria-label={`${label}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
-                      disabled={Boolean(showReauth || inCooldown || (switchingAccountId && !switching))}>
-                      <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+                      disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
+                      <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
                         <span className="pwi-auth-row-label">{label}</span>
                         <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
@@ -560,20 +562,37 @@ export default function ProviderAuthPanel({
                         {inCooldown && (
                           <span className="pwi-auth-row-secondary faint">{t("pws.healthCooldownHint")}</span>
                         )}
+                        {account.paused && (
+                          <span className="pwi-auth-row-secondary faint">{t("pws.accountPausedHint")}</span>
+                        )}
                       </span>
                       {healthLabel && (
                         <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
                       )}
                       {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
                       {kiroSkipReasonKey(account, item.name) && <span className="badge badge-amber">{t(kiroSkipReasonKey(account, item.name)!)}</span>}
-                      {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                      {account.paused && <span className="badge badge-muted">{t("codexAuth.paused")}</span>}
+                      {account.active && !account.paused && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
                       {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
+                    {typeof account.paused === "boolean" && authHandlers.onPauseAccount && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        aria-label={`${t(account.paused ? "codexAuth.resume" : "codexAuth.pause")} — ${label}`}
+                        title={account.paused ? t("pws.accountPausedHint") : undefined}
+                        aria-busy={pausing}
+                        disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
+                        onClick={() => void authHandlers.onPauseAccount(item.name, account, !account.paused)}
+                      >
+                        {t(account.paused ? "codexAuth.resume" : "codexAuth.pause")}
+                      </button>
+                    )}
                     {showReauth && (
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        disabled={busy || Boolean(switchingAccountId)}
+                        disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
                         onClick={() => void authHandlers.onReauth(item.name, account.id)}
                       >
                         {t("pws.reauthenticate")}
@@ -596,7 +615,7 @@ export default function ProviderAuthPanel({
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
                       aria-label={`${t("common.remove")} — ${label}`}
                       title={`${t("common.remove")} — ${label}`}
-                      disabled={Boolean(switchingAccountId)}
+                      disabled={Boolean(switchingAccountId) || Boolean(pausingAccountId)}
                       onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>

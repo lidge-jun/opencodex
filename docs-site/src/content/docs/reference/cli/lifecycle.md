@@ -29,8 +29,11 @@ independent sibling; `port: 0` only asks the OS for that instance's port and doe
 state. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
 native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`). A sibling started
 beside a running proxy does neither: it serves direct requests on its own port only, and Codex,
-Grok and Claude stay pointed at the proxy that was already running. Stopping that sibling, with
-`ocx stop` or a signal, leaves their configuration alone as well. While it runs, the proxy also
+Grok and Claude stay pointed at the proxy that was already running. With a separate
+`OPENCODEX_HOME`, startup checks the default home's runtime record and managed Grok and
+Codex loopback destinations for a live opencodex owner before syncing. A custom home with
+no live owner still syncs normally; explicit `ocx sync` and `ocx grok apply` remain available.
+Stopping that sibling with `ocx stop` or a signal leaves their configuration alone as well. While it runs, the proxy also
 keeps Codex pointed at itself: when the opencodex routing in `~/.codex/config.toml` names another
 local port where no opencodex has answered for about 20 seconds (an instance that re-pointed it and
 then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex

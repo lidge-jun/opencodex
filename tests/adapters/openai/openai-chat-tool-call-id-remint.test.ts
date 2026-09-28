@@ -49,6 +49,44 @@ describe("createToolCallIdReminter", () => {
     expect(new Set(ids).size).toBe(3);
   });
 
+  test("thousands of repeats use a bounded number of occupied-set probes", () => {
+    const remint = createToolCallIdReminter([]);
+    const originalHas = Set.prototype.has;
+    let probes = 0;
+    Set.prototype.has = function (value) { probes++; return originalHas.call(this, value); };
+    const ids: string[] = [];
+    try {
+      for (let i = 0; i < 2_000; i++) ids.push(remint("call-0-0"));
+    } finally {
+      Set.prototype.has = originalHas;
+    }
+    expect(ids[0]).toBe("call-0-0");
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every(id => id.length <= MAX_TOOL_CALL_ID_LENGTH)).toBe(true);
+    expect(probes).toBeLessThan(4_100);
+  });
+
+  test("62-character sibling IDs share a cursor when suffix width grows", () => {
+    const rawIds = [..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"].slice(0, 40)
+      .map(char => "p".repeat(61) + char);
+    const remint = createToolCallIdReminter([]);
+    const originalHas = Set.prototype.has;
+    let probes = 0;
+    Set.prototype.has = function (value) { probes++; return originalHas.call(this, value); };
+    const emitted: string[] = [];
+    try {
+      for (let round = 0; round < 20; round++) {
+        for (const rawId of rawIds) emitted.push(remint(rawId));
+      }
+    } finally {
+      Set.prototype.has = originalHas;
+    }
+    expect(emitted.slice(0, rawIds.length)).toEqual(rawIds);
+    expect(new Set(emitted).size).toBe(emitted.length);
+    expect(emitted.every(id => id.length <= MAX_TOOL_CALL_ID_LENGTH)).toBe(true);
+    expect(probes).toBeLessThan(4_000);
+  });
+
   test("skips a suffix the reserved set already occupies", () => {
     const remint = createToolCallIdReminter(["call-0-0", "call-0-0-2"]);
 

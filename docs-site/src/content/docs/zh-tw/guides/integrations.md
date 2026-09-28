@@ -1,9 +1,9 @@
 ---
 title: 整合
-description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast 與 omo——每個客戶端一個開關，每次寫入前都會先備份。
+description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo 與 Factory Droid——每個客戶端一個開關，每次寫入前都會先備份。
 ---
 
-**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十五個客戶端以這種方式運作，每個都有一個開關：
+**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十七個客戶端以這種方式運作，每個都有一個開關：
 
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
@@ -22,6 +22,8 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 儲存後立即生效——Raycast 會監看該檔案 | 無——僅限 loopback |
 | omo | `~/.omo/agent/models.json` | JSON | 新工作階段 | loopback 佔位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | 結束並重新啟動後 | 僅限 loopback |
+| Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 會移動該目錄；若都不存在則建立 `kilo.jsonc`） | JSONC | 新工作階段 | `OPENCODEX_KILO_API_KEY` |
+| Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows 上) | JSON | 檔案變更時立即生效 | 無金鑰迴環 |
 
 具有受支援推理強度階梯的 GJC 模型會匯出 `reasoning: true`、`thinking.levels` 與 `compat.supportsReasoningEffort`，讓 GJC 提供強度選擇。原生 Codex 模型即使未在目錄中列出階梯，也會取得標準階梯。沒有已知階梯的模型會省略這些欄位；`none` 不傳送強度，`ultra` 在傳輸時會折疊成 `max`，因此不會列為選項。重新整理整合即可更新模型選項。
 
@@ -201,3 +203,17 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Kilo
+
+Kilo 只會把 `provider.opencodex` 寫入 `~/.config/kilo` 下最先存在的全域檔（`XDG_CONFIG_HOME` 會移動該目錄；若沒有任何候選檔則建立 `kilo.jsonc`）。若另一個候選檔也定義 `provider.opencodex`，狀態會回報衝突且套用會拒絕。其他鍵保持不變。套用會重寫整個檔案，因此不會保留註解與尾隨逗號。請在 Kilo 中選擇 `opencodex/<模型>`。
+
+即使其他候選檔發生衝突或無法剖析，停用仍可移除已記錄檔案中由 OpenCodex 管理的區塊；其他候選檔不會變動。
+
+```bash
+ocx integration client enable --client kilo
+```
+
+## Factory Droid
+
+Factory Droid 使用 `~/.factory/settings.json`（Windows 上為 `%USERPROFILE%\.factory\settings.json`）。使用 `ocx integration client enable --client droid` 明確啟用，然後在 `/model` 中選擇自訂模型。受管理的項目不含金鑰，且僅支援迴環連線。停用會移除受管理的項目；Undo 會還原儲存的原始位元組。如果舊版 `config.json` 含有 OpenCodex 項目，或 `settings.local.json` 覆寫了 `customModels`，請先解決衝突再啟用。請參閱 [Factory BYOK 文件](https://docs.factory.ai/model-independence/byok)。

@@ -119,7 +119,9 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientOpencode",
   // Cline CLI is a product name, not untranslated interface copy.
   "integrations.tab.cline",
+  "integrations.tab.droid",
   "api.clientConfig.clientCline",
+  "api.clientConfig.clientDroid",
   "api.clientConfig.clientPi",
   "api.clientConfig.clientOmp",
   "api.clientConfig.clientHermes",
@@ -160,7 +162,11 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientOmo",
   // Cline product name and CLI acronym are intentionally preserved.
   "integrations.tab.cline",
+  "integrations.tab.droid",
   "api.clientConfig.clientCline",
+  "integrations.tab.kilo",
+  "api.clientConfig.clientKilo",
+  "api.clientConfig.clientDroid",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",

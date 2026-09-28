@@ -416,12 +416,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
       "Cline exports a two-document bundle: settings for providers.json and catalog for sibling models.json. Use integration client enable --client cline for a journaled write.",
+      "Droid exports documented customModels for settings.json; use integration client enable --client droid for a journaled write.",
       "The config never contains a real key; it carries a documented env reference or a non-secret loopback placeholder.",
       "The destination path is printed for merging by hand — ocx never writes your real client config.",
     ],

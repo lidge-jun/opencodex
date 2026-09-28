@@ -655,6 +655,52 @@
 .dash-shadow-controls > .custom-select { flex: 1; min-width: 0; }
 .dash-shadow-controls > .switch { order: 1; }
 
+/* Memory routing: two fixed column widths, shared by both rows. The pickers must not
+   size themselves from their own label — content-sized pills turned "Low" and "Medium"
+   into two different widths, so the Consolidation row never lined up with the Extract
+   row above it, and the effort picker alone wasted 220px on a five-letter word.
+
+   Each column gets its own width and both rows use the same two, so the columns compare
+   across the rows instead of inside one row: the model column is exactly as wide as the
+   longest common id needs (measured 220px at the trigger's 13px font, trigger padding,
+   chevron gap and chevron included), the effort column fits the longest option label
+   "Codex default" (measured 136px, rounded to 140px). A longer model id ellipsizes
+   inside its column instead of widening one row's pill, so the two rows keep matching
+   columns whatever is selected. */
+.memory-models-row { align-items: center; }
+
+.memory-models-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex: 0 0 min(100%, 23rem);
+  min-width: 0;
+}
+
+.memory-models-controls > .custom-select:first-child {
+  flex: 0 1 220px;
+  min-width: 0;
+}
+
+.memory-models-controls > .custom-select:last-child {
+  flex: 0 1 140px;
+  min-width: 0;
+}
+
+.memory-models-controls .select-trigger {
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+}
+
+.memory-models-controls .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dash-overview-stack .setting-hint,
 .dash-overview-stack .dash-sync-hint { max-width: 60ch; }
 

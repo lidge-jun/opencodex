@@ -5,6 +5,7 @@ test("Kiro exclusion labels appear only for eligible rows and avoid duplicate he
   expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "suspended" }, "kiro")).toBe("kiroSelection.suspended");
   expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "quota_exhausted" }, "kiro")).toBe("kiroSelection.quotaExhausted");
   expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "needs_reauth" }, "kiro")).toBeNull();
+  expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "paused" }, "kiro")).toBeNull();
   expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "cooldown", health: { status: "cooldown" } }, "kiro")).toBeNull();
   expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "cooldown" }, "kiro")).toBe("kiroSelection.cooldown");
   expect(kiroSkipReasonKey({ autoSelectable: false, skipReason: "future_reason" }, "kiro")).toBe("kiroSelection.generic");

@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types";
+import { siblingOfLivePort } from "../codex/sibling-start";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { readCachedHubState } from "../client/hub-state";
 import { fetchClaudeContextWindows } from "./claude";
@@ -77,6 +78,7 @@ export async function syncClaudeAgentDefsAtProxyStartup(
   port: number,
   deps: ClaudeAgentStartupSyncDeps = {},
 ): Promise<string[] | null> {
+  if (siblingOfLivePort() !== null) return null;
   const inject = deps.injectAgentDefs ?? injectClaudeAgentDefs;
   const warn = deps.warn ?? (message => console.warn(message));
 

@@ -66,8 +66,8 @@ function provider(): OcxProviderConfig {
   } as OcxProviderConfig;
 }
 
-function incoming() {
-  return { headers: new Headers(), translatorBudget: createTestTranslatorBudget() };
+function incoming(translatorBudget = createTestTranslatorBudget()) {
+  return { headers: new Headers(), translatorBudget };
 }
 
 async function run(adapter: ReturnType<typeof createCodeBuddyAdapter>, p: OcxParsedRequest): Promise<AdapterEvent[]> {
@@ -836,5 +836,58 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     const events = await run(adapter, p);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_call_limit", status: 502, retryable: false });
     expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
+  });
+
+  test("an empty-ID start does not consume a turn slot", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const frames: unknown[] = [INIT_OK, toolUseStart(cliName, "")];
+    for (let i = 0; i < 16; i++) frames.push(toolUseStart(cliName, `valid_${i}`), inputJsonDelta("{}"), BLOCK_STOP);
+    frames.push(MESSAGE_STOP);
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines(frames)) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use" });
+    expect(events.filter(e => e.type === "tool_call_start")).toHaveLength(16);
+  });
+
+  test("argument overflow fails before emission and releases the parser reservation", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const translatorBudget = createTestTranslatorBudget({ maxCallArgumentBytes: Buffer.byteLength(cliName) + 4 });
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([INIT_OK, toolUseStart(cliName), inputJsonDelta("1234"), inputJsonDelta("5")])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(p, incoming(translatorBudget), e => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit", status: 502, retryable: false });
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
+    expect(translatorBudget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0, overflows: 1 });
+  });
+
+  test("aborting with an open block releases its identity and argument reservation", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const controller = new AbortController();
+    const translatorBudget = createTestTranslatorBudget();
+    const charge = translatorBudget.chargeRetained.bind(translatorBudget);
+    let charges = 0;
+    translatorBudget.chargeRetained = (bytes, scope) => {
+      charge(bytes, scope);
+      if (++charges === 2) queueMicrotask(() => controller.abort());
+    };
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([INIT_OK, toolUseStart(cliName), inputJsonDelta("x")])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(p, { ...incoming(translatorBudget), abortSignal: controller.signal }, e => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "error", retryable: false });
+    expect(controller.signal.aborted).toBe(true);
+    expect(charges).toBe(2);
+    expect(translatorBudget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
   });
 });

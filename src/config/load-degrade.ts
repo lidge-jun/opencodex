@@ -122,6 +122,35 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
+  warnDegradedMemoryModels(rawParsed, validated);
+}
+
+/**
+ * A malformed `memoryModels` phase disables that phase rather than failing the whole schema, so
+ * say so once: silently keeping whatever route the phase already had — which may be the shadow
+ * intercept rather than Codex's own model — is the outcome a typo must not produce quietly.
+ */
+export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).memoryModels;
+  if (raw === undefined) return;
+  if (validated.memoryModels === undefined || raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    console.warn("\u26a0\ufe0f  config.json memoryModels is invalid (expected { extract?: { model, reasoningEffort? }, consolidation?: { model, reasoningEffort? } } with a nonblank model and a declared effort per phase) \u2014 the memory pipeline keeps its existing route, which may include shadow-call interception");
+    return;
+  }
+  // A misspelled phase key is stripped by the permissive load schema, so without this warning it
+  // disappears silently and the next settings save persists the sanitized map without it.
+  for (const key of Object.keys(raw as Record<string, unknown>)) {
+    if (key === "extract" || key === "consolidation") continue;
+    // Redact and JSON-escape the key name: a malformed hand-edit can place a secret in a property
+    // name, and a control character in one must not be able to forge a log line.
+    console.warn("\u26a0\ufe0f  config.json memoryModels." + JSON.stringify(redactSecretString(key)) + " is not a recognized phase \u2014 ignoring it");
+  }
+  for (const phase of ["extract", "consolidation"] as const) {
+    if ((raw as Record<string, unknown>)[phase] !== undefined && validated.memoryModels[phase] === undefined) {
+      console.warn("\u26a0\ufe0f  config.json memoryModels." + phase + " is invalid (expected { model, reasoningEffort? } with a nonblank model) \u2014 that phase keeps its existing route, which may include shadow-call interception");
+    }
+  }
 }
 
 /**

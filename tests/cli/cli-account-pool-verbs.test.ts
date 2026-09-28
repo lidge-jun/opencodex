@@ -34,6 +34,9 @@ function deps(
         // Pool verbs resolve their account argument against the list before writing.
         return new Response(JSON.stringify({ accounts: KNOWN_ACCOUNTS.map(id => ({ id })) }), { status: 200 });
       }
+      if (captured.method === "GET" && captured.path === "/api/oauth/accounts") {
+        return new Response(JSON.stringify({ accounts: [{ id: "acct_1", alias: "gem-pro" }] }), { status: 200 });
+      }
       const { status = 200, json } = respond(captured);
       return new Response(JSON.stringify(json), { status });
     }) as unknown as typeof fetch,
@@ -54,6 +57,38 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
 }
 
 describe("ocx account pause / resume", () => {
+  test("generic OAuth pause resolves aliases and uses the OAuth account route", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const base = deps(() => ({ json: { ok: true } }), calls);
+    const genericDeps: AccountDeps = {
+      ...base,
+      loadConfigImpl: () => ({ providers: { "google-antigravity": { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "oauth" } } }) as never,
+    };
+    let code: number;
+    try {
+      code = await cmdPause(["google-antigravity", "gem-pro"], genericDeps, true);
+    } finally { out.restore(); }
+    expect(code).toBe(0);
+    const write = calls.find(call => call.path === "/api/oauth/accounts/pause");
+    expect(write?.method).toBe("PUT");
+    expect(write?.body).toEqual({ provider: "google-antigravity", accountId: "acct_1", paused: true });
+  });
+
+  test("generic OAuth resume reports when it changes the active account", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const base = deps(() => ({ json: { ok: true, activeAccountChanged: true, activeAccountId: "acct_2" } }), calls);
+    const genericDeps: AccountDeps = {
+      ...base,
+      loadConfigImpl: () => ({ providers: { "google-antigravity": { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "oauth" } } }) as never,
+    };
+    try {
+      await cmdPause(["google-antigravity", "acct_1"], genericDeps, false);
+    } finally { out.restore(); }
+    expect(out.errors.join("\n")).toContain("Active account changed to acct_2.");
+  });
+
   test("pause PUTs the shared route with paused true", async () => {
     const calls: Captured[] = [];
     const out = capture();

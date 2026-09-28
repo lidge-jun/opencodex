@@ -45,7 +45,7 @@ import {
   explicitQuotaConfig,
   explicitQuotaDestination,
   explicitQuotaIdentity,
-  getTokenForAccountQuotaProbe,
+  accountQuotaProbeSkip, getTokenForAccountQuotaProbe,
   hasPassiveAccountQuota,
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
@@ -421,7 +421,7 @@ async function fetchAccountQuota(
   forceRefresh: boolean,
   providerConfig?: OcxProviderConfig,
 ): Promise<AccountQuotaCacheEntry> {
-  if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
+  if (accountQuotaProbeSkip(provider, accountId)) return accountQuotaProbeSkip(provider, accountId)!;
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
   if (provider === "anthropic" || provider === "kiro") hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, accountId);
