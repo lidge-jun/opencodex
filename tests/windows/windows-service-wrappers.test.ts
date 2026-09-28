@@ -86,12 +86,12 @@ describe("which command lines the wrapper killer stops", () => {
   });
 });
 
-+  test("a look-alike prefix does not hide the real token behind it", () => {
-    // A first occurrence that is only a glued suffix must not end the scan: the
-    // genuine wrapper path later in the same command line is still a kill match.
-    expect(killsCommandLine("cmd.exe /c " + script(HOME_A) + ".bak ^& " + script(HOME_A), patterns)).toBe(true);
-    expect(killsCommandLine("cmd.exe /c " + script(HOME_A) + ".bak", patterns)).toBe(false);
-  });
+test("a look-alike prefix does not hide the real token behind it", () => {
+  // A first occurrence that is only a glued suffix must not end the scan: the
+  // genuine wrapper path later in the same command line is still a kill match.
+  expect(killsCommandLine("cmd.exe /c " + script(HOME_A) + ".bak ^& " + script(HOME_A), patterns)).toBe(true);
+  expect(killsCommandLine("cmd.exe /c " + script(HOME_A) + ".bak", patterns)).toBe(false);
+});
 
 describe("the generated script still implements that rule", () => {
   test("matchRuleMatchesScript", () => {
