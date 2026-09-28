@@ -124,6 +124,22 @@ describe("manual compaction request selection", () => {
     expect(ordinary.model).toBe("kimi/k3");
   });
 
+  test("source matching strips a synthetic fast-row suffix before comparing", () => {
+    const settings = config();
+    settings.providers.gateway.models = ["cheap"];
+    settings.compactionRouting!.sourceModels = ["gateway/cheap"];
+    for (const [model, allowed] of [
+      ["gateway/cheap", true], ["gateway/cheap--fast", true], ["gateway/other--fast", false],
+    ] as const) {
+      const input = { ...body(), model,
+        client_metadata: { "x-codex-turn-metadata": metadata() } };
+      const before = structuredClone(input);
+      const result = applyCompactionRoutingOverride(input, new Headers(), settings, { endpoint: "compact" });
+      expect(Boolean(result)).toBe(allowed);
+      if (!allowed) expect(input).toEqual(before);
+    }
+  });
+
   test("source-scoped compaction keeps GPT native and only rewrites Kimi and agy", async () => {
     const settings = config();
     Object.assign(settings.compactionRouting!, {

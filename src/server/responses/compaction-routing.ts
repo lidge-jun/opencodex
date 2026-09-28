@@ -59,7 +59,9 @@ export function applyCompactionRoutingOverride(
   if (!triggers) return null;
   if (override.sourceModels !== undefined) {
     if (!validCompactionSourceModels(override.sourceModels)) return null;
-    const source = raw.model;
+    // Match the selector the conversation actually routed on: a synthetic `--fast` or
+    // effort suffix is ingress decoration, so `cheap--fast` is still the allowlisted `cheap`.
+    const source = sourceSelectorOf(config, raw.model);
     if (!override.sourceModels.some(selector => selector.endsWith("/*")
       ? source.startsWith(selector.slice(0, -1)) && source.length > selector.length - 1
       : source === selector)) return null;
