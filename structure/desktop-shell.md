@@ -5,6 +5,13 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
+The desktop Cargo package requires Rust 1.88 or newer. Its committed lockfile already
+contains dependencies with that minimum; the package declaration must not advertise 1.77.
+The lockfile selects patched `serde_with` and `time` releases, with compatible exact
+`serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
+committed lockfile (`--locked`); the dependency update does not change app configuration,
+the bundled model proxy, or the minimum supported operating-system versions.
+
 `desktop/ui/` is the startup surface. Once the runtime reports healthy, a visible or manually
 launched shell navigates the webview to the proxy's loopback dashboard (`/#/usage`) rather than
 bundling or serving `gui/dist` itself. A hidden login launch retains the small bundled ready surface
