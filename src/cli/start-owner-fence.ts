@@ -10,11 +10,21 @@ export async function recoverStartStateUnderOwnershipLease(deps: {
 }): Promise<boolean> {
   if (!deps.supervised) return deps.recover();
   const lease = deps.acquireLease();
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    lease.release();
+  };
   try {
     const decision = deps.decide();
-    if (decision.kind === "stay-out") deps.stayOut(decision.refusal);
+    if (decision.kind === "stay-out") {
+      // stayOut exits the process, so a finally block would never release the lease.
+      release();
+      deps.stayOut(decision.refusal);
+    }
     return await deps.recover();
   } finally {
-    lease.release();
+    release();
   }
 }
