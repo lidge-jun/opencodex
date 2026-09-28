@@ -26,7 +26,11 @@ existing task. Explicit `ocx service install` remains the operator-owned registr
 
 `src/config/serving-runtimes.ts` records successfully serving installs and lets only a
 non-sibling managed-service start defer to a verified strictly newer recorded command. The
-census update uses the shared cross-process config mutation lock; recorded paths must resolve to files owned
+census gate recognizes launchd, systemd, and current or repaired WinSW definitions through
+`OCX_SERVICE_MANAGED=1`; the Windows Task Scheduler wrapper uses `OCX_SERVICE=1` with its
+wrapper-protocol marker. Legacy WinSW definitions carrying only `OCX_SERVICE=1` do not
+delegate until `ocx service repair` rewrites the XML. The census update uses the shared
+cross-process config mutation lock; recorded paths must resolve to files owned
 by the current user without group/world write permission on POSIX. Candidate
 probes are newest-recorded first, capped at four three-second attempts; a failed probe
 falls through within that cap, and a failed launch or nonzero pre-bind child exit leaves

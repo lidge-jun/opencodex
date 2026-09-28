@@ -400,11 +400,11 @@ export async function deferServiceChildToNewerRuntime(options: {
 }
 
 /**
- * A child a service manager started, as its environment proves it. launchd and systemd write
- * `OCX_SERVICE_MANAGED=1`; the Windows Task Scheduler wrapper writes `OCX_SERVICE=1` with its
- * stay-out protocol marker instead. Bare `OCX_SERVICE=1` never qualifies: `ocx claude` and
- * `ocx opencode` companions carry it, and so does a WinSW child, which the environment alone
- * cannot tell apart from them.
+ * A child a service manager started, as its environment proves it. launchd, systemd, and
+ * current or repaired WinSW definitions write `OCX_SERVICE_MANAGED=1`; the Windows Task
+ * Scheduler wrapper writes `OCX_SERVICE=1` with its stay-out protocol marker instead.
+ * Bare `OCX_SERVICE=1` never qualifies: `ocx claude` and `ocx opencode` companions carry
+ * it, and legacy WinSW definitions without the managed marker do not delegate until repaired.
  */
 export function isManagedServiceEnvironment(env: NodeJS.ProcessEnv): boolean {
   return env[SERVICE_MANAGED_ENV] === "1" || (env.OCX_SERVICE === "1" && env[WINDOWS_WRAPPER_PROTOCOL_ENV] === "1");

@@ -104,6 +104,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   const aclTimeout = env.OPENCODEX_ACL_TIMEOUT_MS?.trim();
   const envLines = [
     `  <env name="OCX_SERVICE" value="1"/>`,
+    `  <env name="OCX_SERVICE_MANAGED" value="1"/>`,
     `  <env name="${BUN_RUNTIME_SOURCE_ENV}" value="${xmlEscape(entry.bunRuntimeSource)}"/>`,
     `  <env name="${BUN_RUNTIME_PATH_ENV}" value="${xmlEscape(entry.bun)}"/>`,
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,

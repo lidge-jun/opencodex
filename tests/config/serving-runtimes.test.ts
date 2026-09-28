@@ -16,6 +16,7 @@ import {
   servingRuntimesPath,
   type ServedRuntimeRecord,
 } from "../../src/config/serving-runtimes";
+import { buildWinswXml } from "../../src/lib/winsw";
 import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 
 const dirs: string[] = [];
@@ -470,5 +471,41 @@ describe("deferServiceChildToNewerRuntime", () => {
       env: { OCX_SERVICE_MANAGED: "1" },
       deps: { ...deps, runInherited: async () => ({ exitCode: 42, ready: true }) },
     })).toBe(42);
+  });
+
+  test("a generated WinSW service child delegates to a newer recorded install", async () => {
+    const dir = freshDir();
+    const newer = fakeBinary(dir, "ocx-newer.exe");
+    recordServingRuntime(record([newer], "2.68.0"), dir);
+    const xml = buildWinswXml(
+      { bun: "C:\\ocx\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\ocx\\index.ts" },
+      { USERDOMAIN: "WORKGROUP", USERNAME: "user", PATH: "C:\\Windows" },
+      10100,
+    );
+    const env: NodeJS.ProcessEnv = Object.fromEntries(
+      [...xml.matchAll(/<env name="([^"]+)" value="([^"]*)"\/>/g)].map(match => [match[1]!, match[2]!]),
+    );
+    expect(env.OCX_SERVICE).toBe("1");
+    expect(env.OCX_SERVICE_MANAGED).toBe("1");
+    expect(env.OCX_WINDOWS_WRAPPER_PROTOCOL).toBeUndefined();
+    expect(isManagedServiceEnvironment(env)).toBe(true);
+
+    expect(await deferServiceChildToNewerRuntime({
+      sibling: false,
+      env,
+      selfVersion: "2.67.0",
+      selfCommand: [join("/", "npm", "bun.exe"), join("/", "npm", "index.ts")],
+      deps: {
+        dir,
+        exists: () => true,
+        run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }),
+        runInherited: async (command, args) => {
+          expect(command).toEqual([newer]);
+          expect(args).toEqual(["start"]);
+          return { exitCode: 0, ready: true };
+        },
+        log: () => {},
+      },
+    })).toBe(0);
   });
 });
