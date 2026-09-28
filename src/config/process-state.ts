@@ -293,7 +293,7 @@ export function setProcessCommandLinePlatformForTests(next: NodeJS.Platform | nu
   processCommandLinePlatformForTests = next;
 }
 
-function readProcessCommandLine(pid: number): string | undefined {
+export function readProcessCommandLine(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
   const platform = processCommandLinePlatformForTests ?? process.platform;
   try {

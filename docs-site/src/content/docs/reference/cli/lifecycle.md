@@ -551,6 +551,11 @@ supersedes it rather than replacing it.
 A state file with no ownership record means the CLI installation owns the runtime, which is what
 every installation made before this feature is in. Nothing changes for you until an app takes over.
 
+Supervised service children also check the recorded owner before startup and once more while
+holding the startup ownership lease, before choosing a port or publishing a PID. If the desktop
+app claims the runtime during startup, the service child stands down even if the desktop proxy
+has not begun listening yet. An unreadable ownership record has the same stand-down behavior.
+
 Home paths inside a state record are compared with the current home by the physical directory they
 resolve to, not just their spelling. A junction or symlink recorded under an older install still
 names the same home and keeps working after the move; an alias that no longer resolves is only
