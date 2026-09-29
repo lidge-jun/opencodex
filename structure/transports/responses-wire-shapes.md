@@ -401,7 +401,7 @@ At EOF without a real terminal they synthesize `response.failed` rather than `ad
 produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
 recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
 The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
-while preserving status and output; failed turns are not retained as continuation state. Request logs keep transport status.
+while preserving status and output; failed turns are not retained as continuation state. Buffered JSON masks selected credentials in synthetic bare-error fields before log inspection or client formatting; request logs keep transport status.
 The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
 Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
 Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.

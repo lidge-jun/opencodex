@@ -858,9 +858,17 @@ export async function deliverPassthroughResponse(
           upstream.abort(new Error(message));
           const upstreamError = failure?.upstreamError;
           const upstreamRefusalCode = failure?.upstreamRefusalCode;
-          const presentation = upstreamError === undefined || failure === undefined
+          const rawPresentation = upstreamError === undefined || failure === undefined
             ? undefined
             : bufferedBareErrorPresentation(failure, upstreamError);
+          const presentation = rawPresentation === undefined ? undefined : {
+            status: rawPresentation.status,
+            error: {
+              type: maskCredential(rawPresentation.error.type),
+              code: maskCredential(rawPresentation.error.code),
+              message: maskCredential(rawPresentation.error.message),
+            },
+          };
           if (upstreamError !== undefined) {
             // The streaming relay turns a bare `error` event into a terminal failure. Mirror that
             // verdict for JSON callers before recording/formatting it, or a provider refusal is
