@@ -185,7 +185,7 @@ function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskC
   const diagnostic = redactSecretString(message);
   const error = {
     type: refusalCode === undefined ? "upstream_error" : "invalid_request_error",
-    code: refusalCode ?? "upstream_server_error",
+    code: refusalCode === undefined ? "upstream_server_error" : (maskCredential?.(refusalCode) ?? refusalCode),
     message: (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({

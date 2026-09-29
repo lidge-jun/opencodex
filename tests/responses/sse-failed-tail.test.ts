@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
-import { MAX_TAIL_ERROR_MESSAGE_CHARS } from "../../src/server/relay";
+import { MAX_TAIL_ERROR_MESSAGE_CHARS, upstreamErrorTailFrame } from "../../src/server/relay";
 import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { createOutboundCredentialMask } from "../../src/server/responses/terminal-error-redaction";
@@ -74,6 +74,16 @@ describe("relaySseWithFailedTail", () => {
       : relaySseEagerBounded(src, new AbortController(), parityHooks, { maskCredential }));
     expect(failedMessage(out)).toContain("[REDACTED]");
     expect(failedMessage(out)).not.toContain(credential);
+  });
+
+  test("masks selected credentials in every synthetic refusal field", () => {
+    const credential = "fixture-selected-credential";
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${credential}` });
+    const frame = decoder.decode(upstreamErrorTailFrame(
+      encoder, `refused ${credential}`, `invalid_${credential}`, maskCredential,
+    ));
+    expect(frame).not.toContain(credential);
+    expect(frame).toContain("[REDACTED]");
   });
   test("relays a healthy stream verbatim with no injected frame", async () => {
     const upstream = new AbortController();
