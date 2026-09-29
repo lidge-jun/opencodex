@@ -559,7 +559,10 @@ function decodeBatchPathValue(
     .replaceAll(escapedPercent, "%");
 }
 
-/** Validate the generated wrapper before interpreting omitted optional homes. */
+/**
+ * Validate the generated wrapper before interpreting omitted optional homes.
+ * The generated OCX_CLI set line, not bun runtime provenance, selects the valid launch shape.
+ */
 function wrapperLooksGenerated(body: string): boolean {
   const sourceLaunch = /:loop\s*[\s\S]*^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/im;
   const standaloneLaunch = /:loop\s*[\s\S]*^"%OCX_BUN%" start\b[^\r\n]*$/im;

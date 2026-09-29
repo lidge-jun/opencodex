@@ -423,12 +423,16 @@ describe("the Windows chain walk", () => {
     writeWindowsTask(launcher);
     const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
 
-    expect(inspectServiceManagerInstallation({
+    const result = inspectServiceManagerInstallation({
       platform: "win32",
       home,
       runRaw,
       winswStatus: () => "nonexistent",
-    }).kind).toBe("present");
+    });
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") return;
+    expect(result.claims).toHaveLength(1);
+    expect(result.claims[0].backend).toBe("scheduler");
   });
 
   test("a source wrapper that drops its CLI argument is unknown", () => {
