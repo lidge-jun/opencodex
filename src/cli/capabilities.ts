@@ -1062,18 +1062,24 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["agent", "roles"],
-    summary: "omo (Codex / LazyCodex): show each Codex agent role's model pin, or set one role's model in its TOML and in omo.jsonc.",
+    summary: "omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.",
     routes: [
       { method: "GET", path: "/api/codex-agent-roles" },
       { method: "PUT", path: "/api/codex-agent-roles/{role}" },
+      { method: "POST", path: "/api/codex-agent-roles/auto-assign" },
     ],
-    flags: [{ name: "--json", value: "boolean", summary: "Emit the role list or the write result as JSON." }],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the role list, the write result or the proposals as JSON." },
+      { name: "--model", value: "string", summary: "suggest: size the roles with this model instead of the Codex default model." },
+      { name: "--apply", value: "boolean", summary: "suggest: write every proposal through the role model write." },
+    ],
     mutates: true,
     json: "payload",
     details: [
       "A bare invocation reads and never writes.",
       "Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles and set is refused.",
       "set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.",
+      "suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.",
     ],
   },
   {

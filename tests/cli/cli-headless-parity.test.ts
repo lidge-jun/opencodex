@@ -961,6 +961,31 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
+  test("agent roles suggest prints proposals, and --apply writes only proposed roles through PUT", async () => {
+    const proposals = {
+      sizingModel: "gpt-5.5",
+      proposals: [
+        { role: "explorer", model: "gpt-5.5", status: "proposed", tier: "fast", effortIntent: "glance", proposedModel: "a/small", proposedEffort: "low" },
+        { role: "worker", model: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null },
+        { role: "vague", model: null, status: "unsized", reason: "no JSON" },
+      ],
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--model", "a/sizer", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: { model: "a/sizer" } },
+      { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} },
+      { path: "/api/codex-agent-roles/explorer", method: "PUT", body: { model: "a/small", effort: "low" } },
+      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid" } },
+    ]);
+  });
+
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
       ? { id: "key-1", name: "deploy", key: "ocx_secret" }

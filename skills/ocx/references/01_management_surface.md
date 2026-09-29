@@ -1186,22 +1186,26 @@ JSON mode: `payload`.
 
 ### `ocx agent roles`
 
-omo (Codex / LazyCodex): show each Codex agent role's model pin, or set one role's model in its TOML and in omo.jsonc.
+omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.
 
 | Method | Route |
 |---|---|
 | GET | `/api/codex-agent-roles` |
 | PUT | `/api/codex-agent-roles/{role}` |
+| POST | `/api/codex-agent-roles/auto-assign` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the role list or the write result as JSON. |
+| `--json` | boolean | Emit the role list, the write result or the proposals as JSON. |
+| `--model` | string | suggest: size the roles with this model instead of the Codex default model. |
+| `--apply` | boolean | suggest: write every proposal through the role model write. |
 
 JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 - Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles and set is refused.
 - set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.
+- suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.
 
 ### `ocx api policy`
 
