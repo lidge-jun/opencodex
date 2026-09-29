@@ -911,7 +911,7 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
     if (code === "restart_capability_unsupported") {
       console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
       console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
-    } else if (code === "restart_version_skew") {
+    } else if (code === "restart_version_skew" || code === "restart_version_skew_cli_newer") {
       console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
       console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
     } else if (code === "restart_package_tree_unsettled") {
@@ -924,6 +924,37 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
   } else {
     console.error("❌ Proxy was not running and the fallback start did not become healthy.");
   }
+}
+/** Update restart: the CLI is newer than the attested proxy, so stop the old build
+ * and start the current installation instead of respawning the old one in place.
+ * Other skew directions keep refusing in reportRestartFailure. */
+async function restartViaStopStartForUpdate(
+  startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
+): Promise<boolean> {
+  const cliVersion = packageVersion();
+  console.log(`🔄 Running proxy is older than this CLI (${cliVersion}); restarting via stop/start from the current installation...`);
+  try {
+    await handleStop();
+  } catch (error) {
+    console.error(`❌ Update restart failed to stop the old proxy: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  const startOutcome = await startWhenStopped(true);
+  if (startOutcome.status !== "started") {
+    console.error("❌ Update restart stopped the old proxy but the new proxy did not start.");
+    return false;
+  }
+  const live = await findLiveProxy({ deadlineAt: Date.now() + 15_000, attempts: 2 }).catch(() => null);
+  if (!live) {
+    console.error("❌ Update restart started a proxy but it did not become healthy.");
+    return false;
+  }
+  if (live.version && live.version !== cliVersion) {
+    console.error(`❌ Update restart is still serving ${live.version} instead of ${cliVersion}.`);
+    return false;
+  }
+  console.log(`✅ Proxy updated and running${live.version ? ` on ${live.version}` : ""} (PID ${live.pid ?? "unknown"}).`);
+  return true;
 }
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
@@ -947,7 +978,15 @@ async function handleProxyRestart(
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
   });
-  if (!result.ok) reportRestartFailure(result);
+  if (!result.ok) {
+    const code = result.phase === "request" && result.error instanceof Error ? result.error.message : "";
+    if (result.phase === "request" && code === "restart_version_skew_cli_newer") {
+      const updated = await restartViaStopStartForUpdate(startWhenStopped);
+      process.exitCode = updated ? 0 : 1;
+      return updated;
+    }
+    reportRestartFailure(result);
+  }
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;
 }

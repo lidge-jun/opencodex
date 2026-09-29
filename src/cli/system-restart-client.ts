@@ -143,8 +143,13 @@ export async function requestBoundSystemRestart(
   const proxyVersion = fenced
     ? body.installedVersion as string
     : typeof body.version === "string" ? body.version : undefined;
-  if (computeVersionSkew(deps.cliVersion ?? ownCliVersion(), proxyVersion).skewed) {
-    return rejected("restart_version_skew");
+  const skew = computeVersionSkew(deps.cliVersion ?? ownCliVersion(), proxyVersion);
+  if (skew.skewed) {
+    // cli-newer means this installation already holds the update the running proxy
+    // lacks: an in-place respawn would keep serving the old build (#4522), so the
+    // caller restarts via stop/start from here instead of refusing. Other skew
+    // directions (proxy-newer, incomparable) still refuse.
+    return rejected(skew.relation === "cli-newer" ? "restart_version_skew_cli_newer" : "restart_version_skew");
   }
 
   let observed: LiveProxy | null;
