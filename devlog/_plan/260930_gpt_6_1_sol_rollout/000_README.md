@@ -11,3 +11,11 @@ OpenAI released GPT-6.1 Sol on 2026-09-29 as the successor to GPT-6 Sol. Only So
 | 030_default_swap.md | wp2 | Defaults moving from gpt-6-sol to gpt-6.1-sol, roster migration v3 |
 | 040_tokenlab_protocols.md | wp3 | Per-model wire routing; TokenLab JEV decision backend deferred to its own unit |
 | 050_release.md | wp4 | PR, CI, merge, preview/main promotion, release.yml, npm verification |
+
+## Audit record (wp1)
+
+Read-only reviewer on gpt-6-sol (high), 2026-09-30:
+
+- Round 1 FAIL, four blockers. Three concerned the JEV backend (combo dispatch passes no combo settings, combo normalization/persistence and the GUI editor would drop new fields, credential/URL/outbound guard must switch together). One named roster tests that enumerate models by value.
+- Fold: the roster tests are listed in 020; the JEV backend is deferred to its own unit (040 records why and sketches it).
+- Round 2 PASS. Non-blocking notes kept for B: the v3 roster migration must run after the v2 step and touch only bare `gpt-6-sol`; TokenLab's anthropic wire sends `x-api-key` to `/v1/messages`, which TokenLab accepts; `kiro-adapter.test.ts` (2047/2050) and `codex-catalog.test.ts` (7974/7985) take in-place edits only.
