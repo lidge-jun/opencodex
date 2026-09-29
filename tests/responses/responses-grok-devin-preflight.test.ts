@@ -20,6 +20,7 @@ const limit: AdapterEvent = {
   type: "error", status: 429, errorType: "rate_limit_error", code: "resource_exhausted",
   retryable: true, message: "Cognition chat failed (resource_exhausted); retry after ~60s",
 };
+const clientLimitMessage = `Please try again in 60s. ${limit.message}`;
 mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
   resolveAdapter(provider: OcxProviderConfig, cache?: "none" | "short" | "long") {
     if (provider.adapter !== "devin") return originalResolve(provider, cache);
@@ -113,7 +114,7 @@ test.each([
   expect(response.headers.get("content-type")).toContain("application/json");
   expect(response.headers.get("retry-after")).toBe("60");
   expect(await response.json()).toEqual({ error: {
-    message: limit.message, type: "rate_limit_error", code: "rate_limit_exceeded",
+    message: clientLimitMessage, type: "rate_limit_error", code: "rate_limit_exceeded",
   } });
   expect(calls).toBe(1);
 });
@@ -268,10 +269,15 @@ test("a replay-unsafe heartbeat leaves the error in SSE", async () => {
   expect(calls).toBe(1);
 });
 
-test("other clients keep their existing SSE response", async () => {
+test("Codex receives native retry advice in SSE without a synthetic reasoning item", async () => {
   const response = await run({ surface: "codex" });
   expect(response.status).toBe(200);
-  expect(await response.text()).toContain("response.failed");
+  const frames = (await response.text()).split("\n")
+    .filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  const failed = frames.find(frame => frame.type === "response.failed");
+  expect(failed.response.error).toMatchObject({ code: "rate_limit_exceeded", message: clientLimitMessage });
+  expect(frames.some(frame => frame.type.includes("reasoning") || frame.type === "response.completed")).toBe(false);
+  expect(calls).toBe(1);
 });
 
 test.each([false, true])("Grok starts SSE after bounded Devin preflight (heartbeat=%s)", async heartbeat => {
@@ -372,18 +378,18 @@ test("cancellation before the first event aborts the producer", async () => {
   expect(calls).toBe(1);
 });
 
-const bufferedExclusions: { name: string; surface?: "grok" | "codex"; source: AdapterEvent[] }[] = [
-  { name: "other client", surface: "codex", source: [limit] },
-  { name: "replay-unsafe activity", source: [{ type: "heartbeat", replayUnsafe: true }, limit] },
-  { name: "local send budget", source: [{ ...limit, code: SEND_BUDGET_EXHAUSTED_CODE }] },
-  { name: "non-429 failure", source: [{ ...limit, status: 503, errorType: "upstream_error" }] },
+const bufferedExclusions: { name: string; surface?: "grok" | "codex"; source: AdapterEvent[]; message: string }[] = [
+  { name: "other client", surface: "codex", source: [limit], message: clientLimitMessage },
+  { name: "replay-unsafe activity", source: [{ type: "heartbeat", replayUnsafe: true }, limit], message: clientLimitMessage },
+  { name: "local send budget", source: [{ ...limit, code: SEND_BUDGET_EXHAUSTED_CODE }], message: limit.message },
+  { name: "non-429 failure", source: [{ ...limit, status: 503, errorType: "upstream_error" }], message: limit.message },
 ];
-test.each(bufferedExclusions)("buffered $name retains its existing JSON result", async ({ surface, source }) => {
+test.each(bufferedExclusions)("buffered $name retains its existing JSON result", async ({ surface, source, message }) => {
   events = source;
   const response = await run({ stream: false, surface });
   expect(response.status).toBe(200);
   expect(response.headers.get("retry-after")).toBeNull();
-  expect(await response.json()).toMatchObject({ status: "failed", error: { message: limit.message } });
+  expect(await response.json()).toMatchObject({ status: "failed", error: { message } });
 });
 
 test("buffered output before a 429 is retained exactly once", async () => {
@@ -392,7 +398,7 @@ test("buffered output before a 429 is retained exactly once", async () => {
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
     status: "failed", output: [{ content: [{ type: "output_text", text: "answer" }] }],
-    error: { message: limit.message },
+    error: { message: clientLimitMessage },
   });
   expect(calls).toBe(1);
 });
@@ -415,6 +421,6 @@ test.each([true, false])("OAuth replay preserves unsafe activity through heartbe
   const response = await run({ stream, oauthFailoverEnabled: true });
   expect(response.status).toBe(200);
   if (stream) expect(await response.text()).toContain("response.failed");
-  else expect(await response.json()).toMatchObject({ status: "failed", error: { message: limit.message } });
+  else expect(await response.json()).toMatchObject({ status: "failed", error: { message: clientLimitMessage } });
   expect(calls).toBe(2);
 });

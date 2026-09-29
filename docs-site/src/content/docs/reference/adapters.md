@@ -526,11 +526,14 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   Foreground `shellArgs` and `shellStreamArgs` are an exception: both are rejected before spawn
   on every platform until kernel-backed descendant ownership is available. Use client shell tools;
   background-shell execution and other native operations retain their existing policy.
-- The denial reply is a silent redirect whose wording follows the request catalog. A catalog that
-  carries `shell_command`/`exec_command` or a unified `exec` keeps the bridge wording; a catalog
-  that carries neither — an orchestrator client exposing only its own Responses tools, for example —
-  is redirected to the request's actual wire names, so the model is pointed at a tool that exists
-  rather than at an alias it cannot see.
+- The denial reply is a silent redirect whose wording follows the request catalog.
+  In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
+  shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
+  and never recommends the top-level shell bridge code mode does not expose. A flat catalog that
+  carries `shell_command`/`exec_command` or a non-freeform unified `exec` keeps the bridge wording;
+  a catalog that carries neither — an orchestrator client exposing only its own Responses tools,
+  for example — is redirected to the request's actual wire names, so the model is pointed at a
+  tool that exists rather than at an alias it cannot see.
 - A recognized Cursor data-policy gate is reported with its title, the action it requires, and the
   Cursor Dashboard review URL instead of a bare `failed_precondition: Error`. Recognition is limited
   to the known structured detail: unknown or malformed details keep the generic Connect error, no
@@ -610,6 +613,20 @@ configuration that names the old id is rewritten at startup.
   allowance on standalone turns surface the original 429 without an early retry. The
   final 429 preserves the stated delay as a cooldown hint. A `~` in its message marks a delay recovered
   from a secondhand trailer sentence rather than an exact header value.
+- For Codex Responses streams, known typed rate-limit failures with a valid delay are normalized to
+  `rate_limit_exceeded` with `Please try again in Ns.` before the original redacted detail.
+  This lets Codex honor the stated delay and use its native reconnect notification without
+  adding a reasoning item to conversation history. Client retries are finite and controlled by
+  the client's `stream_max_retries`; this does not promise recovery after app shutdown or restart.
+  Leave `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` unset or `0` to let the client own the wait.
+  A positive proxy allowance keeps the existing proxy-owned wait; the client only learns of a
+  final refusal afterwards, and client retries can multiply the proxy's per-request attempts.
+  Combo target/account failover and Grok HTTP 429 handling retain their existing ordering.
+  The exact UI placement and text depend on the Codex version; this is not a custom countdown.
+  Message-only rate-limit errors use the same longest-delay-first formatting. Typed errors
+  without a usable delay retain their original code. Client retries create new HTTP requests;
+  they do not share one proxy request's send counter or cumulative wait allowance. This
+  compatibility mapping does not replace the controls of an explicitly enabled proxy wait.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 
