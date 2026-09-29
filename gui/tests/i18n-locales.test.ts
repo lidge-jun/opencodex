@@ -110,6 +110,41 @@ describe("i18n locale contracts", () => {
     expect(duplicates).toEqual([]);
   });
 
+  test("pt-BR renders no literal backslash-escape inside a value", () => {
+    // A value holding `\\"` in the source renders as \" in the GUI, so the user sees
+    // stray backslashes around a provider name. The key-set and placeholder tests
+    // cannot see this, so it gets its own assertion. Scoped to this PR's locale:
+    // vi carries three pre-existing offenders that are not ours to change here.
+    const offenders: string[] = [];
+    const pt = DICTS["pt-BR"];
+
+    for (const key of Object.keys(en) as Array<keyof typeof en>) {
+      const value = pt[key];
+      if (value.includes("\\\"") || value.includes("\\\\")) {
+        offenders.push(`pt-BR.${key}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  test("pt-BR provider messages read as Portuguese, not as broken machine text", () => {
+    const pt = DICTS["pt-BR"];
+
+    // Regression values: the key set and placeholder contracts both passed while
+    // these three read as malformed or as the wrong subject in the GUI.
+    expect(pt["prov.removeLastProvider"]).toBe(
+      "Você não pode remover este provedor quando nenhum outro provedor habilitado puder se tornar o padrão.",
+    );
+    expect(pt["pws.allSystemsOk"]).toBe("Todos os sistemas operando normalmente");
+    // English means "all systems operational" — not "all operating systems".
+    expect(pt["pws.allSystemsOk"]).not.toMatch(/sistemas operacionais/);
+    // A provider name is quoted, not backslash-quoted.
+    expect(pt["prov.setDefaultSuccess"]).toBe(
+      "\"{name}\" agora é o provedor padrão.",
+    );
+  });
+
   test("formatUptime uses catalog units for every locale", () => {
     for (const { code } of LOCALES) {
       const day = DICTS[code]["uptime.day"];
