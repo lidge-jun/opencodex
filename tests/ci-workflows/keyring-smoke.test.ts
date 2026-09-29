@@ -199,6 +199,13 @@ describe("packaged keyring native binding", () => {
       .toEqual(["/opt/ocx/keyring/keyring.linux-x64-gnu.node"]);
   });
 
+  test("candidate paths follow the target platform's rules on any host", () => {
+    expect(packagedKeyringCandidates({ root: "C:\\Program Files\\OpenCodex", platform: "win32", arch: "x64" }))
+      .toEqual(["C:\\Program Files\\OpenCodex\\keyring\\keyring.win32-x64-msvc.node"]);
+    expect(packagedKeyringCandidates({ root: "/opt/ocx", platform: "linux", arch: "x64" }))
+      .toEqual(["/opt/ocx/keyring/keyring.linux-x64-gnu.node"]);
+  });
+
   test("loads only an existing deterministic packaged path and never consults cwd", () => {
     const binding = { Entry: class {}, AsyncEntry: class {} } as unknown as KeyringBinding;
     const calls: string[] = [];
