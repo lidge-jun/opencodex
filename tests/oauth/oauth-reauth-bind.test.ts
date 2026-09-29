@@ -124,6 +124,38 @@ describe("OAuth account-scoped reauth", () => {
     expect(getAccountSet("xai")?.accounts[0]?.loginId).not.toBe(loginId);
   });
 
+  test.each([
+    ["reauth without observation", "reauth", "Google AI Pro", undefined, "Google AI Pro"],
+    ["reauth without observation after null", "reauth", null, undefined, null],
+    ["reauth with explicit null", "reauth", "Google AI Pro", null, null],
+    ["reauth with fresh Pro", "reauth", "Free", "Google AI Pro", "Google AI Pro"],
+    ["same-identity upsert without observation", "upsert", "Google AI Pro", undefined, "Google AI Pro"],
+    ["same-identity upsert with explicit null", "upsert", "Google AI Pro", null, null],
+    ["same-identity upsert with fresh Pro", "upsert", null, "Google AI Pro", "Google AI Pro"],
+  ] as const)("Antigravity %s preserves only unobserved plan", async (_case, mode, previous, incoming, expected) => {
+    await saveCredential("google-antigravity", {
+      access: "old-access", refresh: "old-refresh", expires: Date.now() + 60_000,
+      email: "ag@example.test", accountId: "ag-account", projectId: "old-project", plan: previous,
+    });
+    const slotId = getAccountSet("google-antigravity")!.activeAccountId;
+    const provider = OAUTH_PROVIDERS["google-antigravity"]!;
+    const original = provider.login;
+    provider.login = async () => ({
+      access: "new-access", refresh: "new-refresh", expires: Date.now() + 60_000,
+      email: "ag@example.test", accountId: "ag-account", projectId: "new-project",
+      ...(incoming !== undefined ? { plan: incoming } : {}),
+    });
+    try {
+      await runLogin("google-antigravity", {} as OAuthController, mode === "reauth" ? { reauthAccountId: slotId } : undefined);
+    } finally {
+      provider.login = original;
+    }
+    expect(getAccountSet("google-antigravity")?.accounts).toHaveLength(1);
+    expect(getAccountCredential("google-antigravity", slotId)).toMatchObject({
+      access: "new-access", refresh: "new-refresh", projectId: "new-project", plan: expected,
+    });
+  });
+
   test("kiro-cli reauth refuses a native-origin slot before any CLI work", async () => {
     const cred: OAuthCredentials = { access: "native-access", refresh: "native-refresh", expires: Date.now() + 60_000 };
     await appendKiroAccountFromDeviceLogin(cred);

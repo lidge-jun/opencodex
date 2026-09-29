@@ -24,6 +24,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
   expiresAt?: number;
+  plan?: string | null;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

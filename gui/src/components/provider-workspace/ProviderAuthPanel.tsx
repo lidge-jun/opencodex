@@ -536,6 +536,7 @@ export default function ProviderAuthPanel({
               <ul className="pwi-auth-list">
                 {accounts.map(account => {
                   const label = oauthAccountDisplayLabel(accounts, account, t);
+                  const planLabel = account.plan === "Free" ? t("modal.badge.free") : account.plan;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
                   const healthStatus = account.health?.status;
@@ -550,11 +551,11 @@ export default function ProviderAuthPanel({
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
+                      aria-label={`${label}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
                       disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
-                        <span className="pwi-auth-row-label">{label}</span>
+                        <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
                         <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>

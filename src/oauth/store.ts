@@ -532,6 +532,12 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
+  if (candidate.plan !== undefined) {
+    if (typeof candidate.plan === "string" && !/[\x00-\x1f\x7f-\x9f]/.test(candidate.plan)) {
+      const plan = candidate.plan.trim();
+      normalized.plan = plan.length > 0 && plan.length <= 128 ? plan : null;
+    } else normalized.plan = null;
+  }
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
     // Persist only allowlisted origins; drop anything else so auth.json cannot
     // become an SSRF springboard across reloads. Copilot and Devin are the two
@@ -849,6 +855,12 @@ export interface OAuthCredentialWriteReceipt {
   previousAccount: ProviderAccount | undefined;
 }
 
+function retainUnobservedPlan(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
+  return fresh.plan === undefined && previous.plan !== undefined
+    ? { ...fresh, plan: previous.plan }
+    : fresh;
+}
+
 export async function saveCredentialWithReceipt(
   provider: string,
   cred: OAuthCredentials,
@@ -873,7 +885,7 @@ export async function saveCredentialWithReceipt(
     } else if (identity) {
       const existing = set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
-        existing.credential = safe;
+        existing.credential = retainUnobservedPlan(safe, existing.credential);
         delete existing.needsReauth;
         if (existing.paused !== true) set.activeAccountId = existing.id;
         accountId = existing.id;
@@ -1140,7 +1152,7 @@ export async function saveAccountCredential(
     const set = store[provider];
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
-    account.credential = safe;
+    account.credential = retainUnobservedPlan(safe, account.credential);
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
     // A pause that found no usable fallback leaves the active id on a paused row. Once this
