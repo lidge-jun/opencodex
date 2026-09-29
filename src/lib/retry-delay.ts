@@ -73,3 +73,13 @@ export function parseRetryAfterFromMessage(message: string): number | undefined 
   }
   return result;
 }
+
+/** Put the longest valid lower bound first for clients that read only one hint. */
+export function formatRetryAfterAdvice(message: string): string | undefined {
+  const seconds = parseRetryAfterFromMessage(message);
+  if (seconds === undefined) return undefined;
+  const advice = `Please try again in ${seconds}s.`;
+  if (message.startsWith(advice)) return message;
+  const detail = /try\s+again\s+in/i.test(message) ? `Provider detail: ${message}` : message;
+  return `${advice} ${detail}`;
+}

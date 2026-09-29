@@ -1,4 +1,4 @@
-import { parseRetryAfterFromMessage } from "./retry-delay";
+import { formatRetryAfterAdvice, parseRetryAfterFromMessage } from "./retry-delay";
 
 export interface OcxErrorPayload {
   message: string;
@@ -631,10 +631,12 @@ export function adapterFailureFromMessage(message: string): { httpStatus: number
             : httpStatus === 400
               ? "invalid_request_error"
               : "upstream_error";
-  return {
-    httpStatus,
-    error: classifyError(httpStatus, errorType, finalMessage),
-  };
+  const error = classifyError(httpStatus, errorType, finalMessage);
+  if (httpStatus === 429 && error.type === "rate_limit_error"
+    && ["rate_limit_exceeded", "slow_down"].includes(error.code ?? "")) {
+    error.message = formatRetryAfterAdvice(message) ?? error.message;
+  }
+  return { httpStatus, error };
 }
 
 /** Map a terminal Responses error object to the HTTP status we record in /api/logs. */
