@@ -340,6 +340,34 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 
 Sibling instances refuse the write, because it reaches the shared `CODEX_HOME`.
 
+### Role model auto-assign
+
+`POST /api/codex-agent-roles/auto-assign` (dashboard Auto-assign, `ocx agent roles suggest`) proposes a
+model for every role and writes nothing. Applying a proposal is the ordinary
+`PUT /api/codex-agent-roles/{role}`, now with an optional `effort`. The work splits in two on purpose:
+
+- **Sizing is one model call.** `src/codex/role-sizing.ts` holds the rubric (ported from the MIT-licensed
+  modelchk skill, cited in the file) as the system prompt, the neutral vocabulary
+  (`fast|standard|frontier`, `glance|measured|thorough|exhaustive`), and the validator. Each role sends its
+  name and the first 1500 characters of `description` plus `developer_instructions`; a role with neither
+  is not sent. The call goes through the proxy's own `/v1/chat/completions` via
+  `postLocalChatCompletion` (`src/lib/local-chat-completion.ts`, shared with the routed vision describer), on
+  the root `model` of Codex `config.toml` unless the caller names one. An answer that is not the strict JSON
+  shape, a missing role, or a field outside the vocabulary leaves that role **unsized** with the reason;
+  nothing is guessed. The sizing model never names a model.
+- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
+  `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
+  opencodex config first, then price rank (input plus output per 1M tokens, split evenly across the
+  three tiers, a lone priced model is frontier). Unpriced, unmapped models are never proposed. A role
+  gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
+  model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
+  only for a role whose file already sets `model_reasoning_effort`, and written by the same span-preserving
+  editor as `model`, located by the same TOML-aware scan.
+
+The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
+without a provider. Sibling instances refuse the preview too: it sits under the refused
+`/api/codex-agent-roles` prefix, and its proposals could not be applied there anyway.
+
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
 `multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.
 `syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to

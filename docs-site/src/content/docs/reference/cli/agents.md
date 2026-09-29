@@ -28,6 +28,10 @@ and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integ
 ocx agent roles set explorer xai/grok-4.5
 ```
 
+`ocx agent roles suggest` sizes every role with one call to the default Codex model (or `--model`) and
+prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
+through the same write as `set`. See [Auto-assign](/guides/integrations/#auto-assign).
+
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows
 (picker-visible rows plus the login-entitled Luna/Haiku auth slots, intersected with executor
