@@ -350,7 +350,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
     const { cancelLoginFlow } = await import("../../oauth");
-    const cancelled = cancelLoginFlow(provider);
+    // Without a flow id this cancels the provider's newest in-flight login, which is what the
+    // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
+    // several users passes the flowId it was given at /api/oauth/login.
+    const cancelled = cancelLoginFlow(provider, typeof body.flowId === "string" ? body.flowId : undefined);
     return jsonResponse({ ok: true, cancelled });
   }
 
@@ -390,8 +393,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     // The exchange itself times out at 30s inside the provider client; this only has to
     // outlast it so a hung socket surfaces as an answer rather than as a hung request.
-    const settled = await waitForLoginSettled(provider, 60_000);
-    const status = getLoginStatus(provider, maskEmails);
+    // Pinned to the flow this paste actually landed in: with several code logins in flight for
+    // one provider, "the newest flow" by the time this resolves may be somebody else's.
+    const settled = await waitForLoginSettled(provider, 60_000, submitted.flowId);
+    const status = getLoginStatus(provider, maskEmails, submitted.flowId);
     if (!settled) return jsonResponse({ ok: false, error: "provider_unreachable" }, 400);
     if (status.error) {
       const failure = status.errorCode ?? "invalid_or_expired_code";

@@ -10,7 +10,9 @@ import {
   clearLoginState,
   getLoginStatus,
   startLoginFlow,
+  submitManualLoginCode,
   supportsCodeLoginMode,
+  waitForLoginSettled,
 } from "../../src/oauth";
 import { getAccountSet, removeCredential, resetOAuthReauthReconcileStateForTests } from "../../src/oauth/store";
 import { loginState, resetOAuthFlowReconcileStateForTests } from "../../src/oauth/login-flow-state";
@@ -99,6 +101,13 @@ async function startCodeLogin(): Promise<{ url: URL; state: string; challenge: s
     challenge: url.searchParams.get("code_challenge")!,
     expiresAt: started.expiresAt,
   };
+}
+
+/** Start a code-mode login under a caller-chosen flow id, as the management route does. */
+async function startCodeFlow(flowId: string): Promise<{ flowId: string; state: string; challenge: string }> {
+  const started = await startLoginFlow("anthropic", { forceLogin: true, codeMode: true }, { flowId });
+  const url = new URL(started.url);
+  return { flowId, state: url.searchParams.get("state")!, challenge: url.searchParams.get("code_challenge")! };
 }
 
 async function postCode(body: unknown, server: { url: string | URL }): Promise<Response> {
@@ -342,10 +351,13 @@ describe("OAuth code-display login", () => {
       expect(challengeOf(byCode.get("code-second")!.code_verifier)).toBe(secondChallenge);
       expect(byCode.get("code-first")!.code_verifier).not.toBe(byCode.get("code-second")!.code_verifier);
 
-      // The other half of the guarantee at the API level: a second concurrent login for the
-      // same provider is refused rather than allowed to share the first flow's slot.
+      // The other half of the guarantee at the API level: a second concurrent CODE login is
+      // ALLOWED (each gets its own flow slot), because a code flow binds nothing. The callback
+      // flow binds the fixed loopback port, so it still refuses to overlap — in either order.
       await startCodeLogin();
-      await expect(startLoginFlow("anthropic", { forceLogin: true, codeMode: true }))
+      const concurrent = await startLoginFlow("anthropic", { forceLogin: true, codeMode: true });
+      expect(new URL(concurrent.url).searchParams.get("code_challenge")).not.toBe(firstChallenge);
+      await expect(startLoginFlow("anthropic", { forceLogin: true }))
         .rejects.toThrow("already in progress");
     } finally {
       mock.restore();
@@ -473,7 +485,7 @@ describe("OAuth code-display login", () => {
       expect(await wrongFlow.json()).toEqual({ ok: false, error: "no_pending_login" });
 
       // Past its TTL: the flow object is still live, the paste window is not.
-      loginState.get("anthropic")!.expiresAt = Date.now() - 1;
+      loginState.get(flowId)!.expiresAt = Date.now() - 1;
       const expired = await postCode({ provider: "anthropic", flowId, input: "code" }, server);
       expect(expired.status).toBe(409);
       expect(await expired.json()).toEqual({ ok: false, error: "no_pending_login" });
@@ -518,6 +530,118 @@ describe("OAuth code-display login", () => {
     expect(asked[0]).toContain("Paste the code");
     expect(printed).toContain("https://claude.ai/oauth/authorize");
     expect(printed).toContain("Logged in to anthropic");
+  });
+
+  // Concurrency, flow by flow. Two code logins for the SAME provider are in flight at once;
+  // each may only ever be settled by its own paste.
+  test("two concurrent code flows settle only their own paste, pasted out of order", async () => {
+    const mock = installTokenMock(request => ({
+      kind: "ok",
+      uuid: `account-${request.code}`,
+      email: `${request.code}@example.com`,
+    }));
+    const server = startServer(0);
+    try {
+      const a = await startCodeFlow("flow-a");
+      const b = await startCodeFlow("flow-b");
+      expect(a.challenge).not.toBe(b.challenge);
+      expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("pending");
+      expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("pending");
+
+      // Flow A's code addressed to flow B: refused, and neither flow moves.
+      const crossed = await postCode({ provider: "anthropic", flowId: "flow-b", input: `code-a#${a.state}` }, server);
+      expect(crossed.status).toBe(400);
+      expect(await crossed.json()).toEqual({ ok: false, error: "state_mismatch" });
+      expect(mock.requests).toHaveLength(0);
+      expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("pending");
+      expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("pending");
+
+      // Out of order: B settles first, and A is untouched by it.
+      const bDone = await postCode({ provider: "anthropic", flowId: "flow-b", input: `code-b#${b.state}` }, server);
+      expect(bDone.status).toBe(200);
+      expect(await bDone.json()).toMatchObject({ ok: true, account: { email: "c***b@example.com" } });
+      expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("complete");
+      expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("pending");
+
+      const aDone = await postCode({ provider: "anthropic", flowId: "flow-a", input: `code-a#${a.state}` }, server);
+      expect(aDone.status).toBe(200);
+      expect(await aDone.json()).toMatchObject({ ok: true, account: { email: "c***a@example.com" } });
+
+      // Each exchange carried its own verifier — no shared PKCE slot.
+      const byCode = new Map(mock.requests.map(request => [request.code, request]));
+      expect(challengeOf(byCode.get("code-a")!.code_verifier)).toBe(a.challenge);
+      expect(challengeOf(byCode.get("code-b")!.code_verifier)).toBe(b.challenge);
+    } finally {
+      await server.stop(true);
+      mock.restore();
+    }
+  });
+
+  test("cancelling one code flow leaves the other in flight", async () => {
+    const mock = installTokenMock(request => ({
+      kind: "ok",
+      uuid: `account-${request.code}`,
+      email: `${request.code}@example.com`,
+    }));
+    const server = startServer(0);
+    try {
+      await startCodeFlow("flow-a");
+      const b = await startCodeFlow("flow-b");
+      expect(cancelLoginFlow("anthropic", "flow-a")).toBe(true);
+      expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("error");
+      expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("pending");
+
+      const done = await postCode({ provider: "anthropic", flowId: "flow-b", input: `code-b#${b.state}` }, server);
+      expect(done.status).toBe(200);
+      expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("complete");
+      // The cancelled flow cannot be revived by a late, otherwise valid paste.
+      const late = await postCode({ provider: "anthropic", flowId: "flow-a", input: "code-a#whatever" }, server);
+      expect(late.status).toBe(409);
+      expect(await late.json()).toEqual({ ok: false, error: "no_pending_login" });
+    } finally {
+      await server.stop(true);
+      mock.restore();
+    }
+  });
+
+  // The reaper: a code flow past its paste window can never complete, so it must not sit in the
+  // table holding a verifier and an open paste promise until the process restarts.
+  test("an expired code flow is reaped when the next login for that provider starts", async () => {
+    await startCodeFlow("flow-a");
+    loginState.get("flow-a")!.expiresAt = Date.now() - 1;
+    await startCodeFlow("flow-b");
+    expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("error");
+    expect(getLoginStatus("anthropic", true, "flow-a").errorCode).toBe("no_pending_login");
+    expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("pending");
+  });
+
+  // The documented rule for the provider-only legacy APIs: they act on the newest flow still
+  // in progress, falling back to the newest flow overall so a just-settled login still reports.
+  test("provider-only login APIs act on the provider's newest in-flight flow", async () => {
+    const mock = installTokenMock(request => ({
+      kind: "ok",
+      uuid: `account-${request.code}`,
+      email: `${request.code}@example.com`,
+    }));
+    try {
+      await startCodeFlow("flow-a");
+      const b = await startCodeFlow("flow-b");
+      expect(getLoginStatus("anthropic").flowId).toBe("flow-b");
+
+      // A legacy paste with no flow id feeds that same flow, and only it.
+      expect(submitManualLoginCode("anthropic", `code-b#${b.state}`)).toEqual({ ok: true });
+      expect(await waitForLoginSettled("anthropic", 5_000, "flow-b")).toBe(true);
+      expect(getLoginStatus("anthropic", true, "flow-b").status).toBe("complete");
+      expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("pending");
+      expect(mock.requests.map(request => request.code)).toEqual(["code-b"]);
+
+      // With B settled, the provider-only view falls back to the flow still running.
+      expect(getLoginStatus("anthropic").flowId).toBe("flow-a");
+      expect(cancelLoginFlow("anthropic")).toBe(true);
+      expect(getLoginStatus("anthropic", true, "flow-a").status).toBe("error");
+    } finally {
+      mock.restore();
+    }
   });
 
   test("the callback flow's paste route keeps its original accept-only contract", async () => {
