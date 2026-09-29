@@ -76,6 +76,8 @@ two naming different homes, and on macOS a logged-out user can have the plist on
 domain to query. The probe returns what it saw and does not decide ownership; callers such as
 `src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
 read-only and time-bounded, so it is safe while the proxy runs under that same manager.
+On Windows, the generated-wrapper check accepts both package installs that invoke the source CLI
+and standalone installs whose executable handles `start` directly; other wrapper shapes fail closed.
 
 ## Stable service launcher (launchd and systemd)
 

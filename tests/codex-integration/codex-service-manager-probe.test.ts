@@ -8,7 +8,7 @@
  *   - mutation-test the fixture's argv instead of the argv production emits
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import {
   type ProbeRunner,
   type RawProbeRunner,
 } from "../../src/service-manager-probe";
+import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -407,6 +408,45 @@ describe("the Windows chain walk", () => {
     const schtasksPath = calls[0].file;
     expect(schtasksPath.toLowerCase().replace(/\\/g, "/")).toContain("system32/schtasks.exe");
     expect(calls[0].args).toEqual(["/query", "/tn", "opencodex-proxy", "/xml"]);
+  });
+
+  test("a production-generated standalone wrapper is accepted", () => {
+    const dir = join(home, ".opencodex");
+    const wrapper = join(dir, "opencodex-service.cmd");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(wrapper, buildWindowsServiceScript({
+      bun: "C:\\OpenCodex\\ocx.exe",
+      bunRuntimeSource: "standalone",
+      cli: null,
+    }, 10100));
+    const launcher = writeWindowsLauncher(wrapper);
+    writeWindowsTask(launcher);
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+
+    expect(inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      runRaw,
+      winswStatus: () => "nonexistent",
+    }).kind).toBe("present");
+  });
+
+  test("a source wrapper that drops its CLI argument is unknown", () => {
+    const wrapper = writeWindowsWrapper("C:\\a\\.codex", "C:\\a\\.opencodex");
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(
+      '"%OCX_BUN%" "%OCX_CLI%" start',
+      '"%OCX_BUN%" start',
+    ));
+    const launcher = writeWindowsLauncher(wrapper);
+    writeWindowsTask(launcher);
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+
+    expect(inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      runRaw,
+      winswStatus: () => "nonexistent",
+    }).kind).toBe("unknown");
   });
 
   test("a registered task whose chain disagrees with the staged definition is unknown", () => {

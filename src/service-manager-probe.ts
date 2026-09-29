@@ -561,7 +561,11 @@ function decodeBatchPathValue(
 
 /** Validate the generated wrapper before interpreting omitted optional homes. */
 function wrapperLooksGenerated(body: string): boolean {
-  return /:loop\s*[\s\S]*^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/im.test(body);
+  const sourceLaunch = /:loop\s*[\s\S]*^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/im;
+  const standaloneLaunch = /:loop\s*[\s\S]*^"%OCX_BUN%" start\b[^\r\n]*$/im;
+  return batchSetValue(body, "OCX_CLI") === null
+    ? standaloneLaunch.test(body)
+    : sourceLaunch.test(body);
 }
 
 function normalizeWindowsPath(value: string): string {
