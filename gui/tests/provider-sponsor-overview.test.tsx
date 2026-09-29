@@ -21,7 +21,7 @@ const packy: CatalogPreset = {
 const tokenlab: CatalogPreset = {
   id: "tokenlab", label: "TokenLab", adapter: "openai-chat", auth: "key",
   baseUrl: "https://api.tokenlab.sh/v1", sponsor: "standard",
-  sponsorUrl: "https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme",
+  sponsorUrl: "https://tokenlab.sh/r/OPENCODEX",
   dashboardUrl: "https://tokenlab.sh/dashboard/api?tab=keys",
 };
 const configured = (preset: CatalogPreset): WorkspaceItem => ({
@@ -71,7 +71,7 @@ test("TokenLab renders its own copy with separate sponsor and API-key links", ()
   expect(html).toContain("TokenLab");
   expect(html).toContain("One API key for leading models");
   expect(html).not.toContain("A model for every prompt");
-  expect(html).toContain('href="https://tokenlab.sh/?utm_source=opencodex&amp;utm_medium=readme"');
+  expect(html).toContain('href="https://tokenlab.sh/r/OPENCODEX"');
   expect(html).toContain('href="https://tokenlab.sh/dashboard/api?tab=keys"');
   expect(html.match(/<a /g)).toHaveLength(2);
 });

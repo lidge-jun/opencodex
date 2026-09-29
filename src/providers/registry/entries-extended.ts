@@ -1148,7 +1148,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://tokenlab.sh/dashboard/api?tab=keys",
     // Standard sponsor under SPONSORS.md (agreement dated 2026-09-29). Pins the row in the
     // picker and adds the chip; nothing about routing, discovery or defaults changes.
-    sponsor: { tier: "standard", url: "https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme" },
+    sponsor: { tier: "standard", url: "https://tokenlab.sh/r/OPENCODEX" },
     liveModels: true,
     preserveCustomDestination: true,
     defaultModel: "gpt-5.6-terra",

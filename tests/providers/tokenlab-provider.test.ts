@@ -36,7 +36,7 @@ describe("TokenLab provider", () => {
     const preset = deriveProviderPresets().find(row => row.id === "tokenlab");
     expect(preset).toMatchObject({ auth: "key", dashboardUrl: "https://tokenlab.sh/dashboard/api?tab=keys" });
     expect(preset).toMatchObject({
-      sponsor: "standard", sponsorUrl: "https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme",
+      sponsor: "standard", sponsorUrl: "https://tokenlab.sh/r/OPENCODEX",
     });
     expect(KEY_LOGIN_PROVIDERS.tokenlab?.defaultModel).toBe("gpt-5.6-terra");
     const provider = config().providers.tokenlab!;
