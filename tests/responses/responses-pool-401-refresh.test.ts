@@ -20,6 +20,7 @@ import {
 import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
+  expandPreviousResponseInput,
   responseContinuationRetainedStoreSnapshot,
   runPendingResponseStatePersistForTests,
 } from "../../src/responses/state";
@@ -339,6 +340,35 @@ afterEach(() => {
 });
 
 describe("ordinary pool 401 refresh and replay (#2887)", () => {
+  test("failed non-stream terminal cannot echo the selected pool credential or retain it for replay", async () => {
+    const harness = installHarness({
+      responseForSend(authorization) {
+        return new Response(
+          `event: response.failed\ndata: ${JSON.stringify({
+            type: "response.failed",
+            response: {
+              id: "resp_failed_pool_echo", status: "failed", output: [],
+              error: { type: "server_error", code: "upstream_error", message: `rejected ${authorization}` },
+              last_error: { detail: "raw token rejected-access" },
+            },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    const response = await handleResponses(
+      request("/v1/responses"), config(), { model: "", provider: "" } as RequestLogContext,
+    );
+    const body = await response.text();
+    expect(harness.sends).toEqual(["Bearer rejected-access"]);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(body)).toMatchObject({ id: "resp_failed_pool_echo", status: "failed" });
+    expect(body).not.toContain("rejected-access");
+    expect(body).toContain("[REDACTED]");
+    const next = { model: "gpt-5.5", previous_response_id: "resp_failed_pool_echo", input: "retry" };
+    expect(expandPreviousResponseInput(next)).toEqual(next);
+  });
+
   test("Responses refreshes a time-valid stored credential once and replays the same account", async () => {
     const harness = installHarness();
     const response = await handleResponses(

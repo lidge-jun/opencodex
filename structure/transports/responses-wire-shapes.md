@@ -389,7 +389,7 @@ Native passthrough SSE has TWO shapes, selected per request in
 
 Both client readers also retain a bounded, redacted message from a bare upstream
 `error` event. If EOF arrives without a real Responses terminal, they synthesize
-one `response.failed` with that message instead of replacing it with `adapter_eof`.
+one `response.failed` with that message instead of replacing it with `adapter_eof`. The shared outbound block rewrite masks diagnostic fields on real failed and incomplete terminals before streaming delivery or buffered JSON reconstruction, preserving status and output; failed turns are not retained as continuation state.
 That synthesized terminal also carries the upstream's own verdict. Codex classifies
 a `response.failed` by `error.code` alone and retries every code outside its fatal
 set, so a refusal stamped `upstream_server_error` reached the client as a retryable
@@ -436,7 +436,7 @@ The [Responses HTTP/SSE owner](responses.md#responses-httpsse) validates the fir
 and strictly covered output indices before publishing JSON or serving state; see [ADR-6162](../decisions/ADR-6162-responses-http-sse.md).
 Deferred inspection checks cancellation after each yield and before terminal/cache publication;
 a disconnect returns 499. This buffered path makes no tee/eager choice; ordinary `stream:true`
-traffic retains the two shapes above.
+traffic retains the two shapes above, with terminal diagnostic redaction in both.
 
 > Decision record: [ADR-6162](../decisions/ADR-6162-responses-http-sse.md)
 

@@ -1,4 +1,5 @@
 import { isNativeControlResponse } from "./native-response-control";
+import { createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -835,6 +836,7 @@ export async function deliverPassthroughResponse(
             rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
           )
           : undefined,
+        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers),
         rememberPlaintextBlock,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const clientBlockRewrite = blockRewrites.length > 0

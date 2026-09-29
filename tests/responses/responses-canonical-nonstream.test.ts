@@ -4,6 +4,7 @@ import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-res
 import { getDefaultConfig } from "../../src/config";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
+import { expandPreviousResponseInput } from "../../src/responses/state";
 import {
   BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
@@ -223,6 +224,41 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(outbound?.stream).toBe(true);
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toMatchObject({ id: "resp_omitted", status: "completed", output: [] });
+  });
+
+  test.each([false, true])("redacts echoed pooled bearer in failed terminal for stream:%s", async stream => {
+    const bearer = "fixture-pooled-bearer-123456789";
+    const failed = {
+      id: `resp_failed_secret_${stream}`,
+      status: "failed",
+      output: [],
+      error: { type: "server_error", code: "upstream_error", message: `upstream saw Bearer ${bearer}` },
+      last_error: {
+        message: `Authorization: Bearer ${bearer}`,
+        detail: "raw echo fixture-forward-token",
+      },
+    };
+    globalThis.fetch = (async () => new Response(sseEvent("response.failed", { response: failed }), {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+
+    const response = await call(requestBody(stream, true));
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).not.toContain(bearer);
+    expect(text).not.toContain("fixture-forward-token");
+    if (stream) {
+      expect(text).toContain("event: response.failed");
+      expect(text).toContain("[REDACTED]");
+    } else {
+      const json = JSON.parse(text) as typeof failed;
+      expect(json).toMatchObject({ id: failed.id, status: "failed", output: [], error: {
+        type: "server_error", code: "upstream_error", message: "upstream saw Bearer [REDACTED]",
+      } });
+      expect(json.last_error.message).toContain("[REDACTED]");
+    }
+    const next = { model: "openai/gpt-5.6-sol", previous_response_id: failed.id, input: "retry" };
+    expect(expandPreviousResponseInput(next)).toEqual(next);
   });
 
   test("missing Content-Type keeps canonical non-stream opaque-state recovery on the SSE path", async () => {
