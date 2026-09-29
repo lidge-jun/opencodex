@@ -1666,6 +1666,7 @@
     "subagent-model-fallback.test.ts": "routing",
     "codex-agent-role-models.test.ts": "routing",
     "codex-role-sizing.test.ts": "routing",
+    "codex-role-auto-assign.test.ts": "routing",
     "omo-role-models.test.ts": "clients",
     "lazycodex-detection.test.ts": "clients",
     "codex-agent-role-routes.test.ts": "server",
