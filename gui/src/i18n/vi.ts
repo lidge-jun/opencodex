@@ -260,6 +260,8 @@ export const vi: Record<TKey, string> = {
   "startup.preference": "Khởi động theo yêu cầu",
   "startup.enabled": "Đã bật",
   "startup.disabled": "Đã tắt",
+  "startup.protection.desktop": "Ứng dụng máy tính",
+  "startup.desktopHint": "Khởi chạy khi đăng nhập và giám sát proxy tích hợp. Xác minh quyền quản lý và các tiến trình đang chạy.",
   "startup.protection.service": "Service nền",
   "startup.protection.shim": "Trình bao bọc khởi chạy",
   "startup.protection.none": "Chưa cài đặt",

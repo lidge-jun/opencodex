@@ -265,6 +265,8 @@ export const ja: Record<TKey, string> = {
   "startup.preference": "オンデマンド起動",
   "startup.enabled": "有効",
   "startup.disabled": "無効",
+  "startup.protection.desktop": "デスクトップアプリ",
+  "startup.desktopHint": "ログイン時に起動し、内蔵プロキシを監視します。管理権限の記録と実行中のプロセスを確認します。",
   "startup.protection.service": "バックグラウンドサービス",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未インストール",

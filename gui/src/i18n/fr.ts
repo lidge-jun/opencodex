@@ -260,6 +260,8 @@ export const fr: Record<TKey, string> = {
   "startup.preference": "Démarrage à la demande",
   "startup.enabled": "Activé",
   "startup.disabled": "Désactivé",
+  "startup.protection.desktop": "Application de bureau",
+  "startup.desktopHint": "Démarre à la connexion et supervise son proxy intégré. La prise en charge et les processus actifs sont vérifiés.",
   "startup.protection.service": "Service en arrière-plan",
   "startup.protection.shim": "Mécanisme de lancement",
   "startup.protection.none": "Non installé",

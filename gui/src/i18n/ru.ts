@@ -265,6 +265,8 @@ export const ru: Record<TKey, string> = {
   "startup.preference": "Запуск по требованию",
   "startup.enabled": "Включён",
   "startup.disabled": "Выключен",
+  "startup.protection.desktop": "Настольное приложение",
+  "startup.desktopHint": "Запускается при входе и следит за встроенным прокси. Проверяются владелец и работающие процессы.",
   "startup.protection.service": "Фоновая служба",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "Не установлен",

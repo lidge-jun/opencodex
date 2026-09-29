@@ -260,6 +260,8 @@ export const zh: Record<TKey, string> = {
   "startup.preference": "按需启动",
   "startup.enabled": "已启用",
   "startup.disabled": "已禁用",
+  "startup.protection.desktop": "桌面应用",
+  "startup.desktopHint": "登录时启动，由桌面应用守护内置代理；已核对接管记录和实际进程。",
   "startup.protection.service": "后台服务",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未安装",

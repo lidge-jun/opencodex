@@ -260,6 +260,8 @@ export const ko: Record<TKey, string> = {
   "startup.preference": "필요 시 자동 시작",
   "startup.enabled": "켜짐",
   "startup.disabled": "꺼짐",
+  "startup.protection.desktop": "데스크톱 앱",
+  "startup.desktopHint": "로그인 시 시작하여 내장 프록시를 관리합니다. 소유 기록과 실행 중인 프로세스를 확인합니다.",
   "startup.protection.service": "백그라운드 서비스",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "설치되지 않음",

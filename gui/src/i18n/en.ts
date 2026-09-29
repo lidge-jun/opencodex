@@ -267,6 +267,8 @@ export const en = {
   "startup.preference": "On-demand startup",
   "startup.enabled": "Enabled",
   "startup.disabled": "Disabled",
+  "startup.protection.desktop": "Desktop app",
+  "startup.desktopHint": "Starts at login; the desktop app supervises its bundled proxy. Ownership and live processes are verified.",
   "startup.protection.service": "Background service",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "Not installed",

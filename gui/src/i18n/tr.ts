@@ -266,6 +266,8 @@ export const tr: Record<TKey, string> = {
   "startup.preference": "İsteğe bağlı başlatma",
   "startup.enabled": "Etkin",
   "startup.disabled": "Devre dışı",
+  "startup.protection.desktop": "Masaüstü uygulaması",
+  "startup.desktopHint": "Oturum açıldığında başlar ve yerleşik proxy’yi izler. Sahiplik ve çalışan işlemler doğrulanır.",
   "startup.protection.service": "Arka plan servisi",
   "startup.protection.shim": "Başlatıcı shim",
   "startup.protection.none": "Yüklü değil",

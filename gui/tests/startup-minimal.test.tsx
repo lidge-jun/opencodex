@@ -36,8 +36,10 @@ function response(body: unknown): Response {
 }
 
 let status: "protected" | "at-risk" = "protected";
+let desktop = false;
 
 beforeEach(() => {
+  desktop = false;
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   testWindow = new Window({ url: "http://localhost/#startup" });
@@ -54,7 +56,11 @@ beforeEach(() => {
     configurable: true,
     value: async (url: string) => {
       const path = new URL(String(url), "http://localhost/").pathname;
-      if (path === "/api/startup-health") return response(health(status));
+      if (path === "/api/startup-health") return response(desktop ? {
+        ...health("protected"), protection: "desktop", serviceInstalled: false, serviceViable: false,
+        shimInstalled: false, shimHealthy: false,
+        desktop: { owned: true, loginEnabled: true, running: true, viable: true },
+      } : health(status));
       if (path === "/api/settings") return response({ codexAutoStart: true, codexRuntime: { version: "x" } });
       return response({});
     },
@@ -98,4 +104,14 @@ test("at-risk: recovery details open by default", async () => {
   await mount();
   const details = container.querySelector<HTMLDetailsElement>("details.startup-recovery-details")!;
   expect(details.open).toBe(true);
+});
+
+test("desktop protection is named separately and cannot install a competing service", async () => {
+  desktop = true;
+  await mount();
+  expect(container.querySelector(".startup-state-line")?.textContent).toContain("Desktop app");
+  expect(container.querySelector(".startup-details")?.textContent).toContain("desktop app supervises");
+  const install = container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Install"]');
+  expect(install).not.toBeNull();
+  expect(install!.disabled).toBe(true);
 });

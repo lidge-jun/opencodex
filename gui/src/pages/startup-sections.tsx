@@ -88,7 +88,7 @@ export function StartupDetailsSection({
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
   const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
   const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
-  const actionsDisabled = installBusy !== null || failed || loading;
+  const actionsDisabled = installBusy !== null || failed || loading || data.desktop?.owned === true;
 
   return (
     <section className="panel startup-details">
@@ -96,6 +96,14 @@ export function StartupDetailsSection({
         <h3 className="panel-title">{t("startup.details")}</h3>
         <span className="muted mono">{data.platform}</span>
       </div>
+      {data.desktop && (
+        <div className="startup-detail-row">
+          <div><strong>{t("startup.protection.desktop")}</strong><span>{t("startup.desktopHint")}</span></div>
+          <div className="startup-detail-actions">
+            <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t("startup.unhealthy")} />
+          </div>
+        </div>
+      )}
       <div className="startup-detail-row">
         <div><strong>{t("startup.service")}</strong><span>{t("startup.serviceHint")}</span></div>
         <div className="startup-detail-actions">

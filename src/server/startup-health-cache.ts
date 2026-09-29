@@ -5,6 +5,7 @@ import { deriveStartupHealth, type StartupHealth } from "../codex/autostart-heal
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
 import { durableBunPath } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import type { OcxConfig } from "../types";
 import { truncateRetainedUtf8 } from "../lib/admission";
 
@@ -121,7 +122,7 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
   const bun = durableBunPath();
   const cli = join(import.meta.dir, "..", "cli", "index.ts");
   return new Promise(resolve => {
-    execFile(bun, [cli, "__startup-health"], {
+    execFile(bun, selfLaunchArgv(["__startup-health"], { sourceEntrypoint: cli }), {
       encoding: "utf8",
       env: process.env,
       timeout: PROBE_TIMEOUT_MS,

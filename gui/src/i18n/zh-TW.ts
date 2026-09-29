@@ -152,6 +152,8 @@ export const zhTW: Record<TKey, string> = {
   "startup.preference": "按需啟動",
   "startup.enabled": "已啟用",
   "startup.disabled": "已停用",
+  "startup.protection.desktop": "桌面應用程式",
+  "startup.desktopHint": "登入時啟動，由桌面應用程式守護內建代理；已核對接管記錄和實際程序。",
   "startup.protection.service": "背景服務",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未安裝",

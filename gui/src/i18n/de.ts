@@ -258,6 +258,8 @@ export const de: Record<TKey, string> = {
   "startup.preference": "Start bei Bedarf",
   "startup.enabled": "Aktiviert",
   "startup.disabled": "Deaktiviert",
+  "startup.protection.desktop": "Desktop-App",
+  "startup.desktopHint": "Startet bei der Anmeldung und überwacht den integrierten Proxy. Zuständigkeit und laufende Prozesse werden geprüft.",
   "startup.protection.service": "Hintergrunddienst",
   "startup.protection.shim": "Launcher-Shim",
   "startup.protection.none": "Nicht installiert",
