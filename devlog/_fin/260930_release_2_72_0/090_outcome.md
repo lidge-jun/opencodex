@@ -9,7 +9,8 @@ Closed 2026-09-30 (KST).
 | Payment and sponsor email | TokenLab's 1,200 USDT payment confirmed on-chain (2026-09-29 13:53 UTC). Reply sent from the maintainer mailbox through Aside exec at 2026-09-30 02:59 KST, confirming receipt, the 2.72.0 release, the placements and the term start |
 
 Release content since 2.71.0: #6221 (TokenLab preset, by @hedging8563), #6240 (sponsor placement,
-CLI sponsor pinning, final sponsor copy and referral link), #6243 (dev pre-move to 2.73.0).
+CLI sponsor pinning, final sponsor copy and referral link). #6243 moved `dev` to 2.73.0 after the
+candidate was pinned and is not part of 2.72.0.
 
 Per the agreement, the three-month sponsorship term starts with the 2.72.0 npm release
 (2026-09-29 17:45 UTC, 2026-09-30 KST).
