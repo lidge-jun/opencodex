@@ -81,6 +81,9 @@ A standalone wrapper that invokes `start` directly must carry the generated prot
 markers, one quoted `OCX_BUN` assignment, and no `OCX_CLI` assignment in either quoting form.
 Its executable lines and control-flow order must match the standalone script emitted by
 `src/service/windows-taskxml.ts`; added jumps, exits, calls, labels, or commands make the probe unknown.
+When Task Scheduler reports a registered task, the probe also requires its action to contain exactly
+one Exec with the generated `wscript.exe` command and exact `/b /nologo` launcher arguments.
+A foreign command or additional action makes ownership unknown even if the wrapper and homes agree.
 Its executable must be absolute, end in `.exe`, and agree with `bunPath` in every readable service
 state record for the scheduler backend with `cliPath: null`. Missing, malformed, or contradictory
 state leaves the probe unknown; it cannot authorize unattended native Codex writes.

@@ -17,7 +17,8 @@ import {
   type ProbeRunner,
   type RawProbeRunner,
 } from "../../src/service-manager-probe";
-import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
+import { buildWindowsServiceScript, buildWindowsTaskXml } from "../../src/service/windows-taskxml";
+import { windowsWscript } from "../../src/service/windows-scheduler";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -346,7 +347,7 @@ describe("the Windows chain walk", () => {
       "<Task>",
       "  <Actions Context=\"Author\">",
       "    <Exec>",
-      `      <Command>C:\\WINDOWS\\System32\\wscript.exe</Command>`,
+      `      <Command>${windowsWscript()}</Command>`,
       `      <Arguments>/b /nologo &quot;${launcherPath.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}&quot;</Arguments>`,
       "    </Exec>",
       "  </Actions>",
@@ -447,6 +448,41 @@ describe("the Windows chain walk", () => {
     if (result.kind !== "present") return;
     expect(result.claims).toHaveLength(1);
     expect(result.claims[0].backend).toBe("scheduler");
+  });
+
+  test("a registered production-generated standalone action establishes native ownership", () => {
+    process.env.CODEX_HOME = "C:\\Users\\ws\\.codex";
+    process.env.OPENCODEX_HOME = "C:\\Users\\ws\\.opencodex";
+    const wrapper = writeStandaloneWrapper();
+    const statePath = writeStandaloneState();
+    const launcher = join(home, ".opencodex", "opencodex-service-launcher.vbs");
+    const registeredXml = buildWindowsTaskXml(wrapper, launcher, undefined, "S-1-5-21-123");
+    const { runRaw } = recorder(() => ({ status: 0, stdout: registeredXml }));
+    expect(inspectNativeCodexOwnership({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent", statePaths: [statePath],
+      configDir: join(home, ".opencodex"),
+      currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
+    }).ownership).toBe("owned");
+  });
+
+  test.each([
+    ["foreign command", (xml: string) => xml.replace(/<Command>[^<]*<\/Command>/, "<Command>C:\\foreign\\proxy.exe</Command>")],
+    ["extra Exec action", (xml: string) => xml.replace("</Actions>", "<Exec><Command>C:\\foreign\\proxy.exe</Command></Exec></Actions>")],
+  ])("a registered standalone task with %s cannot establish native ownership", (_, mutate) => {
+    process.env.CODEX_HOME = "C:\\Users\\ws\\.codex";
+    process.env.OPENCODEX_HOME = "C:\\Users\\ws\\.opencodex";
+    const wrapper = writeStandaloneWrapper();
+    const statePath = writeStandaloneState();
+    const launcher = join(home, ".opencodex", "opencodex-service-launcher.vbs");
+    const registeredXml = mutate(buildWindowsTaskXml(wrapper, launcher, undefined, "S-1-5-21-123"));
+    const { runRaw } = recorder(() => ({ status: 0, stdout: registeredXml }));
+    const deps = {
+      platform: "win32" as const, home, runRaw, winswStatus: () => "nonexistent" as const,
+      statePaths: [statePath], configDir: join(home, ".opencodex"),
+      currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
+    };
+    expect(inspectServiceManagerInstallation(deps).kind).toBe("unknown");
+    expect(inspectNativeCodexOwnership(deps).ownership).toBe("unknown");
   });
 
   test.each([
@@ -672,10 +708,7 @@ describe("the Windows chain walk", () => {
     ].join("\r\n"));
     const foreignLauncher = join(home, ".opencodex", "foreign-launcher.vbs");
     writeFileSync(foreignLauncher, `shell.Run """${foreignWrapper}""", 0, True\r\n`);
-    const registeredXml = [
-      '<?xml version="1.0" encoding="UTF-16"?>',
-      `<Arguments>/b /nologo &quot;${foreignLauncher}&quot;</Arguments>`,
-    ].join("\n");
+    const registeredXml = windowsTaskXmlFor(foreignLauncher);
     const { runRaw } = recorder(() => ({ status: 0, stdout: registeredXml }));
 
     const result = inspectServiceManagerInstallation({ platform: "win32", home, runRaw, winswStatus: () => "nonexistent" });

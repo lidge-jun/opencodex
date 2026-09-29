@@ -30,7 +30,7 @@ import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "./lib/bun-runtime";
 import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./service/windows-wrapper-exit";
-import { buildWindowsServiceScript } from "./service/windows-taskxml";
+import { buildWindowsServiceScript, windowsTaskActionMatches } from "./service/windows-taskxml";
 import { inspectServiceStateEvidence, serviceStatePathsForOpenCodexHome } from "./service/state";
 
 /** Short: this runs inside admission, and a slow answer is the same as none. */
@@ -894,6 +894,10 @@ function inspectWindows(
     const registeredWalk = walkWindowsChain(deps, registration.registeredXml, taskXmlPath);
     if (registeredWalk.kind !== "present") return registeredWalk;
     const registeredClaim = registeredWalk.claims[0];
+    const registeredLauncher = /"([^"]+)"/.exec(windowsTaskArguments(registration.registeredXml) ?? "")?.[1];
+    if (!registeredLauncher || !windowsTaskActionMatches(registration.registeredXml, registeredLauncher)) {
+      return unknown("the registered scheduled-task action does not match the generated launcher action");
+    }
     if (!homesEqual(registeredClaim.homes, stagedClaim.homes)) {
       return unknown("the registered scheduled task names different homes than the staged task definition");
     }
