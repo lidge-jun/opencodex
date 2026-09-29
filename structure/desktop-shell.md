@@ -417,6 +417,14 @@ the runtime to be gone; destroying the X window or a crash does not count as a d
 report records readiness time and whole app-process-tree RSS as evidence; those observations are not
 pass/fail budgets until a reviewed cross-platform baseline exists.
 
+The lane takes about 15 minutes, so a pull request selects it only through the `changes` job's
+`desktop` filter: `desktop/**`, the standalone build and its runtime locator
+(`scripts/build-standalone.ts`, `scripts/standalone-targets.ts`, `src/lib/standalone.ts`,
+`src/lib/bun-runtime.ts`), native keyring staging (`scripts/standalone-keyring.ts`,
+`src/lib/keyring-native.ts`), `package.json`, `bun.lock` and `ci.yml` itself. Ordinary `src/**` and
+`gui/**` edits do not run it on a pull request; promotion pushes to `main` and `preview` and
+`workflow_dispatch` always do, so a packaging regression from such an edit surfaces at promotion.
+
 Extraction is intentional. A GitHub-hosted runner is disposable but its package database is still a
 shared job resource, and a normal pull request does not need passwordless package installation or GUI
 elevation to prove that the packaged executable and resources boot together. The separate

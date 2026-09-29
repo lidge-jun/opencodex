@@ -270,15 +270,20 @@ jobs:
               - '.github/workflows/ci.yml'
             gui:
               - 'gui/**'
-            # Building both Linux package formats and booting their real payloads is
-            # substantially heavier than the Rust-only desktop-shell check. Keep it
-            # scoped to inputs that can change the packaged shell, dashboard or
-            # standalone sidecar. The workflow names itself so edits to this lane
-            # cannot skip their own E2E.
+            # Building both Linux package formats and booting their real payloads takes
+            # about 15 minutes, far more than the Rust-only desktop-shell check. On a
+            # pull request it runs only for inputs that change how the package is
+            # assembled or launched: the shell itself, the standalone sidecar build
+            # and its runtime locator, the native keyring staging, and the dependency
+            # set. Ordinary src/** and gui/** changes no longer select it on a pull
+            # request; they are still covered on every promotion push to main and
+            # preview and by workflow_dispatch, which always request this job.
+            # The workflow names itself so edits to this lane cannot skip their own E2E.
             desktop:
               - 'desktop/**'
-              - 'gui/**'
-              - 'src/**'
+              - 'src/lib/standalone.ts'
+              - 'src/lib/keyring-native.ts'
+              - 'src/lib/bun-runtime.ts'
               - 'scripts/build-standalone.ts'
               - 'scripts/standalone-keyring.ts'
               - 'scripts/standalone-targets.ts'

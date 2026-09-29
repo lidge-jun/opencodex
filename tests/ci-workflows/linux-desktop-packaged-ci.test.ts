@@ -27,9 +27,25 @@ describe("Linux packaged desktop E2E in CI", () => {
     const filter = changes?.steps?.find(step => step.name === "Detect changed areas");
     const filters = String(filter?.with?.filters ?? "");
     expect(filters).toContain("desktop:");
-    expect(filters).toContain("'desktop/**'");
-    expect(filters).toContain("'src/**'");
-    expect(filters).toContain("'.github/workflows/ci.yml'");
+    // The package E2E filter: only packaging inputs select it on a pull request. Ordinary
+    // src/** and gui/** edits are left to promotion pushes and workflow_dispatch.
+    const desktopFilter = filters.split(/\n(?=\s{0,2}\S[^\n]*:\s*$)/m)
+      .find(block => /^\s*desktop:\s*$/m.test(block.split("\n")[0] ?? "")) ?? "";
+    const desktopPaths = [...desktopFilter.matchAll(/- '([^']+)'/g)].map(match => match[1]);
+    expect(desktopPaths).toEqual([
+      "desktop/**",
+      "src/lib/standalone.ts",
+      "src/lib/keyring-native.ts",
+      "src/lib/bun-runtime.ts",
+      "scripts/build-standalone.ts",
+      "scripts/standalone-keyring.ts",
+      "scripts/standalone-targets.ts",
+      "package.json",
+      "bun.lock",
+      ".github/workflows/ci.yml",
+    ]);
+    expect(desktopPaths).not.toContain("src/**");
+    expect(desktopPaths).not.toContain("gui/**");
 
     const shell = workflow.jobs?.["desktop-shell"];
     expect(shell?.if).toContain("needs.changes.outputs.desktop == 'true'");
