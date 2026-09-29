@@ -412,3 +412,13 @@ L'accès HTTP direct est surtout utile aux intégrations qui exigent les contrat
 ## Sessions distantes et rotation des clés de données
 
 `POST /api/keys/rotate {id}` démarre un chevauchement de dix minutes et renvoie le nouveau secret une seule fois. `POST /api/keys/rotate/commit {id,rotationId}` valide; `DELETE /api/keys/rotate {id,rotationId}` annule. L'authentification de gestion est obligatoire et une clé de données ne suffit pas. `POST /api/session/logout` exige la `gui-session` courante, l'Origin correspondante et CSRF. Un jeton admin reçoit 403 et ne peut jamais créer une session de consentement.
+
+## Seuil d’utilisation par compte Anthropic
+
+`PUT /api/oauth/accounts/auto-switch`
+
+Anthropic OAuth uniquement. `{ provider: "anthropic", accountId, threshold }` : entier 0–100 ou null pour hériter ; champ absent invalide. Conservé au redémarrage, supprimé avec le compte.
+
+Le DTO inclut `autoSwitchThresholdOverride` (entier/null), `autoSwitchThreshold` (défaut du pool) et `effectiveAutoSwitchThreshold`. 0 désactive seulement le basculement selon l’utilisation ; pause et reprise après 429 restent actives.
+
+HTTP: 400 invalid/unsupported; 404 missing account; `oauth_mutation_busy` on lock contention.

@@ -209,7 +209,11 @@ token，也不是简单重读账号列表。`--json` 返回
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值只有在 `pool.kernel` 打开且 `strategy: "fill-first"` 时才参与选择；标志关闭时，保存阈值不会启用阈值切换。两种情况下都不会改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值已保存但未应用，`inert: false` 表示账户池正在应用它。没有 `inert` 字段表示能力未知，此时同样不会报告 `enabled: true`。API 密钥提供方、Anthropic 和无效值会被拒绝。
+控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值只有在 `pool.kernel` 打开且 `strategy: "fill-first"` 时才参与选择；标志关闭时，保存阈值不会启用阈值切换。两种情况下都不会改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值已保存但未应用，`inert: false` 表示账户池正在应用它。没有 `inert` 字段表示能力未知，此时同样不会报告 `enabled: true`。API 密钥提供方和无效值会被拒绝。
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Anthropic OAuth 使用 `ocx account auto-switch anthropic threshold 90 --account <id>` 保存账户专属整数 0–100。`off --account <id>` 设为 0，`on --account <id>` 设为 80，`inherit --account <id>` 恢复继承，`status --account <id>` 只读查询；可加 `--json`。账户卡片提供相同控制。未设置/null 继承 `anthropicAccountPool.autoSwitchThreshold`（默认 80）；0 只禁用该账户按用量切换。设置在重启和重新登录后保留，删除账户时移除。手动选择、affinity、未知或全部耗尽时的后备行为与模型路由限制不变。池禁用时不应用阈值；暂停与 429 恢复仍有效。
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

@@ -190,7 +190,11 @@ OAuth プロバイダーと API キー プロバイダーの場合、これに�
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-`openai` Codex プールのしきい値を制御するか、汎用 OAuth プールのしきい値を保存します。`on` は 80%、`off` は 0%、`threshold <n>` は 0–100 を保存します。汎用プールのしきい値は `pool.kernel` が有効で `strategy: "fill-first"` の場合にのみ選択へ反映されます。フラグが無効なら、保存してもしきい値による切り替えは有効になりません。いずれの場合もプロバイダーの有効化設定と 429 エラー時のローテーションは変更されません。汎用プールの照会と変更の結果はサーバーの確認値を使用します。汎用プールの `poolEnabled` は保存された設定で、`null` は未指定です。継承後の実効状態ではありません。`inert: true` は保存済みで未適用、`inert: false` はプールが適用中であることを示します。`inert` が無い場合は機能が不明であり、その場合も `enabled: true` とは表示しません。API キープロバイダー、Anthropic、不正な値は拒否されます。
+`openai` Codex プールのしきい値を制御するか、汎用 OAuth プールのしきい値を保存します。`on` は 80%、`off` は 0%、`threshold <n>` は 0–100 を保存します。汎用プールのしきい値は `pool.kernel` が有効で `strategy: "fill-first"` の場合にのみ選択へ反映されます。フラグが無効なら、保存してもしきい値による切り替えは有効になりません。いずれの場合もプロバイダーの有効化設定と 429 エラー時のローテーションは変更されません。汎用プールの照会と変更の結果はサーバーの確認値を使用します。汎用プールの `poolEnabled` は保存された設定で、`null` は未指定です。継承後の実効状態ではありません。`inert: true` は保存済みで未適用、`inert: false` はプールが適用中であることを示します。`inert` が無い場合は機能が不明であり、その場合も `enabled: true` とは表示しません。API キープロバイダー、不正な値は拒否されます。
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Anthropic OAuth では `ocx account auto-switch anthropic threshold 90 --account <id>` でアカウント別の整数 0–100 を保存します。`off --account <id>` は 0、`on --account <id>` は 80、`inherit --account <id>` は継承へ戻し、`status --account <id>` は読み取り専用です。`--json` も使えます。カードにも同じカスタム設定があります。未設定/null は `anthropicAccountPool.autoSwitchThreshold`（既定 80）を継承し、0 はそのアカウントの使用量による切り替えのみ無効にします。再起動・再ログインで保持され、削除時に消えます。手動選択、affinity、使用量不明・全候補消耗時のフォールバック、モデルルート制限は維持されます。プール無効時は適用されず、一時停止と 429 復旧は引き続き有効です。
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

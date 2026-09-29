@@ -92,6 +92,23 @@ test("the usage tab reports the real outcome, not the click", async () => {
   expect(host.textContent).toContain("Quota check completed");
 });
 
+test("Anthropic account threshold editor uses its pool default, preserves zero, and resets with null", async () => {
+  const calls: Array<number | null> = [];
+  const item = { ...oauthItem, name: "anthropic", adapter: "anthropic" };
+  const handlers = authHandlers({ onAccountThreshold: async (_provider, _account, value) => { calls.push(value); return true; } });
+  const row = { id: "threshold-account", active: true, autoSwitchThresholdOverride: null, autoSwitchThreshold: 65 };
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[row]} authHandlers={handlers} />);
+  const toggle = () => host.querySelector('[aria-label^="Override global usage threshold"]') as HTMLButtonElement;
+  expect(toggle()).not.toBeNull();
+  await act(async () => { toggle().click(); }); expect(calls).toEqual([65]);
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[{ ...row, autoSwitchThresholdOverride: 0 }]} authHandlers={handlers} />);
+  const input = host.querySelector('#anthropic-threshold-threshold-account') as HTMLInputElement;
+  expect(input.value).toBe("0");
+  await act(async () => { toggle().click(); }); expect(calls).toEqual([65, null]);
+  await render(<ProviderAuthPanel item={item} apiBase="" accounts={[{ id: row.id, active: true }]} authHandlers={handlers} />);
+  expect(toggle()).toBeNull(); // Old servers do not acquire a synthetic capability.
+});
+
 test("a failed read is reported as a failure", async () => {
   const { handler, settle } = deferredHandler();
   await render(<ProviderUsage item={usageItem} onRefreshQuota={handler} />);

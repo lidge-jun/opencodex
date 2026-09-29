@@ -919,15 +919,19 @@ Show or set the usage percentage at which a pool moves to another account.
 | PUT | `/api/codex-auth/auto-switch` |
 | GET | `/api/oauth/accounts/pool` |
 | PUT | `/api/oauth/accounts/pool` |
+| GET | `/api/oauth/accounts` |
+| PUT | `/api/oauth/accounts/auto-switch` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the stored threshold and whether it is applied. |
+| `--account` | string | Anthropic account ID; inherit restores the pool default, off stores zero. |
 
 JSON mode: `envelope`.
 
 - A bare invocation reads and never writes.
 - `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.
+- Anthropic requires --account <id>; inherit sends null to restore its pool default. Manual/affinity precedence and pool-off recovery are unchanged.
 - For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.
 
 ### `ocx storage cleanup`

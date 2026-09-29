@@ -2,6 +2,7 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "pws.anthropicAccountThresholdHint": "覆寫 Claude 集區預設門檻。0 僅停用此帳戶的依用量切換；暫停和速率限制復原仍然適用。",
   "kiroLogin.title": "登入 Kiro",
   "kiroLogin.chooseMethod": "選擇登入方式",
   "kiroLogin.cli": "從 Kiro CLI 匯入",

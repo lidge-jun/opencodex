@@ -348,3 +348,13 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 ## 远程会话与数据密钥轮换
 
 `POST /api/keys/rotate {id}` 开始十分钟重叠期，并只返回一次新密钥。`POST /api/keys/rotate/commit {id,rotationId}` 提交，`DELETE /api/keys/rotate {id,rotationId}` 中止。它们都需要管理认证，数据密钥不能调用。`POST /api/session/logout` 需要当前 `gui-session`、匹配的 Origin 和 CSRF。Admin token 会收到 403，永远不能创建用户同意会话。
+
+## Anthropic 账户用量阈值
+
+`PUT /api/oauth/accounts/auto-switch`
+
+仅 Anthropic OAuth。`{ provider: "anthropic", accountId, threshold }`：整数 0–100 或 null 继承；缺少字段无效。重启后保留，随账户删除。
+
+DTO 包含 `autoSwitchThresholdOverride`（整数/null）、`autoSwitchThreshold`（池默认值）、`effectiveAutoSwitchThreshold`。0 只禁用按用量切换；暂停和 429 恢复不变。
+
+HTTP: 400 invalid/unsupported; 404 missing account; `oauth_mutation_busy` on lock contention.

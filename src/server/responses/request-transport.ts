@@ -193,9 +193,13 @@ export async function prepareResponsesTransport(
       // Resolve that choice, not the rejected candidate, before trying admission again.
       oauthSelection = captureOAuthAccountSelection(route.providerName);
       if (!oauthSelection) return null;
-      const revisedAnthropicId = route.providerName === "anthropic" && anthropicRouteDecision
-        ? resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision).accountId : null;
-      if (route.providerName === "anthropic" && anthropicRouteDecision && !revisedAnthropicId) return null;
+      // A revision also changes on per-account policy edits. Re-evaluate the selector
+      // after credential waits even without a model route, rather than reusing stale active.
+      const revisedAnthropic = route.providerName === "anthropic"
+        ? resolveAnthropicAccountForSession(anthropicSessionKey, config, Date.now(), anthropicRouteDecision) : null;
+      const revisedAnthropicId = revisedAnthropic?.accountId;
+      if (route.providerName === "anthropic" && !revisedAnthropicId) return null;
+      if (revisedAnthropic) anthropicReason = revisedAnthropic.reason;
       candidate = route.providerName === "anthropic"
         ? await getAnthropicPoolAccessSnapshot(revisedAnthropicId ?? oauthSelection.accountId)
         : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });

@@ -3,6 +3,7 @@
 Anthropic account pause, model routes, and quota labels follow the
 [Anthropic account-pool contract](providers/anthropic-account-pool.md).
 
+Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
 An Anthropic 429 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling is skipped only after the matching account cooldown is present.
 
 GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses

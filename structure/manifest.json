@@ -268,6 +268,13 @@
       ]
     },
     {
+      "path": "providers/anthropic-account-thresholds.md",
+      "tier": 4,
+      "title": "Anthropic Account Thresholds",
+      "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",

@@ -10,6 +10,7 @@ export interface AccountAutoSwitchControlProps {
   override: number | null;
   disabled?: boolean;
   inputId: string;
+  hintText?: string;
   onChange(threshold: number | null): Promise<boolean>;
 }
 
@@ -20,6 +21,7 @@ export default function AccountAutoSwitchControl({
   override,
   disabled = false,
   inputId,
+  hintText,
   onChange,
 }: AccountAutoSwitchControlProps) {
   const t = useT();
@@ -40,7 +42,7 @@ export default function AccountAutoSwitchControl({
     draft: String(current.override ?? globalThreshold),
   }));
   const blocked = disabled || saving;
-  const hint = t("accountPool.autoSwitchHint");
+  const hint = hintText ?? t("accountPool.autoSwitchHint");
   const hintId = useId();
 
   const write = async (next: number | null) => {

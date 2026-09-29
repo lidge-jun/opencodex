@@ -284,7 +284,11 @@ OAuth 및 API 키 제공자에는 제공자의 할당량 보고 엔드포인트�
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-`openai` Codex 풀의 임계값을 제어하거나 일반 OAuth 풀의 임계값을 저장합니다. `on`은 80%, `off`는 0%, `threshold <n>`은 0–100을 저장합니다. 일반 풀의 임계값은 `pool.kernel`이 켜져 있고 `strategy: "fill-first"`일 때만 선택에 반영됩니다. 플래그가 꺼져 있으면 저장해도 임계값 기반 전환이 켜지지 않습니다. 어느 쪽이든 제공자 활성화 설정은 바뀌지 않고, 429 오류에 따른 회전도 비활성화되지 않습니다. 일반 풀의 조회와 변경 결과는 서버가 확인한 값을 사용합니다. 일반 풀의 `poolEnabled`는 저장된 제공자별 설정이며 `null`은 미지정입니다. 전역 설정을 상속한 실제 상태를 뜻하지 않습니다. `inert: true`는 임계값이 저장만 되고 적용되지 않는 상태, `inert: false`는 풀이 실제로 적용하고 있는 상태를 뜻합니다. `inert`가 아예 없으면 기능 지원을 알 수 없는 경우이며, 이때도 `enabled: true`로 표시하지 않습니다. API 키 제공자, Anthropic 및 잘못된 값은 거부합니다.
+`openai` Codex 풀의 임계값을 제어하거나 일반 OAuth 풀의 임계값을 저장합니다. `on`은 80%, `off`는 0%, `threshold <n>`은 0–100을 저장합니다. 일반 풀의 임계값은 `pool.kernel`이 켜져 있고 `strategy: "fill-first"`일 때만 선택에 반영됩니다. 플래그가 꺼져 있으면 저장해도 임계값 기반 전환이 켜지지 않습니다. 어느 쪽이든 제공자 활성화 설정은 바뀌지 않고, 429 오류에 따른 회전도 비활성화되지 않습니다. 일반 풀의 조회와 변경 결과는 서버가 확인한 값을 사용합니다. 일반 풀의 `poolEnabled`는 저장된 제공자별 설정이며 `null`은 미지정입니다. 전역 설정을 상속한 실제 상태를 뜻하지 않습니다. `inert: true`는 임계값이 저장만 되고 적용되지 않는 상태, `inert: false`는 풀이 실제로 적용하고 있는 상태를 뜻합니다. `inert`가 아예 없으면 기능 지원을 알 수 없는 경우이며, 이때도 `enabled: true`로 표시하지 않습니다. API 키 제공자 및 잘못된 값은 거부합니다.
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Anthropic OAuth는 `ocx account auto-switch anthropic threshold 90 --account <id>`로 계정별 정수 0–100을 저장합니다. `off --account <id>`는 0, `on --account <id>`는 80, `inherit --account <id>`는 상속 복원, `status --account <id>`는 조회입니다. `--json`도 지원합니다. 계정 카드에서 같은 사용자 지정 임계값을 편집합니다. 미설정/null은 풀 기본값 `anthropicAccountPool.autoSwitchThreshold`(기본 80)를 상속하고, 0은 해당 계정의 사용량 기반 전환만 끕니다. 재시작·재로그인 후에도 유지되고 계정 삭제 시 제거됩니다. 수동 선택, 세션 affinity, 사용량 미확인·전체 소진 시 fallback, 모델 경로 제한은 유지됩니다. 풀이 꺼져 있으면 임계값은 적용되지 않으며 pause와 429 복구는 계속 동작합니다.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

@@ -354,3 +354,13 @@ account の selector binding は残るため、欠落中の exact route は fail
 ## リモートセッションとデータキー更新
 
 `POST /api/keys/rotate {id}` は10分間の移行を開始し、新しい秘密値を一度だけ返します。`POST /api/keys/rotate/commit {id,rotationId}` で確定し、`DELETE /api/keys/rotate {id,rotationId}` で中止します。管理認証が必須で、データキーからは呼べません。`POST /api/session/logout` には現在の `gui-session`、一致する Origin、CSRF が必要です。管理トークンは 403 となり、同意セッションを作成できません。
+
+## Anthropic アカウント使用量しきい値
+
+`PUT /api/oauth/accounts/auto-switch`
+
+Anthropic OAuth のみ。`{ provider: "anthropic", accountId, threshold }`: 整数 0–100、null は継承、欠落はエラー。再起動後も保持され、アカウント削除時に消えます。
+
+DTO は `autoSwitchThresholdOverride`（整数/null）、`autoSwitchThreshold`（プール既定値）、`effectiveAutoSwitchThreshold` を含みます。0 は使用量による切り替えのみ無効にし、一時停止と 429 復旧は維持します。
+
+HTTP: 400 invalid/unsupported; 404 missing account; `oauth_mutation_busy` on lock contention.

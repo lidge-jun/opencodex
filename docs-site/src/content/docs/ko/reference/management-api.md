@@ -380,3 +380,13 @@ account의 selector binding은 남아 있어 계정이 없을 때 exact route가
 ## 원격 세션과 데이터 키 교체
 
 `POST /api/keys/rotate {id}`는 최대 10분의 전환을 시작하며 새 데이터 키를 한 번만 반환합니다. `POST /api/keys/rotate/commit {id,rotationId}`는 확정하고, `DELETE /api/keys/rotate {id,rotationId}`는 취소합니다. 모두 관리 인증이 필요하며 데이터 키로 호출할 수 없습니다. `POST /api/session/logout`은 현재 `gui-session`, 일치하는 Origin, CSRF가 필요합니다. 관리자 토큰은 403을 받고 동의 세션을 만들거나 교환할 수 없습니다.
+
+## Anthropic 계정 사용량 임계값
+
+`PUT /api/oauth/accounts/auto-switch`
+
+Anthropic OAuth 전용. `{ provider: "anthropic", accountId, threshold }`: 정수 0–100, null은 상속, 누락은 오류. 재시작 후 유지되고 계정 삭제 시 제거됩니다.
+
+계정 DTO는 `autoSwitchThresholdOverride`(정수/null), `autoSwitchThreshold`(풀 기본값), `effectiveAutoSwitchThreshold`를 포함합니다. 0은 사용량 전환만 끄며 pause·429 복구는 유지합니다.
+
+HTTP: 400 invalid/unsupported; 404 missing account; `oauth_mutation_busy` on lock contention.

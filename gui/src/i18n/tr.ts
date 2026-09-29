@@ -5,6 +5,7 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "pws.anthropicAccountThresholdHint": "Claude havuzunun varsayılan eşiğini geçersiz kılar. 0, yalnızca bu hesap için kullanıma dayalı geçişi kapatır; duraklatma ve hız sınırı kurtarması geçerliliğini korur.",
   "kiroLogin.title": "Kiro oturumu aç",
   "kiroLogin.chooseMethod": "Oturum açma yöntemi seç",
   "kiroLogin.cli": "Kiro CLI ile içe aktar",

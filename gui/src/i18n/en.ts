@@ -6,6 +6,7 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "pws.anthropicAccountThresholdHint": "Overrides the Claude pool default. 0 disables usage-based switching only for this account; pause and rate-limit recovery still apply.",
   "kiroLogin.title": "Sign in to Kiro",
   "kiroLogin.chooseMethod": "Choose a sign-in method",
   "kiroLogin.cli": "Kiro CLI",

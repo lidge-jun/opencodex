@@ -1,4 +1,6 @@
 import { parseAnthropicModelRoutes, readAnthropicModelRoutes } from "../../oauth/anthropic-model-routes";
+import { effectiveAnthropicAccountThreshold } from "../../oauth/anthropic-account-threshold";
+import { handleAnthropicAccountThreshold } from "./anthropic-account-threshold";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -418,6 +420,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
             });
           return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true } : {}),
+            ...(provider === "anthropic" && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
+              effectiveAutoSwitchThreshold: effectiveAnthropicAccountThreshold(config, full),
+              autoSwitchThreshold: effectiveAnthropicAccountThreshold(config) } : {}),
             ...(provider === "kiro" && full ? kiroAutoSelection(full) : {}) };
         }),
       };
@@ -493,6 +498,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
+  if (url.pathname === "/api/oauth/accounts/auto-switch" && req.method === "PUT") return handleAnthropicAccountThreshold(req, config);
   if (url.pathname === "/api/oauth/accounts/pause" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);

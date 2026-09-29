@@ -1,4 +1,5 @@
 import { loadConfig } from "../config";
+import { cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
@@ -40,6 +41,7 @@ const AUTO_NOTE = "auto (no pin — lowest-usage account is selected per request
 const EXTENDED_USAGE = `Usage:
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account auto-switch anthropic <on|off|status|inherit|threshold <0-100>> --account <id> [--json]
   ocx account alias <provider> <id|alias|main> <display-name|-> [--json]
   ocx account priority <provider> <id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <id|alias|main> [--json]
@@ -358,6 +360,7 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const classified = configAndType(deps, name);
   // Anthropic keeps its threshold on its own pool contract; generic OAuth providers (#695)
   // and the Codex pool are accepted here.
+  if (!("error" in classified) && classified.type === "oauth" && name === "anthropic") return cmdAnthropicAccountThreshold(args, action, wantsJson, deps);
   if ("error" in classified || classified.type === "api-key" || name === "anthropic") {
     return usage("Error: auto-switch only applies to the openai Codex account pool or a generic OAuth provider pool");
   }

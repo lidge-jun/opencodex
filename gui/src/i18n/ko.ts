@@ -4,6 +4,7 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "pws.anthropicAccountThresholdHint": "Claude 풀 기본값을 재정의합니다. 0은 이 계정의 사용량 기반 전환만 끄며, 일시정지와 요청 제한 복구는 계속 적용됩니다.",
   "kiroLogin.title": "Kiro에 로그인",
   "kiroLogin.chooseMethod": "로그인 방법 선택",
   "kiroLogin.cli": "Kiro CLI에서 가져오기",

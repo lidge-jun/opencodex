@@ -1,5 +1,17 @@
 # GUI And Management API
 
+Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
+`autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
+`PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
+explicit null restores inheritance and missing/invalid values fail. Other providers are rejected.
+`src/server/management/anthropic-account-threshold.ts` validates; the auth store serializes writes.
+CLI `ocx account auto-switch anthropic` requires `--account <id>` with status, inherit, on, off or
+threshold. The dashboard reuses `AccountAutoSwitchControl` below account actions, retaining
+focus/draft semantics and translated copy. The hook protects same-provider selection mutations
+and stale roster reads; confirmed pool-setting changes seed new overrides immediately, without
+overwriting an existing custom draft. Old servers do not show a synthetic control. See
+[Anthropic threshold semantics](providers/anthropic-account-thresholds.md).
+
 Anthropic account rows now expose the shared boolean `paused` DTO and use the existing
 `PUT /api/oauth/accounts/pause` body `{ provider, accountId, paused }`. The dashboard's
 `ProviderAuthPanel` and `useProviderAccountPools` reuse the translated pause/resume actions,

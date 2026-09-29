@@ -402,3 +402,13 @@ fail closed, пока аккаунт отсутствует, а при повт�
 ## Удалённые сессии и ротация ключей данных
 
 `POST /api/keys/rotate {id}` начинает десятиминутный overlap и один раз возвращает новый секрет. `POST /api/keys/rotate/commit {id,rotationId}` подтверждает, `DELETE /api/keys/rotate {id,rotationId}` отменяет. Требуется management auth; ключ данных не подходит. `POST /api/session/logout` требует текущую `gui-session`, совпадающий Origin и CSRF. Admin token получает 403 и не может создать consent session.
+
+## Порог использования аккаунта Anthropic
+
+`PUT /api/oauth/accounts/auto-switch`
+
+Только Anthropic OAuth. `{ provider: "anthropic", accountId, threshold }`: целое 0–100 или null для наследования; отсутствие поля — ошибка. Сохраняется при перезапуске и удаляется вместе с аккаунтом.
+
+DTO содержит `autoSwitchThresholdOverride` (целое/null), `autoSwitchThreshold` (порог пула) и `effectiveAutoSwitchThreshold`. 0 отключает только переключение по использованию; пауза и восстановление после 429 сохраняются.
+
+HTTP: 400 invalid/unsupported; 404 missing account; `oauth_mutation_busy` on lock contention.

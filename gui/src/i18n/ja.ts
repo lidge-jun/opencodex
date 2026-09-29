@@ -4,6 +4,7 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "pws.anthropicAccountThresholdHint": "Claude プールの既定値を上書きします。0 はこのアカウントだけで使用量による切り替えを無効にします。一時停止とレート制限からの復旧は引き続き適用されます。",
   "kiroLogin.title": "Kiro にログイン",
   "kiroLogin.chooseMethod": "ログイン方法を選択",
   "kiroLogin.cli": "Kiro CLI から取り込む",

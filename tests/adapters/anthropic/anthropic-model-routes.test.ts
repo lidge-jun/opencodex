@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { OAUTH_PROVIDERS } from "../../../src/oauth";
+import { getAccountCredential, setAnthropicAccountThreshold } from "../../../src/oauth/store";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -90,6 +92,25 @@ test("bounded first-match globs and invalid rules", () => {
   expect(resolveAnthropicModelRoute(cfg, "CLAUDE-HAIKU-4").decision).toBeNull();
   expect(parseAnthropicModelRoutes([{ name: "a", match: "*", accounts: ["a", "a"] }]).ok).toBe(false);
   expect(parseAnthropicModelRoutes([{ name: "a", match: "[bad]", accounts: ["a"] }]).ok).toBe(false);
+});
+
+test.each([false, true])("threshold edit during credential refresh reselects before send (route=%s)", async routed => {
+  const ids = await seed(); const [a, b, c] = ids as [string, string, string];
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool = { enabled: true, strategy: "quota", ...(routed ? { routes: [{ name: "all", match: "claude-*", accounts: ids }] } : {}) };
+  const initial = resolveAnthropicAccountForSession(null, cfg);
+  await promoteAnthropicActiveAccount(initial.accountId!, captureOAuthAccountSelection("anthropic"), { config: cfg, reason: initial.reason });
+  for (const [id, percent] of [[a, 60], [b, 70], [c, 90]] as const) setCachedProviderAccountQuotaForTests("anthropic", id, { fiveHourPercent: percent, updatedAt: Date.now() });
+  const credential = getAccountCredential("anthropic", a)!;
+  await saveAccountCredential("anthropic", a, { ...credential, expires: Date.now() - 1 });
+  const refresh = spyOn(OAUTH_PROVIDERS.anthropic!, "refresh").mockImplementation(async () => {
+    await setAnthropicAccountThreshold(a, 50);
+    return { ...credential, expires: Date.now() + 3600_000 };
+  });
+  try {
+    const response = await post(cfg); expect(response.status).toBe(200);
+    expect(sends).toEqual(["Bearer synthetic-access-1"]);
+  } finally { refresh.mockRestore(); }
 });
 
 test.each([true, false])("all-paused pool returns 403 without any send (enabled=%s)", async enabled => {
