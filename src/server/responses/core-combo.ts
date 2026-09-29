@@ -46,6 +46,7 @@ import {
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
+import { poolAccountProviderLabel } from "../../providers/label";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import {
@@ -977,6 +978,8 @@ export async function executeComboResponses(
       status: failure.response.status,
       code: failure.upstreamCode,
       message: failure.classificationText,
+      // The dispatch rewrote this to name the pool account that actually served the turn.
+      failedAccount: poolAccountProviderLabel(childLog.provider, pick.target.provider),
       onCooldownRecorded: target => {
         failedTargetCooldownRecorded ||= targetKey(target) === failedTargetKey;
       },
