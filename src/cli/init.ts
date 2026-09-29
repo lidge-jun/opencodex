@@ -8,6 +8,7 @@ import { InitialConfigPublicationError } from "../config/initialize";
 import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
+import { pinSponsorsWithinKind } from "../providers/sponsor-order";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 class InitCancelledError extends Error {
@@ -126,7 +127,7 @@ export async function runInit(): Promise<void> {
   try {
     console.log("\n🔧 opencodex (ocx) setup\n");
 
-    const providers = buildInitProviders();
+    const providers = pinSponsorsWithinKind(buildInitProviders());
     printMenu(providers);
 
     const choice = await prompt.ask("\nSelect default provider (number): ");

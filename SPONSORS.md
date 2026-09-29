@@ -47,8 +47,8 @@ sponsor receives:
   policy. A second-language blurb (for example Chinese) may run alongside the English one.
 - A built-in provider preset (`ocx provider add <id>`) shipped in a public npm release,
   listed near the top of the provider picker in the dashboard and CLI and marked as a sponsor
-  there. The dashboard picker lists sponsor rows Main before Standard, then alphabetically by
-  label, an order no sponsor can buy.
+  there. The dashboard picker, `ocx init` and `ocx provider presets` list sponsor rows Main
+  before Standard, then alphabetically by label, an order no sponsor can buy.
 - A detailed entry on the [providers page](https://opencodex.me/guides/providers/) of the docs
   site.
 - Maintenance: if a release breaks the preset or its adapter, the maintainer fixes it; issues
