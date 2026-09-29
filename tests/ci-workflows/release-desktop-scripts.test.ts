@@ -154,6 +154,8 @@ describe("desktop release scripts", () => {
   test("the Linux sidecar verifier takes the staged AppImage directory and keeps the local default", () => {
     const verifier = readFileSync(repoPath("desktop", "scripts", "verify-linux-sidecar.sh"), "utf8");
     expect(verifier).toContain('bundle="${1:-$root/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage}"');
+    expect(verifier).toContain("usr/lib/OpenCodex/keyring/keyring.linux-x64-gnu.node");
+    expect(verifier).toContain("__keyring-load-check");
     const wrapper = readFileSync(repoPath("desktop", "scripts", "appimage-patchelf.py"), "utf8");
     expect(wrapper).toContain('os.environ.get("CARGO_TARGET_DIR"');
     expect(wrapper).toContain("APPDIR_SIDECAR_TAIL");

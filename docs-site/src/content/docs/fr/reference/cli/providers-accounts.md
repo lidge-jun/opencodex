@@ -214,6 +214,10 @@ faire basculer la requête vers un autre compte de pool admissible. Ces transiti
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+La commande CLI suspend ou reprend un compte Anthropic OAuth par id ou alias unique (correspondance exacte, puis sans distinction de casse). Utilise `PUT /api/oauth/accounts/pause` avec `{ provider: "anthropic", accountId, paused }`, également utilisé par le tableau de bord. L’état `paused` est enregistré dans le compte et exposé par `GET /api/oauth/accounts`. La suspension s’applique même si le pool proactif est désactivé : le compte est exclu de la sélection, des affinités et des successeurs 429. Si tous les comptes sont suspendus, les requêtes renvoient 403 jusqu’à une reprise. Les requêtes déjà envoyées continuent ; les identifiants et l’état de santé sont conservés. La suspension survit au redémarrage et à une nouvelle connexion, et disparaît avec la suppression du compte. Les seuils individuels ne font pas partie de cette commande.
+
 ### `ocx account clear <provider> [--json]`
 
 Efface la sélection manuelle du compte Codex sans résoudre d'id de compte, donc fonctionne même lorsqu'un compte s'appelle littéralement `auto`. Pools Codex uniquement ; les autres types de fournisseur n'ont pas de sélection automatique à rétablir.

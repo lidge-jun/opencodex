@@ -541,7 +541,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["account", "pause"],
-    summary: "Exclude one account in a Codex or supported generic OAuth pool from automatic selection.",
+    summary: "Exclude one account in a Codex, Anthropic or supported generic OAuth pool from automatic selection.",
     // Resume uses the same endpoints with `paused: false`.
     routes: [
       { method: "PUT", path: "/api/codex-auth/accounts/pause" },
@@ -552,12 +552,12 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "envelope",
     details: [
-      "Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Generic OAuth pause never dispatches to that account: it is excluded from new requests, failover and refresh, and an all-paused pool answers 403. Anthropic is unsupported.",
+      "Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.",
     ],
   },
   {
     command: ["account", "resume"],
-    summary: "Return a paused account to a Codex or supported generic OAuth pool.",
+    summary: "Return a paused account to a Codex, Anthropic or supported generic OAuth pool.",
     routes: [
       { method: "PUT", path: "/api/codex-auth/accounts/pause" },
       { method: "GET", path: "/api/oauth/accounts" },
@@ -986,7 +986,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["integration", "native"],
-    summary: "Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen).",
+    summary: "Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen) and, on request, the Private Inference installer Cursor's update channel advertises.",
     routes: [
       { method: "GET", path: "/api/native-integrations" },
       { method: "PUT", path: "/api/native-integrations/claude" },
@@ -994,6 +994,7 @@ export const CAPABILITIES: readonly Capability[] = [
       { method: "PUT", path: "/api/native-integrations/codex" },
       { method: "PUT", path: "/api/native-integrations/grok" },
       { method: "GET", path: "/api/native-integrations/cursor" },
+      { method: "GET", path: "/api/native-integrations/cursor/local-installer" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the client rows or toggle result as JSON." }],
     mutates: true,

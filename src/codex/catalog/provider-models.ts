@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { resolveProviderApiKey } from "../../providers/key-store";
-import { getAccountSet } from "../../oauth/store";
+import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { readKiroAccountModels, kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
@@ -74,6 +74,7 @@ import {
 import type { NormalizedComboConfig } from "../../combos/types";
 import {
   ProviderOutboundPolicyError,
+  ProviderOutboundSendCancelledError,
   providerOutboundGet,
   providerOutboundPost,
   providerRedirectError,
@@ -149,6 +150,8 @@ export function observedModelsAuthResolver(
       return {
         apiKey: observation.snapshot.accessToken,
         observed: true,
+        oauthAccountId: observation.snapshot.accountId,
+        oauthGeneration: observation.snapshot.generation,
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
       };
@@ -174,6 +177,8 @@ export async function fetchProviderModelsWithAuth(
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
+  const anthropicSelection = name === "anthropic" && prov.authMode === "oauth"
+    ? captureOAuthAccountSelection(name) : null;
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
@@ -256,6 +261,8 @@ export async function fetchProviderModelsWithAuth(
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,
+          oauthAccountId: snapshot.accountId,
+          oauthGeneration: snapshot.generation,
           ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
@@ -263,6 +270,15 @@ export async function fetchProviderModelsWithAuth(
       : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
+  const maySendAnthropicDiscovery = () => {
+    if (name !== "anthropic" || prov.authMode !== "oauth") return true;
+    const selected = captureOAuthAccountSelection(name);
+    const row = auth.oauthAccountId ? getAccountCredentialWithStatus(name, auth.oauthAccountId) : null;
+    return !!anthropicSelection && !!selected && !!row && !row.paused && !row.needsReauth
+      && selected.accountId === anthropicSelection.accountId && selected.revision === anthropicSelection.revision
+      && row.credential.expires > Date.now() && auth.oauthAccountId === selected.accountId
+      && credentialGeneration(row.credential) === auth.oauthGeneration && row.credential.access === apiKey;
+  };
   // A configured default is a real callable selector and must remain discoverable when a
   // compatible provider's live /models request fails (issue #308). Static providers already seed
   // their default selector above when no explicit model list exists.
@@ -609,7 +625,8 @@ export async function fetchProviderModelsWithAuth(
     // proof is on the URL — not the provider name — because an OAuth/forward
     // name matches any baseUrl by design. Retargeted or renamed custom rows
     // fetch a different URL and keep the rejection.
-    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl };
+    if (!maySendAnthropicDiscovery()) return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
+    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl, beforeSend: maySendAnthropicDiscovery };
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {
         headers,
@@ -774,6 +791,9 @@ export async function fetchProviderModelsWithAuth(
     markProviderDiscoveryOk(name, liveModelCount);
     return observed(returned, "authoritative");
   } catch (error) {
+    if (error instanceof ProviderOutboundSendCancelledError) {
+      return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
+    }
     if (error instanceof ProviderOutboundPolicyError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
       if (shouldLog) {

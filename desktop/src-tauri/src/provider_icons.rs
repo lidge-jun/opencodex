@@ -91,6 +91,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("orcarouter", "orcarouter.svg"),
     ("orcarouter-oauth", "orcarouter.svg"),
     ("packycode", "packycode.svg"),
+    ("tokenlab", "tokenlab.svg"),
     ("parallel", "parallel.svg"),
     ("sambanova", "sambanova.svg"),
     ("scaleway", "scaleway.svg"),
@@ -131,6 +132,7 @@ fn paint(file: &str) -> &'static str {
         | "packycode.svg"
         | "siliconflow.svg"
         | "synthetic.svg"
+        | "tokenlab.svg"
         | "vercel-ai-gateway-color.svg"
         | "zenmux.svg" => "mask",
         "baseten.svg" | "kilo.svg" | "sambanova.svg" | "venice.svg" | "zai.svg" => "plate",
@@ -200,6 +202,7 @@ fn svg(file: &str) -> Option<&'static str> {
         "stepfun-color.svg" => svg!("stepfun-color.svg"),
         "synthetic.svg" => svg!("synthetic.svg"),
         "together.svg" => svg!("together.svg"),
+        "tokenlab.svg" => svg!("tokenlab.svg"),
         "umans.svg" => svg!("umans.svg"),
         "venice.svg" => svg!("venice.svg"),
         "vercel-ai-gateway-color.svg" => svg!("vercel-ai-gateway-color.svg"),

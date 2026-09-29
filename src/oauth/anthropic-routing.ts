@@ -40,6 +40,7 @@ import {
   clearAnthropicCooldownGenerations,
   noteAnthropicCooldownMutation,
 } from "../providers/quota/anthropic-cooldown-recovery";
+import { subscribeOAuthAccountPauseChanges } from "../lib/account-selection-events";
 
 /**
  * The read side of a `Headers` object, so a caller can pass the live upstream response's
@@ -62,6 +63,16 @@ const VALID_QUOTA_WINDOWS = new Set<OcxAccountPoolQuotaWindow>(["five-hour", "we
 export const ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST = 3;
 
 export type AnthropicAccountPoolConfig = NonNullable<OcxConfig["anthropicAccountPool"]>;
+
+/** Local admission refusal across async dispatch; never treat it as provider reachability evidence. */
+export class AnthropicAccountCooldownError extends Error {
+  constructor(readonly retryAfterSeconds: number | null, readonly routePosition?: number) {
+    super(routePosition === undefined
+      ? "All Anthropic OAuth accounts are temporarily rate-limited"
+      : "Anthropic OAuth accounts for this model route are temporarily rate-limited");
+    this.name = "AnthropicAccountCooldownError";
+  }
+}
 
 /**
  * Where a cooldown's length came from. Same vocabulary as `CodexCooldownSource`, because it
@@ -335,7 +346,7 @@ export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
   if (!set) return [];
   return set.accounts
     .filter(account =>
-      account.needsReauth !== true
+      account.paused !== true && account.needsReauth !== true
       && !isCooled(account.id, now)
       && isPoolCredentialUsable(account.id, now))
     .map(account => account.id);
@@ -370,6 +381,8 @@ export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
 const QUORUM_CACHE_TTL_MS = 2_000;
 
 let quorumCache: { value: boolean; readAt: number } | null = null;
+// Pause changes eligibility, not health. Do not reset cooldowns or cancel sent turns.
+subscribeOAuthAccountPauseChanges(provider => { if (provider === PROVIDER) quorumCache = null; });
 
 /**
  * Whether a 429 has somewhere to go: two or more accounts that could serve traffic if asked.
@@ -400,7 +413,7 @@ export function hasAnthropicFailoverQuorum(now = Date.now()): boolean {
   if (set) {
     let usable = 0;
     for (const account of set.accounts) {
-      if (account.needsReauth === true) continue;
+      if (account.paused === true || account.needsReauth === true) continue;
       if (!isPoolCredentialUsable(account.id, now)) continue;
       if (++usable >= 2) { value = true; break; }
     }
@@ -424,8 +437,8 @@ export function getAnthropicPoolRetryAfterSeconds(now = Date.now(), decision: An
     && !getEligibleAnthropicAccounts(now).some(id => decision.accounts.includes(id));
   let earliest: number | null = null;
   for (const account of set.accounts) {
+    if (account.paused === true || account.needsReauth === true || !isPoolCredentialUsable(account.id, now)) continue;
     if (decision && !fallbackExpanded && !decision.accounts.includes(account.id)) continue;
-    if (fallbackExpanded && (account.needsReauth === true || !isPoolCredentialUsable(account.id, now))) continue;
     const snap = getAnthropicAccountHealthSnapshot(account.id, now);
     if (!snap?.cooldownUntil) continue;
     if (earliest === null || snap.cooldownUntil < earliest) earliest = snap.cooldownUntil;
@@ -555,6 +568,7 @@ export type AnthropicAccountSelectionReason =
   | "manual"
   | "fill-first"
   | "none"
+  | "paused"
   | "all-cooled";
 
 export interface AnthropicAccountSelection {
@@ -637,7 +651,7 @@ function pickUnboundStrategyAccount(
 
 /**
  * Resolve which Anthropic OAuth account should serve this session.
- * When the pool is disabled, always returns the store's active account.
+ * When the pool is disabled, retain the active account unless the operator paused it.
  */
 export function resolveAnthropicAccountForSession(
   sessionKey: string | null | undefined,
@@ -648,6 +662,11 @@ export function resolveAnthropicAccountForSession(
   pruneExpiredAffinity(now);
   const set = getAccountSet(PROVIDER);
   if (!set || set.accounts.length === 0) return { accountId: null, reason: "none", ...(decision ? { routePosition: decision.position } : {}) };
+  const scoped = decision && !decision.fallback
+    ? set.accounts.filter(account => decision.accounts.includes(account.id)) : set.accounts;
+  if (scoped.length > 0 && scoped.every(account => account.paused === true)) {
+    return { accountId: null, reason: "paused", routePosition: decision?.position };
+  }
 
   if (manualPreference === undefined) {
     manualPreference = set.selectionRevision !== undefined
@@ -655,23 +674,24 @@ export function resolveAnthropicAccountForSession(
       : null;
   }
 
-  if (!isAnthropicAccountPoolEnabled(config)) {
-    return { accountId: set.activeAccountId, reason: "pool-disabled" };
+  const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision);
+  if (eligible.length === 0) {
+    // Pause, removal and reauthentication are not cooldown evidence. Classify only
+    // usable members of this strict route (or the ordinary pool after fallback widens).
+    const recoverable = set.accounts.filter(account =>
+      (!decision || decision.fallback || decision.accounts.includes(account.id))
+      && account.paused !== true && account.needsReauth !== true && isPoolCredentialUsable(account.id, now));
+    const cooled = recoverable.length > 0 && recoverable.every(account => isCooled(account.id, now));
+    if (cooled || decision) return { accountId: null, reason: cooled ? "all-cooled" : "none", routePosition: decision?.position };
   }
 
-  const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision);
-  if (decision && eligible.length === 0) {
-    let cooled: boolean;
-    if (decision.fallback) {
-      // A removed route member is not a candidate, but fallback can still use the
-      // ordinary pool once those accounts recover. Only usable stored accounts count.
-      const ordinary = set.accounts.filter(account =>
-        account.needsReauth !== true && isPoolCredentialUsable(account.id, now));
-      cooled = ordinary.length > 0 && ordinary.every(account => isCooled(account.id, now));
-    } else {
-      cooled = decision.accounts.every(id => set.accounts.some(account => account.id === id && isCooled(id, now)));
+  if (!isAnthropicAccountPoolEnabled(config)) {
+    const active = set.accounts.find(account => account.id === set.activeAccountId);
+    // Disabled proactive rotation does not authorize a paused slot or an entirely cooled pool.
+    if (active?.paused || isCooled(set.activeAccountId, now)) {
+      return { accountId: eligible[0] ?? null, reason: eligible.length > 0 ? "only-eligible" : "none" };
     }
-    return { accountId: null, reason: cooled ? "all-cooled" : "none", routePosition: decision.position };
+    return { accountId: set.activeAccountId, reason: "pool-disabled" };
   }
 
   // A manual choice is a one-dispatch preference, not a lower-priority quota hint.
@@ -695,7 +715,7 @@ export function resolveAnthropicAccountForSession(
   if (key) {
     const affined = sessionAffinity.get(key);
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
-      const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
+      const stillThere = set.accounts.some(a => a.id === affined.accountId && a.paused !== true && a.needsReauth !== true);
       const stillUsable = stillThere && !isCooled(affined.accountId, now)
         && isPoolCredentialUsable(affined.accountId, now);
       if (stillUsable && eligible.includes(affined.accountId)) {
@@ -763,11 +783,34 @@ export function resolveAnthropicAccountForSession(
   }
 
   if (!accountId) {
-    const anyCooled = set.accounts.some(a => (!decision || decision.accounts.includes(a.id)) && isCooled(a.id, now));
+    const anyCooled = set.accounts.some(a => !a.paused && (!decision || decision.accounts.includes(a.id)) && isCooled(a.id, now));
     return { accountId: null, reason: anyCooled ? "all-cooled" : "none", routePosition: decision?.position };
   }
 
   return { accountId, reason, routePosition: decision?.position };
+}
+
+/** Shared local refusal policy for Responses and native Messages after asynchronous waits. */
+export async function resolveAnthropicDispatchAccountId(
+  config: OcxConfig,
+  sessionKey: string | null = null,
+  decision: AnthropicRouteDecision | null = null,
+): Promise<string> {
+  const now = Date.now();
+  const selection = resolveAnthropicAccountForSession(sessionKey, config, now, decision);
+  if (selection.reason === "all-cooled") {
+    throw new AnthropicAccountCooldownError(getAnthropicPoolRetryAfterSeconds(now, decision), decision?.position);
+  }
+  if (selection.reason === "paused" || !selection.accountId || !getEligibleAnthropicAccounts(now).includes(selection.accountId)) {
+    const { OAuthAccountPausedError, OAuthLoginRequiredError } = await import("./index");
+    const active = getAccountSet(PROVIDER)?.activeAccountId;
+    // Pool-off fresh admission resolves the active credential first. Preserve that
+    // paused-active refusal when no usable survivor could take over from it.
+    if (selection.reason === "paused" || (!isAnthropicAccountPoolEnabled(config) && active
+      && getAccountCredentialWithStatus(PROVIDER, active)?.paused)) throw new OAuthAccountPausedError();
+    throw new OAuthLoginRequiredError(PROVIDER);
+  }
+  return selection.accountId;
 }
 
 export function bindAnthropicSessionAffinity(
@@ -805,13 +848,44 @@ export function rotateAnthropicAccountOn429(
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
   decision: AnthropicRouteDecision | null = null,
 ): string | null {
+  if (!recordAnthropicAccount429(config, failedAccountId, retryAfterHeader, now, rateLimitHeaders)) return null;
+
+  // The pool's strategy is a PROACTIVE policy. When the pool is disabled, reactive
+  // presence-only recovery must not silently reactivate round-robin/fill-first merely
+  // because those dormant values remain in config. The quota picker is the neutral
+  // recovery policy already used by the default strategy.
+  const next = isAnthropicAccountPoolEnabled(config)
+    ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision)
+    : pickLowestUsage(config, failedAccountId, now);
+  if (!next) {
+    console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning 429`);
+    return null;
+  }
+
+  console.warn(
+    `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
+  );
+  return next;
+}
+
+/** Record the account refusal even when this request has no remaining retry sends. */
+export function recordAnthropicAccount429(
+  config: OcxConfig,
+  failedAccountId: string,
+  retryAfterHeader: string | null | undefined,
+  now = Date.now(),
+  rateLimitHeaders?: AnthropicRateLimitHeaders | null,
+): boolean {
   // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
   // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
   // of which move a HEALTHY request and stay opt-in. Rotating away from an account upstream has
   // just rate-limited is a different thing: it only ever runs after a refusal, and stranding a
   // 429 while a second logged-in account sits idle is a defect, not a configuration choice.
   // Presence is the activation rule, the same one an apiKeyPool of two keys already uses.
-  if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)) return null;
+  // A sent turn may finish after its account is paused; its one remaining successor is
+  // still a valid reactive recovery even though the current unpaused quorum is now one.
+  if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)
+    && !getAccountCredentialWithStatus(PROVIDER, failedAccountId)?.paused) return false;
 
   // Retry-After first: it is the header written FOR this decision. The rejected window's
   // reset is the fallback, because a 429 that omits Retry-After still carries it -- and
@@ -832,26 +906,10 @@ export function rotateAnthropicAccountOn429(
   sweepExpiredOnWrite(now);
   clearAnthropicSessionAffinityForAccount(failedAccountId);
   notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
-  // A rotation means the roster in use just changed; do not answer the next activation question
-  // from a count read taken before the failure.
+  // The refused account changed the eligible roster even when no retry send remains.
   quorumCache = null;
 
-  // The pool's strategy is a PROACTIVE policy. When the pool is disabled, reactive
-  // presence-only recovery must not silently reactivate round-robin/fill-first merely
-  // because those dormant values remain in config. The quota picker is the neutral
-  // recovery policy already used by the default strategy.
-  const next = isAnthropicAccountPoolEnabled(config)
-    ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision)
-    : pickLowestUsage(config, failedAccountId, now);
-  if (!next) {
-    console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning 429`);
-    return null;
-  }
-
-  console.warn(
-    `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
-  );
-  return next;
+  return true;
 }
 
 export interface AnthropicSelectionRoutingOptions {
@@ -885,7 +943,7 @@ export function commitAnthropicSelectionRouting(
   committed: OAuthAccountSelection,
   options: AnthropicSelectionRoutingOptions,
 ): boolean {
-  if (committed.accountId !== accountId || (options.routeDecision
+  if (getAccountCredentialWithStatus(PROVIDER, accountId)?.paused || committed.accountId !== accountId || (options.routeDecision
     && !routeCandidates(getEligibleAnthropicAccounts(), options.routeDecision).includes(accountId))) return false;
   const current = captureOAuthAccountSelection(PROVIDER);
   if (current?.accountId !== committed.accountId || current.revision !== committed.revision) return false;
@@ -929,7 +987,12 @@ export function resetAnthropicRoutingForManualSelection(accountId: string): void
  * as quota probes).
  */
 export async function getAnthropicPoolAccessToken(accountId: string): Promise<string> {
-  const stored = getAccountCredential(PROVIDER, accountId);
+  const row = getAccountCredentialWithStatus(PROVIDER, accountId);
+  if (row?.paused) {
+    const { OAuthAccountPausedError } = await import("./index");
+    throw new OAuthAccountPausedError();
+  }
+  const stored = row?.credential;
   if (!stored) {
     const { OAuthLoginRequiredError } = await import("./index");
     throw new OAuthLoginRequiredError(PROVIDER);
@@ -946,6 +1009,10 @@ export async function getAnthropicPoolAccessToken(accountId: string): Promise<st
 export async function getAnthropicPoolAccessSnapshot(accountId: string): Promise<OAuthAccessSnapshot> {
   const accessToken = await getAnthropicPoolAccessToken(accountId);
   const row = getAccountCredentialWithStatus(PROVIDER, accountId);
+  if (row?.paused) {
+    const { OAuthAccountPausedError } = await import("./index");
+    throw new OAuthAccountPausedError();
+  }
   if (!row || row.needsReauth || row.credential.access !== accessToken
     || row.credential.expires <= Date.now()) {
     throw new Error("Anthropic pool credential changed during account selection");
@@ -959,6 +1026,7 @@ export async function getAnthropicPoolAccessSnapshot(accountId: string): Promise
  */
 export function canRefreshAnthropicPoolAccount(accountId: string): boolean {
   const set = getAccountSet(PROVIDER);
+  if (set?.accounts.find(account => account.id === accountId)?.paused) return false;
   const cred = getAccountCredential(PROVIDER, accountId);
   if (!cred) return false;
   if (cred.source !== "local-cli") return true;

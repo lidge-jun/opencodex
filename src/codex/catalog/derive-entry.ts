@@ -144,10 +144,9 @@ export function deriveEntry(
         delete e.context_window;
         delete e.max_context_window;
         delete e.auto_compact_token_limit;
-        // Nor its comp_hash (#5796). Codex compacts a thread whenever the recorded value
-        // changes, and the template is whichever native row a rebuild found first, so an
-        // inherited value moves with rebuild order. Left unset, normalization gives every
-        // routed row the same "opencodex" marker.
+        // Nor its comp_hash (#5796): template selection is not evidence of history
+        // compatibility. Normalization represents the unknown value as null, avoiding
+        // both rebuild-dependent hashes and a synthetic native/routed mismatch.
         delete e.comp_hash;
       }
       if (typeof e.base_instructions === "string") {

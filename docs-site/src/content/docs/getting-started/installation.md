@@ -66,7 +66,8 @@ are not required. Download the archive for your platform, extract it, and run:
 ./ocx start
 ```
 
-The extracted `gui/dist` directory must stay beside the binary so `GET /` can serve the dashboard.
+The extracted `gui/dist` and `keyring` directories must stay beside the binary. The first serves
+the dashboard; the second carries the platform-native OS credential-store binding.
 
 ### Release channels
 

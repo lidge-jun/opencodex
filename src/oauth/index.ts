@@ -925,8 +925,10 @@ export async function refreshAnthropicAccountWithLock(
   const now = deps.now ?? Date.now;
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
-    const stored = getAccountCredential(provider, accountId);
-    if (!stored) throw new OAuthLoginRequiredError(provider);
+    const row = getAccountCredentialWithStatus(provider, accountId);
+    if (!row) throw new OAuthLoginRequiredError(provider);
+    if (row.paused) throw new OAuthAccountPausedError();
+    const stored = row.credential;
     const account = getAccountSet(provider)?.accounts.find(candidate => candidate.id === accountId);
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);

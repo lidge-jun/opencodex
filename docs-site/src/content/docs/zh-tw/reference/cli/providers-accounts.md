@@ -144,14 +144,18 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-暫停或恢復 Codex 帳號池或通用 OAuth 供應商池中的單一帳號，包括
-`google-antigravity`。在 Codex 池中，`main` 僅代表 Codex 內建帳號；通用 OAuth 帳號必須用 id 或唯一別名識別。
-已暫停的通用 OAuth 帳號不會參與請求選帳、429 輪替或主動 Token 刷新，也不能手動選取。
+暫停或恢復 Codex、Anthropic 或通用 OAuth 供應商池中的單一帳號，包括
+`google-antigravity`。在 Codex 池中，`main` 僅代表 Codex 內建帳號；OAuth 帳號必須用 id 或唯一別名識別。
+已暫停的 OAuth 帳號不會參與請求選帳、429 輪替或主動 Token 刷新，也不能手動選取。
 若暫停目前使用中的帳號，系統會在有其他可用帳號時切換過去。若全部帳號都已暫停，
 需要該池的請求會回覆 403，直到恢復其中一個帳號。
 
-通用 OAuth 供應商可用帳號 id，或唯一且完全相符／不區分大小寫的別名識別帳號。
+Anthropic 和通用 OAuth 供應商可用帳號 id，或唯一且完全相符／不區分大小寫的別名識別帳號。
 JSON 回應會提供帳號 id、暫停狀態與目前 active 帳號 id。
+
+Anthropic 暫停不受帳號池啟用開關影響，包含工作階段綁定與 429 後繼選帳。
+重新啟動或登入仍保留暫停，憑證與健康狀態不會清除，已送出的請求不會中斷。
+刪除帳號會一併刪除暫停狀態；個別帳號的自動切換門檻不在此功能範圍內。
 
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>

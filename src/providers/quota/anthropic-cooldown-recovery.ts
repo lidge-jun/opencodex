@@ -1,7 +1,15 @@
-import { credentialGeneration, getAccountCredential } from "../../oauth/store";
+import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus } from "../../oauth/store";
 import type { ProviderQuota } from "../quota-types";
 
 export class AnthropicQuotaProbeOwnershipError extends Error {}
+
+/** Check live pause and bearer ownership at the last synchronous step before usage dispatch. */
+export function assertAnthropicQuotaSendAllowed(accountId: string, token: string): void {
+  const row = getAccountCredentialWithStatus("anthropic", accountId);
+  if (!row || row.paused || row.needsReauth || row.credential.access !== token) {
+    throw new AnthropicQuotaProbeOwnershipError("anthropic quota account is no longer eligible");
+  }
+}
 
 const cooldownGenerationByAccount = new Map<string, number>();
 let nextCooldownGeneration = 1;

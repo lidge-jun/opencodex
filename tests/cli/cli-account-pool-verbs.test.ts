@@ -57,6 +57,37 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
 }
 
 describe("ocx account pause / resume", () => {
+  test("Anthropic ambiguous aliases fail without a write; exact ids still win", async () => {
+    const out = capture();
+    const writes: unknown[] = [];
+    const d: AccountDeps = {
+      baseUrl: "http://127.0.0.1:10100",
+      loadConfigImpl: () => ({ providers: { anthropic: { adapter: "anthropic", authMode: "oauth" } } }) as never,
+      fetchImpl: (async (_url, init) => {
+        if (init?.method === "PUT") { writes.push(JSON.parse(String(init.body))); return Response.json({ ok: true }); }
+        return Response.json({ accounts: [{ id: "a", alias: "reserve" }, { id: "b", alias: "reserve" }] });
+      }) as typeof fetch,
+    };
+    try {
+      expect(await cmdPause(["anthropic", "reserve"], d, true)).toBe(1);
+      expect(writes).toEqual([]);
+      expect(await cmdPause(["anthropic", "a"], d, true)).toBe(0);
+      expect(writes).toEqual([{ provider: "anthropic", accountId: "a", paused: true }]);
+    } finally { out.restore(); }
+  });
+
+  test.each([true, false])("Anthropic pause=%s resolves a unique alias and preserves the JSON contract", async paused => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const d = deps(() => ({ json: { ok: true, activeAccountId: "acct_2" } }), calls);
+    d.loadConfigImpl = () => ({ providers: { anthropic: { adapter: "anthropic", authMode: "oauth" } } }) as never;
+    try {
+      expect(await cmdPause(["anthropic", "GEM-PRO", "--json"], d, paused)).toBe(0);
+      expect(calls.find(call => call.method === "PUT")?.body).toEqual({ provider: "anthropic", accountId: "acct_1", paused });
+      expect(JSON.parse(out.lines.join("\n"))).toEqual({ ok: true, provider: "anthropic", id: "acct_1", paused, activeAccountId: "acct_2" });
+    } finally { out.restore(); }
+  });
+
   test("generic OAuth pause resolves aliases and uses the OAuth account route", async () => {
     const calls: Captured[] = [];
     const out = capture();

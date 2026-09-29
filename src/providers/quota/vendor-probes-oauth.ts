@@ -1,7 +1,7 @@
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
-import { getAccountCredential, getAccountSet } from "../../oauth/store";
+import { captureOAuthAccountSelection, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
@@ -39,7 +39,7 @@ import {
 } from "./account-cache";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
-import { AnthropicQuotaProbeOwnershipError, probeAnthropicQuotaWithRecovery } from "./anthropic-cooldown-recovery";
+import { AnthropicQuotaProbeOwnershipError, assertAnthropicQuotaSendAllowed, probeAnthropicQuotaWithRecovery } from "./anthropic-cooldown-recovery";
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
@@ -348,7 +348,8 @@ export async function fetchAnthropicUsageQuota(
 export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
   // Capture the account we intend to probe before awaiting — a mid-flight active
   // switch must not seed the wrong account's cache with this response.
-  const probedAccountId = getAccountSet("anthropic")?.activeAccountId;
+  const selection = captureOAuthAccountSelection("anthropic");
+  const probedAccountId = selection?.accountId;
   const probedAccountKey = probedAccountId ? accountCacheKey("anthropic", probedAccountId) : null;
   const writerGeneration = captureConfigGeneration();
   let accessToken: string;
@@ -357,18 +358,16 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
   } catch {
     return null;
   }
+  if (!probedAccountId || !probedAccountKey) return null;
   let quota: ProviderQuota | null;
   let anthropicCurrent: (() => boolean) | undefined;
   try {
-    if (probedAccountId && probedAccountKey) {
-      const result = await probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
-        fresh => fetchAnthropicUsageQuota(accessToken, fresh), () => mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
-      if (result && !result.isCurrent()) return null;
-      quota = result?.quota ?? null;
-      anthropicCurrent = result?.isCurrent;
-    } else {
-      quota = await fetchAnthropicUsageQuota(accessToken);
-    }
+    const result = await probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
+      fresh => { assertAnthropicQuotaSendAllowed(probedAccountId, accessToken); return fetchAnthropicUsageQuota(accessToken, fresh); },
+      () => mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
+    if (result && !result.isCurrent()) return null;
+    quota = result?.quota ?? null;
+    anthropicCurrent = result?.isCurrent;
   } catch (error) {
     if (error instanceof AnthropicQuotaProbeOwnershipError) return null;
     throw error;
@@ -383,7 +382,9 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
     }
   }
   const quotaReport = report(provider, "anthropic:oauth-usage", quota);
-  if (quotaReport && anthropicCurrent) accountReportCurrent.set(quotaReport, anthropicCurrent);
+  if (quotaReport && anthropicCurrent) {
+    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet("anthropic")?.activeAccountId === probedAccountId);
+  }
   return quotaReport;
 }
 

@@ -35,6 +35,7 @@ import {
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
   SendBudgetExhaustedError,
+  UpstreamRetryEvidenceError,
   prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
@@ -54,8 +55,10 @@ import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
+  AnthropicAccountCooldownError,
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   rotateAnthropicAccountOn429,
+  recordAnthropicAccount429,
   getAnthropicPoolAccessSnapshot,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -382,6 +385,18 @@ export async function prepareAdapterExchange(
     cleanupUpstreamAbort();
     upstream.abort();
     if (options.abortSignal?.aborted) return clientCancelledResponse();
+    const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+    // A pause committed during pacing is local admission policy, not a failed upstream.
+    if (refusal instanceof OAuthAccountPausedError) {
+      return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
+    }
+    if (refusal instanceof OAuthLoginRequiredError) {
+      return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
+    }
+    if (refusal instanceof AnthropicAccountCooldownError) {
+      return formatErrorResponse(429, "rate_limit_error", refusal.message,
+        refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+    }
     // A budget refusal is a decision this process made, not an upstream fault. Reporting it as
     // 502 does more than mislabel it: the Codex client retries 5xx and does not retry a 429, so
     // blaming the provider makes the caller send the whole turn again -- the amplification this
@@ -587,6 +602,17 @@ export async function prepareAdapterExchange(
         upstream.abort();
         if (options.abortSignal?.aborted) {
           return { failed: clientCancelledResponse() };
+        }
+        const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+        if (refusal instanceof OAuthAccountPausedError) {
+          return { failed: formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal)) };
+        }
+        if (refusal instanceof OAuthLoginRequiredError) {
+          return { failed: formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal)) };
+        }
+        if (refusal instanceof AnthropicAccountCooldownError) {
+          return { failed: formatErrorResponse(429, "rate_limit_error", refusal.message,
+            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) }) };
         }
         // Same rule on the recovery leg: the ladder refused to send again, so the answer names
         // this proxy rather than the provider it never reached.
@@ -999,6 +1025,11 @@ export async function prepareAdapterExchange(
        } catch {
           break;
         }
+      }
+      if (upstreamResponse.status === 429 && transportState.anthropicPoolAccountId
+        && transportState.anthropicPoolFailovers >= ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST) {
+        recordAnthropicAccount429(config, transportState.anthropicPoolAccountId,
+          upstreamResponse.headers.get("retry-after"), Date.now(), upstreamResponse.headers);
       }
       // Generic OAuth account failover (#2568) rotates reactively after a refusal when
       // two accounts are stored. Kiro additionally classifies bounded 400/403 refusals;

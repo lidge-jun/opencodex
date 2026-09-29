@@ -11,6 +11,7 @@ import {
 } from "../../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
+import { windowsWscript } from "../../src/service/windows-scheduler";
 import { getDefaultConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -74,6 +75,7 @@ function schedulerXml(launcherPath: string): string {
     "<Task>",
     "  <Actions>",
     "    <Exec>",
+    `      <Command>${windowsWscript()}</Command>`,
     `      <Arguments>/b /nologo &quot;${escaped}&quot;</Arguments>`,
     "    </Exec>",
     "  </Actions>",
@@ -99,7 +101,7 @@ function writeSchedulerChain(
     'set "OCX_BUN=C:\\bun\\bun.exe"',
     'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
     ":loop",
-    '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+    '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
   ].join("\r\n"));
   writeFileSync(launcher, `shell.Run """${wrapper}""", 0, True\r\n`);
   if (options.writeTaskXml !== false) writeFileSync(taskXml, schedulerXml(launcher));

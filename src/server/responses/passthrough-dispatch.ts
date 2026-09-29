@@ -137,7 +137,8 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { AnthropicAccountCooldownError } from "../../oauth/anthropic-routing";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
   hasEligibleGenericOAuthFailoverTarget,
@@ -881,7 +882,23 @@ export async function preparePassthroughExchange(
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
         return formatErrorResponse(429, "request_send_budget_exhausted", err.message);
       }
-      const localRefusal = mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
+      const refusal = unwrapUpstreamRetryEvidenceError(err);
+      // Pacing may outlive the selected account's admission. No fetch occurred, so do
+      // not turn an operator pause into a 502 or charge it to host/account health.
+      if (refusal instanceof OAuthAccountPausedError || refusal instanceof OAuthLoginRequiredError || refusal instanceof AnthropicAccountCooldownError) {
+        releaseUpstreamHostAdmission(nativeHostState.lease);
+        nativeHostState.lease = null;
+        releaseCodexAuthContextProbeLease(admissionState.authCtx);
+        if (refusal instanceof OAuthLoginRequiredError) {
+          return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
+        }
+        if (refusal instanceof AnthropicAccountCooldownError) {
+          return formatErrorResponse(429, "rate_limit_error", refusal.message,
+            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+        }
+        return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
+      }
+      const localRefusal = mapCodexAuthContextErrorToResponse(refusal, {
         now: Date.now(), accountSelector: route.codexAccountNamespace,
       });
       if (localRefusal) {

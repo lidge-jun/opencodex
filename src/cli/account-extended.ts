@@ -796,7 +796,7 @@ function resolveGenericOAuthAccountTarget(accounts: unknown[], requested: string
   return { error: `Account not found: no OAuth account has the id or alias "${requested}"` };
 }
 
-/** Pause or resume a Codex account or a generic OAuth provider account. */
+/** Pause or resume a Codex or OAuth provider account, including Anthropic. */
 export async function cmdPause(args: string[], deps: AccountDeps, paused: boolean): Promise<number> {
   const wantsJson = flag(args, "--json");
   const name = args.shift();
@@ -809,7 +809,6 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
   if (!baseUrl) return proxyUnreachable();
 
   if (classified.type === "oauth") {
-    if (name === "anthropic") return usage(`Error: ${verb} is not supported for the Anthropic OAuth pool`);
     const list = await apiJson(deps, baseUrl, "GET", `/api/oauth/accounts?provider=${encodeURIComponent(name)}`);
     if (list.status === 0) return proxyUnreachable(list.transportError);
     if (list.status !== 200) return apiError(list.json, `failed to list ${name} OAuth accounts`, list.status);
