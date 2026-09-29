@@ -729,20 +729,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // the first five eligible visible rows by display priority; OCX guidance uses natural ranks.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
-    const disabled = new Set(config.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
-    const visibleRouted = [...new Set(models
-      .filter(m => ![...disabled].some(stored =>
-        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
-      ))
-      .map(catalogModelSlug))];
+    const [{ listCatalogNativeSlugs }, { subagentSelectableModels }] = await Promise.all([
+      import("../../codex/catalog"),
+      import("../../codex/subagent-selectable-models"),
+    ]);
     const chosen = config.subagentModels ?? [];
-    const selectable = [
-      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
-      ...visibleRouted,
-    ];
     // A saved roster slot must stay representable even after its model is disabled
     // elsewhere (Models page, provider allowlist, a provider row going away). The
     // dashboard treats `available` as the set of rows it can render, so a chosen id
@@ -751,11 +744,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // deliberate 5-model roster to an unrelated visibility toggle is data loss, not a
     // filter. Same reasoning as `fetchGrokCandidateModels`, which deliberately lists a
     // model the user already excluded so its switch remains reachable.
-    const selectableSet = new Set(selectable);
-    const available = [
-      ...selectable,
-      ...[...new Set(chosen)].filter(model => !selectableSet.has(model)),
-    ];
+    const available = subagentSelectableModels(config, models, listCatalogNativeSlugs());
     // #857: let CLI/GUI show when a running Codex app-server keeps an older
     // in-memory catalog than the one on disk. Bounded request-path read: the synchronous
     // collector blocked the event loop for the whole Windows CIM walk (4-7s measured).
