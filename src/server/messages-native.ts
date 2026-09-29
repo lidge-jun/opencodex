@@ -623,9 +623,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       });
     }
     // A non-streaming caller whose upstream streamed anyway: fold the stream into one message.
-    const tapState: { closeReason?: FinalRequestLogMeta["closeReason"] } = {};
+    const tapState: { closeReason?: FinalRequestLogMeta["closeReason"]; meta?: FinalRequestLogMeta } = {};
     const tapped = tapAnthropicSseForLog(source, logCtx, (_status, meta) => {
       tapState.closeReason = meta.closeReason;
+      tapState.meta = meta;
     }, bodyGuard);
     try {
       const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget);
@@ -636,7 +637,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       bindUsage(logCtx.usage);
       if (message.type === "error") {
         const error = isRec(message.error) ? message.error : {};
-        return fail(502, typeof error.message === "string" ? error.message : "upstream stream failed", "api_error");
+        const text = typeof error.message === "string" ? error.message : "upstream stream failed";
+        // A mid-stream reset closes this row with the same meta as the streaming lane's row.
+        if (tapState.meta?.terminalStatus) finishLog(502, text, tapState.meta);
+        return fail(502, text, "api_error");
       }
       finishLog(200);
       return Response.json(message);

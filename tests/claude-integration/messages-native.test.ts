@@ -321,7 +321,10 @@ describe("managed native Messages", () => {
       expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "api_error" } });
       expect(text).toContain("anthropic passthrough upstream stream failed: ");
       const row = rowFor(requestId);
+      // Same row as the streaming lane for the same reset.
       expect(row.status).toBe(502);
+      expect(row.terminalStatus).toBe("failed");
+      expect(row.closeReason).toBe("terminal");
       expect(row.transportPhase).toBe("mid_stream");
       expect(row.failureCause).toBe("transport-ambiguous");
     } finally {
