@@ -79,9 +79,14 @@ read-only and time-bounded, so it is safe while the proxy runs under that same m
 On Windows, the generated-wrapper check accepts package installs that invoke the source CLI.
 A standalone wrapper that invokes `start` directly must carry the generated protocol and runtime
 markers, one quoted `OCX_BUN` assignment, and no `OCX_CLI` assignment in either quoting form.
+Its executable lines and control-flow order must match the standalone script emitted by
+`src/service/windows-taskxml.ts`; added jumps, exits, calls, labels, or commands make the probe unknown.
 Its executable must be absolute, end in `.exe`, and agree with `bunPath` in every readable service
 state record for the scheduler backend with `cliPath: null`. Missing, malformed, or contradictory
 state leaves the probe unknown; it cannot authorize unattended native Codex writes.
+The state records a lexical executable path, not an install-time file identity or digest. A
+retargeted junction or replacement at the same path is therefore outside this probe's evidence;
+resolving the path only at probe time cannot establish which file the installer recorded.
 
 ## Stable service launcher (launchd and systemd)
 

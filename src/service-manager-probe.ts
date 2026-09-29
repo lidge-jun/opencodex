@@ -30,6 +30,7 @@ import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "./lib/bun-runtime";
 import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./service/windows-wrapper-exit";
+import { buildWindowsServiceScript } from "./service/windows-taskxml";
 import { inspectServiceStateEvidence, serviceStatePathsForOpenCodexHome } from "./service/state";
 
 /** Short: this runs inside admission, and a slow answer is the same as none. */
@@ -570,6 +571,52 @@ function generatedBatchSetValue(body: string, name: string): string | null {
   return assignments.length === 1 ? batchSetValue(assignments[0]!, name) : null;
 }
 
+/** Compare executable lines with the actual standalone generator's ordered script. */
+function matchesGeneratedStandaloneControlFlow(body: string, port: number): boolean {
+  const scriptLines = (script: string): string[] => {
+    const lines = script.replace(/\r\n/g, "\n").split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    return lines;
+  };
+  const lines = scriptLines(body);
+  const expected = scriptLines(buildWindowsServiceScript({
+    bun: "C:\\OpenCodex\\ocx.exe", bunRuntimeSource: "standalone", cli: null,
+  }, port, []));
+  const tokenBlock = 'if exist "%OCX_API_TOKEN_FILE%" (';
+  const boundary = lines.indexOf(tokenBlock);
+  const expectedBoundary = expected.indexOf(tokenBlock);
+  if (boundary < 0 || expectedBoundary < 0) return false;
+  const allowed = [
+    "OCX_SERVICE", WINDOWS_WRAPPER_PROTOCOL_ENV, BUN_RUNTIME_SOURCE_ENV,
+    BUN_RUNTIME_PATH_ENV, "PATH", "CODEX_HOME", "CODEX_SQLITE_HOME",
+    "OPENCODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "OCX_API_TOKEN_FILE", "OCX_SERVICE_LOG", "OCX_BUN",
+  ];
+  const required = [
+    "OCX_SERVICE", WINDOWS_WRAPPER_PROTOCOL_ENV, BUN_RUNTIME_SOURCE_ENV,
+    BUN_RUNTIME_PATH_ENV, "OCX_API_TOKEN_FILE",
+    "OCX_SERVICE_LOG", "OCX_BUN",
+  ];
+  let previous = -1;
+  const seen = new Set<string>();
+  for (const line of lines.slice(0, boundary)) {
+    if (line === 'set "ERRORLEVEL="') continue;
+    if (!line.startsWith('set "')) continue;
+    const name = /^set "([A-Z_]+)=[^"\r\n]*"$/.exec(line)?.[1];
+    const index = name ? allowed.indexOf(name) : -1;
+    if (index <= previous || !name) return false;
+    previous = index;
+    seen.add(name);
+  }
+  if (required.some(name => !seen.has(name))) return false;
+  const withoutPrefixSets = (scriptLines: string[], end: number): string[] =>
+    scriptLines.filter((line, index) => index >= end || line === 'set "ERRORLEVEL="' || !line.startsWith('set "'));
+  const actualFlow = withoutPrefixSets(lines, boundary);
+  const generatedFlow = withoutPrefixSets(expected, expectedBoundary);
+  return actualFlow.length === generatedFlow.length
+    && actualFlow.every((line, index) => line === generatedFlow[index]);
+}
+
 /** Validate the generated launch shape before interpreting omitted optional homes. */
 function wrapperLaunchShape(body: string): "source" | { standaloneBun: string } | null {
   if (!/^:loop\s*$/im.test(body)) return null;
@@ -592,6 +639,7 @@ function wrapperLaunchShape(body: string): "source" | { standaloneBun: string } 
     || !/^setlocal EnableExtensions DisableDelayedExpansion\s*$/im.test(body)
     || !new RegExp(`^if "%ERRORLEVEL%"=="${WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE}" goto stopped\\s*$`, "im").test(body)
     || !/^:stopped\s*$/im.test(body)) return null;
+  if (!matchesGeneratedStandaloneControlFlow(body, Number(port))) return null;
   for (const [name, value] of [
     ["OCX_SERVICE", "1"],
     [WINDOWS_WRAPPER_PROTOCOL_ENV, "1"],

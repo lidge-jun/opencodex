@@ -449,6 +449,59 @@ describe("the Windows chain walk", () => {
     expect(result.claims[0].backend).toBe("scheduler");
   });
 
+  test.each([
+    "goto stopped",
+    "exit /b 0",
+    "call C:\\foreign\\proxy.cmd",
+    ":foreign",
+    "echo foreign",
+  ])("a standalone wrapper with an inserted control line is unknown: %s", inserted => {
+    const wrapper = writeStandaloneWrapper();
+    const statePath = writeStandaloneState();
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(
+      '"%OCX_BUN%" start --port 10100',
+      `${inserted}\r\n"%OCX_BUN%" start --port 10100`,
+    ));
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+    expect(inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent", statePaths: [statePath],
+    }).kind).toBe("unknown");
+  });
+
+  test("an unreachable standalone launch cannot establish native ownership", () => {
+    process.env.CODEX_HOME = "C:\\Users\\ws\\.codex";
+    process.env.OPENCODEX_HOME = "C:\\Users\\ws\\.opencodex";
+    const wrapper = writeStandaloneWrapper();
+    const statePath = writeStandaloneState();
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+    const deps = {
+      platform: "win32" as const, home, runRaw, winswStatus: () => "nonexistent" as const,
+      statePaths: [statePath], configDir: join(home, ".opencodex"),
+      currentHomes: { codexHome: process.env.CODEX_HOME, opencodexHome: process.env.OPENCODEX_HOME },
+    };
+    expect(inspectNativeCodexOwnership(deps).ownership).toBe("owned");
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(
+      '"%OCX_BUN%" start --port 10100',
+      'goto stopped\r\n"%OCX_BUN%" start --port 10100',
+    ));
+    expect(inspectNativeCodexOwnership(deps).ownership).toBe("unknown");
+  });
+
+  test("a production-generated source wrapper remains accepted", () => {
+    const dir = join(home, ".opencodex");
+    const wrapper = join(dir, "opencodex-service.cmd");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(wrapper, buildWindowsServiceScript({
+      bun: "C:\\OpenCodex\\bun.exe", bunRuntimeSource: "bundled",
+      cli: "C:\\OpenCodex\\src\\cli\\index.ts",
+    }, 10100));
+    writeWindowsTask(writeWindowsLauncher(wrapper));
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+    expect(inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent",
+    }).kind).toBe("present");
+  });
+
   test("a direct launch without an OCX_BUN assignment is unknown", () => {
     const wrapper = writeStandaloneWrapper();
     const statePath = writeStandaloneState();
