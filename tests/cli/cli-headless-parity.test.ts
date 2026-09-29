@@ -945,6 +945,21 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
+  test("agent roles reads and sets through the role-model routes, --json in any position", async () => {
+    const runtime = fakeRuntime(req => req.method === "GET" ? { roles: [], omo: { state: "absent" } } : undefined);
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["roles", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["roles", "set", "ocx explorer", "xai/grok-4.5", "--json"], runtime.deps)).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles", method: "GET", body: null },
+      { path: "/api/codex-agent-roles/ocx%20explorer", method: "PUT", body: { model: "xai/grok-4.5" } },
+    ]);
+  });
+
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
       ? { id: "key-1", name: "deploy", key: "ocx_secret" }

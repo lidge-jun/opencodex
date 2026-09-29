@@ -244,8 +244,8 @@ interface CodexAgentRolesStatus {
 
 async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
-  const action = (args.shift() ?? "status").toLowerCase();
   const wantsJson = takeFlag(args, "--json");
+  const action = (args.shift() ?? "status").toLowerCase();
   if (action === "status") {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest<CodexAgentRolesStatus>("/api/codex-agent-roles", {}, deps);
