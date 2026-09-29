@@ -526,11 +526,14 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   Foreground `shellArgs` and `shellStreamArgs` are an exception: both are rejected before spawn
   on every platform until kernel-backed descendant ownership is available. Use client shell tools;
   background-shell execution and other native operations retain their existing policy.
-- The denial reply is a silent redirect whose wording follows the request catalog. A catalog that
-  carries `shell_command`/`exec_command` or a unified `exec` keeps the bridge wording; a catalog
-  that carries neither — an orchestrator client exposing only its own Responses tools, for example —
-  is redirected to the request's actual wire names, so the model is pointed at a tool that exists
-  rather than at an alias it cannot see.
+- The denial reply is a silent redirect whose wording follows the request catalog.
+  In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
+  shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
+  and never recommends the top-level shell bridge code mode does not expose. A flat catalog that
+  carries `shell_command`/`exec_command` or a non-freeform unified `exec` keeps the bridge wording;
+  a catalog that carries neither — an orchestrator client exposing only its own Responses tools,
+  for example — is redirected to the request's actual wire names, so the model is pointed at a
+  tool that exists rather than at an alias it cannot see.
 - A recognized Cursor data-policy gate is reported with its title, the action it requires, and the
   Cursor Dashboard review URL instead of a bare `failed_precondition: Error`. Recognition is limited
   to the known structured detail: unknown or malformed details keep the generic Connect error, no

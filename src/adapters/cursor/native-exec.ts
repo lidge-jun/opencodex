@@ -54,7 +54,8 @@ import {
 import { clientBytes, execBytes, execStreamCloseBytes, execThrowBytes } from "./native-exec-common";
 import type { McpToolDefinition } from "./gen/agent_pb";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
-import { cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorToolWireName } from "./tool-naming";
+import { CODEX_UNIFIED_EXEC_TOOL, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolWireName } from "./tool-naming";
+import { CODE_MODE_RESULT_ECHO_SENTENCE } from "../exec-tool-result-normalize";
 import type { OcxTool } from "../../types";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
@@ -84,20 +85,23 @@ export interface CursorNativeExecContext extends CursorNativeExecDeps {
 const REDIRECT_HINT_MAX_TOOLS = 16;
 
 /**
- * Redirect text for Cursor-native fs/shell/fetch attempts when the request catalog carries NO shell
- * bridge or other execution-path tool (an orchestrator client that only exposes delegation tools,
- * for example). The default refusal steers the model to `shell_command` / `exec_command`; when those
- * are not in the catalog some models (kimi-k3 observed) conclude every tool is unavailable and give
- * up instead of using the tools that ARE listed. Name the real catalog instead — the client tools
- * plus any configured MCP tools advertised this turn — and stay neutral about what those tools can
- * do, so a listed file/search/fetch tool is never contradicted.
+ * Catalog-aware redirect for denied Cursor-native fs/shell/fetch attempts. Code mode must point
+ * inside freeform `exec`, since the default refusal names top-level shell tools it does not expose.
+ * When no execution path exists, name the actual client and configured MCP tools instead and stay
+ * neutral about their capabilities, so a listed file/search/fetch tool is never contradicted.
  */
 export function cursorNativeExecRedirectHint(
-  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
   mcpToolDefs: readonly Pick<McpToolDefinition, "name" | "providerIdentifier">[] = [],
 ): string | undefined {
   const clientTools = tools ?? [];
-  if (cursorRequestHasShellAlias(clientTools) || cursorRequestHasExecutionPath(clientTools)) return undefined;
+  if (cursorRequestHasShellAlias(clientTools)) return undefined;
+  // Code mode (freeform unified `exec`, no bare shell bridge): the default bridge wording names
+  // top-level shell tools this catalog does not expose, so the model probes for tools that cannot
+  // exist. Redirect INSIDE `exec` instead — shell, file, search, and fetch are nested helpers of
+  // the code cell. The caller supplies the active-turn catalog, so no tool_choice re-filter here.
+  if (cursorRequestUsesCodeMode(clientTools)) return cursorCodeModeExecRedirectHint();
+  if (cursorRequestHasExecutionPath(clientTools)) return undefined;
   // Client tools are advertised under OCX_RESPONSES_TOOL_PROVIDER, so the harness shows them as
   // `mcp_<provider>_<wire name>`; configured MCP servers are advertised under their own provider id.
   // A request with no client tools but configured MCP tools still gets those named; a request that
@@ -115,6 +119,20 @@ export function cursorNativeExecRedirectHint(
     + "Cursor-native Read/Glob/Grep/LS/Shell/Write/Fetch are not part of this request's catalog; do not retry them. "
     + "Pick the listed tool that fits the operation — a listed file, search, or fetch tool if there is one, otherwise the listed tool that delegates work to a worker agent. "
     + "Do NOT narrate this redirect, do NOT comment on tool availability, and do NOT re-announce the task — just make the catalog tool call."
+  );
+}
+
+/**
+ * Code-mode half of the redirect above: the only execution surface is the freeform `exec` cell,
+ * so the denial names the nested helpers instead of the missing flat bridge. The result-echo
+ * sentence is the shared canonical wording tool-guidance emits for the same isolate.
+ */
+function cursorCodeModeExecRedirectHint(): string {
+  return (
+    `Re-issue this operation NOW through the \`${CODEX_UNIFIED_EXEC_TOOL}\` tool: this turn uses Codex code mode, so \`${CODEX_UNIFIED_EXEC_TOOL}\` takes a JavaScript body and shell, file, search, and fetch are nested helpers called INSIDE that body as \`await tools.<name>(...)\`, for example \`text(await tools.exec_command({cmd: "ls"}))\`. `
+    + "Cursor-native Read/Glob/Grep/LS/Shell/Write/Fetch are not part of this request's catalog; do not retry them, and do not call `shell_command` or `exec_command` at the top level here — code mode exposes no bare shell bridge, only the nested helpers. Every other tool this turn lists remains callable at the top level as usual. "
+    + CODE_MODE_RESULT_ECHO_SENTENCE + " "
+    + `Do NOT narrate this redirect, do NOT comment on tool availability, and do NOT re-announce the task — just make the \`${CODEX_UNIFIED_EXEC_TOOL}\` call.`
   );
 }
 
