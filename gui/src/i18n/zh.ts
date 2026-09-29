@@ -1684,7 +1684,7 @@ export const zh: Record<TKey, string> = {
   "integrations.semantics.raycast": "在 Raycast 的 providers.yaml 中添加一个 OpenCodex 提供商条目，让所有已路由的模型出现在 Raycast AI 模型选择器中。需要 Raycast Pro。",
   "integrations.semantics.omo": "仅管理 omo 的 models.json 中的 providers.opencodex，路径为 ~/.omo/agent，若设置了 OMO_CODING_AGENT_DIR、SENPI_CODING_AGENT_DIR 或 PI_CODING_AGENT_DIR 则以其为准。你的其他提供商保持不变。对新会话生效。",
   "integrations.omoRoles.title": "Codex 智能体角色模型",
-  "integrations.omoRoles.hint": "为每个智能体角色选择 Codex 使用的模型。保存时只修改 $CODEX_HOME/agents 中该角色文件的 model 行，并把选择同步到供 LazyCodex 读取的 omo.jsonc。",
+  "integrations.omoRoles.hint": "为每个智能体角色选择 Codex 使用的模型。保存时只修改 $CODEX_HOME/agents 中该角色文件的 model 行；只有在 omo.jsonc 可以安全改写时，才会把选择同步到供 LazyCodex 读取的 omo.jsonc。",
   "integrations.omoRoles.role": "角色",
   "integrations.omoRoles.current": "当前模型",
   "integrations.omoRoles.model": "新模型",

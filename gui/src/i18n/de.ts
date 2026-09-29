@@ -1667,7 +1667,7 @@ export const de: Record<TKey, string> = {
   "integrations.semantics.raycast": "Fügt einen OpenCodex-Provider-Eintrag in die providers.yaml von Raycast ein, damit jedes geroutete Modell in der Modellauswahl von Raycast AI erscheint. Raycast Pro erforderlich.",
   "integrations.semantics.omo": "Verwaltet ausschließlich providers.opencodex in der models.json von omo — ~/.omo/agent, sofern nicht OMO_CODING_AGENT_DIR, SENPI_CODING_AGENT_DIR oder PI_CODING_AGENT_DIR sie umleitet. Ihre übrigen Provider bleiben unverändert. Gilt ab neuen Sitzungen.",
   "integrations.omoRoles.title": "Modelle der Codex-Agentenrollen",
-  "integrations.omoRoles.hint": "Wählen Sie das Modell, mit dem Codex jede Agentenrolle ausführt. Beim Speichern ändert sich nur die model-Zeile in der Datei dieser Rolle unter $CODEX_HOME/agents, und die Auswahl wird für LazyCodex in omo.jsonc übernommen.",
+  "integrations.omoRoles.hint": "Wählen Sie das Modell, mit dem Codex jede Agentenrolle ausführt. Beim Speichern ändert sich nur die model-Zeile in der Datei dieser Rolle unter $CODEX_HOME/agents. In omo.jsonc wird die Auswahl für LazyCodex nur übernommen, wenn sich die Datei sicher neu schreiben lässt.",
   "integrations.omoRoles.role": "Rolle",
   "integrations.omoRoles.current": "Aktuelles Modell",
   "integrations.omoRoles.model": "Neues Modell",

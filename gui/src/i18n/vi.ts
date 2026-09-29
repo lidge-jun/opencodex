@@ -2225,7 +2225,7 @@ export const vi: Record<TKey, string> = {
   "integrations.semantics.raycast": "Thêm một provider OpenCodex vào providers.yaml của Raycast để mọi model được định tuyến xuất hiện trong bộ chọn model AI của Raycast. Yêu cầu Raycast Pro.",
   "integrations.semantics.omo": "Chỉ quản lý providers.opencodex trong models.json của omo — ~/.omo/agent, trừ khi OMO_CODING_AGENT_DIR, SENPI_CODING_AGENT_DIR hoặc PI_CODING_AGENT_DIR chuyển hướng. Các nhà cung cấp khác của bạn không thay đổi. Áp dụng cho phiên mới.",
   "integrations.omoRoles.title": "Mô hình cho vai trò tác tử Codex",
-  "integrations.omoRoles.hint": "Chọn mô hình Codex dùng cho từng vai trò tác tử. Khi lưu, chỉ dòng model trong tệp của vai trò đó ở $CODEX_HOME/agents thay đổi, và lựa chọn được ghi sang omo.jsonc cho LazyCodex.",
+  "integrations.omoRoles.hint": "Chọn mô hình Codex dùng cho từng vai trò tác tử. Khi lưu, chỉ dòng model trong tệp của vai trò đó ở $CODEX_HOME/agents thay đổi; lựa chọn chỉ được ghi sang omo.jsonc cho LazyCodex khi tệp đó có thể được ghi lại an toàn.",
   "integrations.omoRoles.role": "Vai trò",
   "integrations.omoRoles.current": "Mô hình hiện tại",
   "integrations.omoRoles.model": "Mô hình mới",

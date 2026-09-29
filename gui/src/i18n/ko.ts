@@ -1703,7 +1703,7 @@ export const ko: Record<TKey, string> = {
   "integrations.semantics.raycast": "Raycast의 providers.yaml에 OpenCodex 프로바이더 항목을 추가해 라우팅된 모든 모델이 Raycast AI 모델 선택기에 표시되도록 합니다. Raycast Pro가 필요합니다.",
   "integrations.semantics.omo": "omo의 models.json에서 providers.opencodex만 관리합니다. 위치는 ~/.omo/agent이며 OMO_CODING_AGENT_DIR, SENPI_CODING_AGENT_DIR, PI_CODING_AGENT_DIR 중 설정된 값이 있으면 그쪽이 우선합니다. 다른 프로바이더는 그대로 유지됩니다. 새 세션부터 적용됩니다.",
   "integrations.omoRoles.title": "Codex 에이전트 역할 모델",
-  "integrations.omoRoles.hint": "Codex가 에이전트 역할마다 쓰는 모델을 고릅니다. 저장하면 $CODEX_HOME/agents에 있는 그 역할 파일의 model 줄만 바뀌고, LazyCodex용으로 omo.jsonc에도 같은 값을 반영합니다.",
+  "integrations.omoRoles.hint": "Codex가 에이전트 역할마다 쓰는 모델을 고릅니다. 저장하면 $CODEX_HOME/agents에 있는 그 역할 파일의 model 줄만 바뀌고, omo.jsonc를 안전하게 다시 쓸 수 있을 때만 LazyCodex용으로 같은 값을 반영합니다.",
   "integrations.omoRoles.role": "역할",
   "integrations.omoRoles.current": "현재 모델",
   "integrations.omoRoles.model": "새 모델",

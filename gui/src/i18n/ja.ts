@@ -2100,7 +2100,7 @@ export const ja: Record<TKey, string> = {
   "integrations.semantics.raycast": "Raycast の providers.yaml に OpenCodex のプロバイダーエントリを追加し、ルーティングされたすべてのモデルを Raycast AI のモデル選択に表示します。Raycast Pro が必要です。",
   "integrations.semantics.omo": "omo の models.json にある providers.opencodex のみを管理します。場所は ~/.omo/agent で、OMO_CODING_AGENT_DIR・SENPI_CODING_AGENT_DIR・PI_CODING_AGENT_DIR のいずれかが設定されている場合はそちらが優先されます。他のプロバイダーは変更しません。新しいセッションから適用されます。",
   "integrations.omoRoles.title": "Codex エージェントロールのモデル",
-  "integrations.omoRoles.hint": "Codex が各エージェントロールで使うモデルを選びます。保存すると $CODEX_HOME/agents にあるそのロールのファイルの model 行だけが変わり、LazyCodex 用に omo.jsonc にも同じ値を反映します。",
+  "integrations.omoRoles.hint": "Codex が各エージェントロールで使うモデルを選びます。保存すると $CODEX_HOME/agents にあるそのロールのファイルの model 行だけが変わり、omo.jsonc を安全に書き換えられる場合に限り LazyCodex 用に同じ値を反映します。",
   "integrations.omoRoles.role": "ロール",
   "integrations.omoRoles.current": "現在のモデル",
   "integrations.omoRoles.model": "新しいモデル",

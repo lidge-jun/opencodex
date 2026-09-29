@@ -2191,7 +2191,7 @@ export const ru: Record<TKey, string> = {
   "integrations.semantics.raycast": "Добавляет запись провайдера OpenCodex в providers.yaml Raycast, чтобы каждая маршрутизируемая модель появилась в выборе моделей Raycast AI. Требуется Raycast Pro.",
   "integrations.semantics.omo": "Управляет только providers.opencodex в models.json omo — ~/.omo/agent, если только OMO_CODING_AGENT_DIR, SENPI_CODING_AGENT_DIR или PI_CODING_AGENT_DIR не перенаправляет путь. Остальные провайдеры остаются без изменений. Применяется к новым сессиям.",
   "integrations.omoRoles.title": "Модели ролей агентов Codex",
-  "integrations.omoRoles.hint": "Выберите модель, на которой Codex запускает каждую роль агента. При сохранении меняется только строка model в файле этой роли в $CODEX_HOME/agents, а выбор копируется в omo.jsonc для LazyCodex.",
+  "integrations.omoRoles.hint": "Выберите модель, на которой Codex запускает каждую роль агента. При сохранении меняется только строка model в файле этой роли в $CODEX_HOME/agents, а в omo.jsonc для LazyCodex выбор копируется, только если этот файл можно безопасно перезаписать.",
   "integrations.omoRoles.role": "Роль",
   "integrations.omoRoles.current": "Текущая модель",
   "integrations.omoRoles.model": "Новая модель",
