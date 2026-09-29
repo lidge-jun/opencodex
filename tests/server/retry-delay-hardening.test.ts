@@ -5,7 +5,7 @@ describe("stated reset duration boundaries", () => {
   test("the error adapter retains a local parser binding after extraction", () => {
     const failure = adapterFailureFromMessage("Devin rate limit: reset in 5 minutes 30 seconds");
     expect(failure.httpStatus).toBe(429);
-    expect(failure.error.message).toBe("Devin rate limit: reset in 5 minutes 30 seconds Please try again in 330s.");
+    expect(failure.error.message).toBe("Please try again in 330s. Devin rate limit: reset in 5 minutes 30 seconds");
     expect(failure.error.code).toBe("rate_limit_exceeded");
   });
 

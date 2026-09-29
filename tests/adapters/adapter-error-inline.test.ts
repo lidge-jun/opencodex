@@ -38,13 +38,25 @@ describe("typed rate-limit retry advice", () => {
   });
 
   test("does not invent a delay or rewrite unrelated explicit verdicts", () => {
-    expect(adapterFailureFromEvent(refusal("resource_exhausted", "busy")).error.message).toBe("busy");
+    for (const message of ["busy", "retry after ~0s", "retry after 2 months"]) {
+      expect(adapterFailureFromEvent(refusal("resource_exhausted", message)).error)
+        .toMatchObject({ code: "resource_exhausted", message });
+    }
     for (const code of ["insufficient_quota", "request_send_budget_exhausted", "invalid_argument", "vendor_custom"]) {
       const event = refusal(code);
       expect(adapterFailureFromEvent(event).error).toMatchObject({ code, message: event.message });
     }
     const not429 = { ...refusal(), status: 503, errorType: "server_error" };
     expect(adapterFailureFromEvent(not429).error).toMatchObject({ code: "resource_exhausted", message: not429.message });
+  });
+
+  test("typed and message-only errors share the same longest-first client advice", () => {
+    const message = "rate limit exceeded: Please try again in 1s. retry after ~900s";
+    const typed = adapterFailureFromEvent(refusal("resource_exhausted", message));
+    const untyped = adapterFailureFromMessage(message);
+    expect(typed).toEqual(untyped);
+    expect(typed.error.message).toBe(`Please try again in 900s. Provider detail: ${message}`);
+    expect(adapterFailureFromMessage(typed.error.message).error.message).toBe(typed.error.message);
   });
 
   test("redacts the retained provider detail before appending retry advice", () => {
