@@ -258,8 +258,9 @@ function codexCliUpdateBoundEnv(bound: NodeJS.ProcessEnv | undefined): NodeJS.Pr
 interface NpmConfigIsolation {
   /** Controlled cwd: contains the sentinel package.json, so npm's project-config walk stops here. */
   readonly dir: string;
-  /** Empty file substituted for both the user and the global npmrc. */
+  /** Distinct empty files: npm refuses to load one path at two configuration levels. */
   readonly npmrc: string;
+  readonly globalNpmrc: string;
   /** npm cache root under dir: keeps _cacache and _logs inside the owned root so a
    *  successful query cannot leave residue in the ambient ~/.npm. */
   readonly cache: string;
@@ -283,8 +284,10 @@ function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): N
     writeFileSync(join(root, "package.json"), "{}\n");
     const npmrc = join(root, "ocx-update.npmrc");
     writeFileSync(npmrc, "");
+    const globalNpmrc = join(root, "ocx-update-global.npmrc");
+    writeFileSync(globalNpmrc, "");
     const cache = join(root, "npm-cache");
-    return { dir: root, npmrc, cache, env: codexCliUpdateBoundEnv(boundEnv) };
+    return { dir: root, npmrc, globalNpmrc, cache, env: codexCliUpdateBoundEnv(boundEnv) };
   } catch (error) {
     // A mid-setup failure must not leak a directory this call created; a
     // caller-supplied directory stays the caller's responsibility.
@@ -299,7 +302,7 @@ function isolatedNpmArgs(args: readonly string[], isolation: NpmConfigIsolation)
     ...args,
     "--registry=" + CODEX_CLI_REGISTRY,
     "--userconfig=" + isolation.npmrc,
-    "--globalconfig=" + isolation.npmrc,
+    "--globalconfig=" + isolation.globalNpmrc,
     "--cache=" + isolation.cache,
   ];
 }

@@ -321,6 +321,7 @@ describe("registry configuration isolation", () => {
     /** Snapshot taken while the call was live; the isolation dir is gone by return. */
     cwdHadSentinel: boolean;
     cwdHadNpmrc: boolean;
+    cwdHadGlobalNpmrc: boolean;
   }
 
   /** The npm argv, whether it reached spawn bare (POSIX) or inside a cmd /c line (Windows). */
@@ -346,6 +347,7 @@ describe("registry configuration isolation", () => {
         options,
         cwdHadSentinel: existsSync(join(cwd, "package.json")),
         cwdHadNpmrc: existsSync(join(cwd, "ocx-update.npmrc")),
+        cwdHadGlobalNpmrc: existsSync(join(cwd, "ocx-update-global.npmrc")),
       };
       calls.push(call);
       const field = queriedField(call);
@@ -367,13 +369,15 @@ describe("registry configuration isolation", () => {
     expect(calls.length).toBe(3);
     for (const call of calls) {
       expect(argvLine(call)).toContain("--registry=" + CODEX_CLI_REGISTRY);
-      // Both file configs are substituted with the controlled empty npmrc inside the
+      // Both file configs use distinct controlled empty files inside the
       // isolation dir — a user ~/.npmrc or a global $PREFIX/etc/npmrc cannot answer.
       expect(argvLine(call)).toContain("--userconfig=");
       expect(argvLine(call)).toContain("--globalconfig=");
       expect(argvLine(call)).toContain("ocx-update.npmrc");
+      expect(argvLine(call)).toContain("ocx-update-global.npmrc");
       expect(call.cwdHadSentinel).toBe(true);
       expect(call.cwdHadNpmrc).toBe(true);
+      expect(call.cwdHadGlobalNpmrc).toBe(true);
     }
     // The isolation directory is cleaned up after the resolve.
     expect(existsSync(calls[0]!.options.cwd as string)).toBe(false);
@@ -523,6 +527,43 @@ describe("registry configuration isolation", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")("real npm accepts both isolated config paths without any registry access", () => {
+    // POSIX uses a flat argv. Windows planning remains deferred; its quoted command
+    // and file isolation are covered above without treating a shell line as argv.
+    const fakeHome = mkdtempSync(join(tmpdir(), "ocx-update-config-test-"));
+    let configReads = 0;
+    let isolatedDir = "";
+    try {
+      const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+        const field = queriedField({ args } as CapturedCall);
+        isolatedDir = options.cwd as string;
+        if (configReads === 0) {
+          const flags = args.filter(arg => arg.startsWith("--"));
+          const user = flags.find(arg => arg.startsWith("--userconfig="));
+          const global = flags.find(arg => arg.startsWith("--globalconfig="));
+          expect(user?.slice("--userconfig=".length)).not.toBe(global?.slice("--globalconfig=".length));
+          const result = spawnSync(bin, ["config", "get", "registry", ...flags], {
+            ...options,
+            env: { ...(options.env as NodeJS.ProcessEnv), HOME: fakeHome, USERPROFILE: fakeHome },
+            timeout: 10_000, windowsHide: true, encoding: "utf8",
+          });
+          expect(result.error).toBeUndefined();
+          expect(result.status).toBe(0);
+          expect(new URL(result.stdout.trim()).href).toBe(new URL(CODEX_CLI_REGISTRY).href);
+          expect(result.stderr).not.toContain("double-loading config");
+          configReads++;
+        }
+        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+      }) as never;
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(configReads).toBe(1);
+      expect(existsSync(isolatedDir)).toBe(false);
+      expect(readdirSync(fakeHome)).toEqual([]);
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
   test("a real npm call under the isolated argv leaves the operator HOME untouched", () => {
     // Runs real npm exactly once: the first captured query executes for real with a
     // disposable HOME while the rest stay stubbed. npm_config_offline makes the
@@ -538,6 +579,7 @@ describe("registry configuration isolation", () => {
           bin, args, options,
           cwdHadSentinel: existsSync(join(cwd, "package.json")),
           cwdHadNpmrc: existsSync(join(cwd, "ocx-update.npmrc")),
+          cwdHadGlobalNpmrc: existsSync(join(cwd, "ocx-update-global.npmrc")),
         };
         calls.push(call);
         const field = queriedField(call);
@@ -549,6 +591,7 @@ describe("registry configuration isolation", () => {
         // a real process exit so the residue assertions actually bound npm's writes.
         expect(result.error).toBeUndefined();
         expect(result.status === 0 || result.status === 1).toBe(true);
+        expect(result.stderr).not.toContain("double-loading config");
         // The owned root is still live here, so residue inside it is observable
         // before the resolver's finally removes it.
         for (const name of readdirSync(cwd)) ownedDuringRun.push(name);
@@ -560,7 +603,7 @@ describe("registry configuration isolation", () => {
       // Anything npm persisted was inside the owned root and is removed with it;
       // the disposable HOME stays completely empty (no ~/.npm, no ~/.npmrc, no _logs).
       for (const name of ownedDuringRun) {
-        expect(["package.json", "ocx-update.npmrc", "npm-cache"].includes(name)).toBe(true);
+        expect(["package.json", "ocx-update.npmrc", "ocx-update-global.npmrc", "npm-cache"].includes(name)).toBe(true);
       }
       expect(existsSync(cwd)).toBe(false);
       expect(readdirSync(fakeHome)).toEqual([]);
