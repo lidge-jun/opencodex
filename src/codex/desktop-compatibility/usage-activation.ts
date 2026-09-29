@@ -31,7 +31,7 @@ export class UsageActivation {
     return true;
   }
   private async reset(phase:string) {
-    this.mode='observe';this.phase=phase;this.startedAt=null;this.outputs=0;++this.generation;
+    this.mode='observe';this.phase=phase;this.startedAt=null;this.latest=null;this.outputs=0;++this.generation;
     return this.refresh(this.binding);
   }
   async activate(options:{scope:ApplyScope;accountWideConsent:boolean}) {
@@ -41,15 +41,17 @@ export class UsageActivation {
     let verified:string|null;
     try{verified=await this.verifyIdentity();}catch{verified=null;}
     if(verified!==binding||this.binding!==binding||this.generation!==beforeVerification)return{accepted:false,reason:'identity-not-verified',...this.snapshot()};
+    if(this.mode==='apply')return{accepted:false,reason:'activation-already-pending',...this.snapshot()};
     const age=this.latest?this.clock()-this.latest.at:Infinity;
     if(!this.latest||this.latest.kind!=='exhausted'||age<0||age>300000)return{accepted:false,reason:'no-fresh-eligible-exhaustion',...this.snapshot()};
-    if(this.mode==='apply')return{accepted:false,reason:'activation-already-pending',...this.snapshot()};
+    // An exhausted observation authorizes one trial, not every retry within its TTL.
+    this.latest=null;
     this.mode='apply';this.phase='awaiting-fresh-usage';this.startedAt=this.clock();this.outputs=0;
     const generation=++this.generation;
     let refreshed:RefreshResult;
     try { refreshed=await this.refresh(this.binding); }
     catch {
-      if(this.generation===generation){this.mode='observe';this.phase='refresh-failed';this.startedAt=null;++this.generation;}
+      if(this.generation===generation){this.mode='observe';this.phase='refresh-failed';this.startedAt=null;this.latest=null;this.outputs=0;++this.generation;}
       return{accepted:false,reason:'refresh-failed',...this.snapshot()};
     }
     // Account/mode changes while a close callback awaited invalidate this activation.
@@ -59,7 +61,7 @@ export class UsageActivation {
     if(!Number.isSafeInteger(refreshed.requested)||!Number.isSafeInteger(refreshed.closed)
       ||!Number.isSafeInteger(refreshed.failed)||refreshed.requested<0||refreshed.closed<0
       ||refreshed.failed!==0||refreshed.closed!==refreshed.requested){
-      this.mode='observe';this.phase='refresh-failed';this.startedAt=null;this.outputs=0;++this.generation;
+      this.mode='observe';this.phase='refresh-failed';this.startedAt=null;this.latest=null;this.outputs=0;++this.generation;
       return{accepted:false,reason:'refresh-failed',refresh:refreshed,...this.snapshot()};
     }
     return{accepted:true,reason:'awaiting-new-response',refresh:refreshed,...this.snapshot()};

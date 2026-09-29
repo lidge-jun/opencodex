@@ -1,3 +1,4 @@
+import { UsageActivation } from "../../src/codex/desktop-compatibility/usage-activation";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
@@ -212,7 +213,7 @@ describe("optional native compatibility runtime", () => {
     expect(adjusted.rate_limit.allowed).toBe(true); expect(adjusted.rate_limit.primary_window.used_percent).toBe(100); expect(adjusted.credits.has_credits).toBe(false);
     const bytes = new Uint8Array([0, 255, 1, 128, 42]);
     const uploaded = await send("/backend-api/files", { method: "POST", body: bytes, headers: { cookie: "fixture=session" } });
-    expect(new Uint8Array(await uploaded.arrayBuffer())).toEqual(bytes); expect(uploaded.headers.get("set-cookie")).toContain("fixture=kept");
+    expect(new Uint8Array(await uploaded.arrayBuffer())).toEqual(bytes); expect(uploaded.headers.get("set-cookie")).toContain("fixture=kept; Secure");
     expect(io.calls.at(-1)).toEqual({ path: "/backend-api/files", method: "POST", bytes: 5, cookie: "fixture=session" });
     await io.runtime.observe(); expect(await send("/backend-api/wham/usage").then(res => res.json())).toEqual(usage);
     const cert = createDesktopCertificateService("unused", { platform: "win32" });
@@ -279,5 +280,73 @@ describe("optional native compatibility runtime", () => {
       } finally { await new Promise<void>(resolve => blocker.close(() => resolve())); }
       await io.runtime.start(); expect(io.runtime.getPacUrl()).toBe(originalUrl); await io.runtime.stop();
     }
+  });
+});
+
+describe("compatibility trials consume their exhausted observation", () => {
+  for (const ending of ["cancel", "timeout"] as const) {
+    for (const observeDuringTrial of [false, true]) {
+      test(`${ending} needs a new observation (observed during trial: ${observeDuringTrial})`, async () => {
+        let now = 1000;
+        const activation = new UsageActivation("account", async () => ({ requested: 0, closed: 0, failed: 0 }),
+          async () => "account", () => now);
+        activation.observe("account", "exhausted");
+        expect((await activation.activate(consent)).accepted).toBe(true);
+        expect((await activation.activate(consent)).reason).toBe("activation-already-pending");
+        const oldGeneration = activation.snapshot().generation;
+        if (observeDuringTrial) activation.observe("account", "exhausted");
+        if (ending === "cancel") await activation.observeOnly();
+        else { now += 180000; expect(await activation.expireIfNeeded()).toBe(true); }
+        expect(activation.snapshot().mode).toBe("observe");
+        expect(activation.recordOutput("account", oldGeneration)).toBe(false);
+        // Still inside the old observation's five-minute TTL: consent is not enough.
+        expect(await activation.activate(consent)).toMatchObject({ accepted: false, reason: "no-fresh-eligible-exhaustion" });
+        expect(activation.observe("another-account", "exhausted")).toBe(false);
+        expect((await activation.activate(consent)).accepted).toBe(false);
+        activation.observe("account", "exhausted");
+        expect((await activation.activate({ ...consent, accountWideConsent: false })).accepted).toBe(false);
+        expect((await activation.activate(consent)).accepted).toBe(true);
+      });
+    }
+  }
+  for (const failure of ["throw", "partial", "invalid-count"] as const) {
+    test(`${failure} clears observations and outputs produced while refresh was pending`, async () => {
+      let fail = true;
+      const activation = new UsageActivation("account", async () => {
+        if (!fail) return { requested: 0, closed: 0, failed: 0 };
+        activation.observe("account", "exhausted");
+        activation.recordOutput("account", activation.snapshot().generation);
+        if (failure === "throw") throw new Error("synthetic refresh failure");
+        return failure === "partial" ? { requested: 1, closed: 0, failed: 1 }
+          : { requested: Number.NaN, closed: 0, failed: 0 };
+      }, async () => "account", () => 1000);
+      activation.observe("account", "exhausted");
+      expect(await activation.activate(consent)).toMatchObject({ accepted: false, reason: "refresh-failed", mode: "observe", outputs: 0 });
+      fail = false;
+      expect(await activation.activate(consent)).toMatchObject({ accepted: false, reason: "no-fresh-eligible-exhaustion" });
+      activation.observe("account", "exhausted");
+      expect((await activation.activate(consent)).accepted).toBe(true);
+    });
+  }
+  test("a superseded refresh failure cannot erase a newer trial", async () => {
+    let calls = 0, entered!: () => void, rejectOld!: (error: Error) => void;
+    const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+    const activation = new UsageActivation("account", async () => {
+      if (++calls === 1) {
+        entered();
+        return new Promise<{ requested: number; closed: number; failed: number }>((_, reject) => { rejectOld = reject; });
+      }
+      return { requested: 0, closed: 0, failed: 0 };
+    }, async () => "account", () => 1000);
+    activation.observe("account", "exhausted");
+    const old = activation.activate(consent); await enteredPromise;
+    await activation.observeOnly();
+    activation.observe("account", "exhausted");
+    expect((await activation.activate(consent)).accepted).toBe(true);
+    const generation = activation.snapshot().generation;
+    rejectOld(new Error("superseded refresh"));
+    expect((await old).accepted).toBe(false);
+    expect(activation.snapshot()).toMatchObject({ mode: "apply", generation });
+    expect(activation.recordOutput("account", generation)).toBe(true);
   });
 });
