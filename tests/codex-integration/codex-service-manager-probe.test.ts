@@ -453,6 +453,40 @@ describe("the Windows chain walk", () => {
     }).kind).toBe("unknown");
   });
 
+  test("a source wrapper with an extra standalone launch is unknown", () => {
+    const wrapper = writeWindowsWrapper("C:\\a\\.codex", "C:\\a\\.opencodex");
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100\r\n"%OCX_BUN%" start --port 10100',
+    ));
+    const launcher = writeWindowsLauncher(wrapper);
+    writeWindowsTask(launcher);
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+
+    expect(inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent",
+    }).kind).toBe("unknown");
+  });
+
+  test("a standalone wrapper with an extra source launch is unknown", () => {
+    const dir = join(home, ".opencodex");
+    const wrapper = join(dir, "opencodex-service.cmd");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(wrapper, buildWindowsServiceScript({
+      bun: "C:\\OpenCodex\\ocx.exe", bunRuntimeSource: "standalone", cli: null,
+    }, 10100).replace(
+      '"%OCX_BUN%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100\r\n"%OCX_BUN%" start --port 10100',
+    ));
+    const launcher = writeWindowsLauncher(wrapper);
+    writeWindowsTask(launcher);
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+
+    expect(inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent",
+    }).kind).toBe("unknown");
+  });
+
   test("a registered task whose chain disagrees with the staged definition is unknown", () => {
     const wrapper = writeWindowsWrapper("C:\\Users\\ws\\.codex", "C:\\Users\\ws\\.opencodex");
     const launcher = writeWindowsLauncher(wrapper);

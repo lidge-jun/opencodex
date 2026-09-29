@@ -564,11 +564,15 @@ function decodeBatchPathValue(
  * The generated OCX_CLI set line, not bun runtime provenance, selects the valid launch shape.
  */
 function wrapperLooksGenerated(body: string): boolean {
-  const sourceLaunch = /:loop\s*[\s\S]*^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/im;
-  const standaloneLaunch = /:loop\s*[\s\S]*^"%OCX_BUN%" start\b[^\r\n]*$/im;
+  if (!/^:loop\s*$/im.test(body)) return false;
+  const launchLines = body.split(/\r?\n/).filter(line => /^\s*"%OCX_BUN%"/i.test(line));
+  if (launchLines.length !== 1) return false;
+  const launch = launchLines[0]!.trim();
+  const sourceLaunch = /^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/i;
+  const standaloneLaunch = /^"%OCX_BUN%" start\b[^\r\n]*$/i;
   return batchSetValue(body, "OCX_CLI") === null
-    ? standaloneLaunch.test(body)
-    : sourceLaunch.test(body);
+    ? standaloneLaunch.test(launch)
+    : sourceLaunch.test(launch);
 }
 
 function normalizeWindowsPath(value: string): string {
