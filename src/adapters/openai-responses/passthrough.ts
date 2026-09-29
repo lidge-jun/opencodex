@@ -34,7 +34,7 @@ import {
 import {
   createAdapterTierMetadata,
 } from "../../providers/fastwire";
-import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
+import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
 import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripRejectedSamplingParams } from "./request-strips";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -352,6 +352,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      outBody = stripNoneReasoningSummary(outBody);
       // #4587: on a bridged provider, hand the destination back the search call and result the
       // proxy executed on its behalf, in place of the hosted cell the caller replays. Scoped to
       // its exact conversation and serving identity and recorded by the bridge itself, so a

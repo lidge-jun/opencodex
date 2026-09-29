@@ -1825,6 +1825,34 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.reasoning).toEqual({ effort: "high" });
   });
 
+  test("Claude omitted thinking display never puts summary:none on the Responses wire", () => {
+    const claudeBody = anthropicToResponsesBody({
+      model: "gpt-6-astra",
+      max_tokens: 10,
+      messages: [{ role: "user", content: "hi" }],
+      thinking: { type: "adaptive", display: "omitted" },
+      output_config: { effort: "high" },
+    });
+    // The translator still emits the marker, so the parser can hide the thinking summary.
+    expect((claudeBody as { reasoning?: unknown }).reasoning).toEqual({ summary: "none", effort: "high" });
+
+    for (const target of [
+      { ...provider, baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
+      { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "key" as const, apiKey: "sk-test" },
+    ]) {
+      const parsed = parseRequest(claudeBody);
+      expect(parsed.options.hideThinkingSummary).toBe(true);
+      const request = createResponsesPassthroughAdapter(target).buildRequest(parsed, { headers: new Headers() });
+      const wire = JSON.parse(request.body) as { reasoning?: Record<string, unknown> };
+      expect(wire.reasoning).toEqual({ effort: "high" });
+    }
+
+    // A summary-only marker leaves no empty reasoning object behind.
+    const summaryOnly = parseRequest({ model: "gpt-6-astra", input: "hi", reasoning: { summary: "none" } });
+    const wire = JSON.parse(createResponsesPassthroughAdapter(provider).buildRequest(summaryOnly, { headers: new Headers() }).body);
+    expect(wire.reasoning).toBeUndefined();
+  });
+
   function routedXaiResponsesProvider() {
     const entry = getProviderRegistryEntry("xai")!;
     const route = routeModel({
