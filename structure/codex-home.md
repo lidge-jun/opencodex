@@ -151,12 +151,11 @@ writes are ignored.
 Recovery-completion provenance is separate from the convergence promise: release retains the owner through the pending recovery and its following stage sweep.
 `tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
-A sibling instance — `ocx start --port <other>` while a live proxy serves the configured port, the
-`"sibling"` outcome of `decideStartWithLiveOwner` in `src/cli/dispatch.ts` — gets past the spend-ledger
+A sibling instance is `ocx start --port <other>` while a live proxy serves the configured port, or a start where the cross-home owner check proves a different live proxy at a managed client destination. It gets past the spend-ledger
 lease only with its own `OPENCODEX_HOME`, and still shares this Codex home, `~/.claude`, `~/.grok` and
 the launchd domain with the live owner. `handleStart` marks the process through
 `src/codex/sibling-start.ts` before the server binds, and the mark is one-way for the process's
-lifetime. It closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
+lifetime. The cross-home check follows same-home discovery and precedes journal reconciliation. It reads the default home's protected runtime record plus every home nominated by the shared owner registry, plus managed Grok and Codex loopback URLs as location hints. The registry (~/.opencodex/ocx-homes/<hash>.json, home path only, written beside runtime-port.json publication; OCX_OWNER_REGISTRY_DIR overrides the anchor for tests only) is the locator that lets one custom home find another; it lives in OpenCodex's own namespace, never inside a protected client home, and pointers whose home no longer publishes a record are pruned before the reader's entry cap while a truncated listing fails closed as indeterminate. It accepts a different process only when the listener's PID matches a record and a fresh `/healthz` challenge proves possession of its attestation secret; an unauthenticated listener at a stale managed destination is not an owner, and a sole custom-home start still syncs. When a managed destination answers but ownership cannot be decided - a live listener no registered record names, a legacy record without an attestation secret, or an unreadable transport - the verdict is indeterminate and the start still takes the sibling mark, so a competing owner never rewrites shared clients on unverifiable evidence. The mark closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
 `sibling`, so startup sync, cache invalidation, Grok, the retained catalog writers and the native-main
 lifecycle stand down (the sibling runs the no-op lifecycle, so it never contends for the owner lease;
 its data-plane `auth.json` refresh still runs under the machine-wide exclusive claim). Owner-level

@@ -13,6 +13,39 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 | `combos?` | `Record<string, OcxComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
 | `routingProfiles?` | `Record<string, OcxRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
 
+### Codex Pool low-quota protection
+
+`codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main
+account keeps its separate 98% hard lock. The optional shape is:
+
+```json
+{"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true},"windows":{"short":true,"weekly":true}}}}
+```
+
+Absence or `enabled: false` disables it. `threshold` is a finite inclusive percentage from 1
+through 100. An enabled policy needs at least one true action and one true window. A selected
+5-hour or weekly window triggers at `usage >= threshold`; either selected window is enough.
+Only fresh accepted observations qualify: there is no extra polling, and credits-only,
+cached, expired, monthly, custom-window-only, and raw out-of-range usage observations are ignored
+for this policy. Display bars may still clamp invalid upstream percentages. The policy is independent
+of proactive account switching.
+
+With `pause`, the account leaves Pool selection in memory before the next request. The server
+coalesces a config save after the observation turn and retries failed saves for a bounded time.
+Normal shutdown waits briefly for pending saves. A timed-out save that is already running remains
+`pending` until it actually succeeds or fails; a queued save is cancelled. A failed save is visible
+in the event history. A restart before a successful save cannot preserve the pause. In-flight requests keep their
+captured account. Manual resume suppresses repause across all currently high windows for that
+account until a below-threshold reading or a new reset boundary re-arms a window. A reset never resumes an account automatically.
+
+With `notify`, the server writes a local log line with window and percentage but no account id
+and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only
+that server’s events, including account id, window, usage percentage, known reset time, timestamp,
+and status. The default status is `logged`: the alert reached the log and event history only.
+There is no desktop or OS notification. Each account/window logs once per server-local episode.
+If an injected notification sink fails, its failure is recorded and a later eligible observation
+can retry it; only a successful sink is marked `delivered`.
+
 ## Model resolution order
 
 opencodex resolves the requested model in this order:
@@ -37,9 +70,24 @@ more than one provider, so use explicit namespaces when a bare model could be am
 ### Blocked-model redirects
 
 `blockedModelRedirects` is an optional top-level `Record<string, string>` of exact resolved
-model-id replacements, unset by default. It runs **after** the resolution order above: a match
-keeps the provider and account route already selected, replaces only the upstream model id, and
-records the route reason `blocked-model-redirect`. Omitting the key leaves routing unchanged.
+model-id replacements, unset by default. Bare keys still match the native model **after** provider,
+account, and alias resolution. A target without an explicit, different configured provider keeps
+that selected provider and account and replaces only the upstream model id, once. This preserves
+existing bare and slash-valued mappings, including mappings on provider-qualified requests.
+
+A target explicitly naming a **different configured provider** (for example,
+`google-antigravity/gemini-3.8-flash-high`) instead routes through that provider. An exact
+`<source-provider>/<resolved-model>` key with such a target takes precedence over a bare key;
+other qualified keys have no effect. Cross-provider redirects can chain through resolved aliases,
+with one shared five-edge limit and cycle detection. A pinned account selector never leaves its
+account: a cross-provider target fails closed, whether its key is bare or account-qualified.
+The destination uses its own credentials and quota, and never inherits source account fields;
+a caller `Authorization` header addressed to the source route is stripped, as for combo and policy routes.
+A disabled destination, a forward destination, or a key/OAuth destination without usable stored
+credentials keeps the source route's legacy behavior. Under a routing policy, every redirect target
+must itself be a declared eligible candidate, even when it keeps the same provider.
+Malformed redirect maps are ignored with a warning on load and rejected on configuration writes.
+Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
 ```json
 {

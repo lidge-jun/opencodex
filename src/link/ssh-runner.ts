@@ -93,7 +93,7 @@ export class SshRunnerError extends Error {
   }
 }
 
-async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void): Promise<string> {
+async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, kill?: () => void, fatalUtf8 = true): Promise<string> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -118,7 +118,7 @@ async function readOutput(stream: ReadableStream<Uint8Array>, maxBytes: number, 
     offset += chunk.byteLength;
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: fatalUtf8 }).decode(bytes);
   } catch (error) {
     throw new SshRunnerError("decode", "ssh output was not valid UTF-8", { cause: error });
   }
@@ -150,7 +150,7 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
       throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
     }
     const stdout = readOutput(outputStream(child.stdout), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"));
-    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"));
+    const stderr = readOutput(outputStream(child.stderr), DEFAULT_OUTPUT_BYTES, () => defaultKill(child, "SIGTERM"), false);
     void stdout.catch(() => {});
     void stderr.catch(() => {});
     return {
@@ -181,8 +181,8 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
         throw new SshRunnerError("spawn", `could not spawn ${argv[0] ?? "ssh"}`, { cause: error });
       }
 
-    const stdout = readOutput(outputStream(child.stdout), Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), () => defaultKill(child, "SIGTERM"));
-    const stderr = readOutput(outputStream(child.stderr), Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), () => defaultKill(child, "SIGTERM"));
+      const stdout = readOutput(outputStream(child.stdout), Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), () => defaultKill(child, "SIGTERM"));
+      const stderr = readOutput(outputStream(child.stderr), Math.min(maxOutputBytes, DEFAULT_OUTPUT_BYTES), () => defaultKill(child, "SIGTERM"), false);
       if (options.stdin !== undefined) {
         try {
           const input = child.stdin;

@@ -633,6 +633,16 @@ describe("headless GUI parity CLI", () => {
     expect(runtime.requests).toHaveLength(0);
   });
 
+  test("provider edit sends only validated Copilot context tiers", async () => {
+    const { requests, deps } = fakeRuntime();
+    expect(await handleProviderRuntimeCommand("edit", ["github-copilot", "--model-context-tier", "gpt-5.6-luna=long_context", "--model-context-tier", "gpt-5.5=default"], deps)).toBe(0);
+    expect(requests).toEqual([{ path: "/api/providers?name=github-copilot", method: "PATCH",
+      body: { modelContextTiers: { "gpt-5.6-luna": "long_context", "gpt-5.5": "default" } } }]);
+    expect(await handleProviderRuntimeCommand("edit", ["github-copilot", "--model-context-tier", "gpt-5.5=wide"], deps)).toBe(2);
+    expect(await handleProviderRuntimeCommand("edit", ["openai", "--model-context-tier", "gpt-5.5=default"], deps)).toBe(2);
+    expect(requests).toHaveLength(1);
+  });
+
   test("provider edit --headers sends the parsed block and - clears it", async () => {
     const runtime = fakeRuntime();
     const code = await handleProviderRuntimeCommand("edit", [

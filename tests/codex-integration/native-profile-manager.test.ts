@@ -18,7 +18,7 @@ import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutatio
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
-import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { BULK_DURABLE_IO_BUDGET_MS, INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const nativeProfileLockChildPath = helperPath("native-profile-lock-child.ts");
 const roots: string[] = [];
@@ -935,7 +935,7 @@ describe("native main profile transactions", () => {
     expect(readFileSync(manager.context.vaultPath, "utf8")).toBe(vaultBefore);
     expect((await manager.list()).profiles).toHaveLength(32);
     expect(existsSync(overflow.stagingCodexHome)).toBe(false);
-  }, 30_000);
+  }, BULK_DURABLE_IO_BUDGET_MS);
 
   test("switches with a journal larger than the metadata cap", async () => {
     const f = fixture();

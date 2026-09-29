@@ -8,6 +8,7 @@
  * Binning rules (applied in priority order):
  *  1. disabled === true              -> disabled
  *  2. keyOptional === true           -> ready  (key not required — not the same as free pricing)
+ *     subscription CLI adapter       -> ready  (`claude-cli`: the CLI owns the login; see subscription-cli.ts)
  *  3. authMode === "oauth"           -> ready  (credentials managed externally)
  *  4. authMode === "forward"         -> ready  (passes caller credentials through)
  *  5. authMode === "local"           -> ready  (local runtime, no key required)
@@ -22,6 +23,8 @@
  * provider), "free" (free pricing), "paid" (everything else). Accounts wins
  * over free.
  */
+
+import { isSubscriptionCliProvider } from "./subscription-cli";
 
 /**
  * Shape of a single provider value as it appears in the proxy config map.
@@ -51,7 +54,8 @@ export interface WorkspaceProvider {
     enabled?: boolean;
     requestsPerMinute?: number;
     minIntervalMs?: number;
-    models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number }>;
+    maxConcurrentRequests?: number;
+    models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number; maxConcurrentRequests?: number }>;
   };
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
@@ -135,7 +139,11 @@ export function hasLoopbackBaseUrl(baseUrl: string): boolean {
 }
 
 function isConfigurationReady(p: WorkspaceProvider): boolean {
+  // A subscription CLI row is ready by adapter alone: `keyOptional` is enriched from the
+  // registry only for the canonical `claude-cli` name, and a renamed or hand-authored row using
+  // that adapter still never reads a key.
   return p.keyOptional === true ||
+    isSubscriptionCliProvider(p) ||
     p.authMode === "oauth" ||
     p.authMode === "forward" ||
     p.authMode === "local" ||
@@ -164,10 +172,13 @@ export function isAccountProvider(name: string, p: WorkspaceProvider): boolean {
 /**
  * Free pricing (badge / filter / sort): `freeTier`, keyless free (`keyOptional`),
  * local runtimes, or loopback. Forward passthrough is NOT free — those are
- * account providers. Does **not** imply ready-without-key — use
- * `binProviderStatus` for readiness.
+ * account providers, and a subscription CLI row (`claude-cli`) is NOT free either:
+ * its `keyOptional` means the CLI owns the credential and bills the user's
+ * subscription, so it sorts, filters and groups with the paid API rows. Does **not**
+ * imply ready-without-key — use `binProviderStatus` for readiness.
  */
 export function isFreeProvider(p: WorkspaceProvider): boolean {
+  if (isSubscriptionCliProvider(p)) return false;
   return p.freeTier === true
     || p.keyOptional === true
     || p.authMode === "local"

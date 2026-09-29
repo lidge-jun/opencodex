@@ -290,3 +290,27 @@ test("a first discovery failure backs off even with no last good list", async ()
   await Bun.sleep(1); // let the finished flight leave the join table
   expect(calls).toBe(2);
 });
+
+test("a paused account's model evidence leaves the catalog and context limits", async () => {
+  setup();
+  const { setAccountPaused } = await import("../../../src/oauth/store");
+  const a = await add("a");
+  await add("b");
+  refreshKiroAccountModelsDetached(a, provider,
+    wire({ models: [{ modelId: "only-on-a", tokenLimits: { maxInputTokens: 150_000 } }] }, []));
+  await awaitKiroModelRefreshForTests(a.id);
+  expect(kiroObservedContextWindow("only-on-a")).toBe(150_000);
+  const staticProvider = { ...provider, liveModels: false, models: ["shipped"] } as OcxProviderConfig;
+  const list = async () => (await fetchProviderModelsWithAuth({ name: "kiro", provider: staticProvider,
+    metadataModelIdCaseFold: false } as never, 60_000, undefined, refreshingModelsAuthResolver)).models.map(model => model.id);
+  expect(await list()).toEqual(["shipped", "only-on-a"]);
+
+  await setAccountPaused("kiro", a.id, true);
+  expect(await list()).toEqual(["shipped"]);
+  expect(kiroObservedContextWindow("only-on-a")).not.toBe(150_000);
+  const calls: Array<{ url: string; bearer: string; target: string; profile: string }> = [];
+  const paused = getAccountSet("kiro")!.accounts.find(row => row.id === a.id)!;
+  refreshKiroAccountModelsDetached(paused, provider, wire({ models: [] }, calls));
+  await awaitKiroModelRefreshForTests(a.id);
+  expect(calls).toHaveLength(0);
+});

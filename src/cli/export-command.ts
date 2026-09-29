@@ -1,8 +1,8 @@
 /**
  * `ocx export --client <id>` — print a client config for the live proxy.
  *
- * Fourteen clients, five formats. The accepted list is `EXPORT_CLIENT_IDS`, not
- * this comment: OpenCode, Pi, Prime, Aside, ZCode and omo are JSON; OMP,
+ * The accepted clients span five formats. The accepted list is `EXPORT_CLIENT_IDS`, not
+ * this comment: OpenCode, Pi, Prime, Aside, ZCode, omo and Kilo are JSON; OMP,
  * Hermes, gjc, DSH, MiniMax Code and Raycast are YAML; OpenClaw is JSON5; Kimi
  * is TOML.
  *
@@ -159,16 +159,16 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     const spec = EXPORT_CLIENTS[client];
     const root = await runtimeBaseUrl(deps);
     let built: { document: unknown; text: string };
-    if (client === "raycast") {
+    if (client === "raycast" || client === "droid") {
       // The dial address alone cannot distinguish a wildcard authenticated bind
       // from loopback. Let the live server resolve its admission/listener policy;
       // saved config can differ from the process serving this request.
       const exported = await runtimeRequest<{
         client: string; format: string; config: unknown; text: string;
-      }>("/api/client-config?client=raycast", {}, { ...deps, baseUrl: root });
-      if (!exported || exported.client !== "raycast" || exported.format !== "yaml"
+      }>(`/api/client-config?client=${client}`, {}, { ...deps, baseUrl: root });
+      if (!exported || exported.client !== client || exported.format !== spec.format
         || typeof exported.text !== "string" || exported.config === undefined) {
-        throw new RuntimeApiError("Management API returned an unexpected Raycast export payload.", 502, null);
+        throw new RuntimeApiError(`Management API returned an unexpected ${client} export payload.`, 502, null);
       }
       built = { document: exported.config, text: exported.text };
     } else {

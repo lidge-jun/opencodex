@@ -157,8 +157,7 @@ the id unregisters it and the next canonical write drops the row. Configured nat
 like `gpt-5.5` there), and a combo `nativeAlias` cannot target one because schema validation runs
 before registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
 
-Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied
-model ids still follow generic routing. User-selected config and historical usage remain stored.
+Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied model ids still follow generic routing. User-selected config and historical usage remain stored.
 
 Account-gated native ids use authenticated ChatGPT `/models` rosters cached per credential generation with a bounded timeout.
 A bare gated row requires a confirmed eligible account; a selector-qualified row requires its mapped account. Failed discovery
@@ -166,6 +165,7 @@ grants neither. The same snapshot gates Pool selection, so catalog and runtime u
 The roster's per-model `available_access_programs` is projected separately: bare native rows use only confirmed main-account
 metadata, and selector-qualified rows use only their mapped account. An object requires a valid `cyber` string array; malformed values under other program keys are omitted without losing that grant. Explicit `null` stays null; omission stays omitted.
 Failed discovery or credential replacement removes stale access-program metadata. It changes presentation, not routing grants.
+The roster's `availability_nux.message` is trimmed, capped at 2,000 UTF-16 units without leaving a lone surrogate, and projected only onto bare native rows from a confirmed main-account roster that lists the slug. Missing or unconfirmed main metadata writes `null` to clear stale prompts; account-qualified, combo, and native alias rows carry no availability prompt. Pool-account prompts never reach the bare row.
 
 `client_version` arrives on the inbound request and is part of that cache identity, so
 `src/codex/model-entitlements.ts` bounds the work as well as the state: stored versions per account, concurrent
@@ -226,7 +226,7 @@ in-flight publication; unrelated unscoped rows require no credential lookup.
 A Devin live row spreads its measured `inputModalities` before
 `catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy
 `modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live
-value survives only when none of them applies.
+value survives only when none of them applies. Devin live rows collapse by catalog family (so `swe-1-6-fast` stays its own row), read their ladder from the family effort axis (including `minimal`), and carry the effective enabled default member's effort as `defaultReasoningEffort` when the family marks a default; `swe-1-6` is marked text-only because it drops images without an error.
 
 For `liveModels: false`, a static provider publishes the ordered union of `models` and `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
 union before retained ids; a nonempty explicit list does not import a different default.
@@ -296,7 +296,7 @@ a label edit refresh Codex output.
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger
-opt-in context tier uses that effective long window in both shapes; invalid values are omitted.
+opt-in context tier uses that effective long window in both shapes; invalid values are omitted. For `github-copilot`, `modelContextTiers` raises a selected long-context window only when an exact `modelContextWindows` value supplies per-model evidence; that value wins before the provider cap, while unknown models retain observed metadata. The gather fingerprint includes the map.
 
 Supported bare native GPT rows also consume `providers.openai.modelDisplayNames`. Retained sync
 and convergence pass the same map to the observed-state merge. After native normalization and

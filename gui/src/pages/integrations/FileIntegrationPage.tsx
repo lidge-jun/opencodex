@@ -15,6 +15,7 @@ import {
   loadIntegrationJournal,
   loadIntegrationState,
   previewIntegrationMutation,
+  canDisableKiloWithCandidateIssue,
   toggleIntegration,
   bindingFor,
   IntegrationApiError,
@@ -83,6 +84,8 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   raycast: "integrations.semantics.raycast",
   omo: "integrations.semantics.omo",
   cline: "integrations.semantics.cline",
+  kilo: "integrations.semantics.kilo",
+  droid: "integrations.semantics.droid",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -101,6 +104,8 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   raycast: "integrations.tab.raycast",
   omo: "integrations.tab.omo",
   cline: "integrations.tab.cline",
+  kilo: "integrations.tab.kilo",
+  droid: "integrations.tab.droid",
 };
 
 export default function FileIntegrationPage({
@@ -261,12 +266,13 @@ export default function FileIntegrationPage({
     );
   }
 
-  const applied = status.state === "current" || status.state === "stale";
+  const removableKiloIssue = canDisableKiloWithCandidateIssue(status);
+  const applied = status.state === "current" || status.state === "stale" || removableKiloIssue;
   const enabled = profileId !== undefined ? status.enabled === true : applied;
   const profileUnavailable = profileId !== undefined && (stateResource.state.showError || stateResource.state.refreshing);
   // A profile may stop future sync even when its file cannot be changed; the
   // writer still refuses unsafe deletion and reports the actual state separately.
-  const locked = (!status.installed || status.state === "conflict" || status.state === "unsafe")
+  const locked = (!status.installed || ((status.state === "conflict" || status.state === "unsafe") && !removableKiloIssue))
     && !(profileId !== undefined && enabled);
 
   return (
@@ -312,10 +318,10 @@ export default function FileIntegrationPage({
         Conflict used to be a dead end: the switch locks, the page explains why,
         and the only way forward was to open the file and edit it by hand -- which
         is the thing a user came to a dashboard to avoid. The switch stays locked
-        and this is the one way past it, behind a dialog that names the file and
-        says what is lost.
+        and this is the way past an overwriteable conflict, behind a dialog
+        that names the file and says what is lost.
       */}
-      {status.installed && status.state === "conflict" && (
+      {status.installed && status.state === "conflict" && status.reason !== "candidate-conflict" && (
         <button
           type="button"
           className="btn btn-danger"
@@ -328,6 +334,9 @@ export default function FileIntegrationPage({
 
       <p className="page-sub">{t(SEMANTICS_KEY[client])}</p>
       <p className="integration-path">{status.configPath}</p>
+      {status.reason === "candidate-conflict" && status.conflictPaths?.map(path => (
+        <Notice key={path} tone="err">{t("integrations.status.candidateConflict", { path })}</Notice>
+      ))}
       {/* Only the raycast envelope carries this; the guard is the field, not the id. */}
       {status.raycast && <RaycastPlanNotice install={status.raycast} />}
       {/*

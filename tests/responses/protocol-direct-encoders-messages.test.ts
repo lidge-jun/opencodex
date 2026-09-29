@@ -18,6 +18,7 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 interface ToolOptions {
   hideThinkingSummary?: boolean;
+  hideRawReasoning?: boolean;
   toolParameterSchemas?: Map<string, Record<string, unknown>>;
 }
 
@@ -34,6 +35,7 @@ function legacyMessagesStream(events: AdapterEvent[], options: ToolOptions = {})
     {
       translatorBudget,
       ...(options.hideThinkingSummary ? { hideThinkingSummary: true } : {}),
+      ...(options.hideRawReasoning ? { hideRawReasoning: true } : {}),
       ...(options.toolParameterSchemas ? { toolParameterSchemas: options.toolParameterSchemas } : {}),
       // The Anthropic inbound wire never enforces the declared catalog (#4735).
       enforceDeclaredToolNames: false,
@@ -53,6 +55,7 @@ function directOptions(options: ToolOptions = {}) {
     inputTokenFloor: INPUT_FLOOR,
     translatorBudget: createTestTranslatorBudget(),
     ...(options.hideThinkingSummary ? { hideThinkingSummary: true } : {}),
+    ...(options.hideRawReasoning ? { hideRawReasoning: true } : {}),
     ...(options.toolParameterSchemas ? { toolParameterSchemas: options.toolParameterSchemas } : {}),
   };
 }
@@ -213,6 +216,15 @@ const SCENARIOS: Record<string, { events: AdapterEvent[]; options?: ToolOptions 
       { type: "done" },
     ],
     options: { hideThinkingSummary: true },
+  },
+  "raw reasoning hidden by the provider policy keeps summaries": {
+    events: [
+      { type: "reasoning_raw_delta", text: "private cot" },
+      { type: "thinking_delta", thinking: "summary" },
+      { type: "text_delta", text: "Answer" },
+      { type: "done" },
+    ],
+    options: { hideRawReasoning: true },
   },
   "server-side web search pair": {
     events: [

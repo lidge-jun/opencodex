@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
-import { getAccountCredential, getAccountSet } from "../../oauth/store";
+import { getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
@@ -180,7 +180,8 @@ export function supportsPerAccountQuota(provider: string): boolean {
 }
 
 export function explicitAccountReader(provider: string): boolean {
-  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code";
+  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
+    || provider === "devin";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -437,14 +438,28 @@ export function clearAccountQuotaCache(provider?: string): void {
  *   Anthropic's lock only adopts disk credentials for `local-cli` rows.
  */
 export async function getTokenForAccountQuotaProbe(provider: string, accountId: string): Promise<string> {
-  const stored = getAccountCredential(provider, accountId);
-  if (!stored) throw new Error("account credential missing");
+  const row = getAccountCredentialWithStatus(provider, accountId);
+  if (!row) throw new Error("account credential missing");
+  // An operator-paused account is excluded from every automatic upstream use, quota reads included.
+  if (row.paused) throw new Error("account is paused; quota probe skipped");
+  const stored = row.credential;
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;
   if (activeId !== accountId && stored.source === "local-cli") {
     throw new Error("background local-cli token expired; skip CLI-adopting refresh for quota probe");
   }
   return getValidAccessTokenForAccount(provider, accountId);
+}
+
+/**
+ * Rows that must not be probed: an unsupported provider reads as unavailable, and a paused
+ * account returns its last reading unchanged (its `ts` shows the age) or an unavailable row,
+ * without writing the cache. Undefined means "probe normally".
+ */
+export function accountQuotaProbeSkip(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
+  if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
+  if (getAccountCredentialWithStatus(provider, accountId)?.paused !== true) return undefined;
+  return accountQuotaCache.get(accountCacheKey(provider, accountId)) ?? { ts: Date.now(), quota: null, unavailable: true };
 }
 
 export function explicitQuotaConfig(provider: string, configured?: OcxProviderConfig): OcxProviderConfig | undefined {
@@ -465,6 +480,9 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
     target.adapter, target.baseUrl, target.authMode, target.disabled === true,
+    // Only credentials that carry their own endpoint (Devin tenants) extend the identity, so
+    // every other provider's existing cache keys stay valid.
+    ...(provider === "devin" && credential.apiBaseUrl ? [credential.apiBaseUrl] : []),
   ])).digest("hex");
 }
 
@@ -472,6 +490,7 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (config.disabled === true || config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
-  // These readers use fixed canonical billing origins, never config.baseUrl.
-  return provider === "xai" || provider === "cursor";
+  // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
+  // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
+  return provider === "xai" || provider === "cursor" || provider === "devin";
 }

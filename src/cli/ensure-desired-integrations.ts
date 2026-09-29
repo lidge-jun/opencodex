@@ -30,6 +30,7 @@ import {
   shouldSyncGrokOnStart,
 } from "../codex/desired-state";
 import type { OcxConfig } from "../types";
+import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 
 export function grokSyncFailureMessage(err: unknown): string {
   const detail = err instanceof Error ? err.message : String(err);
@@ -101,6 +102,10 @@ export async function ensureGrokFenceMatchesDesired(
 ): Promise<void> {
   const config = deps.loadConfig();
   const { log, error } = io(deps);
+  if (siblingOfLivePort() !== null) {
+    log(`   ${siblingSkipMessage()} ~/.grok/config.toml was left exactly as it is.`);
+    return;
+  }
   // A hub-gated skip is NOT "the user turned Grok off" (#4236). Stripping the managed block
   // there deleted a fence the operator still wants — and `ocx ensure` reported it as the
   // Grok toggle doing its job. Only an explicit OFF authorizes the strip; the gate just

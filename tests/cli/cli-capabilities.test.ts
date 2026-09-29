@@ -247,7 +247,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "GET /api/models",
   "GET /api/native-main-profiles",
   "GET /api/native-main-profiles/doctor",
-  "GET /api/oauth/accounts",
   "GET /api/oauth/providers",
   "GET /api/provider-context-caps",
   "GET /api/provider-presets",

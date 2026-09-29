@@ -16,6 +16,7 @@ import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
+import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
 function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
   return new Map(tools.map(tool => [
@@ -610,8 +611,11 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         ...(choiceInstruction ? [choiceInstruction] : []),
       ].join("\n\n"), parsed.modelId);
       const reasoningEffort = supportedCommandCodeEffort(provider, parsed.modelId, parsed.options.reasoning);
+      const projectContext = provider.projectContext === "on"
+        ? await loadCommandCodeProjectContext(cwd)
+        : EMPTY_COMMAND_CODE_PROJECT_CONTEXT;
       const body = {
-        config: await commandCodeConfig(cwd), memory: "", taste: null, skills: null,
+        config: await commandCodeConfig(cwd), ...projectContext,
         permissionMode: "standard", mode: "agent",
         params: {
           model: canonicalCommandCodeModelId(parsed.modelId),

@@ -1,4 +1,4 @@
-import { compactionRoutingSchema } from "../../config/schema/leaf-validators";
+import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
@@ -272,7 +272,7 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, ["mcode", "pi", "aside", "raycast", "omo", "cline"]));
+  }, ["mcode", "pi", "aside", "raycast", "omo", "cline", "droid"]));
 
   return out;
 }
@@ -374,6 +374,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      // Absent means both phases keep their existing routes; the GUI renders that as "Off".
+      memoryModels: config.memoryModels ?? null,
       startupHealth: await readStartupHealthSnapshot(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -467,6 +469,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
       compactionRecovery?: unknown;
+      memoryModels?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -479,8 +482,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
-      && body.compactionRouting === undefined && body.compactionRecovery === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, compactionRouting, or compactionRecovery" }, 400);
+      && body.compactionRouting === undefined
+      && body.compactionRecovery === undefined
+      && body.memoryModels === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -518,6 +523,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (compactionRouting != null && !compactionRouting.success) {
       return jsonResponse({ error: "compactionRouting requires a model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" }, 400);
     }
+    const memoryModels = body.memoryModels == null
+      ? body.memoryModels
+      : memoryModelsSchema.safeParse(body.memoryModels);
+    if (memoryModels != null && !memoryModels.success) {
+      return jsonResponse({ error: "memoryModels requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" }, 400);
+    }
     let quotaAutoRefreshChange: { id: string; window: "fiveHour" | "weekly"; enabled: boolean } | undefined;
     if (body.codexQuotaAutoRefresh !== undefined) {
       if (!isPlainRecord(body.codexQuotaAutoRefresh)) {
@@ -547,7 +558,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
-    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery"]);
+    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels"]);
     const previousSettings = {
       codexAutoStart: config.codexAutoStart,
       hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -620,6 +631,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
       if (compactionRecovery === null) deleteConfigTopLevelKey(config, "compactionRecovery");
       else if (compactionRecovery?.success) config.compactionRecovery = compactionRecovery.data;
+      // Null clears both phases; the GUI sends that when neither row names a model.
+      if (memoryModels === null) deleteConfigTopLevelKey(config, "memoryModels");
+      else if (memoryModels?.success) config.memoryModels = memoryModels.data;
       if (quotaAutoRefreshChange) {
         const { id, window, enabled } = quotaAutoRefreshChange;
         const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
@@ -722,6 +736,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      // The panel re-reads its own save response, so a missing block would render both
+      // phases as "Off" while the server kept them.
+      memoryModels: config.memoryModels ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealthSnapshot(config),

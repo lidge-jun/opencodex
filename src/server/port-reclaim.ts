@@ -149,9 +149,57 @@ export function parseListenPidsFromNetstat(output: string, port: number): number
 }
 
 /**
+ * Field names `ss -p` is known to emit inside a `users:` tuple. comm names are printed
+ * unescaped and are attacker-controlled, but bounded to 15 bytes (TASK_COMM_LEN - 1):
+ * a forged complete tuple needs `",pid=N,fd=N),("` — closing one tuple and opening the
+ * next leaves no room for a nonempty name — and a forged in-tuple field needs a key
+ * outside this list to stay under the bound, so it trips the grammar check instead.
+ */
+const SS_OWNER_FIELD_KEYS = new Set(["fd", "ino", "sk", "v6only"]);
+
+/**
+ * Strictly parse a `users:(("name",pid=N,fd=N)[,("name2",...)])` column, returning every
+ * attributed PID, or null when the column deviates from the grammar anywhere — a row that
+ * cannot be trusted must not attribute an owner at all. Every accepted tuple must carry
+ * its own `fd=`: a forged tuple fragment emitted inside a comm (a 15-byte comm has room
+ * for `a",pid=N),("b` but never for a full tuple plus `fd=`) supplies only `pid=`, so
+ * its PID must never reach the owner list.
+ */
+function parseSsOwnerPids(field: string): number[] | null {
+  if (!field.startsWith("users:(")) return null;
+  const pids: number[] = [];
+  let at = "users:(".length;
+  while (field.startsWith("(", at)) {
+    at += 1;
+    // ss prints comm raw between quotes with no escaping; a quote inside the name
+    // therefore ends it early and the rest of the name lands in field position.
+    const name = /^"[^"\n]*"/.exec(field.slice(at));
+    if (name === null || name[0] === `""`) return null;
+    at += name[0].length;
+    const pid = /^,pid=(\d+)/.exec(field.slice(at));
+    if (pid === null) return null;
+    at += pid[0].length;
+    let hasFd = false;
+    for (;;) {
+      const kv = /^,([a-z_]+)=([^,"()\s]+)/.exec(field.slice(at));
+      if (kv === null) break;
+      if (!SS_OWNER_FIELD_KEYS.has(kv[1]!)) return null;
+      if (kv[1] === "fd") hasFd = true;
+      at += kv[0].length;
+    }
+    if (field[at] !== ")" || !hasFd) return null;
+    pids.push(Number(pid[1]));
+    at += 1;
+    if (field.startsWith(",(", at)) at += 1;
+  }
+  return field[at] === ")" && field.slice(at + 1).trim() === "" ? pids : null;
+}
+
+/**
  * Parse `ss -Hltnp` rows for a port, keeping each distinct PID/address pair. A row
- * without a `pid=` attribution (another user's socket) is dropped rather than
- * reported unverifiable. Exported for unit tests.
+ * without a `pid=` attribution (another user's socket), or whose `users:` column
+ * does not parse cleanly, is dropped rather than reported unverifiable. Exported
+ * for unit tests.
  */
 export function parseListenEntriesFromSs(output: string, port: number): ListenEntry[] {
   const entries = new Map<string, ListenEntry>();
@@ -163,11 +211,13 @@ export function parseListenEntriesFromSs(output: string, port: number): ListenEn
     // LISTEN <recv-q> <send-q> <local-addr:port> <peer-addr:port> users:(...)
     const localIdx = parts.findIndex(part => part.endsWith(portSuffix) || part.endsWith(`]:${port}`));
     if (localIdx < 0) continue;
-    const pidMatch = /pid=(\d+)/.exec(line);
-    const pid = pidMatch ? Number(pidMatch[1]) : NaN;
-    if (Number.isSafeInteger(pid) && pid > 0) {
-      const address = normalizeListenAddress(parts[localIdx]);
-      entries.set(`${pid}|${address}`, { pid, address });
+    const usersIdx = line.indexOf("users:(");
+    if (usersIdx < 0) continue;
+    const ownerPids = parseSsOwnerPids(line.slice(usersIdx));
+    if (ownerPids === null) continue;
+    const address = normalizeListenAddress(parts[localIdx]);
+    for (const pid of ownerPids) {
+      if (Number.isSafeInteger(pid) && pid > 0) entries.set(`${pid}|${address}`, { pid, address });
     }
   }
   return [...entries.values()];

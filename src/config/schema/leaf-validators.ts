@@ -10,6 +10,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  contextTierRecordConfigError,
   mergeModelCapabilities,
 } from "../provider-validation";
 import { isValidCodexAccountNamespaceTarget } from "../../codex/account-namespace-match";
@@ -56,6 +57,21 @@ export const compactionRoutingSchema = z.object({
 }).strict();
 
 /**
+ * One phase of Codex's memory pipeline. A present phase must name a model: the GUI's "Off"
+ * removes the phase instead of blanking it, so an empty entry would only ever come from a
+ * hand-edited file, where failing the write is the honest answer.
+ */
+export const memoryModelSettingSchema = z.object({
+  model: z.string().trim().min(1),
+  reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
+}).strict();
+
+export const memoryModelsSchema = z.object({
+  extract: memoryModelSettingSchema.optional(),
+  consolidation: memoryModelSettingSchema.optional(),
+}).strict();
+
+/**
  * Bounds for the opt-in same-target 429 wait-and-retry policy. Single source of truth
  * shared by the config schema, the load-time sanitizer, and the management write
  * boundary. Strict, so an unknown key is rejected at every validation boundary instead
@@ -77,7 +93,7 @@ export const retryOn429PolicySchema = z.object({
  * both retry layers, so the ceiling is deliberately lower than `retryOn429`'s: 10 total sends
  * against an already-failing provider is already generous.
  */
-const transientRetryOn5xxPolicySchema = z.object({
+export const transientRetryOn5xxPolicySchema = z.object({
   enabled: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),
 }).strict();
@@ -264,6 +280,10 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
  */
 export const providerConfigSchema = z.object({
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  modelContextTiers: z.unknown().superRefine((value, ctx) => {
+    const error = contextTierRecordConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["modelContextTiers"]),
   pinnedReasoningEffort: pinnedReasoningEffortSchema.optional(),
   modelPinnedReasoningEfforts: modelPinnedEffortsSchema.optional(),
   // Validated rather than left to passthrough: an unrecognized strategy would otherwise
@@ -297,6 +317,7 @@ export const providerConfigSchema = z.object({
   annotateEmptyToolOutputs: z.boolean().optional(),
   foldDeveloperRoleToSystem: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
+  responseTierAuthoritative: z.boolean().optional(),
   fastEnabled: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
@@ -361,6 +382,7 @@ export const providerConfigSchema = z.object({
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
   // operator asked for shell mode, got code mode, and was told nothing (#2106).
   codexToolMode: z.enum(["code_mode_only", "shell"]).optional(),
+  projectContext: z.enum(["off", "on"]).optional(),
   responsesItemIdRepair: z.object({
     message: z.array(z.string().min(1)).optional(),
     reasoning: z.array(z.string().min(1)).optional(),
@@ -368,6 +390,7 @@ export const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  hideRawReasoning: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in
   // feature that is off by default. The management write boundary still rejects it loudly.
@@ -375,7 +398,11 @@ export const providerConfigSchema = z.object({
   xaiResponsesXSearch: z.boolean().optional(),
   xaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
   zaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
-}).passthrough();
+}).passthrough().superRefine((provider, ctx) => {
+  if (provider.projectContext !== undefined && provider.adapter !== "command-code") {
+    ctx.addIssue({ code: "custom", path: ["projectContext"], message: "projectContext is supported only by the command-code adapter" });
+  }
+});
 
 
 export { providerRelativeSendPathConfigError } from "../provider-relative-send-path";
@@ -944,6 +971,26 @@ export const clientConnectionSchema = z.object({
 export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
   startIdleWindows: z.boolean().optional(),
+  lowQuotaProtection: z.object({
+    enabled: z.boolean(),
+    threshold: z.number().finite().min(1).max(100),
+    actions: z.object({
+      pause: z.boolean(),
+      notify: z.boolean(),
+    }).strict(),
+    windows: z.object({
+      short: z.boolean(),
+      weekly: z.boolean(),
+    }).strict(),
+  }).strict().superRefine((policy, ctx) => {
+    if (!policy.enabled) return;
+    if (!policy.actions.pause && !policy.actions.notify) {
+      ctx.addIssue({ code: "custom", path: ["actions"], message: "enabled low-quota protection needs an action" });
+    }
+    if (!policy.windows.short && !policy.windows.weekly) {
+      ctx.addIssue({ code: "custom", path: ["windows"], message: "enabled low-quota protection needs a window" });
+    }
+  }).optional(),
 }).strict();
 
 /**

@@ -485,6 +485,47 @@ can still fail when a recorded session has no surviving rollout file.
 | `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider; PUT 409 `initial_model_selection_pending` |
 | `GET, PUT /api/model-presets` | Read preset summaries or choose preset/all/custom mode | 400 invalid mode or unsupported preset; 404 unknown provider; PUT 409 `initial_model_selection_pending` |
+| `PUT /api/model-settings` | Edit one routed model's capability axes in place | 400 missing provider/modelId, unknown or native/combo provider, malformed field, unknown field, non-exact model id, or an invalid default effort for the resulting ladder; 500 when the config could not be saved (live config left unchanged) |
+
+`PUT /api/model-settings` takes `{ provider, modelId }` plus any of `contextWindow`,
+`inputModalities`, `reasoningEfforts`, and `defaultReasoningEffort`. It writes the
+provider-level per-model maps the runtime already reads (`modelContextWindows`,
+`modelCapabilities.<modelId>.inputModalities`, `modelReasoningEfforts`,
+`modelDefaultReasoningEfforts`), so an edited row keeps its discovery provenance instead of
+being replaced by a custom model. `inputModalities` accepts `text`, `image`, and `audio`;
+`reasoningEfforts` must be a subset of the efforts the runtime knows. Unknown request fields
+are rejected by name. `modelId` must be exact, without surrounding whitespace, control
+characters, excessive length, or a reserved object-property name. `contextWindow` must be
+`null` or a positive safe integer.
+
+Every field is optional, and `null` **clears** the declaration rather than writing a default,
+which hands the fact back to the registry, the catalog, and the provider. An empty
+`inputModalities` array also clears, while an empty `reasoningEfforts` array is stored as an
+explicit "this model has no reasoning rungs" override — it does not clear.
+Clearing `inputModalities` also removes the exact legacy `modelInputModalities` entry for that
+model, so a restore cannot leave an older declaration in force; family keys shared with other
+models stay. An emptied per-model map is removed instead of left as `{}`. A request that changes nothing
+answers `changed: false` with the stored state. The receipt also reports `saved` (whether this
+request published config), `hasOverrides` (whether any of the four axes remains stored), and
+`catalogRefresh` (`committed`, `skipped`, or `failed`). These fields distinguish a no-op with
+stored declarations from a model with nothing to restore. A changed request persists atomically;
+an unpublished save failure leaves the live config unchanged. After publication the server
+drops that provider's cached `/models` result and reports the catalog outcome. A published write
+followed by a bookkeeping error still returns `saved: true` with a skipped refresh. The gather
+bakes resolved hints into the rows it caches, and a cache hit may only lower a configured window,
+so a raised or cleared override would otherwise read back the previous answer for the whole TTL.
+Only routed providers are addressable: `openai` is the
+native passthrough lane and `combo` is a synthetic row, so neither is a provider whose per-model
+maps these facts come from. Display name is not part of this route; use
+`PUT /api/providers/{provider}/model-display-names`.
+
+`GET /api/models` reports the exact stored `contextWindowDeclared` separately from the
+effective `contextWindow`. The Models editor starts from the declaration and shows the effective
+window as an inherited hint when no declaration exists. If a save outcome is unknown, or the
+save succeeded but the model list did not reload, the dialog disables further writes and offers
+a read-only Reload. After a successful reload, reopen the row to inspect the stored values.
+A `catalogRefresh` that failed, or was skipped with `retryable: true`, leaves the save in place and
+shows a warning to run Sync; a non-retryable skip means no managed Codex catalog and is a clean save.
 
 A manual model replaces the Models dashboard row with the same provider and model ID.
 For OpenAI, the manual row keeps `openai/<model>` and supports the same visibility controls
@@ -516,8 +557,10 @@ outcome fields from an older server do not establish successful recovery.
 | `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
-| `GET, DELETE /api/oauth/accounts` | List masked accounts or remove one account. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; `oauth_mutation_busy` |
+| `GET /api/oauth/accounts` | List masked accounts; generic OAuth account rows include their `paused` state. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
+| `DELETE /api/oauth/accounts` | Remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; 404 account missing; 409 account paused; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | Pause or resume one generic OAuth account. Body `{ provider, accountId, paused }`; pausing the active account selects the next usable account when available | 400 unsupported provider or invalid body; 404 account missing; `oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/pool/settings` | Read or update pool policy for any kind (codex, anthropic, generic); answers with the same keys for all three and declares in `supported` which the kind honours | 400 unknown provider, a field the kind does not support, or an invalid value |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Legacy per-pool policy for Anthropic and generic OAuth providers; superseded by `/api/pool/settings` and kept for existing clients | 400 codex or api-key provider, or invalid policy |
 | `POST /api/oauth/accounts/clear-cooldown` | Clear one OAuth account's runtime cooldown | 400 invalid provider/account |
@@ -526,6 +569,8 @@ outcome fields from an older server do not establish successful recovery.
 | `PUT /api/providers/keys/active` | Select a provider's active key | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Set or clear a provider-key alias | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | List, create, edit, or delete data-plane admission keys | 400 invalid body/id; 404 key missing |
+
+For Anthropic, `routes` is an ordered array of `{name, match, accounts, fallback?}` rules on both settings endpoints. GET and write echoes include `routes` (`null` when absent); unified DTOs expose `routes: null` for other kinds. A supplied `routes` on another kind is rejected. Omission preserves rules, `[]` matches nothing, and `null` clears them. The `accounts` values are stored IDs; removed IDs remain valid in a rule so re-adding an account can restore routing. Management responses retain valid configured names; request logs identify a match only as `route:#<n>` (1-based list position). If a hand-edited stored rule is invalid, both settings GETs return `routes: null` and a `routesError` diagnostic instead of presenting that rule as valid; the stored value remains available for correction. Valid or absent rules omit `routesError`.
 
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
 keys are not returned to dashboard clients.
@@ -640,6 +685,7 @@ manager. Its routes are:
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Read cached quota state by account | — |
+| `GET /api/codex-auth/low-quota-events?limit=20` | Read only this server’s last 0–100 low-quota log/notice and pause-save events (default 20); includes account id and status (`logged` for the default log-only alert; `delivered` for a successful injected notice sink; `succeeded` for a completed pause save) | 400 invalid limit; management authentication required |
 | `GET /api/codex-auth/reset-credits` | Inspect reset-credit eligibility for an account | 400 missing account id; upstream status passthrough; 500 lookup failure |
 | `POST /api/codex-auth/reset-credits/consume` | Consume an eligible reset credit. Optional `operationId` (UUIDv4) makes the redemption idempotent: the same id replays one durable outcome instead of spending a second credit. | 400 missing account id or invalid `operationId`; 409 `identity_mismatch` when the id belongs to another account; upstream status passthrough; 503 `server_busy`, `capacity`, or `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |

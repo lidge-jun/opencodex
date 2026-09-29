@@ -1,3 +1,4 @@
+import type { ProxyRestartStartOutcome } from "./tray-proxy";
 /**
  * Registry-driven command dispatch (Phase 3 of the CLI deepening).
  *
@@ -54,8 +55,8 @@ export interface CliDispatchDeps {
   handleResolve: (args: ResolveArgs) => Promise<number>;
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
-  handleRestartStartWhenStopped: () => Promise<boolean | "skipped">;
-  handleProxyRestart: (startWhenStopped: () => Promise<boolean | "skipped">) => Promise<boolean>;
+  handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -512,7 +513,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "droid"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }

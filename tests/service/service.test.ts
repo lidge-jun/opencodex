@@ -1336,6 +1336,10 @@ describe("Windows service task", () => {
 });
 
 describe("launchd service plist", () => {
+  test("restarts after unsuccessful exits and stays down after a deliberate stand-down", () => {
+    expect(buildPlist()).toContain("<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>");
+  });
+
   test("every durable launcher stamps the Bun provenance paired with the binary it baked (#848)", () => {
     const inheritedOverride = process.env.OPENCODEX_BUN_PATH;
     const inheritedSource = process.env.OCX_BUN_RUNTIME_SOURCE;

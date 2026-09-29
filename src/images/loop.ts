@@ -514,6 +514,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         deps.onAttemptSend?.();
         void adapter.runTurn(iterParsed, {
           headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+          ...(deps.incomingMeta.providerName ? { providerName: deps.incomingMeta.providerName } : {}),
           abortSignal: signal,
           translatorBudget,
           pacingSlot,
@@ -591,6 +592,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         } else {
           request = await requestAdapter.buildRequest(iterParsed, {
             headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+            ...(deps.incomingMeta.providerName ? { providerName: deps.incomingMeta.providerName } : {}),
             abortSignal: headerDeadline.signal,
             translatorBudget,
           });
@@ -1064,6 +1066,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      hideRawReasoning: parsed.options.hideRawReasoning,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? {

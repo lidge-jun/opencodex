@@ -380,3 +380,5 @@ committing it.
   `b60df52303ba7170772b256c20c04940`), gradient id and all. The contributor works
   at Crusoe and confirms this is the company mark. Painted as an image: the
   gradient is the brand, so it must never be masked.
+
+- `factory-droid.svg` — Factory Docs favicon, fetched 2026-09-28 from `https://docs.factory.ai/favicon.svg`; unmodified first-party asset for Factory Droid.

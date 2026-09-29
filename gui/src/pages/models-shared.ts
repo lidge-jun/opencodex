@@ -52,10 +52,26 @@ export interface ModelRow {
   pricingStatus?: "free" | "paid";
   inputModalities?: string[];
   contextWindow?: number;
+  /** Exact stored context override; absent when the row inherits its effective window. */
+  contextWindowDeclared?: number;
   contextCap?: number;
   contextCapped?: boolean;
-  /** Stored custom-row override (not the inherited ladder); only present on custom rows. */
+  /**
+   * Stored custom-row override, or — on a routed row — the ladder that actually applies to it,
+   * resolved from the config and the registry. A routed row carries it because the per-model
+   * editor needs the answer rather than the absence of one.
+   */
   reasoningEfforts?: string[];
+  /** The level a request inherits when it names none; absent when nothing pins one. */
+  defaultReasoningEffort?: string;
+  /**
+   * The stored modality declaration, which is NOT the row's own `inputModalities`: that one is
+   * the catalog value. An editor has to pre-fill from this one, or it shows what the provider
+   * published while writing something else, and every save reads back as "nothing changed".
+   */
+  inputModalitiesDeclared?: string[];
+  /** True when the config really changes this model's reasoning, decided by value, not by key. */
+  reasoningOverridden?: boolean;
 }
 
 /** The pricing shape both Free-only consumers read; keeps the helpers usable from either page. */

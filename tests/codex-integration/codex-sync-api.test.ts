@@ -165,6 +165,41 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(errors).toEqual([]);
   });
 
+  test("a service-home refusal leaves one path-free log line and writes nothing (#5782)", async () => {
+    const privatePath = "/srv/private-operator/.opencodex";
+    const logs: string[] = [];
+    const errors: string[] = [];
+    let refreshed = false;
+    let injected = false;
+    const result = await syncModelsToCodex(12345, config, { log: line => logs.push(String(line)), error: line => errors.push(String(line)) }, {
+      admitCodexWrite: () => ({
+        kind: "refused" as const,
+        authority: "service-home" as const,
+        message: `Refusing to write: a service is installed for OPENCODEX_HOME=${privatePath}.`,
+      }),
+      refreshCodexModelCatalog: async () => {
+        refreshed = true;
+        throw new Error("must not refresh");
+      },
+      injectCodexConfig: async () => {
+        injected = true;
+        return { success: true, message: "must not inject" };
+      },
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(result.status).toBe("refused");
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain(privatePath);
+    expect(refreshed).toBe(false);
+    expect(injected).toBe(false);
+    expect(logs).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("service-home");
+    expect(errors[0]).toContain("POST /api/sync");
+    expect(errors[0]).not.toContain(privatePath);
+  });
+
   test("catalog sync proceeds after a bounded reasoning refresh fails on both sync paths", async () => {
     const calls: string[] = [];
     const routedConfig = {

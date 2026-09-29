@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../../types";
+import type { LowQuotaEvent } from "../../codex/low-quota-events";
 import type { Channel } from "../../update/index";
 import type { UpdateCheckResult } from "../../update/job";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
@@ -44,6 +45,8 @@ export interface ManagementRequestIngress {
 }
 
 export interface ManagementApiDeps {
+  /** Bound to this server's lifecycle owner; absent in direct route tests. */
+  listLowQuotaEvents?: (limit?: number) => LowQuotaEvent[];
   /** Bound Claude intercept state, injectable for isolated management-route tests. */
   getClaudeInterceptState?: typeof import("../../claude/intercept/runtime").getClaudeInterceptState;
   /** Reconciliation seam for field-scoped rollback tests. */

@@ -179,7 +179,7 @@ export function TargetEditor({
   const replaceModel = (index: number, patch: Pick<ComboTarget, "provider" | "model">) => {
     onChange(targets.map((row, i) => {
       if (i !== index) return row;
-      const { reasoningEfforts: _reasoningEfforts, ...rest } = row;
+      const { reasoningEfforts: _reasoningEfforts, modelProfile: _modelProfile, ...rest } = row;
       return { ...rest, ...patch };
     }));
   };
@@ -381,6 +381,18 @@ export function TargetEditor({
                       })}
                     </fieldset>
                   )}
+              <label className="cwi-field">
+                <span className="field-label">{t("cws.jev.modelProfile")}</span>
+                <textarea
+                  className="input"
+                  rows={3}
+                  maxLength={512}
+                  value={row.modelProfile ?? ""}
+                  placeholder={t("cws.jev.modelProfilePlaceholder")}
+                  onChange={(event) => update(index, { modelProfile: event.target.value })}
+                />
+                <span className="muted">{t("cws.jev.modelProfileHint")}</span>
+              </label>
             </div>
           )}
           </div>

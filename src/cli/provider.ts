@@ -245,6 +245,9 @@ async function handleAdd(args: string[]): Promise<void> {
   if (existingProvider?.modelCapabilities !== undefined && provConfig.modelCapabilities === undefined) {
     provConfig.modelCapabilities = structuredClone(existingProvider.modelCapabilities);
   }
+  if (existingProvider?.modelContextTiers !== undefined && provConfig.modelContextTiers === undefined) {
+    provConfig.modelContextTiers = structuredClone(existingProvider.modelContextTiers);
+  }
   if (textOnly) {
     const modelId = capabilityModel ?? defaultModel ?? provConfig.defaultModel;
     if (!modelId) {

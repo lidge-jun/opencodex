@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky } from "../../src/cli/account-extended";
+import { cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky, cmdRoutes } from "../../src/cli/account-extended";
 import type { AccountDeps } from "../../src/cli/account-api";
 
 /**
@@ -34,6 +34,9 @@ function deps(
         // Pool verbs resolve their account argument against the list before writing.
         return new Response(JSON.stringify({ accounts: KNOWN_ACCOUNTS.map(id => ({ id })) }), { status: 200 });
       }
+      if (captured.method === "GET" && captured.path === "/api/oauth/accounts") {
+        return new Response(JSON.stringify({ accounts: [{ id: "acct_1", alias: "gem-pro" }] }), { status: 200 });
+      }
       const { status = 200, json } = respond(captured);
       return new Response(JSON.stringify(json), { status });
     }) as unknown as typeof fetch,
@@ -54,6 +57,38 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
 }
 
 describe("ocx account pause / resume", () => {
+  test("generic OAuth pause resolves aliases and uses the OAuth account route", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const base = deps(() => ({ json: { ok: true } }), calls);
+    const genericDeps: AccountDeps = {
+      ...base,
+      loadConfigImpl: () => ({ providers: { "google-antigravity": { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "oauth" } } }) as never,
+    };
+    let code: number;
+    try {
+      code = await cmdPause(["google-antigravity", "gem-pro"], genericDeps, true);
+    } finally { out.restore(); }
+    expect(code).toBe(0);
+    const write = calls.find(call => call.path === "/api/oauth/accounts/pause");
+    expect(write?.method).toBe("PUT");
+    expect(write?.body).toEqual({ provider: "google-antigravity", accountId: "acct_1", paused: true });
+  });
+
+  test("generic OAuth resume reports when it changes the active account", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const base = deps(() => ({ json: { ok: true, activeAccountChanged: true, activeAccountId: "acct_2" } }), calls);
+    const genericDeps: AccountDeps = {
+      ...base,
+      loadConfigImpl: () => ({ providers: { "google-antigravity": { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "oauth" } } }) as never,
+    };
+    try {
+      await cmdPause(["google-antigravity", "acct_1"], genericDeps, false);
+    } finally { out.restore(); }
+    expect(out.errors.join("\n")).toContain("Active account changed to acct_2.");
+  });
+
   test("pause PUTs the shared route with paused true", async () => {
     const calls: Captured[] = [];
     const out = capture();
@@ -499,5 +534,32 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     } finally { out.restore(); }
     expect(calls).toHaveLength(0);
     expect(out.errors.join("\n")).toContain("API-key provider");
+  });
+});
+
+
+describe("ocx account routes anthropic", () => {
+  test("reads, writes and clears through unified settings", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "ocx-route-cli-"));
+    const file = join(dir, "routes.json");
+    const routes = [{ name: "sonnet", match: "claude-*", accounts: ["id"] }];
+    writeFileSync(file, JSON.stringify(routes));
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      const d = deps(() => ({ json: { provider: "anthropic", routes } }), calls);
+      expect(await cmdRoutes(["anthropic"], d)).toBe(0);
+      expect(await cmdRoutes(["anthropic", "--file", file], d)).toBe(0);
+      expect(await cmdRoutes(["anthropic", "--clear"], d)).toBe(0);
+      expect(calls.map(c => c.method)).toEqual(["GET", "PUT", "PUT"]);
+      expect(calls[1]?.body).toEqual({ provider: "anthropic", routes });
+      expect(calls[2]?.body).toEqual({ provider: "anthropic", routes: null });
+      writeFileSync(file, "not-json");
+      expect(await cmdRoutes(["anthropic", "--file", file], d)).toBe(1);
+      expect(calls).toHaveLength(3);
+    } finally { out.restore(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

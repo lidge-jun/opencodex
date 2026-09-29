@@ -6,12 +6,30 @@ import { statusWinswRaw } from "../lib/winsw";
 import { systemdProperty } from "../service-manager-probe";
 import { expectedLaunchdCommand, launchdEvictionTargets, probeLaunchdLoadState, runLaunchctl } from "./launchd";
 import { probeSystemdUnitInactive, unitPath } from "./systemd";
+import {
+  inspectWindowsGuardedManager,
+  observeWindowsGuardedManagerStopped,
+  type WindowsGuardedManagerDeps,
+} from "./windows-guarded-manager";
 import { probeWindowsSchedulerTask } from "./windows-scheduler";
 import { TASK } from "./state";
 
 export type GuardedManagerTarget =
   | { kind: "absent" }
-  | { kind: "bound"; pid: number; managerPid: number; backend: "launchd" | "systemd" }
+  | {
+      kind: "bound";
+      pid: number;
+      managerPid: number;
+      backend: "launchd" | "systemd" | "scheduler" | "winsw";
+      /**
+       * Whether stopping this manager can leave the approved process alive.
+       * launchd/systemd end their job's whole process tree; Windows Task
+       * Scheduler's /end does not reliably cascade to the wrapper's child (#764),
+       * so a bound scheduler or WinSW manager still needs the approved PID
+       * signalled separately after the manager is stopped.
+       */
+      childNeedsSeparateStop: boolean;
+    }
   | { kind: "unknown"; reason: string };
 
 export type GuardedManagerStopped = "inactive" | "active" | "unknown";
@@ -59,6 +77,7 @@ export interface GuardedManagerDeps {
   verifyPid?: (pid: number) => number | null;
   scheduler?: typeof probeWindowsSchedulerTask;
   winsw?: typeof statusWinswRaw;
+  win?: WindowsGuardedManagerDeps;
 }
 
 /** Only one current manager with a verified parent chain may be stopped by name. */
@@ -92,7 +111,7 @@ export function inspectGuardedManagerTarget(
     } catch { return { kind: "unknown", reason: "launchd state could not be verified" }; }
     if (managerPid === null) return { kind: "absent" };
     return managerOwnsApprovedPid(managerPid, approvedPid, parentOf)
-      ? { kind: "bound", pid: approvedPid, managerPid, backend: "launchd" }
+      ? { kind: "bound", pid: approvedPid, managerPid, backend: "launchd", childNeedsSeparateStop: false }
       : { kind: "unknown", reason: "launchd job does not own the approved process" };
   }
   if (platform === "linux") {
@@ -111,16 +130,19 @@ export function inspectGuardedManagerTarget(
         return { kind: "unknown", reason: "systemd unit state is not current and active" };
       }
       return managerOwnsApprovedPid(pid, approvedPid, parentOf)
-        ? { kind: "bound", pid: approvedPid, managerPid: pid, backend: "systemd" }
+        ? { kind: "bound", pid: approvedPid, managerPid: pid, backend: "systemd", childNeedsSeparateStop: false }
         : { kind: "unknown", reason: "systemd unit does not own the approved process" };
     } catch { return { kind: "unknown", reason: "systemd state could not be verified" }; }
   }
   if (platform === "win32") {
     const scheduler = (deps.scheduler ?? probeWindowsSchedulerTask)();
     const native = (deps.winsw ?? statusWinswRaw)();
-    return scheduler.status === "absent" && native === "nonexistent"
-      ? { kind: "absent" }
-      : { kind: "unknown", reason: "Windows manager child PID cannot be proven" };
+    // A simulated win32 (deps.platform injected) must not run real schtasks or
+    // process-list queries at the host; the module degrades every unset probe to
+    // its least-proving answer then, which is exactly the old fail-closed shape.
+    return inspectWindowsGuardedManager(
+      approvedPid, scheduler, native, deps.win ?? {}, deps.platform === undefined,
+    );
   }
   return { kind: "unknown", reason: "unsupported service manager platform" };
 }
@@ -128,7 +150,7 @@ export function inspectGuardedManagerTarget(
 /** A guarded success needs manager absence after settlement and once more at publication. */
 export async function observeGuardedManagerStopped(
   manager: Exclude<GuardedManagerTarget, { kind: "unknown" }>,
-  deps: Pick<GuardedManagerDeps, "platform" | "scheduler" | "winsw"> & {
+  deps: Pick<GuardedManagerDeps, "platform" | "scheduler" | "winsw" | "win"> & {
     launchd?: typeof probeLaunchdLoadState;
     systemd?: typeof probeSystemdUnitInactive;
   } = {},
@@ -140,11 +162,16 @@ export async function observeGuardedManagerStopped(
       return state === "not-loaded" ? "inactive" : state === "unknown" ? "unknown" : "active";
     }
     if (platform === "linux") return (deps.systemd ?? probeSystemdUnitInactive)();
-    if (platform === "win32" && manager.kind === "absent") {
-      const scheduler = (deps.scheduler ?? probeWindowsSchedulerTask)();
-      const native = (deps.winsw ?? statusWinswRaw)();
-      if (scheduler.status === "absent" && native === "nonexistent") return "inactive";
-      return scheduler.status === "unknown" || native === "unknown" ? "unknown" : "active";
+    if (platform === "win32") {
+      // Registration presence is not the question: schtasks /end leaves the task
+      // registered forever, so the Windows check is RUNNING state + surviving
+      // wrapper processes + WinSW status, never mere presence.
+      return observeWindowsGuardedManagerStopped({
+        scheduler: deps.scheduler,
+        winsw: deps.winsw,
+        ...(deps.win ?? {}),
+        ...(manager.kind === "bound" ? { formerManagerPid: manager.managerPid } : {}),
+      }, deps.platform === undefined);
     }
   } catch { return "unknown"; }
   return "unknown";

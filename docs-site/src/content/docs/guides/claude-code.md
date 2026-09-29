@@ -37,6 +37,8 @@ reauthentication, or threshold, then advances. It is **off by default**, shows a
 and is not battle-tested — Anthropic may restrict accounts that look like automated rotation;
 rotation does not protect against provider enforcement.
 
+To bind a model to particular stored Claude accounts, add ordered `anthropicAccountPool.routes` rules while the pool is enabled. Each rule has a safe `name`, a full case-sensitive `match` glob, an `accounts` array of stored account IDs, and optional `fallback` (default `false`). The first matching rule limits active, manual, affinity, strategy and 429 recovery picks to its accounts. A healthy affinity outside that rule is ignored for this request but kept for other models; the routed choice does not overwrite it. Without fallback, an empty route returns a local 401, or 429 with `Retry-After` when all its declared accounts are cooling, before contacting Anthropic. The client response does not name the route; the proxy log records `route:#<n>`, where `n` is the rule’s 1-based position. `fallback: true` uses the ordinary pool only when the route has no eligible account, including its ordinary fill-first successor order; if its stored accounts are all cooling, the returned 429 uses the earliest cooldown across that expanded pool, even if a saved route account has been removed. An unmatched model follows the existing pool policy; disabling the pool leaves saved rules inactive and restores active-account and presence-driven 429 behavior. A rule is an operator allowlist, not proof of model entitlement.
+
 Operational contract when enabled:
 
 - Upstream **429** cools that account, clears its affinities, and may rotate to another eligible
@@ -226,6 +228,14 @@ trust a local certificate authority in the login keychain. That authority is con
 and its subdomains. Its signing key exists only inside the running OpenCodex process, so every
 OpenCodex restart publishes a fresh authority and macOS asks you to trust it again — approve the
 prompt, or later run `ocx claude desktop picker trust`, after each restart.
+
+On restart OpenCodex first removes the previous authority from the keychain. If that removal fails
+(for example because you decline the keychain prompt), the picker stays off for this run so two
+authorities are never trusted side by side. Desktop keeps its network connection: the proxy address
+in its profile still answers, but only as a plain relay that does not read claude.ai traffic, and the
+picker lists Anthropic's own models until the removal succeeds. OpenCodex remembers which certificate
+still needs removal and retries on the next restart; `ocx claude desktop picker status` shows the
+picker as unavailable meanwhile.
 
 While picker mode is on, Claude Desktop reaches the network through OpenCodex. If OpenCodex stops,
 Desktop is offline until you fully restart it or turn picker mode off. Check the state with

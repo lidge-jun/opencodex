@@ -355,7 +355,7 @@ fn input(app: &AppHandle, stale_pid: bool, requested_restart: bool, attempts: u3
     Input {
         phase: supervision.map_or(ExitPhase::Draining, |s| s.phase),
         wanted: supervision.is_some_and(|s| s.wanted),
-        reason_set: supervision.map_or(true, |s| s.reason_set),
+        reason_set: supervision.is_none_or(|s| s.reason_set),
         startup_running: app
             .try_state::<Startup>()
             .is_some_and(|startup| startup.is_running()),
@@ -372,7 +372,7 @@ fn on_exit(app: &AppHandle, pid: u32, exit: SidecarExit) {
     };
     let stale = app
         .try_state::<AppState>()
-        .map_or(true, |state| state.child_pid() != Some(pid));
+        .is_none_or(|state| state.child_pid() != Some(pid));
     let requested = exit.code == Some(REQUESTED_RESTART_EXIT_CODE);
     let attempts = supervisor.state().attempts;
     let verdict = decide(input(app, stale, requested, attempts));

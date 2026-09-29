@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 99 total: 82 key-based, 13 OAuth, three local, and one default
+documented split is 100 total: 83 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -193,6 +193,11 @@ contexts retain exit 0.
 > Decision record: [ADR-0082](../decisions/ADR-0082-windows-service-wrapper-and-incomplete-updates.md)
 
 ## GitHub workflow map
+
+The PR-target resolver accepts commit-index candidates only when their base repository's
+owner and name match the workflow repository. Foreign or incomplete fork-network entries
+cannot supply a write-job PR number. If no unique local current-head candidate remains,
+the existing repository-scoped open-PR lookup runs; absent or ambiguous matches emit no identity.
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |

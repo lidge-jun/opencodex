@@ -151,12 +151,40 @@ describe("listen-entry parsers keep the bound address", () => {
     const output = [
       "LISTEN 0      128        127.0.0.1:10100       0.0.0.0:*    users:((\"bun\",pid=4242,fd=20))",
       "LISTEN 0      128        127.0.0.2:10100       0.0.0.0:*    users:((\"foreign\",pid=7777,fd=6))",
+      "LISTEN 0      128        127.0.0.3:10100       0.0.0.0:*    users:((\"pid=4242\",pid=9999,fd=4))",
       "LISTEN 0      128        127.0.0.1:10100       0.0.0.0:*",
       "LISTEN 0      511                *:22              *:*    users:((\"sshd\",pid=1,fd=3))",
     ].join("\n");
     expect(parseListenEntriesFromSs(output, 10100)).toEqual([
       { pid: 4242, address: "127.0.0.1" },
       { pid: 7777, address: "127.0.0.2" },
+      { pid: 9999, address: "127.0.0.3" },
+    ]);
+  });
+
+  test("ss rows with a forged owner inside an embedded-quote process name are dropped", () => {
+    // ss prints comm inside quotes without escaping it, so these rows are what the
+    // kernel actually prints for the crafted 15-byte task names on the right.
+    const output = [
+      // comm `x",pid=4141,"` — the forged pid leads after naive quote stripping.
+      'LISTEN 0 128 127.0.0.1:10100 0.0.0.0:* users:(("x",pid=4141,"",pid=9999,fd=4))',
+      // comm `",pid=4141,fd=1),("` — a complete forged tuple in front of the real one.
+      'LISTEN 0 128 127.0.0.2:10100 0.0.0.0:* users:(("",pid=4141,fd=1),("",pid=9999,fd=4))',
+      // comm `x",pid=4141,f=9` — a forged in-tuple field with a non-ss key.
+      'LISTEN 0 128 127.0.0.3:10100 0.0.0.0:* users:(("x",pid=4141,f=9",pid=9999,fd=4))',
+      // comm `x",pid=4141,fd=9` — even an ss key cannot rescue a forged field.
+      'LISTEN 0 128 127.0.0.4:10100 0.0.0.0:* users:(("x",pid=4141,fd=9",pid=9999,fd=4))',
+      // comm `a",pid=123),("b` — a forged pid lands in a tuple of its own, but that
+      // fragment carries no fd= so the row is rejected instead of adopting pid 123.
+      'LISTEN 0 128 127.0.0.7:10100 0.0.0.0:* users:(("a",pid=123),("b",pid=9999,fd=4))',
+      // A genuinely shared socket still reports every owner tuple.
+      'LISTEN 0 128 127.0.0.5:10100 0.0.0.0:* users:(("bun",pid=4242,fd=20),("worker",pid=4243,fd=3))',
+      // Trailing garbage after the column is rejected too.
+      'LISTEN 0 128 127.0.0.6:10100 0.0.0.0:* users:(("bun",pid=4244,fd=20))extra',
+    ].join("\n");
+    expect(parseListenEntriesFromSs(output, 10100)).toEqual([
+      { pid: 4242, address: "127.0.0.5" },
+      { pid: 4243, address: "127.0.0.5" },
     ]);
   });
 

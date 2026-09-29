@@ -18,6 +18,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
+  TERMINAL_QUOTA_FAILURE,
   hasQuotaRows,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -25,6 +26,7 @@ import {
   report,
   tagNativeMainReport,
   type CodexAuthAccountsSnapshotPromise,
+  type ProviderQuotaProbeResult,
   type ProviderQuotaReport,
 } from "./report-cache";
 import {
@@ -46,9 +48,11 @@ export async function fetchChatGptForwardQuota(
   providerConfig: OcxProviderConfig,
   forceRefresh: boolean,
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
-): Promise<ProviderQuotaReport | null> {
+): Promise<ProviderQuotaProbeResult> {
   if (providerCodexAccountMode(provider, providerConfig) === "direct") {
-    const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh);
+    const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh, config);
+    // A parsed return from a replaced credential cannot retain an older cached report either.
+    if (snapshot.infoUnpublished) return TERMINAL_QUOTA_FAILURE;
     const quota = providerQuotaFromCodexQuota(snapshot.info.quota);
     if (quota) quota.updatedAt = Date.now();
     return quota
@@ -400,6 +404,8 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
 export async function fetchMuseKeyQuota(provider: string): Promise<ProviderQuotaReport | null> {
   const probedAccountId = getAccountSet(provider)?.activeAccountId;
   if (!probedAccountId) return null;
+  // A paused account is excluded from every automatic upstream use; a key mint is one.
+  if (getAccountSet(provider)?.accounts.find(account => account.id === probedAccountId)?.paused === true) return null;
   const oauthAccessToken = getAccountCredential(provider, probedAccountId)?.muse?.oauthAccessToken;
   // An imported or pasted credential has no account token and never will: it is
   // capability, not provider id, that decides whether a probe is possible.

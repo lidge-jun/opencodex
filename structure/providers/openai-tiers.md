@@ -18,6 +18,25 @@ earlier three-tier implementation. The replacement contract and its verification
 
 ## Public provider contract
 
+In Pool mode, ordinary main/pool WHAM queries share `src/codex/quota-query-backoff.ts`: transport and non-auth
+HTTP failures and unusable HTTP 200 bodies defer later queries (including forced refreshes) for
+5, 10, 20, 40, then 60 minutes. Same-key callers join one read through body validation and
+receive its settled result; only a confirmed reset-credit consume selects the separate post-reset
+proof epoch. Its failure deadline is also recorded for ordinary main reads under the same credential,
+so the epoch never bypasses pacing. Holding a native-main shared claim by itself does not bypass it.
+Outside Pool mode, main usage reads retain their independent forced-refresh behavior.
+A valid Retry-After can extend the delay under the existing bounded cooldown parser. Usable published
+usage, including a post-reset epoch result, clears failure pacing for the same credential only;
+401/403 retain the existing authentication recovery policy. Keys are scoped to
+configuration home, config generation and credential generation; no credentials are retained.
+Deferred calls publish neither fresh quota nor dispatch proof and do not advance quota timestamps.
+The bounded process-local failure cache resets on restart; active reads are never evicted to admit
+another key. Reserve and login probes are separate.
+Removing a pool account prunes its query pacing before provider eligibility is checked; a late
+completion from the removed account cannot restore that state.
+The reset-derived cooldown recovery worker keeps its own five-minute claim interval and sweep clock;
+it can retry past ordinary failure pacing, but still honors an explicit WHAM `Retry-After` deadline.
+
 | Provider id | Product route | Credential owner | Account selection |
 | --- | --- | --- | --- |
 | `openai` | Codex login | current caller/main login plus the hardened Codex account store | `codexAccountMode` is `"pool"` or `"direct"`; missing mode defaults to Pool |
@@ -308,8 +327,16 @@ It blocks newly admitted identity-matched main-account requests. Pool alternativ
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
 Only a fresh valid reading below 98%, including 0%, releases a measured block; passing a reset
-timestamp alone does not. While blocked, the existing once-per-minute background sweep refreshes
-owned main usage, with bounded/coalesced reads and no inference or reset-credit consumption. Failed,
+timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
+when no future reset is known or reads remain blocked, main recovery uses the same capped
+5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
+the physical bearer is reconciled before checking the delay, and late results cannot charge
+a replacement credential. A longer valid Retry-After from any main usage reader is checked for the
+current credential before the recovery worker takes a profile lease or prepares a token; a replacement
+credential has a separate key and may proceed immediately.
+Nonterminal 401/403 responses do not arm the successful-but-blocked recovery delay; the next
+sweep may retry, while terminal authentication failure keeps its reauth quarantine.
+Only fresh lower usage releases the lock; no inference or reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a
 monthly-only plan or explicit primary-monthly evidence. Previously unobserved usage is unknown, not
@@ -353,6 +380,20 @@ invalidates old evidence. Request-owned bearers are matched only against a crede
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
+`src/codex/auth-api/main-account-probe.ts` re-reads the bounded stored main credential and
+rechecks its writer, bearer and generation after body/retry awaits, before publishing main usage,
+credits, plan, reauth or Reserve state, including terminal 401/403 mutations. An unreadable file
+or missing identity writer cannot bypass this check. A same-account bearer replacement is detected
+even with no second probe; an observed A→B→A transition remains fenced by its generation. An
+unchanged credential still permits an older success.
+Successful same-identity responses may still return parsed ordinary info to their caller, without
+shared-state updates, fresh quota or recovery proof. The account-list card uses the published cache
+for such a return, so its displayed quota agrees with the hard-lock state. The snapshot retains the
+unpublished marker, and Direct provider quota drops that response and any older cached report
+rather than reporting stale windows. Conflicting identities
+and stale errors return cached info. The request/body races and card projection are covered by
+`tests/codex-integration/main-account-hard-lock-recovery.test.ts`; the ordinary return and Reserve
+revocation contract remains covered by `tests/codex-integration/reserve-passive-revocation.test.ts`.
 
 Owned startup rebuilds this binding from its pinned auth path under the native owner and exclusive
 claim, after journal recovery and stage cleanup, before publishing ready. That work now runs for

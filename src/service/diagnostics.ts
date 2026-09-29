@@ -5,7 +5,7 @@ import { sh } from "./guards";
 import { installedServiceListenPort, confirmServiceServing } from "./health";
 import { expectedLaunchdCommand, launchdJobMatchesPlist, probeLaunchdLoadState } from "./launchd";
 import type { LaunchdLoadProbe } from "./launchd";
-import { plistPath, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath, readServiceInstallState } from "./state";
+import { plistPath, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlPath, readServiceInstallState, serviceLauncherPathDiagnostic } from "./state";
 import type { ServiceBackend } from "./state";
 import { unitPath, isSystemd } from "./systemd";
 import { statusWindowsXml } from "./windows-ops";
@@ -23,6 +23,8 @@ import { LABEL, TASK, serviceLogPath } from "./state";
  */
 export function bakedServicePathsDiagnostic(platform: NodeJS.Platform = process.platform): string | null {
   const state = readServiceInstallState();
+  const temporaryLauncher = serviceLauncherPathDiagnostic(state, platform);
+  if (temporaryLauncher) return temporaryLauncher;
   // A launcher install runs the launcher, not the baked pair, so the pair's existence says
   // nothing about whether the service can start. Judging the recorded launcher is both
   // necessary (a deleted launcher IS stale) and sufficient (a replaced version directory

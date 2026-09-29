@@ -4,6 +4,7 @@ import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort,
 import { COMBO_NAMESPACE, isValidComboId, targetKey } from "./identifiers";
 
 export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
+export const JEV_MAX_CANDIDATE_FIELD_CHARS = 512;
 export { COMBO_NAMESPACE, preservesPhysicalComboProvider, isNativeAliasCombo, targetKey, parseComboModelId, comboModelId, comboPublicModelId, comboDisabledModelId, comboDisabledModelSelectors, resolveComboId, isValidComboId } from "./identifiers";
 
 /**
@@ -27,6 +28,8 @@ export interface NormalizedComboTarget {
   /** Emergency-only target, deferred under `cooldownWaitPolicy` (#5691). */
   lastResort: boolean;
   reasoningEfforts?: OcxComboDefaultEffort[];
+  /** Optional JEV decision description. */
+  modelProfile?: string;
 }
 
 export interface NormalizedComboConfig {
@@ -333,6 +336,16 @@ export function comboConfigIssues(
         message: `targets[${i}].lastResort must be a boolean`,
       });
     }
+    if (target.modelProfile !== undefined
+      && (typeof target.modelProfile !== "string"
+        || target.modelProfile.trim().length === 0
+        || target.modelProfile.length > JEV_MAX_CANDIDATE_FIELD_CHARS
+        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(target.modelProfile))) {
+      issues.push({
+        path: ["targets", i, "modelProfile"],
+        message: `targets[${i}].modelProfile must be a non-empty string of at most ${JEV_MAX_CANDIDATE_FIELD_CHARS} characters; only tab, line feed and carriage return are allowed among control characters`,
+      });
+    }
 
     if (provider && model) {
       const key = targetKey({ provider, model });
@@ -388,6 +401,9 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
       weight: target.weight ?? 1,
       ...(target.reasoningEfforts !== undefined
         ? { reasoningEfforts: [...target.reasoningEfforts] }
+        : {}),
+      ...(typeof target.modelProfile === "string" && target.modelProfile.trim()
+        ? { modelProfile: target.modelProfile.trim() }
         : {}),
       lastResort: target.lastResort === true,
     })),

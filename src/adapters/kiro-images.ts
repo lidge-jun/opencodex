@@ -1,5 +1,7 @@
 import type { OcxContentPart } from "../types";
 import { normalizeImageTargets, type NormalizeOptions, type NormalizeTarget } from "./anthropic-image-normalize";
+import { MAX_INPUT_BASE64_LENGTH, MAX_INPUT_PIXELS } from "./anthropic-image-codec";
+import { sniffImageDimensions } from "./anthropic-image-guard";
 
 // CodeWhisperer native image part (matches Kiro IDE wire format): the base64 bytes live directly in
 // userInputMessage.images, NOT in userInputMessageContext. Verified against kiro-gateway.
@@ -8,8 +10,7 @@ export interface KiroImage {
   source: { bytes: string }; // pure base64, no "data:...;base64," prefix
 }
 
-// Codex sends each image as a `data:` URL (base64) or a remote https URL. Only data URLs can be
-// inlined as bytes here; remote URLs are not fetchable at request-build time.
+/** Parse inline image bytes; remote URLs are not fetched at request-build time. */
 function parseDataUrlImage(imageUrl: string): KiroImage | undefined {
   if (!imageUrl.startsWith("data:")) return undefined;
   const comma = imageUrl.indexOf(",");
@@ -65,17 +66,36 @@ export function kiroUninlinableImageMarker(count: number): string {
   return "[" + String(count) + " images omitted: remote image references are not supported by this provider]";
 }
 
+/** Report malformed inline references separately from remote URLs. */
+export function kiroImageOmissionMarker(content: string | OcxContentPart[]): string {
+  if (typeof content === "string") return "";
+  const remote = kiroUninlinableImageMarker(countKiroUninlinableImages(content));
+  let malformed = 0;
+  for (const part of content) {
+    if (part.type === "image" && part.imageUrl.startsWith("data:") && !parseDataUrlImage(part.imageUrl)) malformed++;
+  }
+  const inline = malformed === 1
+    ? "[image omitted: malformed inline image data URL]"
+    : malformed > 1 ? `[${malformed} images omitted: malformed inline image data URLs]` : "";
+  return [remote, inline].filter(Boolean).join("\n");
+}
+
 /**
- * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload,
- * whose limits are undocumented. Derived from adjacent AWS surfaces
+ * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload.
+ * The 100-image request cap comes from Kiro's IMAGE_COUNT_EXCEEDED error
+ * ("101 exceeds limit 100"); the per-message and byte limits are undocumented
+ * and derived from adjacent AWS surfaces
  * (devlog/260714_image_normalization_pipeline/050): Bedrock `Message` allows 20 images
  * per message (Converse), and `InvokeModel` caps requests at 25,000,000 bytes — 18MiB
  * bounds the IMAGE share of the body with headroom for text/tools.
  */
 export const KIRO_IMAGE_BASE64_BUDGET = 18 * 1024 * 1024;
 export const KIRO_MAX_IMAGES_PER_MESSAGE = 20;
+export const KIRO_MAX_IMAGES_PER_REQUEST = 100;
 
 const COUNT_CAP_NOTE = "[image omitted: exceeded the 20-image per-message cap; oldest images in this message were dropped]";
+const REQUEST_CAP_NOTE = "[images omitted: exceeded the 100-image request cap; oldest images in this message were dropped]";
+const REQUEST_CAP_EMPTY_NOTE = "[images omitted: exceeded the 100-image request cap; no images remain in this message]";
 
 /** A kiro wire message that can carry images (history userInputMessage or currentMessage). */
 interface KiroImageCarrier {
@@ -105,11 +125,20 @@ function appendNote(carrier: KiroImageCarrier, note: string): void {
   carrier.content = carrier.content ? `${carrier.content}\n${note}` : note;
 }
 
+/** Cheap structural check (no decode or encode) for the request-wide count. */
+function countsTowardRequestCap(image: KiroImage): boolean {
+  const b64 = typeof image.source?.bytes === "string" ? image.source.bytes : "";
+  if (b64.length === 0 || b64.length > MAX_INPUT_BASE64_LENGTH) return false;
+  const dims = sniffImageDimensions(b64);
+  return dims !== null && dims.width * dims.height <= MAX_INPUT_PIXELS;
+}
+
 /**
  * Apply the generous image pipeline to a built CodeWhisperer payload (mutates in
- * place): per-message 20-image cap first (oldest dropped), then the shared tier
- * machinery with the kiro budget and terminal-overflow DROP (kiro has no downstream
- * guard). Test seams (encode/validate) forward into the core.
+ * place): per-message 20-image cap, then the 100-image request cap over
+ * structurally usable images (oldest dropped), then the shared tier machinery
+ * with the kiro budget and terminal-overflow DROP (kiro has no downstream guard).
+ * Test seams (encode/validate) forward into the core.
  */
 export async function normalizeKiroImages(
   payload: unknown,
@@ -124,6 +153,28 @@ export async function normalizeKiroImages(
     if (!images || images.length <= KIRO_MAX_IMAGES_PER_MESSAGE) continue;
     images.splice(0, images.length - KIRO_MAX_IMAGES_PER_MESSAGE);
     appendNote(carrier, COUNT_CAP_NOTE);
+  }
+
+  // Request count cap BEFORE the byte budget: a surplus image must not push survivors to
+  // lower tiers, which #4532 then pins across turns. Only structurally usable images count
+  // (bytes present, within the bomb limits, dimensions sniffable), so a corrupt image cannot
+  // evict valid history; the normalizer below still drops it with its own marker. This stays
+  // a cheap header check: truncated data that still sniffs as an image does count.
+  let excess = carriers.reduce((count, carrier) => count + (carrier.images ?? []).filter(countsTowardRequestCap).length, 0)
+    - KIRO_MAX_IMAGES_PER_REQUEST;
+  for (const carrier of carriers) {
+    if (excess <= 0) break;
+    const images = carrier.images;
+    if (!images?.length) continue;
+    const kept: KiroImage[] = [];
+    for (const image of images) {
+      if (excess > 0 && countsTowardRequestCap(image)) excess--;
+      else kept.push(image);
+    }
+    if (kept.length === images.length) continue;
+    if (kept.length === 0) delete carrier.images;
+    else carrier.images = kept;
+    appendNote(carrier, kept.length === 0 ? REQUEST_CAP_EMPTY_NOTE : REQUEST_CAP_NOTE);
   }
 
   // Targets over the survivors, oldest→newest across carriers. Drops resolve the image

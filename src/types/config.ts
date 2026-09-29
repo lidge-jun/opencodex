@@ -1,6 +1,13 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 
+export interface AnthropicModelRoute {
+  name: string;
+  match: string;
+  accounts: string[];
+  fallback?: boolean;
+}
+
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
   /**
@@ -739,6 +746,27 @@ export interface OcxConfig {
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
   /**
+   * Destination model for Codex's own memory pipeline, per phase
+   * (src/server/responses/memory-models.ts).
+   *
+   * Codex runs Phase 1 ("extract") once per finished thread to summarize that thread's rollout,
+   * and Phase 2 ("consolidation") once as an agent run that merges the summaries into the files
+   * under `$CODEX_HOME/memories`. Without an entry here each phase keeps its existing route,
+   * including any configured shadow-call interception.
+   *
+   * A phase is recognized from Codex's turn metadata, never inferred from the model id, the timing
+   * or the token counts: Phase 1 shares `gpt-5.6-luna` with the app's title/commit helper calls,
+   * and `shadowCallIntercept` is the setting for those. A configured phase wins over that
+   * intercept, because the memory decision is the more specific one.
+   *
+   * `model` is required for a configured phase; omitting the phase leaves its route in place.
+   * `reasoningEffort` overrides the effort Codex hard-codes for that phase.
+   */
+  memoryModels?: {
+    extract?: { model: string; reasoningEffort?: string };
+    consolidation?: { model: string; reasoningEffort?: string };
+  };
+  /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only
    * their generated selector row and are omitted from raw /v1/models. BARE native GPT ids hide
@@ -883,10 +911,12 @@ export interface OcxConfig {
    * HTTP URLs are mirrored into HTTP_PROXY/HTTPS_PROXY when unset. SOCKS5 URLs are mirrored
    * into ALL_PROXY, clear inherited HTTP(S)_PROXY, and use OpenCodex's SOCKS5 transport.
    * Loopback stays in NO_PROXY.
-   * The literal `"auto"` reads the Windows WinINET static proxy (`ProxyEnable`/`ProxyServer`)
-   * once at process start, preserving separate HTTP and HTTPS entries; on other platforms, or
-   * when the system proxy is off, SOCKS-only, or unreadable, it degrades to direct egress with
-   * one log line (#1525). PAC/WPAD and live changes are not followed.
+   * The literal `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS proxy settings
+   * once at startup. Inherited scheme proxies win; on macOS, inherited ALL_PROXY also skips
+   * discovery. A macOS `*.<domain>` exception maps to `.<domain>` (including the apex),
+   * exact link-local CIDRs are omitted with a warning, and other unsafe exceptions
+   * refuse discovery without environment writes.
+   * PAC/WPAD, SOCKS-only settings, and live changes are not followed.
    */
   proxy?: string;
   /**
@@ -1174,6 +1204,8 @@ export interface OcxConfig {
     stickyLimit?: number;
     /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
     quotaWindow?: OcxAccountPoolQuotaWindow;
+    /** Ordered model allowlists; inactive while the pool is disabled. Stored account IDs only. */
+    routes?: AnthropicModelRoute[];
   };
   /**
    * Generic OAuth multi-account PROACTIVE account preference (#2568, #695).
@@ -1240,6 +1272,11 @@ export interface OcxComboTarget {
    * target currently advertises; an explicit list must be non-empty.
    */
   reasoningEfforts?: OcxComboDefaultEffort[];
+  /**
+   * Operator-authored capability description sent only to the JEV decision
+   * service for this target. The built-in model profile always applies.
+   */
+  modelProfile?: string;
   /**
    * Marks an emergency-only target. Inert unless the combo sets
    * `cooldownWaitPolicy`, and never makes a target permanently ineligible —
@@ -1541,6 +1578,23 @@ export interface OcxCodexPoolConfig {
    * operator never meant to exclude.
    */
   excludedPlans?: string[];
+  /** Optional per-account response to fresh quota observations at or above a usage percentage. */
+  lowQuotaProtection?: CodexLowQuotaProtectionConfig;
+}
+
+/** Optional policy for pausing accounts and notifying when selected quota windows are low. */
+export interface CodexLowQuotaProtectionConfig {
+  enabled: boolean;
+  /** Inclusive usage percentage from 1 to 100. */
+  threshold: number;
+  actions: {
+    pause: boolean;
+    notify: boolean;
+  };
+  windows: {
+    short: boolean;
+    weekly: boolean;
+  };
 }
 
 /**

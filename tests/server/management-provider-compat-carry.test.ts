@@ -1,5 +1,5 @@
 /**
- * What a provider save keeps (#5563): the five operator compatibility settings survive an
+ * What a provider save keeps (#5563): the eight operator compatibility settings survive an
  * unrelated POST overwrite with the same name, and none of them, nor the stored key pool, follow
  * the provider to a new destination.
  *
@@ -20,6 +20,7 @@ import { loadConfig, saveConfig } from "../../src/config";
 import * as destinationPolicy from "../../src/lib/destination-policy";
 import { parseRequest } from "../../src/responses/parser";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
+import { rateLimitRetryPolicyFor, resetReplayPolicyFor, transientRetryPolicyFor } from "../../src/providers/key-failover";
 import { routeModel } from "../../src/router";
 import { startServer } from "../../src/server";
 import {
@@ -139,6 +140,18 @@ const CASES: Record<ProviderCompatCarryField, CarryCase> = {
     seed: { preserveReasoningContentModels: [MODEL], requiresReasoningPlaceholderModels: [] },
     probe: provider => translatedAssistant(provider)?.reasoning_content,
   },
+  retryOn429: {
+    seed: { retryOn429: { enabled: true, attempts: 11 } },
+    probe: provider => rateLimitRetryPolicyFor(provider),
+  },
+  transientRetryOn5xx: {
+    seed: { transientRetryOn5xx: { enabled: true, attempts: 7 } },
+    probe: provider => transientRetryPolicyFor(provider),
+  },
+  retryOnReset: {
+    seed: { retryOnReset: { enabled: true, replacements: 1 } },
+    probe: provider => resetReplayPolicyFor(provider),
+  },
 };
 
 function withoutField(provider: OcxProviderConfig, field: ProviderCompatCarryField): OcxProviderConfig {
@@ -157,7 +170,7 @@ describe("an unrelated POST overwrite keeps each compatibility setting on the ne
       const { seed, probe } = CASES[field];
       const name = `relay-${field.toLowerCase()}`;
       await withServer({ [name]: { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay", ...seed } }, async url => {
-        // The add/edit form sends none of the five settings; the edit here is the default model.
+        // The add/edit form sends none of the eight settings; the edit here is the default model.
         const save = await send(url, "/api/providers", "POST", {
           name,
           provider: { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay", defaultModel: MODEL },
@@ -214,6 +227,34 @@ describe("an overwrite that moves the provider carries none of it", () => {
     });
   });
 
+  test("POST changing only authMode drops the three retry policies", async () => {
+    await withServer({ relay: { ...stored, authMode: "key" } }, async url => {
+      const save = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { adapter: "openai-chat", baseUrl: BASE_URL, authMode: "oauth", apiKey: "sk-old" },
+      });
+      expect(save.status).toBe(200);
+      const saved = loadConfig().providers.relay!;
+      expect(saved.authMode).toBe("oauth");
+      expect(saved.baseUrl).toBe(BASE_URL);
+      expect(saved).not.toHaveProperty("retryOn429");
+      expect(saved).not.toHaveProperty("transientRetryOn5xx");
+      expect(saved).not.toHaveProperty("retryOnReset");
+    });
+  });
+
+  test("PATCH naming only baseUrl keeps the three retry policies", async () => {
+    await withServer({ relay: stored }, async url => {
+      const save = await send(url, "/api/providers?name=relay", "PATCH", { baseUrl: "https://other-relay.example/v1" });
+      expect(save.status).toBe(200);
+      const saved = loadConfig().providers.relay!;
+      expect(saved.baseUrl).toBe("https://other-relay.example/v1");
+      expect(saved.retryOn429).toEqual(stored.retryOn429);
+      expect(saved.transientRetryOn5xx).toEqual(stored.transientRetryOn5xx);
+      expect(saved.retryOnReset).toEqual(stored.retryOnReset);
+    });
+  });
+
   test("destination identity", () => {
     const row = { adapter: "openai-chat", baseUrl: BASE_URL } as OcxProviderConfig;
     const omitted = sampleProviderOverwrite({ adapter: "openai-chat", baseUrl: BASE_URL });
@@ -251,12 +292,73 @@ describe("PATCH and POST validate the settings they name", () => {
     });
   });
 
+  test("PATCH writes and clears the three retry policies", async () => {
+    await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL } }, async url => {
+      for (const [field, value] of [
+        ["retryOn429", { enabled: true, attempts: 9 }],
+        ["transientRetryOn5xx", { enabled: true, attempts: 7 }],
+        ["retryOnReset", { enabled: true, replacements: 2 }],
+      ] as const) {
+        const set = await send(url, "/api/providers?name=relay", "PATCH", { [field]: value });
+        expect(set.status).toBe(200);
+        expect(loadConfig().providers.relay?.[field]).toEqual(value);
+      }
+
+      // A cleared policy leaves the row entirely: the load-time schema reads an absent block as
+      // "off", so deleting the key is what disables one, not storing `{ enabled: false }`.
+      for (const field of PROVIDER_COMPAT_CARRY_FIELDS) {
+        if (field !== "retryOn429" && field !== "transientRetryOn5xx" && field !== "retryOnReset") continue;
+        const clear = await send(url, "/api/providers?name=relay", "PATCH", { [field]: null });
+        expect(clear.status).toBe(200);
+        expect(loadConfig().providers.relay).not.toHaveProperty(field);
+      }
+    });
+  });
+
+  // A malformed retry block must never reach disk. The config schema rejects these at load, and a
+  // rejected config is replaced by the default one, so a PATCH that stored one would not corrupt a
+  // single field: it would take the whole provider table down on the next load.
+  test("PATCH refuses a malformed retry policy instead of storing it", async () => {
+    await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay" } }, async url => {
+      for (const [field, value] of [
+        ["transientRetryOn5xx", { attempts: 99 }],
+        ["transientRetryOn5xx", "nope"],
+        ["transientRetryOn5xx", { enabled: true, attempts: 3, surprise: true }],
+        ["retryOn429", { attempts: 99 }],
+        ["retryOnReset", { replacements: 99 }],
+      ] as const) {
+        const res = await send(url, "/api/providers?name=relay", "PATCH", { [field]: value });
+        expect(res.status).toBe(400);
+        expect(loadConfig().providers.relay).not.toHaveProperty(field);
+      }
+      expect(loadConfig().providers.relay?.baseUrl).toBe(BASE_URL);
+    });
+  });
+
   test("POST refuses a malformed setting instead of storing it", async () => {
     await withServer({}, async url => {
       for (const provider of [
         { foldDeveloperRoleToSystem: "yes" },
         { reasoningWireFormat: "flat" },
         { preserveReasoningContentModels: "relay-thinker" },
+      ]) {
+        const save = await send(url, "/api/providers", "POST", {
+          name: "relay",
+          provider: { adapter: "openai-chat", baseUrl: BASE_URL, ...provider },
+        });
+        expect(save.status).toBe(400);
+      }
+      expect(loadConfig().providers.relay).toBeUndefined();
+    });
+  });
+
+  test("POST refuses a malformed retry policy instead of storing it", async () => {
+    await withServer({}, async url => {
+      for (const provider of [
+        { transientRetryOn5xx: { attempts: 99 } },
+        { transientRetryOn5xx: "nope" },
+        { retryOn429: { attempts: 99 } },
+        { retryOnReset: { replacements: 99 } },
       ]) {
         const save = await send(url, "/api/providers", "POST", {
           name: "relay",

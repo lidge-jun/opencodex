@@ -80,6 +80,8 @@ export function bridgeToResponsesSSE(
      */
     localUpstream?: boolean;
     hideThinkingSummary?: boolean;
+    /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
+    hideRawReasoning?: boolean;
     /**
      * Remote compaction v2 turn: accumulate all assistant text and, on done, emit ONE synthetic
      * `{type:"compaction", encrypted_content:"ocx1:"+base64(text)}` output item before
@@ -975,7 +977,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "reasoning_raw_delta": {
-              if (options?.hideThinkingSummary) {
+              if (options?.hideThinkingSummary || options?.hideRawReasoning) {
                 hiddenRawReasoning = appendString(
                   hiddenRawReasoning,
                   event.text,

@@ -31,6 +31,10 @@ const USAGE = `Usage:
       [--context-window <tokens|0>] [--modalities <text,image,audio|->]
       [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra|->]
       [--default-reasoning-effort <level|->] [--json]
+  ocx models set <provider/model> [--context-window <tokens|0|->]
+      [--modalities <text,image,audio|->]
+      [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra|"">|->]
+      [--default-reasoning-effort <level|->] [--reset] [--json]
   ocx models <enable|disable> <provider/model|native-model> [--native] [--json]
   ocx models provider <name> <on|off> [--json]
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
@@ -204,7 +208,7 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (displayName !== undefined) patch.displayName = displayName === "-" ? "" : displayName;
   if (contextRaw !== undefined) {
     const value = Number(contextRaw.replace(/[_,]/g, ""));
-    if (!Number.isInteger(value) || value < 0) throw new CliUsageError("--context-window must be an integer >= 0", USAGE);
+    if (!Number.isSafeInteger(value) || value < 0) throw new CliUsageError("--context-window must be a safe integer >= 0", USAGE);
     patch.contextWindow = value === 0 ? null : value;
   }
   if (modalitiesRaw !== undefined) patch.inputModalities = modalitiesRaw === "-" ? [] : csv(modalitiesRaw);
@@ -243,6 +247,98 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     throw error;
   }
   printData(result, wantsJson, [`Updated custom model ${id}.`]);
+}
+
+/**
+ * Per-model overrides on a routed row: the twin of `ocx models edit` for rows that already
+ * exist, rather than for a custom definition.
+ *
+ * Every option has a clear spelling instead of an empty-value sentinel, because the API treats
+ * `null` as "hand this fact back to the registry, the catalog and the provider default". That is
+ * a different intent from storing a value that merely looks blank, and collapsing the two is how
+ * an override outlives the data it was copied from.
+ */
+async function setModelSettings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const selector = args.shift()?.trim();
+  const wantsJson = takeFlag(args, "--json");
+  const reset = takeFlag(args, "--reset");
+  if (!selector) throw new CliUsageError("model selector is required", USAGE);
+  const contextRaw = takeOption(args, "--context-window");
+  const modalitiesRaw = takeOption(args, "--modalities");
+  const reasoningEffortsRaw = takeOption(args, "--reasoning-efforts");
+  const defaultEffortRaw = takeOption(args, "--default-reasoning-effort");
+  rejectArgs(args, USAGE);
+  const target = parseSelector(selector, false);
+  if (target.native) {
+    throw new CliUsageError(
+      "model settings address a routed model; use provider/model (the native openai lane has no per-model overrides)",
+      USAGE,
+    );
+  }
+  const patch: Record<string, unknown> = {};
+  if (contextRaw !== undefined) {
+    const raw = contextRaw.trim();
+    if (raw === "-") patch.contextWindow = null;
+    else {
+      const value = Number(raw.replace(/[_,]/g, ""));
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new CliUsageError("--context-window must be a safe integer >= 0 (0 or - clears the override)", USAGE);
+      }
+      patch.contextWindow = value === 0 ? null : value;
+    }
+  }
+  if (modalitiesRaw !== undefined) {
+    // "-" is the one spelling that clears. A blank value or a blank member would otherwise
+    // become [] after CSV normalization, which the server also reads as "clear".
+    const trimmed = modalitiesRaw.trim();
+    if (trimmed === "-") patch.inputModalities = null;
+    else {
+      const members = trimmed.split(",").map(item => item.trim());
+      if (members.some(item => !["text", "image", "audio"].includes(item))) {
+        throw new CliUsageError("--modalities must list text, image or audio (comma-separated), or - to clear", USAGE);
+      }
+      patch.inputModalities = [...new Set(members)];
+    }
+  }
+  if (reasoningEffortsRaw !== undefined) {
+    // "-" restores inheritance by clearing the stored ladder (null); "" stores an explicit empty
+    // ladder, which is the "this model does not reason" override. Embedded blank CSV members
+    // (`low,,high`) are malformed and rejected rather than normalized away.
+    const trimmed = reasoningEffortsRaw.trim();
+    if (trimmed === "-") {
+      patch.reasoningEfforts = null;
+    } else if (trimmed === "") {
+      patch.reasoningEfforts = [];
+    } else {
+      const values = trimmed.split(",").map(value => value.trim());
+      if (values.some(value => value === "")) {
+        throw new CliUsageError("--reasoning-efforts must be comma-separated values from none, minimal, low, medium, high, xhigh, max, ultra (\"\" for no reasoning, \"-\" to inherit)", USAGE);
+      }
+      patch.reasoningEfforts = values;
+    }
+  }
+  if (defaultEffortRaw !== undefined) patch.defaultReasoningEffort = defaultEffortRaw.trim() === "-" ? null : defaultEffortRaw.trim();
+  if (reset) {
+    if (Object.keys(patch).length > 0) {
+      throw new CliUsageError("--reset clears every override and cannot be combined with other options", USAGE);
+    }
+    for (const key of ["contextWindow", "inputModalities", "reasoningEfforts", "defaultReasoningEffort"]) patch[key] = null;
+  }
+  if (Object.keys(patch).length === 0) throw new CliUsageError("at least one setting or --reset is required", USAGE);
+  const result = await runtimeRequest<{ changed?: boolean; hasOverrides?: boolean; saved?: boolean; catalogRefresh?: { status?: string; retryable?: boolean } }>("/api/model-settings", {
+    method: "PUT",
+    body: JSON.stringify({ provider: target.provider, modelId: target.id, ...patch }),
+  }, deps);
+  const message = result?.changed === false
+    ? (reset && result.hasOverrides === false ? "Nothing to restore for " + selector + "." : "No settings changed for " + selector + ".")
+    : "Updated model settings for " + selector + ".";
+  printData(result, wantsJson, [message,
+    // A non-retryable skip means there is no managed Codex catalog to refresh, which is normal.
+    ...(result?.saved && (result.catalogRefresh?.status === "failed"
+      || (result.catalogRefresh?.status === "skipped" && result.catalogRefresh.retryable === true))
+      ? ["Settings saved, but the Codex model catalog did not refresh. Run `ocx sync` so Codex picks up the change."] : []),
+  ]);
 }
 
 function parseSelector(selector: string, forceNative: boolean): { provider: string; id: string; native: boolean } {
@@ -415,7 +511,7 @@ async function context(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const raw = args.shift();
     if (!raw) throw new CliUsageError("context value is required", USAGE);
     const value = Number(raw.replace(/[_,]/g, ""));
-    if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("context value must be a positive integer", USAGE);
+    if (!Number.isSafeInteger(value) || value <= 0) throw new CliUsageError("context value must be a positive safe integer", USAGE);
     body = { value };
     // Explicit apply-to-all switch for headless use: re-points every routed provider to
     // the new value, mirroring the dashboard's "apply to every routed provider" toggle.
@@ -475,6 +571,7 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   else if (sub === "price") action = () => price(false, argv, deps);
   else if (sub === "set-price") action = () => price(true, argv, deps);
   else if (sub === "edit") action = () => edit(argv, deps);
+  else if (sub === "set") action = () => setModelSettings(argv, deps);
   else if (sub === "enable") action = () => visibility(true, argv, deps);
   else if (sub === "disable") action = () => visibility(false, argv, deps);
   else if (sub === "provider") action = () => providerVisibility(argv, deps);

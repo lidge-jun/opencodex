@@ -511,7 +511,7 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
 
   test("auto never leaks the literal into HTTP_PROXY when discovery yields nothing", () => {
     for (const [platform, reader] of [
-      ["darwin", () => ({ proxyEnable: "0x1", proxyServer: "127.0.0.1:1" })],
+      ["linux", () => ({ proxyEnable: "0x1", proxyServer: "127.0.0.1:1" })],
       ["win32", () => ({ proxyEnable: "0x0", proxyServer: "127.0.0.1:1" })],
       ["win32", () => ({ proxyEnable: "0x1", proxyServer: "socks=127.0.0.1:1080" })],
       ["win32", () => null],

@@ -401,7 +401,8 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("context window") ||
     text.includes("context length") ||
     text.includes("maximum context") ||
-    text.includes("too many tokens")
+    text.includes("too many tokens") ||
+    (status === 400 && /\binput token count(?:\s*\([\d,]+\))?\s+exceeds\s+the maximum number of tokens allowed\b/.test(text))
   ) {
     return { message, type: "invalid_request_error", code: "context_length_exceeded" };
   }

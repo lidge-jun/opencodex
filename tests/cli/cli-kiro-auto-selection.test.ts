@@ -46,3 +46,23 @@ test("non-Kiro account text retains its old shape", async () => {
   expect(result.rows[0]!.skipReason).toBeUndefined();
   expect(formatAccountTable(result.rows)).not.toContain("not-auto-selected");
 });
+
+test("a paused generic OAuth account is listed as paused in text and JSON", async () => {
+  const result = await fetchRows(deps([
+    { id: "a", active: true, paused: false },
+    { id: "b", active: false, paused: true },
+  ]), "http://127.0.0.1:10100", "google-antigravity", "oauth");
+  expect(result.rows[0]!.paused).toBeUndefined();
+  expect(result.rows[1]!.paused).toBe(true);
+  const table = formatAccountTable(result.rows);
+  expect(table.split("\n").filter(line => line.includes("paused"))).toHaveLength(1);
+});
+
+test("a paused Kiro account names the pause once instead of repeating it as a skip reason", async () => {
+  const result = await fetchRows(deps([{ id: "a", active: false, paused: true, autoSelectable: false,
+    skipReason: "paused" }]), "http://127.0.0.1:10100", "kiro", "oauth");
+  expect(result.rows[0]).toMatchObject({ paused: true, autoSelectable: false, skipReason: "paused" });
+  const table = formatAccountTable(result.rows);
+  expect(table).toContain("paused");
+  expect(table).not.toContain("not-auto-selected(paused)");
+});
