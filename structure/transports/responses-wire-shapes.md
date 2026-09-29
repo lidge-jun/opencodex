@@ -1,5 +1,14 @@
 # Responses Wire Shapes
 
+## Client rate-limit retry advice
+
+`src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes `resource_exhausted`,
+`rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`.
+A parsed provider delay leads the redacted message as `Please try again in Ns.` so Codex
+reads the longest stated lower bound even if a shorter hint occurs in the provider detail.
+Other explicit verdicts, proxy replay budgets and event ordering are unchanged. This creates
+no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
+
 ## Compaction image input
 
 For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and

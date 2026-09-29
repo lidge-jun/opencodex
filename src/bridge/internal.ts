@@ -15,6 +15,7 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { parseRetryAfterFromMessage } from "../lib/retry-delay";
 import { usageDisplayTotalTokens } from "../usage/totals";
 
 export function uuid(): string {
@@ -144,6 +145,19 @@ export function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "er
   const error = classifyError(httpStatus, event.errorType ?? fallback.error.type, message);
   if (event.errorType !== undefined) error.type = event.errorType;
   if (event.code !== undefined) error.code = event.code;
+  // Codex only parses a streamed retry delay for these canonical rate-limit codes.
+  // Preserve other typed verdicts (quota, auth, local send budgets) verbatim.
+  if (httpStatus === 429 && error.type === "rate_limit_error"
+    && ["resource_exhausted", "rate_limit_exceeded", "slow_down"].includes(error.code ?? "")) {
+    error.code = "rate_limit_exceeded";
+    const delay = parseRetryAfterFromMessage(message);
+    if (delay !== undefined) {
+      // Codex reads the FIRST "try again in" hint; lead with the longest parsed
+      // lower bound, even when the original message contains a shorter hint.
+      const advice = `Please try again in ${delay}s.`;
+      error.message = message.startsWith(advice) ? message : `${advice} ${message}`;
+    }
+  }
   // Codex maps cyber_policy on HTTP 400 (body) or mid-stream code; never leave it as 502.
   if (isCyberPolicyCode(error.code) || isCyberPolicyCode(event.code)) {
     error.code = CYBER_POLICY_ERROR_CODE;

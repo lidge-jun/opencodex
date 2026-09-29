@@ -610,6 +610,16 @@ configuration that names the old id is rewritten at startup.
   allowance on standalone turns surface the original 429 without an early retry. The
   final 429 preserves the stated delay as a cooldown hint. A `~` in its message marks a delay recovered
   from a secondhand trailer sentence rather than an exact header value.
+- For Codex Responses streams, known typed rate-limit failures are normalized to
+  `rate_limit_exceeded` with `Please try again in Ns.` before the original redacted detail.
+  This lets Codex honor the stated delay and use its native reconnect notification without
+  adding a reasoning item to conversation history. Client retries are finite and controlled by
+  the client's `stream_max_retries`; this does not promise recovery after app shutdown or restart.
+  Leave `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` unset or `0` to let the client own the wait.
+  A positive proxy allowance keeps the existing proxy-owned wait; the client only learns of a
+  final refusal afterwards, and client retries can multiply the proxy's per-request attempts.
+  Combo target/account failover and Grok HTTP 429 handling retain their existing ordering.
+  The exact UI placement and text depend on the Codex version; this is not a custom countdown.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 
