@@ -1718,6 +1718,7 @@ export const ko: Record<TKey, string> = {
   "integrations.omoRoles.omoComments": "역할 파일에서 {role}은(는) 이제 {model}로 실행됩니다. 저장하면 주석이 사라지므로 omo.jsonc는 바꾸지 않았습니다. 그곳의 codex.agents.{role}.model은 직접 설정하세요.",
   "integrations.omoRoles.omoInvalid": "역할 파일에서 {role}은(는) 이제 {model}로 실행됩니다. omo.jsonc가 codex.agents 객체를 가진 JSON 객체가 아니어서 바꾸지 않았습니다.",
   "integrations.omoRoles.omoFailed": "역할 파일에서 {role}은(는) 이제 {model}로 실행되지만, omo.jsonc에는 쓰지 못했습니다.",
+  "integrations.omoRoles.retryMirror": "omo.jsonc 다시 시도",
   "integrations.omoRoles.omoCommentsState": "omo.jsonc에 주석이 있어서 여기서 저장하면 역할 파일만 바뀝니다. omo.jsonc의 codex.agents는 직접 맞춰 주세요.",
   "integrations.semantics.cline": "Cline CLI의 providers.json과 models.json에서 OpenCodex 항목을 관리합니다. 변경·동기화 전에 Cline을 종료하고 완료 후 다시 실행하세요. 되돌리기는 두 파일의 원본을 복원합니다. 기본 프로바이더는 유지되므로 Cline에서 OpenCodex를 선택하세요.",
   "integrations.semantics.kilo": "Kilo 전역 설정(~/.config/kilo에서 먼저 존재하는 kilo.jsonc, kilo.json, opencode.jsonc, opencode.json, config.json. XDG_CONFIG_HOME는 이 디렉터리를 이동하며, 아무것도 없으면 kilo.jsonc가 생성됨)의 provider.opencodex만 관리합니다. 다른 키는 그대로 둡니다. 적용 시 파일 전체를 다시 쓰므로 주석과 후행 쉼표는 보존되지 않습니다. Kilo에서 opencodex/<모델>을 선택하세요.",

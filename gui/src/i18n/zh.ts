@@ -1699,6 +1699,7 @@ export const zh: Record<TKey, string> = {
   "integrations.omoRoles.omoComments": "角色文件中 {role} 现在使用 {model}。保存会删除 omo.jsonc 的注释，因此未修改它；请手动设置其中的 codex.agents.{role}.model。",
   "integrations.omoRoles.omoInvalid": "角色文件中 {role} 现在使用 {model}。omo.jsonc 不是包含 codex.agents 对象的 JSON 对象，因此未修改。",
   "integrations.omoRoles.omoFailed": "角色文件中 {role} 现在使用 {model}，但无法写入 omo.jsonc。",
+  "integrations.omoRoles.retryMirror": "重试 omo.jsonc",
   "integrations.omoRoles.omoCommentsState": "omo.jsonc 含有注释，因此在这里保存只会修改角色文件。请手动调整 omo.jsonc 中的 codex.agents 以保持一致。",
   "integrations.semantics.cline": "管理 Cline CLI 的 providers.json 和 models.json 中的 OpenCodex 项目。修改或同步前请退出 Cline，完成后重新启动。撤销会恢复两个文件的原始内容。默认提供商保持不变，请在 Cline 中选择 OpenCodex。",
   "integrations.semantics.kilo": "仅管理 Kilo 全局配置——~/.config/kilo 下最先存在的 kilo.jsonc、kilo.json、opencode.jsonc、opencode.json 或 config.json（XDG_CONFIG_HOME 会移动该目录；若都不存在则创建 kilo.jsonc）——中的 provider.opencodex。其他键保持不变。应用会重写整个文件，因此不会保留注释和尾随逗号。请在 Kilo 中选择 opencodex/<模型>。",

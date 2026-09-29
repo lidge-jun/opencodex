@@ -2285,6 +2285,7 @@ export const en = {
   "integrations.omoRoles.omoComments": "{role} now runs on {model} in its role file. omo.jsonc was left unchanged because saving would remove its comments; set codex.agents.{role}.model there by hand.",
   "integrations.omoRoles.omoInvalid": "{role} now runs on {model} in its role file. omo.jsonc was left unchanged because it is not a JSON object with a codex.agents object.",
   "integrations.omoRoles.omoFailed": "{role} now runs on {model} in its role file, but omo.jsonc could not be written.",
+  "integrations.omoRoles.retryMirror": "Retry omo.jsonc",
   "integrations.omoRoles.omoCommentsState": "omo.jsonc contains comments, so saving here changes only the role files. Edit codex.agents in omo.jsonc by hand to keep it in step.",
   "integrations.semantics.cline": "Manages OpenCodex in Cline CLI providers.json and models.json. Stop Cline before changing or syncing these files, then restart. Undo restores both originals. Your default provider stays unchanged; select OpenCodex in Cline.",
   "integrations.semantics.kilo": "Manages only provider.opencodex in Kilo's global config — the first existing file among kilo.jsonc, kilo.json, opencode.jsonc, opencode.json, or config.json under ~/.config/kilo (XDG_CONFIG_HOME relocates that directory; kilo.jsonc is created when none exist). Other keys stay unchanged. Apply rewrites the whole file, so comments and trailing commas are not preserved. Select opencodex/<model> in Kilo.",

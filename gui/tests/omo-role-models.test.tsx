@@ -13,6 +13,7 @@ let mountCount = 0;
 let apiBase = "";
 let puts: Array<{ url: string; body: unknown }> = [];
 let omoWriteStatus = "written";
+let putFailure: { status: number; body: unknown } | null = null;
 let rolesBody: unknown;
 
 function json(body: unknown, status = 200): Response {
@@ -35,6 +36,7 @@ beforeEach(() => {
   apiBase = `http://ocx-omo-roles-${mountCount}.invalid`;
   puts = [];
   omoWriteStatus = "written";
+  putFailure = null;
   rolesBody = {
     roles: [
       { role: "explorer", model: "gpt-5.5", omoModel: null },
@@ -47,6 +49,10 @@ beforeEach(() => {
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
       puts.push({ url, body });
+      if (putFailure) return json(putFailure.body, putFailure.status);
+      const role = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+      const current = rolesBody as { roles: Array<{ role: string; model: string | null }> };
+      rolesBody = { ...current, roles: current.roles.map(row => row.role === role ? { ...row, model: body.model } : row) };
       return json({ ok: true, toml: { status: "written" }, omo: { status: omoWriteStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
@@ -121,4 +127,33 @@ test("says when omo.jsonc was skipped because of its comments", async () => {
   await act(async () => { saveButton("librarian").click(); });
   await settle();
   expect(container.textContent).toContain("saving would remove its comments");
+});
+
+test("a failed omo.jsonc mirror can be retried with the same model", async () => {
+  omoWriteStatus = "write_failed";
+  await mount();
+  await pick("explorer", "xai/grok-4.5");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(container.textContent).toContain("omo.jsonc could not be written");
+  expect(container.textContent).toContain("xai/grok-4.5");
+  expect(saveButton("explorer").disabled).toBe(false);
+  expect(saveButton("explorer").textContent).toBe("Retry omo.jsonc");
+  omoWriteStatus = "written";
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(puts.map(entry => entry.body)).toEqual([{ model: "xai/grok-4.5" }, { model: "xai/grok-4.5" }]);
+  expect(container.textContent).toContain("explorer now runs on xai/grok-4.5.");
+  expect(saveButton("explorer").disabled).toBe(true);
+  expect(saveButton("explorer").textContent).toBe("Save");
+});
+
+test("a failed save shows the localized message rather than the server text", async () => {
+  putFailure = { status: 500, body: { error: "EACCES: permission denied, open '/secret/path'", code: "write_failed" } };
+  await mount();
+  await pick("explorer", "xai/grok-4.5");
+  await act(async () => { saveButton("explorer").click(); });
+  await settle();
+  expect(container.textContent).toContain("Could not save the model for explorer.");
+  expect(container.textContent).not.toContain("EACCES");
 });

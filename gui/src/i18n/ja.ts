@@ -2115,6 +2115,7 @@ export const ja: Record<TKey, string> = {
   "integrations.omoRoles.omoComments": "ロールファイルでは {role} が {model} で動作します。保存するとコメントが消えるため omo.jsonc は変更していません。codex.agents.{role}.model を手動で設定してください。",
   "integrations.omoRoles.omoInvalid": "ロールファイルでは {role} が {model} で動作します。omo.jsonc は codex.agents オブジェクトを持つ JSON オブジェクトではないため変更していません。",
   "integrations.omoRoles.omoFailed": "ロールファイルでは {role} が {model} で動作しますが、omo.jsonc に書き込めませんでした。",
+  "integrations.omoRoles.retryMirror": "omo.jsonc を再試行",
   "integrations.omoRoles.omoCommentsState": "omo.jsonc にコメントがあるため、ここで保存するとロールファイルだけが変わります。omo.jsonc の codex.agents は手動で合わせてください。",
   "integrations.semantics.cline": "Cline CLI の providers.json と models.json の OpenCodex 項目を管理します。変更・同期前に Cline を終了し、完了後に再起動してください。元に戻すと両方の元ファイルが復元されます。既定のプロバイダーは変わりません。Cline で OpenCodex を選択してください。",
   "integrations.semantics.kilo": "Kilo のグローバル設定（~/.config/kilo 配下で最初に存在する kilo.jsonc、kilo.json、opencode.jsonc、opencode.json、config.json。XDG_CONFIG_HOME はこのディレクトリを移動し、いずれも存在しなければ kilo.jsonc が作成されます）の provider.opencodex のみを管理します。他のキーは変更しません。適用時にファイル全体を書き直すため、コメントと末尾カンマは保持されません。Kilo で opencodex/<モデル> を選択してください。",

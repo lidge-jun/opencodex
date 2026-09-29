@@ -30,6 +30,7 @@ const OMO_WRITE_NOTICE: Partial<Record<OmoWriteStatus, TKey>> = {
 export default function OmoRoleModels({ apiBase, active }: { apiBase: string; active: boolean }) {
   const t = useT();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [mirrorRetries, setMirrorRetries] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<string | null>(null);
   const [result, setResult] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null);
 
@@ -72,9 +73,13 @@ export default function OmoRoleModels({ apiBase, active }: { apiBase: string; ac
         ? { tone: "warn", text: t(notice, { role, model }) }
         : { tone: "ok", text: t("integrations.omoRoles.saved", { role, model }) });
       setDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== role)));
+      setMirrorRetries(current => {
+        const { [role]: _previous, ...rest } = current;
+        return omoStatus === "write_failed" ? { ...rest, [role]: model } : rest;
+      });
       await resource.refresh();
-    } catch (error) {
-      setResult({ tone: "err", text: error instanceof Error ? error.message : t("integrations.omoRoles.saveFailed", { role }) });
+    } catch {
+      setResult({ tone: "err", text: t("integrations.omoRoles.saveFailed", { role }) });
     } finally {
       setPending(null);
     }
@@ -119,6 +124,7 @@ export default function OmoRoleModels({ apiBase, active }: { apiBase: string; ac
               {data.roles.map(row => {
                 const draft = drafts[row.role] ?? row.model ?? "";
                 const changed = draft !== "" && draft !== row.model;
+                const retryMirror = !changed && draft !== "" && mirrorRetries[row.role] === draft;
                 return (
                   <tr key={row.role}>
                     <td><code>{row.role}</code></td>
@@ -139,10 +145,12 @@ export default function OmoRoleModels({ apiBase, active }: { apiBase: string; ac
                         <button
                           type="button"
                           className="btn btn-primary btn-sm"
-                          disabled={!changed || pending !== null}
+                          disabled={!(changed || retryMirror) || pending !== null}
                           onClick={() => void save(row.role, draft)}
                         >
-                          {pending === row.role ? t("common.saving") : t("common.save")}
+                          {pending === row.role
+                            ? t("common.saving")
+                            : retryMirror ? t("integrations.omoRoles.retryMirror") : t("common.save")}
                         </button>
                       </div>
                     </td>

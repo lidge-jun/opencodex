@@ -2206,6 +2206,7 @@ export const ru: Record<TKey, string> = {
   "integrations.omoRoles.omoComments": "В файле роли {role} теперь работает на {model}. omo.jsonc не изменён, потому что сохранение удалило бы его комментарии; задайте codex.agents.{role}.model вручную.",
   "integrations.omoRoles.omoInvalid": "В файле роли {role} теперь работает на {model}. omo.jsonc не изменён: это не JSON-объект с объектом codex.agents.",
   "integrations.omoRoles.omoFailed": "В файле роли {role} теперь работает на {model}, но записать omo.jsonc не удалось.",
+  "integrations.omoRoles.retryMirror": "Повторить запись omo.jsonc",
   "integrations.omoRoles.omoCommentsState": "В omo.jsonc есть комментарии, поэтому сохранение здесь меняет только файлы ролей. Поправьте codex.agents в omo.jsonc вручную, чтобы они совпадали.",
   "integrations.semantics.cline": "Управляет OpenCodex в файлах providers.json и models.json Cline CLI. Закройте Cline перед изменением или синхронизацией и запустите снова после завершения. Отмена восстанавливает оба исходных файла. Провайдер по умолчанию не меняется; выберите OpenCodex в Cline.",
   "integrations.semantics.kilo": "Управляет только provider.opencodex в глобальной конфигурации Kilo — первый существующий файл среди kilo.jsonc, kilo.json, opencode.jsonc, opencode.json или config.json в ~/.config/kilo (XDG_CONFIG_HOME переносит этот каталог; если файла нет, создаётся kilo.jsonc). Остальные ключи не меняются. Применение перезаписывает весь файл, поэтому комментарии и завершающие запятые не сохраняются. Выберите opencodex/<модель> в Kilo.",

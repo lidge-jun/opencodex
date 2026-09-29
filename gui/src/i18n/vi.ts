@@ -2240,6 +2240,7 @@ export const vi: Record<TKey, string> = {
   "integrations.omoRoles.omoComments": "Trong tệp vai trò, {role} giờ chạy trên {model}. omo.jsonc được giữ nguyên vì lưu sẽ xóa các chú thích của nó; hãy tự đặt codex.agents.{role}.model ở đó.",
   "integrations.omoRoles.omoInvalid": "Trong tệp vai trò, {role} giờ chạy trên {model}. omo.jsonc được giữ nguyên vì nó không phải đối tượng JSON có đối tượng codex.agents.",
   "integrations.omoRoles.omoFailed": "Trong tệp vai trò, {role} giờ chạy trên {model}, nhưng không ghi được omo.jsonc.",
+  "integrations.omoRoles.retryMirror": "Thử lại omo.jsonc",
   "integrations.omoRoles.omoCommentsState": "omo.jsonc có chú thích nên lưu ở đây chỉ thay đổi các tệp vai trò. Hãy tự sửa codex.agents trong omo.jsonc để hai nơi khớp nhau.",
   "integrations.semantics.cline": "Quản lý OpenCodex trong providers.json và models.json của Cline CLI. Hãy dừng Cline trước khi thay đổi hoặc đồng bộ các tệp này, rồi khởi động lại. Hoàn tác sẽ khôi phục cả hai bản gốc. Nhà cung cấp mặc định của bạn không thay đổi; hãy chọn OpenCodex trong Cline.",
   "integrations.semantics.kilo": "Chỉ quản lý provider.opencodex trong cấu hình toàn cục của Kilo — tệp tồn tại đầu tiên trong kilo.jsonc, kilo.json, opencode.jsonc, opencode.json hoặc config.json dưới ~/.config/kilo (XDG_CONFIG_HOME chuyển thư mục này; nếu không tệp nào tồn tại, kilo.jsonc sẽ được tạo). Các khóa khác giữ nguyên. Áp dụng ghi lại toàn bộ tệp nên chú thích và dấu phẩy cuối không được giữ. Chọn opencodex/<mô hình> trong Kilo.",
