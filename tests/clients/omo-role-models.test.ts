@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +60,27 @@ describe("omo role models", () => {
     const path = file(text);
     expect(writeOmoRoleModel("explorer", "m", path)).toBe("invalid");
     expect(readFileSync(path, "utf8")).toBe(text);
+  });
+
+  test("an explicit null codex, agents, or role entry is invalid and left byte for byte", () => {
+    for (const text of ['{ "codex": null }', '{ "codex": { "agents": null } }', '{ "codex": { "agents": { "explorer": null } } }']) {
+      const path = file(text);
+      expect(writeOmoRoleModel("explorer", "m", path)).toBe("invalid");
+      expect(readFileSync(path, "utf8")).toBe(text);
+      rmSync(dir!, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable file reads as unreadable, and the write still reports the failure", () => {
+    const path = file('{ "codex": {} }');
+    const denied = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const spy = spyOn(fs, "readFileSync").mockImplementation((() => { throw denied; }) as never);
+    try {
+      expect(readOmoRoleModels(path)).toEqual({ state: "unreadable" });
+      expect(() => writeOmoRoleModel("explorer", "m", path)).toThrow("EACCES");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("comment detection ignores comment markers inside strings", () => {

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,5 +78,28 @@ describe("/api/codex-agent-roles", () => {
     expect((await put("explorer", "")).status).toBe(400);
     expect((await put("explorer", 7)).status).toBe(400);
     expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE);
+  });
+
+  test("an unreadable omo.jsonc still lists the roles", async () => {
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(omoPath, '{ "codex": {} }\n');
+    const nativeRead = fs.readFileSync;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (path === omoPath) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      return nativeRead(path, options as BufferEncoding);
+    }) as never);
+    try {
+      const listed = await call("/api/codex-agent-roles");
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        roles: [{ role: "explorer", model: "gpt-5.5", omoModel: null }],
+        omo: { state: "unreadable" },
+      });
+      const saved = await put("explorer", "m3");
+      expect(saved.body.toml).toEqual({ status: "written" });
+      expect(saved.body.omo).toEqual({ status: "write_failed" });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

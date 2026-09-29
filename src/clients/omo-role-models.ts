@@ -16,6 +16,7 @@ export type OmoRoleModelsState =
   | { readonly state: "absent" }
   | { readonly state: "comments" }
   | { readonly state: "invalid" }
+  | { readonly state: "unreadable" }
   | { readonly state: "present"; readonly models: Readonly<Record<string, string>> };
 
 export type OmoRoleModelWriteStatus = "written" | "unchanged" | "absent" | "skipped_comments" | "invalid";
@@ -64,7 +65,12 @@ function agentsOf(doc: JsonObject): JsonObject | null | undefined {
 }
 
 export function readOmoRoleModels(path: string = omoJsoncPath()): OmoRoleModelsState {
-  const loaded = load(path);
+  let loaded: Loaded;
+  try {
+    loaded = load(path);
+  } catch {
+    return { state: "unreadable" };
+  }
   if (loaded.kind !== "document") return { state: loaded.kind };
   const agents = agentsOf(loaded.doc);
   if (agents === null) return { state: "invalid" };
@@ -87,11 +93,12 @@ export function writeOmoRoleModel(role: string, model: string, path: string = om
   const loaded = load(path);
   if (loaded.kind !== "document") return loaded.kind === "comments" ? "skipped_comments" : loaded.kind;
   const { doc, text } = loaded;
-  const codex = doc.codex ?? {};
+  // Only an absent key is created; an explicit null is a value the reader calls invalid.
+  const codex = doc.codex === undefined ? {} : doc.codex;
   if (!isObject(codex)) return "invalid";
-  const agents = codex.agents ?? {};
+  const agents = codex.agents === undefined ? {} : codex.agents;
   if (!isObject(agents)) return "invalid";
-  const entry = agents[role] ?? {};
+  const entry = agents[role] === undefined ? {} : agents[role];
   if (!isObject(entry)) return "invalid";
   if (entry.model === model) return "unchanged";
   agents[role] = { ...entry, model };
