@@ -433,7 +433,7 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
       abortSignal: abort.signal,
       onFirstOutput: () => {
         firstOutputs += 1;
-        setTimeout(() => abort.abort(new Error("fixture client gone")), 0);
+        abort.abort(new Error("fixture client gone"));
       },
       onNativePassthroughTerminal: status => terminals.push(status),
       onResponseComplete: model => completedModels.push(model),
