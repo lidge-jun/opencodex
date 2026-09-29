@@ -569,9 +569,8 @@ An injected combo default supplies `summary: "auto"` only when no summary was sp
 summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
-active effort and omits summary; explicit `summary: "none"` still hides it.
-The passthrough adapter removes that internal `none` marker at final outbound serialization;
-valid summary values remain on the upstream Responses wire.
+active effort and omits summary; explicit `summary: "none"` still hides it, and the passthrough adapter
+strips that internal marker at final outbound serialization (valid summary values stay on the wire).
 The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only —
 openai-chat `reasoning_content`, kiro tags, and Gemini thought parts on routes that do not return
 thought summaries (direct and Vertex Gemini; a `cloud-code-assist` Gemini route emits its thought
