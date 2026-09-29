@@ -15,7 +15,7 @@ import {
   waitForLoginSettled,
 } from "../../src/oauth";
 import { getAccountSet, removeCredential, resetOAuthReauthReconcileStateForTests } from "../../src/oauth/store";
-import { loginState, resetOAuthFlowReconcileStateForTests } from "../../src/oauth/login-flow-state";
+import { loginFlowKeys, loginState, resetOAuthFlowReconcileStateForTests } from "../../src/oauth/login-flow-state";
 import { ANTHROPIC_CODE_REDIRECT_URI, AnthropicOAuthFlow } from "../../src/oauth/anthropic";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
@@ -642,6 +642,23 @@ describe("OAuth code-display login", () => {
     } finally {
       mock.restore();
     }
+  });
+
+  test("a flow for one provider is invisible to another provider's lookups", () => {
+    // `loginFlowKeys` filters with `(state.provider ?? key) === provider`. Without the
+    // parentheses `===` binds first, the expression yields the truthy provider string for every
+    // row, and every flow matches every provider -- cross-provider status reads, cancellations
+    // and reaping, and one global 64-row cap.
+    loginState.set("flow-anthropic", { done: false, provider: "anthropic", flowId: "flow-anthropic" });
+    loginState.set("flow-xai", { done: false, provider: "xai", flowId: "flow-xai" });
+
+    expect(loginFlowKeys("anthropic")).toEqual(["flow-anthropic"]);
+    expect(loginFlowKeys("xai")).toEqual(["flow-xai"]);
+    expect(loginFlowKeys("kiro")).toEqual([]);
+
+    // And the provider-only surface acts on its own flow, not whichever was newest overall.
+    expect(getLoginStatus("anthropic").flowId).toBe("flow-anthropic");
+    expect(getLoginStatus("xai").flowId).toBe("flow-xai");
   });
 
   test("the callback flow's paste route keeps its original accept-only contract", async () => {

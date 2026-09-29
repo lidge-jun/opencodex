@@ -72,7 +72,10 @@ export function loginFlowKeys(provider: string): string[] {
   // ponytail: linear scan over in-flight logins (bounded by MAX_LOGIN_FLOWS_PER_PROVIDER);
   // add a provider -> keys index if that bound ever grows.
   const keys: string[] = [];
-  for (const [key, state] of loginState) if (state.provider ?? key === provider) keys.push(key);
+  // `(state.provider ?? key)` must be parenthesised: `===` binds tighter than `??`, so the
+  // unparenthesised form reads as `state.provider ?? (key === provider)` and returns the truthy
+  // provider string for every flow -- matching every provider against every other.
+  for (const [key, state] of loginState) if ((state.provider ?? key) === provider) keys.push(key);
   return keys;
 }
 
