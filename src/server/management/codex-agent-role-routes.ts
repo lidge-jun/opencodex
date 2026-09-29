@@ -11,9 +11,10 @@ import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 
 const ROLE_PATH_PREFIX = "/api/codex-agent-roles/";
+const AUTO_ASSIGN_PATH = "/api/codex-agent-roles/auto-assign";
 
 export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config } = ctx;
+  const { req, url, config, deps } = ctx;
   const [{ getCodexHome }, roles, omo, { detectLazyCodex }] = await Promise.all([
     import("../../codex/paths"),
     import("../../codex/agent-role-models"),
@@ -37,6 +38,37 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     }, 200, req, config);
   }
 
+  if (url.pathname === AUTO_ASSIGN_PATH && req.method === "POST") {
+    let body: { model?: unknown };
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400, req, config);
+    }
+    if (body?.model !== undefined && typeof body.model !== "string") {
+      return jsonResponse({ error: "model must be a string", code: "invalid_model" }, 400, req, config);
+    }
+    const [{ proposeCodexRoleModels, NoSizingModelError }, { fetchAllModels }] = await Promise.all([
+      import("./codex-role-auto-assign"),
+      import("./shared"),
+    ]);
+    try {
+      return jsonResponse(await proposeCodexRoleModels({
+        config,
+        codexHome: getCodexHome(),
+        ...(typeof body?.model === "string" ? { sizingModel: body.model } : {}),
+        fetchAllModels: deps.fetchAllModels ?? fetchAllModels,
+        ...(deps.completeCodexRoleSizing ? { completeRoleSizing: deps.completeCodexRoleSizing } : {}),
+      }), 200, req, config);
+    } catch (error) {
+      if (error instanceof NoSizingModelError) {
+        return jsonResponse({ error: error.message, code: "no_sizing_model" }, 409, req, config);
+      }
+      throw error;
+    }
+  }
+
   if (!url.pathname.startsWith(ROLE_PATH_PREFIX) || req.method !== "PUT") return null;
   const codexHome = getCodexHome();
   if (!detectLazyCodex(codexHome).detected) {
@@ -51,7 +83,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   } catch {
     return jsonResponse({ error: "role must be URL-encoded", code: "invalid_role" }, 400, req, config);
   }
-  let body: { model?: unknown };
+  let body: { model?: unknown; effort?: unknown };
   try {
     body = await readManagementJsonBody(req);
   } catch (error) {
@@ -60,13 +92,15 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   }
 
   let model: string;
+  let effort: string | undefined;
   let toml: { status: "written" | "unchanged" };
   try {
     model = roles.validateAgentRoleModel(body?.model);
-    toml = roles.writeCodexAgentRoleModel(role, model, codexHome);
+    effort = body?.effort === undefined || body.effort === null ? undefined : roles.validateAgentRoleEffort(body.effort);
+    toml = roles.writeCodexAgentRoleModel(role, model, codexHome, effort);
   } catch (error) {
     if (error instanceof roles.AgentRoleModelError) {
-      const status = error.code === "unknown_role" ? 404 : error.code === "invalid_model" ? 400 : 409;
+      const status = error.code === "unknown_role" ? 404 : error.code === "invalid_model" || error.code === "invalid_effort" ? 400 : 409;
       return jsonResponse({ error: error.message, code: error.code }, status, req, config);
     }
     return jsonResponse({ error: error instanceof Error ? error.message : String(error), code: "write_failed" }, 500, req, config);
@@ -79,5 +113,5 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   } catch {
     omoStatus = "write_failed";
   }
-  return jsonResponse({ ok: true, role, model, toml, omoJsonc: { status: omoStatus } }, 200, req, config);
+  return jsonResponse({ ok: true, role, model, ...(effort ? { effort } : {}), toml, omoJsonc: { status: omoStatus } }, 200, req, config);
 }

@@ -1686,6 +1686,7 @@
   "omo-role-models.test.ts": "clients",
   "lazycodex-detection.test.ts": "clients",
   "codex-agent-role-routes.test.ts": "server",
+  "codex-role-auto-assign-routes.test.ts": "server",
   "subagent-roster-retention.test.ts": "routing",
   "sync-client-integrations.test.ts": "clients",
   "synthetic-tool.test.ts": "images",
