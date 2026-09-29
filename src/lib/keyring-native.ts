@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, dirname, join, resolve } from "node:path";
+import { posix, win32 } from "node:path";
 import { isStandaloneBinary, standaloneRoot } from "./standalone";
 
 export interface KeyringBinding {
@@ -74,6 +74,9 @@ export function packagedKeyringCandidates({
   if (root === undefined) return [];
   const asset = runtimeAsset(platform, arch);
   if (!asset) return [];
+  // Paths follow the target platform's rules rather than the host's, so a candidate list is the
+  // same whether it is computed on that platform or simulated from another one.
+  const { basename, dirname, join, resolve } = platform === "win32" ? win32 : posix;
   const executableDir = resolve(root);
   const adjacent = join(executableDir, "keyring", asset.filename);
   if (platform === "linux") {
