@@ -1679,6 +1679,7 @@
     "subagent-model-fallback.test.ts": "routing",
     "codex-agent-role-models.test.ts": "routing",
     "omo-role-models.test.ts": "clients",
+    "codex-agent-role-routes.test.ts": "server",
     "subagent-roster-retention.test.ts": "routing",
     "sync-client-integrations.test.ts": "clients",
     "synthetic-tool.test.ts": "images",

@@ -1061,6 +1061,21 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["A bare invocation reads and never writes."],
   },
   {
+    command: ["agent", "roles"],
+    summary: "Show each Codex agent role's model pin, or set one role's model in its TOML and in omo.jsonc.",
+    routes: [
+      { method: "GET", path: "/api/codex-agent-roles" },
+      { method: "PUT", path: "/api/codex-agent-roles/{role}" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the role list or the write result as JSON." }],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.",
+    ],
+  },
+  {
     command: ["api", "protocols"],
     summary: "Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.",
     routes: [{ method: "GET", path: "/api/protocols" }],
