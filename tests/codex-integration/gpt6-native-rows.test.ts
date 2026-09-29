@@ -1,5 +1,5 @@
 /**
- * GPT-6 Sol, Luna and Astra Minor native rows.
+ * GPT-6.1 Sol, GPT-6 Sol, Luna and Astra Minor native rows.
  *
  * Held in its own file because tests/codex-integration/codex-catalog.test.ts sits at its
  * file-size ratchet cap (see AGENTS.md, "The file-size ratchet has almost no headroom").
@@ -7,7 +7,9 @@
  * Evidence: the authenticated roster probe of 2026-09-23
  * (`chatgpt.com/backend-api/codex/models?client_version=0.155.0`, main account), pinned verbatim
  * in src/codex/data/roster-pinned-models.json, and
- * https://openai.com/index/introducing-gpt-6-sol-and-luna/ (announced 2026-09-22).
+ * https://openai.com/index/introducing-gpt-6-sol-and-luna/ (announced 2026-09-22). GPT-6.1 Sol's row
+ * comes from the 2026-09-29 probe at `client_version=0.159.0`, the day
+ * https://openai.com/index/introducing-gpt-6-1-sol/ announced it.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -28,6 +30,7 @@ import {
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_SOL_MODEL,
+  NATIVE_GPT61_SOL_MODEL,
   NATIVE_MAIN_DRAIN_SENTINEL_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
   hasNativeOpenAiCapabilityMetadata,
@@ -76,13 +79,14 @@ function nativeTemplate(): Record<string, unknown> {
 const SOL_LADDER = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const LUNA_LADDER = ["low", "medium", "high", "xhigh", "max"];
 
-describe("GPT-6 Sol and Luna are self-described flagship natives", () => {
+describe("GPT-6.1 Sol, GPT-6 Sol and Luna are self-described flagship natives", () => {
   test("each projects its own roster row with its own label, windows and exact ladder", () => {
     const cases = [
-      { slug: NATIVE_GPT6_SOL_MODEL, wire: "gpt-6-sol", displayName: "GPT-6-Sol", ladder: SOL_LADDER },
-      { slug: NATIVE_GPT6_LUNA_MODEL, wire: "gpt-6-luna", displayName: "GPT-6-Luna", ladder: LUNA_LADDER },
+      { slug: NATIVE_GPT61_SOL_MODEL, wire: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", ladder: SOL_LADDER, defaultEffort: "low" },
+      { slug: NATIVE_GPT6_SOL_MODEL, wire: "gpt-6-sol", displayName: "GPT-6-Sol", ladder: SOL_LADDER, defaultEffort: "medium" },
+      { slug: NATIVE_GPT6_LUNA_MODEL, wire: "gpt-6-luna", displayName: "GPT-6-Luna", ladder: LUNA_LADDER, defaultEffort: "medium" },
     ];
-    for (const { slug, wire, displayName, ladder } of cases) {
+    for (const { slug, wire, displayName, ladder, defaultEffort } of cases) {
       expect(slug).toBe(wire);
       expect(SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(slug)).toBe(true);
       expect(isNativeOpenAiCapabilityAliasModel(slug)).toBe(false);
@@ -100,11 +104,12 @@ describe("GPT-6 Sol and Luna are self-described flagship natives", () => {
       expect(nativeOpenAiContextWindow(slug)).toBe(272_000);
       expect(nativeOpenAiContextTier(slug)).toEqual({ defaultWindow: 272_000, longWindow: 872_000 });
       expect(nativeReasoningEfforts(slug)).toEqual(ladder);
-      expect(nativeDefaultReasoningEffort(slug)).toBe("medium");
+      expect(nativeDefaultReasoningEffort(slug)).toBe(defaultEffort);
       expect(nativeInputModalities(slug)).toEqual(["text", "image"]);
       expect(isGpt56NativeSlug(slug)).toBe(true);
     }
-    // The ultra rung follows the row: Sol ships it, Luna does not.
+    // The ultra rung follows the row: both Sol rows ship it, Luna does not.
+    expect(nativeLadderIncludesUltra(NATIVE_GPT61_SOL_MODEL)).toBe(true);
     expect(nativeLadderIncludesUltra(NATIVE_GPT6_SOL_MODEL)).toBe(true);
     expect(nativeLadderIncludesUltra(NATIVE_GPT6_LUNA_MODEL)).toBe(false);
   });
@@ -120,8 +125,18 @@ describe("GPT-6 Sol and Luna are self-described flagship natives", () => {
     expect(efforts(luna)).not.toContain("ultra");
   });
 
-  test("both are listed natives and neither is account-gated", () => {
-    for (const slug of [NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL]) {
+  test("GPT-6.1 Sol keeps its own instructions rather than borrowing GPT-6 Sol's", () => {
+    // A configured native (providers.openai.models) would borrow gpt-6-sol's row; 6.1 ships a
+    // different prompt and a different Fast tier, so it must resolve to its own pinned row.
+    const sol61 = upstreamNativeEntry(NATIVE_GPT61_SOL_MODEL);
+    const sol = upstreamNativeEntry(NATIVE_GPT6_SOL_MODEL);
+    expect(typeof sol61?.base_instructions).toBe("string");
+    expect(sol61?.base_instructions).not.toBe(sol?.base_instructions);
+    expect(sol61?.multi_agent_reasoning_effort).toBe("xhigh");
+  });
+
+  test("all three are listed natives and none is account-gated", () => {
+    for (const slug of [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL]) {
       expect(NATIVE_OPENAI_MODELS).toContain(slug);
       expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)).toBe(false);
       expect(DOCUMENTED_NATIVE_OPENAI_ADDITIONS).toContain(slug);
@@ -175,11 +190,12 @@ describe("gpt-6-astra-minor is an account-gated capability alias of gpt-6-astra"
 });
 
 describe("roster-pinned-models.json", () => {
-  test("holds only Sol and Luna, verbatim roster rows", () => {
+  test("holds only GPT-6.1 Sol, Sol and Luna, verbatim roster rows", () => {
     const roster = readRows("src/codex/data/roster-pinned-models.json");
-    expect(roster.map(row => row.slug)).toEqual([NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL]);
+    expect(roster.map(row => row.slug)).toEqual([NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL]);
     expect(efforts(roster[0])).toEqual(SOL_LADDER);
-    expect(efforts(roster[1])).toEqual(LUNA_LADDER);
+    expect(efforts(roster[1])).toEqual(SOL_LADDER);
+    expect(efforts(roster[2])).toEqual(LUNA_LADDER);
   });
 
   test("never shadows a slug already in upstream-models.json", () => {

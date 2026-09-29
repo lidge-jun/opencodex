@@ -135,9 +135,14 @@ when your installed Codex catalog predates them.
 | `gpt-6-sol` | 272,000 | 872,000 | `medium` | `low` through `ultra` |
 | `gpt-6-luna` | 272,000 | 872,000 | `medium` | `low` through `max` (no `ultra`) |
 
+[GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (announced September 29, 2026) is
+listed the same way as `gpt-6.1-sol`, shown as **GPT-6.1-Sol**. It carries its own roster row
+(captured at `client_version` 0.159.0) rather than GPT-6 Sol's: its own Codex instructions, a `low`
+default effort and the `low` through `ultra` ladder, with the same 272,000 / 872,000 context pair.
+
 The same `providerContextCaps.openai`, `modelContextWindows` and `modelAutoCompactTokenLimits`
-levers apply as for Astra. There are no `openai-apikey/` rows or built-in price estimates for Sol
-or Luna yet.
+levers apply as for Astra. There are no `openai-apikey/` rows or built-in price estimates for Sol,
+GPT-6.1 Sol or Luna yet.
 
 When OpenAI ships a GPT model that this release does not know yet, add it through config instead of
 waiting for an update, the same way a new Claude id goes under `providers.anthropic.models`:

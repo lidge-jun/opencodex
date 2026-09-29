@@ -52,7 +52,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
   verbatim authenticated-roster rows for models codex-rs has not bundled yet (`gpt-6-sol`,
-  `gpt-6-luna`, captured 2026-09-23 at `client_version=0.155.0`), so a wholesale snapshot re-pin
+  `gpt-6-luna` at `client_version=0.155.0`; `gpt-6.1-sol` at 0.159.0), so a wholesale snapshot re-pin
   never erases them and a snapshot row for the same slug always wins;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
@@ -324,9 +324,9 @@ rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt
 `medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
 it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so
 `ensureGpt56ReasoningLevels` restores `max` everywhere but adds `ultra` only where the pinned row
-ships it. Both are ungated flagships. `gpt-6-astra-minor` is an account-gated capability alias of
-Astra with its own presentation (`GPT-6-Astra-Minor`); it has no pinned row of its own and stays
-hidden and request-refused until an authenticated roster lists it.
+ships it. Both are ungated flagships, as is `gpt-6.1-sol` (own roster row, not a Sol alias).
+`gpt-6-astra-minor` is an account-gated capability alias of Astra with its own presentation
+(`GPT-6-Astra-Minor`); no pinned row, hidden and request-refused until a roster lists it.
 
 The API registry separately owns Astra's 1,050,000 context / 922,000 input / 128,000 output and
 five API effort levels. Trusted discovery snapshots carry the output ceiling as well as input
