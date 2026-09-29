@@ -65,4 +65,17 @@ describe("sponsor presets", () => {
     const pinned = pinSponsorRows(rows, row => row.tier, row => row.label).map(row => row.id);
     expect(pinned).toEqual(["e", "d", "b", "a", "c"]);
   });
+
+  test("a run that opens with a sponsor keeps its place in the kind sequence", () => {
+    type Row = { id: string; label: string; kind: string; tier?: "main" | "standard" };
+    const rows: Row[] = [
+      { id: "s1", label: "Sponsor B", kind: "key", tier: "standard" },
+      { id: "o1", label: "OAuth", kind: "oauth" },
+      { id: "k1", label: "Key", kind: "key" },
+      { id: "s2", label: "Sponsor A", kind: "key", tier: "standard" },
+      { id: "s3", label: "Only", kind: "local", tier: "main" },
+    ];
+    const pinned = pinSponsorsWithinKind(rows, row => row.tier).map(row => row.id);
+    expect(pinned).toEqual(["s2", "s1", "o1", "k1", "s3"]);
+  });
 });

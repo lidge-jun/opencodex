@@ -35,21 +35,22 @@ export function registrySponsorTier(id: string): SponsorTier | undefined {
  * order, to the start of the first run of their own kind: they stay under the right heading, sit
  * near the top of the menu, and no new heading is introduced. Every other row keeps its order.
  */
-export function pinSponsorsWithinKind<T extends { id: string; label: string; kind: string }>(rows: readonly T[]): T[] {
-  const tierOf = (row: T) => registrySponsorTier(row.id);
+export function pinSponsorsWithinKind<T extends { id: string; label: string; kind: string }>(
+  rows: readonly T[],
+  tierOf: (row: T) => SponsorTier | undefined = row => registrySponsorTier(row.id),
+): T[] {
   const sponsors = pinSponsorRows(rows.filter(row => tierOf(row) !== undefined), tierOf, row => row.label);
   if (sponsors.length === 0) return [...rows];
   const out: T[] = [];
   const placedKinds = new Set<string>();
   for (const row of rows) {
-    if (tierOf(row) !== undefined) continue;
+    // Record the kind at its first row, sponsor or not, so a run that opens with a sponsor
+    // keeps its place instead of the sponsor moving to a later run of the same kind.
     if (!placedKinds.has(row.kind)) {
       placedKinds.add(row.kind);
       out.push(...sponsors.filter(sponsor => sponsor.kind === row.kind));
     }
-    out.push(row);
+    if (tierOf(row) === undefined) out.push(row);
   }
-  // A sponsor whose kind has no other row still appears, at the end, rather than vanishing.
-  out.push(...sponsors.filter(sponsor => !placedKinds.has(sponsor.kind)));
   return out;
 }
