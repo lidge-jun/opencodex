@@ -128,12 +128,12 @@ export function relayWithAbort(
   });
 }
 
-export function buildFailedTailPayload(err: unknown): string {
+export function buildFailedTailPayload(err: unknown, maskCredential?: (text: string) => string): string {
   const translatorOverflow = isTranslatorBudgetExceededError(err);
-  const message = (translatorOverflow
+  const diagnostic = redactSecretString((translatorOverflow
     ? "upstream translation buffer exceeded the safe limit"
-    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
-    .slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
+    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`));
+  const message = (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
     code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
@@ -145,9 +145,9 @@ export function buildFailedTailPayload(err: unknown): string {
   });
 }
 
-function buildFailedTailPayloadOrFallback(err: unknown): string {
+function buildFailedTailPayloadOrFallback(err: unknown, maskCredential?: (text: string) => string): string {
   try {
-    return buildFailedTailPayload(err);
+    return buildFailedTailPayload(err, maskCredential);
   } catch {
     // Error.message and String(error) may execute hostile accessors. Preserve a
     // bounded protocol terminal even when diagnostic serialization is unsafe.
@@ -155,8 +155,8 @@ function buildFailedTailPayloadOrFallback(err: unknown): string {
   }
 }
 
-export function failedTailFrame(encoder: TextEncoder, err: unknown): Uint8Array {
-  const payload = buildFailedTailPayloadOrFallback(err);
+export function failedTailFrame(encoder: TextEncoder, err: unknown, maskCredential?: (text: string) => string): Uint8Array {
+  const payload = buildFailedTailPayloadOrFallback(err, maskCredential);
   return encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`);
 }
 
@@ -174,17 +174,19 @@ export function upstreamErrorTailFrame(
   encoder: TextEncoder,
   message: string,
   refusalCode?: string,
+  maskCredential?: (text: string) => string,
 ): Uint8Array {
   return encoder.encode(
-    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode)}\n\n`,
+    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode, maskCredential)}\n\n`,
   );
 }
 
-function upstreamErrorFailedPayload(message: string, refusalCode?: string): string {
+function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskCredential?: (text: string) => string): string {
+  const diagnostic = redactSecretString(message);
   const error = {
     type: refusalCode === undefined ? "upstream_error" : "invalid_request_error",
     code: refusalCode ?? "upstream_server_error",
-    message: redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    message: (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({
     type: "response.failed",
@@ -210,8 +212,9 @@ export function refusalFailedTailFrame(
   encoder: TextEncoder,
   message: string,
   refusalCode: string,
+  maskCredential?: (text: string) => string,
 ): Uint8Array {
-  const payload = upstreamErrorFailedPayload(message, refusalCode);
+  const payload = upstreamErrorFailedPayload(message, refusalCode, maskCredential);
   return encoder.encode(
     `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
   );
@@ -489,7 +492,7 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
-  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions },
+  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
@@ -543,6 +546,7 @@ export function relaySseWithFailedTail(
                   encoder,
                   upstreamError,
                   terminalBoundary.upstreamRefusalCode(),
+                  opts?.maskCredential,
                 ));
               controller.enqueue(doneFrame(encoder));
             }
@@ -575,8 +579,8 @@ export function relaySseWithFailedTail(
             const refusalCode = terminalBoundary.upstreamRefusalCode();
             const refusalMessage = terminalBoundary.upstreamError();
             controller.enqueue(refusalCode !== undefined && refusalMessage !== undefined
-              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode)
-              : failedTailFrame(encoder, err));
+              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential)
+              : failedTailFrame(encoder, err, opts?.maskCredential));
           }
           controller.close();
         } catch { /* client already torn down */ }

@@ -1,5 +1,5 @@
 import { isNativeControlResponse } from "./native-response-control";
-import { createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -769,6 +769,7 @@ export async function deliverPassthroughResponse(
           return [block];
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
+      const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
       const blockRewrites = [
         payloadRewrites.length > 0
           ? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites))
@@ -836,7 +837,7 @@ export async function deliverPassthroughResponse(
             rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
           )
           : undefined,
-        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers),
+        createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const clientBlockRewrite = blockRewrites.length > 0
@@ -973,7 +974,6 @@ export async function deliverPassthroughResponse(
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
-        commitReasoningReplayServingRoute(nativeExchange.request.headers);
         const reportNativeTerminal = recordTerminalOutcomes
           ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
             if (signal.aborted) return;
@@ -1019,6 +1019,7 @@ export async function deliverPassthroughResponse(
           effectInspector.dispose();
         }
         if (signal.aborted) return cancelAfterValidation();
+        commitReasoningReplayServingRoute(nativeExchange.request.headers);
         rawBytes = undefined;
         if (client.terminal.status === "completed") {
           rememberPassthroughResponseChecked(client.terminal.response);
@@ -1114,6 +1115,7 @@ export async function deliverPassthroughResponse(
         }, {
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
+          maskCredential,
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
         });
@@ -1207,7 +1209,7 @@ export async function deliverPassthroughResponse(
           responseEffects.responseCompletionCancelled = true;
           clientGone.abort(reason);
         },
-        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions },
+        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,

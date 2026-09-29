@@ -423,9 +423,11 @@ in lockstep with any passthrough-policy change.
 A non-streaming canonical ChatGPT client still uses the destination's SSE-only upstream path.
 The [Responses HTTP/SSE owner](responses.md#responses-httpsse) validates the first terminal
 and strictly covered output indices before publishing JSON or serving state; see [ADR-6162](../decisions/ADR-6162-responses-http-sse.md).
-Deferred inspection checks cancellation after each yield and before terminal/cache publication;
-a disconnect returns 499. This buffered path makes no tee/eager choice; ordinary `stream:true`
-traffic retains the two shapes above, with terminal diagnostic redaction in both.
+Deferred inspection checks cancellation after each yield and commits serving-route state only
+after the final abort check; a disconnect returns 499 without publishing that state or a terminal.
+This buffered path makes no tee/eager choice. Failed and incomplete terminals mask selected outbound
+credentials across the full event, including nested output and metadata, before JSON or SSE delivery;
+synthetic stream failures use the same credential mask in both streaming relays.
 
 > Decision record: [ADR-6162](../decisions/ADR-6162-responses-http-sse.md)
 

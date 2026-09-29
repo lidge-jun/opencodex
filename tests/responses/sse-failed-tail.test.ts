@@ -4,6 +4,7 @@ import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/rel
 import { MAX_TAIL_ERROR_MESSAGE_CHARS } from "../../src/server/relay";
 import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
+import { createOutboundCredentialMask } from "../../src/server/responses/terminal-error-redaction";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -64,6 +65,16 @@ function doneEvents(text: string): string[] {
 }
 
 describe("relaySseWithFailedTail", () => {
+  test.each(["tee", "eager"] as const)("masks a JSON-escaped selected credential in a %s synthetic failure", async mode => {
+    const credential = 'fixture"quoted\\token';
+    const maskCredential = createOutboundCredentialMask({ authorization: `Bearer ${credential}` });
+    const src = sourceStream([], { failAfter: true, error: new Error(`reset after ${credential}`) });
+    const out = await drain(mode === "tee"
+      ? relaySseWithFailedTail(src, new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(src, new AbortController(), parityHooks, { maskCredential }));
+    expect(failedMessage(out)).toContain("[REDACTED]");
+    expect(failedMessage(out)).not.toContain(credential);
+  });
   test("relays a healthy stream verbatim with no injected frame", async () => {
     const upstream = new AbortController();
     const src = sourceStream(["event: response.completed\n", 'data: {"type":"response.completed"}\n\n', "data: [DONE]\n\n"]);

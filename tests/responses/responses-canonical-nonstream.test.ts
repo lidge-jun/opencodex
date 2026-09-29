@@ -5,6 +5,7 @@ import { getDefaultConfig } from "../../src/config";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
 import { expandPreviousResponseInput } from "../../src/responses/state";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
   BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
@@ -39,6 +40,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   releaseSpendHome?.();
   releaseSpendHome = undefined;
+  setRelayPlatformForTests(undefined);
 });
 
 function requestBody(stream: boolean, store: boolean): Record<string, unknown> {
@@ -231,14 +233,20 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     const failed = {
       id: `resp_failed_secret_${stream}`,
       status: "failed",
-      output: [],
+      output: [{
+        type: "message", id: "msg_secret_echo", status: "completed", role: "assistant",
+        content: [{ type: "output_text", text: "fixture-forward-token", annotations: [] }],
+      }],
       error: { type: "server_error", code: "upstream_error", message: `upstream saw Bearer ${bearer}` },
       last_error: {
         message: `Authorization: Bearer ${bearer}`,
         detail: "raw echo fixture-forward-token",
       },
+      metadata: { diagnostic: "selected fixture-forward-token" },
     };
-    globalThis.fetch = (async () => new Response(sseEvent("response.failed", { response: failed }), {
+    globalThis.fetch = (async () => new Response(`: fixture-forward-token\n${sseEvent("response.failed", {
+      response: failed, detail: "outer fixture-forward-token",
+    })}`, {
       headers: { "content-type": "text/event-stream" },
     })) as typeof fetch;
 
@@ -247,12 +255,14 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(response.status).toBe(200);
     expect(text).not.toContain(bearer);
     expect(text).not.toContain("fixture-forward-token");
+    expect(text).toContain("[REDACTED]");
     if (stream) {
       expect(text).toContain("event: response.failed");
       expect(text).toContain("[REDACTED]");
+      expect(text).not.toContain(": fixture-forward-token");
     } else {
       const json = JSON.parse(text) as typeof failed;
-      expect(json).toMatchObject({ id: failed.id, status: "failed", output: [], error: {
+      expect(json).toMatchObject({ id: failed.id, status: "failed", error: {
         type: "server_error", code: "upstream_error", message: "upstream saw Bearer [REDACTED]",
       } });
       expect(json.last_error.message).toContain("[REDACTED]");
@@ -438,16 +448,31 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(nativeCancels).toBe(1);
   });
 
+  test.each(["darwin", "win32"] as const)("redacts selected bearer in synthetic %s streaming failure", async platform => {
+    setRelayPlatformForTests(platform);
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(new Error("reset after fixture-forward-token")); },
+    }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+    const response = await call(requestBody(true, false));
+    const text = await response.text();
+    expect(text).toContain("response.failed");
+    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain("fixture-forward-token");
+  });
+
   test("canonical buffered serving-state commit is ordered after both validations", () => {
     const source = readFileSync(repoPath("src/server/responses/passthrough-delivery.ts"), "utf8");
     const branch = source.indexOf("if (canonicalBufferedJson) {");
     const rawValidation = source.indexOf("if (!raw.ok)", branch);
     const clientValidation = source.indexOf("if (!client.ok)", rawValidation);
     const deferredCommit = source.indexOf("commitReasoningReplayServingRoute(nativeExchange.request.headers);", clientValidation);
+    const finalAbortCheck = source.lastIndexOf("if (signal.aborted) return cancelAfterValidation();", deferredCommit);
     expect(branch).toBeGreaterThan(-1);
     expect(rawValidation).toBeGreaterThan(branch);
     expect(clientValidation).toBeGreaterThan(rawValidation);
     expect(deferredCommit).toBeGreaterThan(clientValidation);
+    expect(finalAbortCheck).toBeGreaterThan(source.indexOf("effectInspector.finish();", clientValidation));
+    expect(deferredCommit).toBeGreaterThan(finalAbortCheck);
     expect(source.slice(branch, deferredCommit)).not.toContain("commitReasoningReplayServingRoute(");
   });
 
