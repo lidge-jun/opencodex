@@ -292,7 +292,7 @@ surface filtering. `managementUsageMaxReadBytes` remains a recognized compatibil
 bounded legacy readers, but it is not an accuracy limit or tuning knob for `GET /api/usage`.
 A Codex-surface response includes an `accounts` breakdown keyed by stable non-PII `accountLogLabel`; cards join it to the management account DTO for 30-day tokens, API-equivalent cost and coverage. New main-pool rows use `main`; legacy bare `openai` rows remain ambiguous.
 A missing `usage.jsonl` returns a zeroed summary with 200 because a fresh install has no usage. Unmeasured requests remain distinct from measured zero through `measured / reported / unreported / unsupported / estimated` counts and their coverage totals.
-The Usage tab renders that shape and the main Dashboard shows its 30-day summary. The 200-entry in-memory `requestLog` is not the aggregation source; the JSONL ledger is.
+The Usage tab renders that shape and the main Dashboard shows its 30-day summary. The 200-entry in-memory `requestLog` is not the aggregation source; the JSONL ledger is. Usage table scrollports in `gui/src/styles-usage-workspace.css` contain absolute screen-reader captions so long tables do not extend the outer document beyond the report; `gui/tests/usage-scroll-browser.ts` measures that boundary and last-row reachability at desktop and mobile widths.
 Ledger read failures instead return `500 { error: "read_failed" }`. Shared GUI usage admission reads that body before classifying HTTP failure and also rejects the legacy HTTP-200 envelope, so every shared cache retains its last valid report rather than fabricating zero totals.
 > Decision record: [ADR-0106](decisions/ADR-0106-usage-read-failure-contract.md)
 

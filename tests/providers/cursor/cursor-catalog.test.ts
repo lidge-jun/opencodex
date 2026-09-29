@@ -190,6 +190,11 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       expect(resolveCursorSelection("claude-opus-5-5", "medium", undefined, { fast: true }).wireId).toBe("claude-opus-5-5-medium-fast");
     });
 
+    test("claude-sonnet-5-5 is seeded with flat effort ids like Opus 5.5 until the live roster lists it", () => {
+      expect(resolveCursorSelection("claude-sonnet-5-5", "medium").wireId).toBe("claude-sonnet-5-5-medium");
+      expect(resolveCursorSelection("claude-sonnet-5-5", "max").wireId).toBe("claude-sonnet-5-5-max");
+    });
+
     test("bare-thinking families ignore effort", () => {
       expect(resolveCursorSelection("claude-4-sonnet", "max").wireId).toBe("claude-4-sonnet-thinking");
     });

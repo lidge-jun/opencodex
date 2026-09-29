@@ -114,7 +114,7 @@ export function selectDriftHealCatalogPath(
 
 /** Repair only the missing config roots; catalog convergence remains the later tick step. */
 async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number): Promise<"none" | "healed" | "not-healed"> {
-  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { DEFAULT_CATALOG_PATH, resolveCodexConfigPath }, { loadConfig }] =
+  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { DEFAULT_CATALOG_PATH, resolveCodexConfigPath }, { loadConfig }, { inspectNativeCodexOwnership }] =
     await Promise.all([
       import("./config-drift-heal"),
       import("./journal"),
@@ -122,6 +122,7 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
       import("./inject"),
       import("./paths"),
       import("../config"),
+      import("../integrations/native/ownership-preflight"),
     ]);
   const capturedSettings = JSON.stringify(config);
   const current = () => entryGeneration === generation && JSON.stringify(loadConfig()) === capturedSettings;
@@ -142,11 +143,17 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
   // Keep the missing routing roots visible to the next tick. Catalog-only convergence below
   // may recreate the file now, but it does not re-inject config.toml in this tick.
   if (catalogPath === null) return "not-healed";
+  // Ownership is probed directly, not through admission: admission can refuse on the
+  // config or generation authority before it ever inspects native ownership, and a
+  // veto that rides that result would let those refusals pass on a foreign home.
+  const serviceHomeOwned = () => inspectNativeCodexOwnership().ownership === "owned";
+  if (!serviceHomeOwned()) return "not-healed";
   await injectCodexConfig(runtime.port, config, {
     catalogPath,
     lockTimeoutMs: TICK_DEADLINE_MS,
     beforeClientWrite: () => {
       if (!current()) throw new Error("Catalog drift heal tick is stale");
+      if (!serviceHomeOwned()) throw new Error("Catalog drift heal lost service-home ownership");
     },
   }).catch(() => null);
   if (!current()) return "none";
