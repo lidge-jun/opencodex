@@ -28,6 +28,9 @@ import {
 } from "./lib/windows-elevation";
 import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
+import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "./lib/bun-runtime";
+import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./service/windows-wrapper-exit";
+import { inspectServiceStateEvidence, serviceStatePathsForOpenCodexHome } from "./service/state";
 
 /** Short: this runs inside admission, and a slow answer is the same as none. */
 export const SERVICE_PROBE_TIMEOUT_MS = 2_000;
@@ -192,6 +195,8 @@ export interface ProbeDeps {
   readonly windowsLocale?: string;
   /** Startup-local full-listing cache; targeted task queries always bypass it. */
   readonly windowsTaskListingCache?: WindowsTaskListingCache;
+  /** Service-state evidence paths; production derives them from the effective config home. */
+  readonly statePaths?: readonly string[];
 }
 
 const LABEL = "com.opencodex.proxy";
@@ -559,20 +564,45 @@ function decodeBatchPathValue(
     .replaceAll(escapedPercent, "%");
 }
 
-/**
- * Validate the generated wrapper before interpreting omitted optional homes.
- * The generated OCX_CLI set line, not bun runtime provenance, selects the valid launch shape.
- */
-function wrapperLooksGenerated(body: string): boolean {
-  if (!/^:loop\s*$/im.test(body)) return false;
+/** One generated quoted assignment, rejecting unquoted and duplicate forms. */
+function generatedBatchSetValue(body: string, name: string): string | null {
+  const assignments = body.split(/\r?\n/).filter(line => new RegExp(`^\\s*@?set\\s+"?${name}=`, "i").test(line));
+  return assignments.length === 1 ? batchSetValue(assignments[0]!, name) : null;
+}
+
+/** Validate the generated launch shape before interpreting omitted optional homes. */
+function wrapperLaunchShape(body: string): "source" | { standaloneBun: string } | null {
+  if (!/^:loop\s*$/im.test(body)) return null;
   const launchLines = body.split(/\r?\n/).filter(line => /^\s*"%OCX_BUN%"/i.test(line));
-  if (launchLines.length !== 1) return false;
+  if (launchLines.length !== 1) return null;
   const launch = launchLines[0]!.trim();
   const sourceLaunch = /^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/i;
-  const standaloneLaunch = /^"%OCX_BUN%" start\b[^\r\n]*$/i;
-  return batchSetValue(body, "OCX_CLI") === null
-    ? standaloneLaunch.test(launch)
-    : sourceLaunch.test(launch);
+  const standaloneLaunch = /^"%OCX_BUN%" start --port ([0-9]{1,5}) >>"%OCX_SERVICE_LOG%" 2>&1$/i;
+  const cliAssignments = body.split(/\r?\n/).filter(line => /^\s*@?set\s+"?OCX_CLI=/i.test(line));
+  if (cliAssignments.length > 0) {
+    return cliAssignments.length === 1 && generatedBatchSetValue(body, "OCX_CLI") !== null && sourceLaunch.test(launch)
+      ? "source" : null;
+  }
+  const port = standaloneLaunch.exec(launch)?.[1];
+  if (!port || Number(port) < 1 || Number(port) > 65535 || !/^@echo off\s*$/im.test(body)
+    || !/^setlocal EnableExtensions DisableDelayedExpansion\s*$/im.test(body)
+    || !new RegExp(`^if "%ERRORLEVEL%"=="${WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE}" goto stopped\\s*$`, "im").test(body)
+    || !/^:stopped\s*$/im.test(body)) return null;
+  for (const [name, value] of [
+    ["OCX_SERVICE", "1"],
+    [WINDOWS_WRAPPER_PROTOCOL_ENV, "1"],
+    [BUN_RUNTIME_SOURCE_ENV, "standalone"],
+  ]) {
+    if (generatedBatchSetValue(body, name) !== value) return null;
+  }
+  const bun = generatedBatchSetValue(body, "OCX_BUN");
+  const runtimePath = generatedBatchSetValue(body, BUN_RUNTIME_PATH_ENV);
+  if (!bun || !runtimePath || normalizeWindowsPath(decodeBatchPathValue(bun)) !== normalizeWindowsPath(decodeBatchPathValue(runtimePath))) return null;
+  for (const name of ["CODEX_HOME", "OPENCODEX_HOME"]) {
+    const assignments = body.split(/\r?\n/).filter(line => new RegExp(`^\\s*@?set\\s+"?${name}=`, "i").test(line));
+    if (assignments.length > 0 && generatedBatchSetValue(body, name) === null) return null;
+  }
+  return { standaloneBun: decodeBatchPathValue(bun) };
 }
 
 function normalizeWindowsPath(value: string): string {
@@ -722,7 +752,7 @@ function probeWinswRegistration(
 
 function inspectWindows(
   deps: Required<Pick<ProbeDeps, "runRaw" | "home">>
-    & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale" | "windowsTaskListingCache">,
+    & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale" | "windowsTaskListingCache" | "statePaths">,
 ): ServiceManagerInstallation {
   const configDir = windowsConfigDirPath(deps);
   const taskXmlPath = join(configDir, "opencodex-service-task.xml");
@@ -848,7 +878,7 @@ function homesEqual(
  * generated service-asset directory.
  */
 function walkWindowsChain(
-  deps: Required<Pick<ProbeDeps, "home">> & Pick<ProbeDeps, "configDir" | "windowsLocale">,
+  deps: Required<Pick<ProbeDeps, "home">> & Pick<ProbeDeps, "configDir" | "windowsLocale" | "statePaths">,
   xml: string,
   definitionPath: string,
 ): ServiceManagerInstallation {
@@ -896,8 +926,20 @@ function walkWindowsChain(
     return unknown(`the launcher wrapper could not be read: ${String(error)}`);
   }
 
-  if (!wrapperLooksGenerated(wrapperBody)) {
+  const launchShape = wrapperLaunchShape(wrapperBody);
+  if (launchShape === null) {
     return unknown(`the launcher wrapper does not look like a generated opencodex service wrapper: ${wrapperPath}`);
+  }
+  if (typeof launchShape !== "string") {
+    const executable = launchShape.standaloneBun;
+    const evidence = inspectServiceStateEvidence(deps.statePaths ?? serviceStatePathsForOpenCodexHome(configDir));
+    const valid = evidence.filter(e => e.kind === "valid");
+    if (!win32Path.isAbsolute(executable) || win32Path.extname(executable).toLowerCase() !== ".exe"
+      || valid.length === 0 || evidence.some(e => e.kind === "invalid" || e.kind === "unreadable")
+      || valid.some(e => e.state.version !== 2 || e.state.backend !== "scheduler" || e.state.cliPath !== null
+        || !e.state.bunPath || normalizeWindowsPath(e.state.bunPath) !== normalizeWindowsPath(executable))) {
+      return unknown("the standalone service wrapper executable is not bound to recorded scheduler install state");
+    }
   }
 
   const rawCodexHome = batchSetValue(wrapperBody, "CODEX_HOME");
@@ -1003,6 +1045,7 @@ export function inspectServiceManagerInstallation(deps: ProbeDeps = {}): Service
       winswStatus: deps.winswStatus,
       windowsLocale: deps.windowsLocale,
       windowsTaskListingCache: deps.windowsTaskListingCache,
+      statePaths: deps.statePaths,
     });
   }
   return unknown(`no service manager probe for platform ${platform}`);
