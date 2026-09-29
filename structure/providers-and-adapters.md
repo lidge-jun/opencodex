@@ -288,6 +288,12 @@ rows. A supplied key scopes the catalog to its model permissions and delivery po
 anonymous catalog does not establish authentication. Newly promoted preset collision protection
 preserves an older same-named custom destination. `tests/providers/tokenlab-provider.test.ts`
 covers derived entry points, scoped discovery, destination preservation and model routing.
+Per-model wires follow TokenLab's declared `accepted_request_formats`: registry
+`modelWireDefaults` send the Responses-capable GPT-6, Grok, DeepSeek, Kimi and GLM ids over
+Responses for Responses inbound only, and an endpoint-bound `claude-` prefix pin in
+`src/types/wire.ts` sends Claude ids to `/v1/messages` on every inbound. No delivery-policy
+header is sent. `tests/providers/tokenlab-protocols.test.ts` asserts the resolved wire per inbound
+and the upstream URL through `handleResponses`.
 
 ## TypeSafe JEV decision provider
 

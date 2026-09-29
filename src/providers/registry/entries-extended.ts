@@ -1156,6 +1156,17 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelContextWindows: { "gpt-5.6-terra": 1_050_000 },
     modelMaxOutputTokens: { "gpt-5.6-terra": 128_000 },
     modelInputModalities: { "gpt-5.6-terra": ["text", "image"] },
+    // Per-model wires from `tokenlab.accepted_request_formats` (GET /v1/models/{id}, 2026-09-30).
+    // The provider stays on Chat, the released and end-to-end verified path, and every model
+    // accepts it. Models that also declare Responses use it for Codex (Responses inbound) only,
+    // so Chat and Anthropic clients skip a translation hop; an explicit modelAdapters entry wins.
+    // Claude ids ride Anthropic Messages through the endpoint-bound pin in src/types/wire.ts.
+    // gemini-3.8-flash declares Chat + Gemini native and stays on Chat. No delivery-policy
+    // header is sent: the API key's own policy stays authoritative.
+    modelWireDefaults: Object.fromEntries([
+      "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
+      "deepseek-v4.1-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.3",
+    ].map(id => [id, { wire: "openai-responses", inbound: ["responses"] }])),
     modelDiscovery: {
       path: "models",
       query: { category: "chat" },

@@ -4,7 +4,7 @@
 
 Keep the preset's provider-wide adapter `openai-chat` (the released, verified path). Add registry defaults so each model rides its declared native wire:
 
-- `modelWireDefaults` -> `openai-responses` for gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-6.1-sol, grok-4.7, deepseek-v4.1-flash, deepseek-v4-pro, kimi-k3, glm-5.3. These are user-overridable: an explicit `modelAdapters` entry of `openai-chat` wins.
+- `modelWireDefaults` -> `{ wire: "openai-responses", inbound: ["responses"] }` for gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-6.1-sol, grok-4.7, deepseek-v4.1-flash, deepseek-v4-pro, kimi-k3, glm-5.3. Scoped to Responses inbound (Codex) like the Alibaba Token Plan precedent (tests/providers/alibaba-token-plan-wire-defaults.test.ts): a Chat or Anthropic client keeps the verified Chat wire with no translation hop. User-overridable: an explicit `modelAdapters` entry of `openai-chat` wins.
 - Claude ids -> Anthropic Messages through the existing endpoint-bound prefix pin (`WIRE_ADAPTER_PIN_PREFIXES` in src/types/wire.ts, the Command Code mechanism): `tokenlab: { endpoint: "https://api.tokenlab.sh/v1", prefixes: { "claude-": "anthropic" } }`. The anthropic adapter already normalizes `/v1` to `/v1/messages`. The pin is bound to the canonical endpoint, so a retargeted TokenLab row is untouched. Every live `claude-*` TokenLab id is checked to declare anthropic_messages before the prefix is used.
 - Everything else, including gemini-3.8-flash, stays on Chat. Gemini native is deferred until tested, as Vincent proposed.
 - No delivery-policy header is added: the user's API-key default stays authoritative.

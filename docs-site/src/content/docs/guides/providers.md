@@ -562,6 +562,20 @@ The preset uses [Chat Completions](https://docs.tokenlab.sh/quickstart) and disc
 `GET /v1/models?category=chat`, keeping only entries that declare `tool-use` capability.
 Image, video, audio, embedding and decision models are excluded from this chat preset.
 
+Each model then uses the request format TokenLab declares for it
+(`tokenlab.accepted_request_formats` on `GET /v1/models/{model}`):
+
+| Models | Codex (Responses clients) | Chat clients | Claude Code (Anthropic clients) |
+| --- | --- | --- | --- |
+| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `grok-4.7`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3` | [Responses](https://docs.tokenlab.sh/api-reference/responses/create-response) | Chat Completions | Chat Completions |
+| `claude-*` | [Messages](https://docs.tokenlab.sh/api-reference/messages/create-message) | Messages | Messages |
+| Every other model, including `gemini-3.8-flash` | Chat Completions | Chat Completions | Chat Completions |
+
+To keep a model on Chat Completions, add it to the provider's `modelAdapters`, for example
+`"modelAdapters": { "gpt-6.1-sol": "openai-chat" }`. The Claude routing applies only while the
+provider points at `https://api.tokenlab.sh/v1`. OpenCodex sends no delivery-policy header, so
+your API key's own delivery policy decides how TokenLab serves each request.
+
 The [model catalog](https://docs.tokenlab.sh/api-reference/models/list-models) is public without
 a key, but a supplied key is validated and scopes results to its model permissions and delivery
 policy. Use a valid key with a funded workspace for inference. `gpt-5.6-terra` is the seeded

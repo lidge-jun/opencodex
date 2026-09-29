@@ -220,7 +220,9 @@ a fresh session ID. Recovery and cached-history replay preserve this classificat
 The API-key `commandcode` provider uses Chat Completions for most model ids and the
 Anthropic Messages adapter (`x-api-key`) for `claude-*` ids, which Command Code serves
 only on `/provider/v1/messages`; the pin applies only while the provider points at that
-endpoint. It supports forwarding `prompt_cache_key`; this is separate
+endpoint. The `tokenlab` provider uses the same endpoint-bound pin for `claude-*` ids, which
+TokenLab declares for Chat and Messages only, on `https://api.tokenlab.sh/v1/messages`.
+Command Code supports forwarding `prompt_cache_key`; this is separate
 from the OAuth adapter's session header and does not guarantee a provider cache hit.
 The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
 markup echoed by the gateway as text is removed when it duplicates a real call. Markup
