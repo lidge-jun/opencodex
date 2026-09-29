@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { isAbsolute } from "node:path";
 import { beforeEach, afterEach } from "bun:test";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { item } from "../fixtures/hosted-image-display";
-import { createHostedImageDisplayRewrite as factory, isLocalCodexImageClient } from "../../src/server/responses-hosted-image-display";
+import { createHostedImageDisplayRewrite as factory, isLocalCodexImageClient, redactHostedImageDisplayPaths } from "../../src/server/responses-hosted-image-display";
 let home: TempHome;
 beforeEach(() => { home = createTempHome("hosted-image-display-"); });
 afterEach(() => { home.remove(); });
@@ -193,6 +193,37 @@ test('non-image JSON and malformed SSE pass through unchanged', () => {
     }
     for (const value of ['data: {', ': heartbeat', 'data: null', 'data: []']) {
       expect(rewrite(value)).toEqual([value]);
+    }
+  } finally { rewrite.dispose?.(); }
+});
+
+test('replay redaction survives pruning and preserves unrelated paths, roles and tool payloads', () => {
+  const rewrite = factory();
+  try {
+    const message = JSON.parse(rewrite.json(JSON.stringify({ output: [item] }))).output[0];
+    const text = message.content[0].text;
+    const path = text.match(/<([^>]+)>/)[1];
+    unlinkSync(path);
+    const unrelated = '![Generated image](<' + home.path('private.png') + '>)';
+    const unowned = text.replace('img-codex-', 'img-other-');
+    const body = { input: [
+      { role: 'assistant', content: [{ type: 'input_text', text: text + '\n' + unrelated + '\n' + unowned }] },
+      { role: 'user', content: text },
+      { type: 'function_call_output', output: text },
+    ] };
+    redactHostedImageDisplayPaths(body);
+    const cleaned = body.input[0].content as Array<{ text: string }>;
+    expect(cleaned[0].text).not.toContain(path);
+    expect(cleaned[0].text).toContain('/v1/opencodex/artifacts/img-codex-');
+    expect(cleaned[0].text).toContain(unrelated);
+    expect(cleaned[0].text).toContain(unowned);
+    expect(body.input[1].content).toBe(text);
+    expect(body.input[2].output).toBe(text);
+    const first = JSON.stringify(body);
+    redactHostedImageDisplayPaths(body);
+    expect(JSON.stringify(body)).toBe(first);
+    for (const malformed of [null, [], {}, { input: [null, false, { role: 'assistant', content: [null, {}] }] }]) {
+      expect(() => redactHostedImageDisplayPaths(malformed)).not.toThrow();
     }
   } finally { rewrite.dispose?.(); }
 });

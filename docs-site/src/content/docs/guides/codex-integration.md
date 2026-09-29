@@ -234,6 +234,11 @@ connected Codex client. The image stays outside the collapsible progress section
 This applies to streaming and non-streaming Responses, without another generation
 request or a change to the selected provider.
 
+When a client replays these generated image messages as assistant history, opencodex
+replaces its generated local image links with opaque artifact references before
+forwarding that history. This protects the display paths without changing the image
+message already shown in the app. It does not redact unrelated user-supplied paths.
+
 This display compatibility requires loopback admission and a recognized Codex client.
 Remote and generic API clients retain the provider's hosted response format.
 Partial previews and URL-only results are not rendered by this compatibility layer.

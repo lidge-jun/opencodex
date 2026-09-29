@@ -146,6 +146,8 @@ import {
   conversationCarriesUploadedFiles,
 } from "./account-change-state";
 
+import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+
 /** Parses, selects, and admits one request without changing the dispatch policy. */
 export async function prepareResponsesRequest(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "req" | "logCtx">,
@@ -168,6 +170,8 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
+  redactHostedImageDisplayPaths(body);
   observeCacheDiagnosticInbound(
     logCtx,
     body,

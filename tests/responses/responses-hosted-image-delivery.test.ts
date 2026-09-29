@@ -9,9 +9,51 @@ beforeEach(() => { home = createTempHome("hosted-image-delivery-"); });
 afterEach(() => { setRelayPlatformForTests(undefined); home.remove(); });
 
 import { item } from "../fixtures/hosted-image-display";
+import { handleResponses } from "../../src/server/responses";
+import { createHostedImageDisplayRewrite } from "../../src/server/responses-hosted-image-display";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { artifactHttpUrl } from "../../src/images/artifacts";
+import type { OcxConfig } from "../../src/types";
 const finalMessage = { id: 'msg_final_fixture', type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'Done.', annotations: [] }] };
 const response = { id: 'resp_image_fixture', object: 'response', model: 'fixture', created_at: 1790666489, status: 'completed', output: [item, finalMessage] };
 const nl = String.fromCharCode(10);
+
+test('full client history replay removes generated artifact paths before upstream dispatch', async () => {
+  const release = acquireOwnedSpendHome();
+  const originalFetch = globalThis.fetch;
+  const rewrite = createHostedImageDisplayRewrite();
+  const requests: any[] = [];
+  try {
+    const message = JSON.parse(rewrite.json(JSON.stringify({ output: [item] }))).output[0];
+    const displayedText = message.content[0].text;
+    const path = displayedText.match(/<([^>]+)>/)[1];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return Response.json({ id: 'resp_replay_fixture', status: 'completed', output: [] });
+    }) as typeof fetch;
+    const config = { port: 0, defaultProvider: 'fixture', providers: { fixture: {
+      adapter: 'openai-responses', baseUrl: 'https://fixture.test/v1', authMode: 'key', apiKey: 'fixture-key',
+    } } } as OcxConfig;
+    for (const content of [message.content, displayedText]) {
+      // Clients may omit the synthetic item id when serializing their full history.
+      const result = await handleResponses(new Request('http://localhost/v1/responses', {
+        method: 'POST', headers: { 'content-type': 'application/json', originator: 'Codex Desktop' },
+        body: JSON.stringify({ model: 'fixture/fixture-model', stream: false,
+          input: [{ role: 'assistant', content }, { role: 'user', content: 'Describe the previous result.' }] }),
+      }), config, { model: '', provider: '' }, { admission: { kind: 'loopback', source: 'loopback' }, inboundWire: 'responses' });
+      await result.text();
+      expect(result.status).toBe(200);
+    }
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(JSON.stringify(request.input)).not.toContain(home.root);
+      expect(JSON.stringify(request.input)).toContain(artifactHttpUrl(path));
+      expect(JSON.stringify(request.input)).toContain('Describe the previous result.');
+    }
+    expect(message.content[0].text).toBe(displayedText);
+    expect(readFileSync(path)).toEqual(Buffer.from(item.result, 'base64'));
+  } finally { globalThis.fetch = originalFetch; rewrite.dispose?.(); release(); }
+});
 
 const cases: Array<{ platform: 'darwin' | 'linux' | 'win32'; format: string; client: string; cache: string }> = [];
 for (const platform of ['darwin', 'linux', 'win32'] as const) {

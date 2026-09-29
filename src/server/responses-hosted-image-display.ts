@@ -5,13 +5,37 @@ import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import {
   chargeImageBudget, createImageBudget, decodeValidatedImageBase64,
-  getArtifactsDir, MAX_ENCODED_BYTES_PER_IMAGE, pruneArtifacts, sniffImageExtension,
+  artifactHttpUrl, getArtifactsDir, MAX_ENCODED_BYTES_PER_IMAGE, pruneArtifacts, sniffImageExtension,
 } from "../images/artifacts";
 import { sseDataPayload, replaceSseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 type Row = Record<string, any>;
 const object = (v: unknown): v is Row => !!v && typeof v === "object" && !Array.isArray(v);
 const originators = new Set(["codex_cli_rs", "Codex Desktop", "codex_app", "codex_work_desktop"]);
+
+/** Full client replay can include display-only messages even without their generated ids. */
+export function redactHostedImageDisplayPaths(body: unknown): void {
+  if (!object(body) || !Array.isArray(body.input)) return;
+  const prefix = join(getArtifactsDir(), "img-codex-");
+  const generatedLink = /!\[Generated image\]\(<([^>\r\n]+)>\)/g;
+  const redact = (text: string) => text.replace(generatedLink, (link, path: string) => {
+    if (!path.startsWith(prefix)
+      || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(png|jpg|webp|gif)$/.test(path.slice(prefix.length))) return link;
+    // No file read or existence check: history may outlive artifact retention.
+    return "![Generated image](<" + artifactHttpUrl(path) + ">)";
+  });
+  for (const item of body.input) {
+    if (!object(item) || item.role !== "assistant"
+      || (item.type !== undefined && item.type !== "message")) continue;
+    if (typeof item.content === "string") item.content = redact(item.content);
+    else if (Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (object(part) && ["output_text", "input_text", "text"].includes(part.type)
+          && typeof part.text === "string") part.text = redact(part.text);
+      }
+    }
+  }
+}
 
 /** Local filesystem links are only appropriate for the loopback Codex client. */
 export function isLocalCodexImageClient(headers: Headers, admissionKind?: string, inboundWire?: string): boolean {

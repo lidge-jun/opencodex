@@ -28,6 +28,14 @@ Hosted items in the continuation cache retain their upstream representation; oth
 client rewrites keep their existing cache policy. Generic, remotely admitted and non-Responses
 clients do not receive this filesystem projection.
 
+Full-history assistant messages can replay the display Markdown without their generated
+item ids. At Responses request preparation, exact generated links under the current
+artifact directory become opaque artifact HTTP references before routing and helper
+dispatch. This does not read files and still applies after artifact pruning; unrelated
+paths, user messages and tool payloads retain their original content. Local display
+uses filesystem links because remote Markdown media has a separate client safety gate;
+HTTP references here are for upstream context, not a claim of desktop HTTP rendering.
+
 Image data must pass the shared base64, format and byte-budget checks in
 `src/images/artifacts.ts`. Files use random names, exclusive creation and mode 0600;
 the artifact directory uses mode 0700 on creation. Per-response display state is capped
