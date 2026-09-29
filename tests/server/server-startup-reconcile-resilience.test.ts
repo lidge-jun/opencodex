@@ -65,7 +65,7 @@ test.skipIf(!IS_CI)("hosted CI can bind a loopback listener for the startup case
   expect(CAN_BIND).toBe(true);
 });
 
-test.skipIf(SKIP_LISTENER)("startServer persists the legacy roster upgrade to the GPT-6 defaults", async () => {
+test.skipIf(SKIP_LISTENER)("startServer persists the legacy roster upgrade to the current defaults", async () => {
   saveConfig({
     ...staleConfig(),
     subagentModels: ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"],
@@ -73,8 +73,8 @@ test.skipIf(SKIP_LISTENER)("startServer persists the legacy roster upgrade to th
   const server = startServer(0);
   try {
     const saved = loadConfig();
-    expect(saved.subagentModels).toEqual(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
-    expect(saved.subagentModelsVersion).toBe(2);
+    expect(saved.subagentModels).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]);
+    expect(saved.subagentModelsVersion).toBe(3);
   } finally {
     await server.stop(true);
   }

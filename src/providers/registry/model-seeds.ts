@@ -164,8 +164,12 @@ export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhi
  * GPT-6 Sol and Luna on the OpenAI API (released 2026-09-22,
  * https://developers.openai.com/api/docs/changelog). Added 2026-09-23 ahead of live discovery; the
  * API window is not published yet, so the rows mirror gpt-6-astra's 1,050,000 / 922,000 API seed.
+ *
+ * GPT-6.1 Sol (released 2026-09-29) publishes the same numbers on its own model page:
+ * 1,050,000 context, 922,000 max input, 128,000 max output, efforts low..max
+ * (https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-09-30).
  */
-export const OPENAI_GPT6_MODELS = ["gpt-6-sol", "gpt-6-luna"];
+export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -254,6 +258,8 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   // 260923 preemptive: GPT-6 Sol/Luna ahead of OpenRouter's own listing; same window as GPT-5.6.
   "openai/gpt-6-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
   "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  // Live /api/v1/models on 2026-09-30: context_length 1,050,000, max_completion_tokens 128,000.
+  "openai/gpt-6.1-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };
 
 /**

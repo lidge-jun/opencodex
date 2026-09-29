@@ -224,7 +224,7 @@ const stateProbe = `
   const additions = {
     appOwnedMemoryBudgetMb: 256, fastRows: true, managementUsageMaxReadBytes: 67108864,
     openaiProviderTierVersion: 2,
-    subagentModels: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'],
+    subagentModels: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'],
     subagentModelsVersion: 2,
   };
   for (const config of [persisted, loaded]) {

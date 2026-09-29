@@ -878,6 +878,7 @@
   "google-wire-compiler.test.ts": "adapters/google",
   "google-wire-shape.test.ts": "adapters/google",
   "gpt6-native-rows.test.ts": "codex-integration",
+  "gpt61-sol-rows.test.ts": "codex-integration",
   "grok-attribution.test.ts": "providers/xai",
   "grok-config-inject.test.ts": "providers/xai",
   "grok-effort-inject.test.ts": "providers/xai",

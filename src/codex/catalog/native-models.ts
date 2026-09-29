@@ -38,6 +38,17 @@ export const NATIVE_GPT6_SOL_MODEL = "gpt-6-sol";
 export const NATIVE_GPT6_LUNA_MODEL = "gpt-6-luna";
 
 /**
+ * GPT-6.1 Sol, announced 2026-09-29 (https://openai.com/index/introducing-gpt-6-1-sol/). Only Sol
+ * moved to 6.1; Astra and Luna stay on GPT-6.
+ *
+ * SELF-DESCRIBED: its row is pinned verbatim in `src/codex/data/roster-pinned-models.json` from
+ * openai/codex `codex-rs/models-manager/models.json` after #49318, which also made it the Codex
+ * catalog default (priority 1). Ladder low..ultra with default effort low, and the GPT-6
+ * 272,000 / 872,000 context pair. Ungated for the same owner decision as Sol and Luna.
+ */
+export const NATIVE_GPT61_SOL_MODEL = "gpt-6.1-sol";
+
+/**
  * Unreleased GPT-6 Astra variant. No public row exists anywhere — neither the codex-rs bundle nor
  * the 2026-09-23 main-account roster probe carries it — so it is ACCOUNT-GATED: hidden and
  * request-refused until an authenticated `/models` roster lists it for that account. Absence is
@@ -56,8 +67,8 @@ export const NATIVE_GPT6_ASTRA_MINOR_MODEL = "gpt-6-astra-minor";
 export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
   Object.freeze({ contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 });
 
-/** Pinned row a configured native borrows its capability metadata from. */
-export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT6_SOL_MODEL;
+/** Pinned row a configured native borrows its capability metadata from: the current Sol. */
+export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT61_SOL_MODEL;
 
 /**
  * Native ChatGPT/Codex ids whose availability is proven per authenticated account.
@@ -123,6 +134,7 @@ export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set(
   // Rows come from roster-pinned-models.json via pinnedNativeModelRows(), not the codex-rs pin.
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT61_SOL_MODEL,
 ]);
 
 /**
@@ -223,6 +235,7 @@ const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
 ]);
 
@@ -240,7 +253,7 @@ export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
  * canonical Codex forward provider, so a new upstream GPT model needs a config entry rather than a
  * release — the way a Claude id listed under `providers.anthropic.models` already works.
  *
- * A configured native borrows `gpt-6-sol`'s pinned row (ladder, modalities, instructions, speed
+ * A configured native borrows `gpt-6.1-sol`'s pinned row (ladder, modalities, instructions, speed
  * tiers) under its own generated name, uses the GPT-6 272k/872k context pair, and is never
  * account-gated. Filtering the config lives in `src/config/derived-registries.ts`; this module stays
  * import-free because the GUI bundles it. Registration runs inside `loadConfig` and every config
@@ -342,4 +355,5 @@ export const NATIVE_MAIN_DRAIN_SENTINEL_MODELS: ReadonlySet<string> = new Set([
   // Astra Minor arrives through the gated spread above; Sol and Luna are ungated flagships.
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT61_SOL_MODEL,
 ]);

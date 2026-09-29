@@ -65,10 +65,11 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol` and `gpt-6-luna` (Sol and Luna added 2026-09-23 from a live roster
-  probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/). None of them is gated, and all
-  six are native-main drain sentinels. The confirmed-denial ordering below is still scoped to the
-  first four (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); Sol and Luna do not feed it yet.
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol` (Sol and Luna added 2026-09-23 from a
+  live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
+  2026-09-30 from openai/codex models.json). None of them is gated, and all seven are native-main
+  drain sentinels. The confirmed-denial ordering below is still scoped to the first four
+  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 Sol rows and Luna do not feed it yet.
 
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED

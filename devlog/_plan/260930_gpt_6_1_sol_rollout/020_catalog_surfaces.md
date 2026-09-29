@@ -24,5 +24,7 @@ Tests that enumerate the roster by value and must gain gpt-6.1-sol (audit A1 blo
 - tests/codex-integration/codex-catalog.test.ts:6842 (catalog roster; file is 7974/7985 lines, so edit in place without adding lines)
 - tests/providers/github-copilot/github-copilot-wire-defaults.test.ts:33, tests/service/service-tier-capability.test.ts:73 (OpenRouter tier map), tests/routing/subagent-model-fallback.test.ts:276
 - tests/providers/kiro/kiro-adapter.test.ts:1744 is at 2047/2050: edit the existing list in place only.
+- tests/codex-integration/configured-native-models.test.ts:93-102: a configured native must now borrow gpt-6.1-sol's pinned capabilities and hash (wp2 audit NEAR-PASS item). catalog-routed-comp-hash.test.ts:75 keeps its gpt-6-sol forward-alias expectation.
+- BizRouter is not added: 010 has no evidence it lists gpt-6.1-sol, and live discovery picks it up once it does.
 
 New focused test `tests/codex-integration/gpt61-sol-rows.test.ts` (registered in scripts/test-layout/layout.json and tests/fixtures/test-layout-expected.json) asserting: native row ladder low..ultra, default effort low, 272,000/872,000 context; openai-apikey 1,050,000/922,000/128,000 and low..max; Copilot Responses wire; expected price 2/10/0.10/2.50; no gpt-6.1-luna/astra id in any registry entry.

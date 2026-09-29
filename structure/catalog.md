@@ -51,8 +51,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
-  verbatim authenticated-roster rows for models codex-rs has not bundled yet (`gpt-6-sol`,
-  `gpt-6-luna`, captured 2026-09-23 at `client_version=0.155.0`), so a wholesale snapshot re-pin
+  verbatim rows the codex-rs snapshot lacks (`gpt-6-sol`/`gpt-6-luna` from the 2026-09-23 roster,
+  `gpt-6.1-sol` from openai/codex `models.json` after #49318), so a wholesale snapshot re-pin
   never erases them and a snapshot row for the same slug always wins;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
@@ -147,7 +147,7 @@ Configured natives are the operator's way to widen that bare list without a rele
 `gpt-*` id under `providers.openai.models` on the canonical Codex forward provider joins
 `NATIVE_OPENAI_MODELS` / `SUPPORTED_NATIVE_OPENAI_SLUGS` in place (`src/codex/catalog/native-models.ts`),
 and `metadata.ts` keeps its pinned-capability, upstream-entry and context tables in step through
-a subscription. Each borrows the pinned `gpt-6-sol` row under a name generated from its slug, takes
+a subscription. Each borrows the pinned `gpt-6.1-sol` row under a name generated from its slug, takes
 the GPT-6 272,000 / 872,000 context pair (`NATIVE_GPT6_CONTEXT`, also used by the built-in GPT-6
 rows), and is never account-gated. Built-in, retired and reserve ids never register. The filter
 lives in `src/config/derived-registries.ts`, whose `refreshConfigDerivedRegistries` runs on every
@@ -319,7 +319,7 @@ templates clear the native multi-agent effort; canonical Astra-forward custom ro
 the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
 preserving custom descriptions and other stored row fields.
 
-GPT-6 Sol and Luna (announced 2026-09-22) are self-described the same way, from their roster-pinned
+GPT-6 Sol and Luna (2026-09-22) and GPT-6.1 Sol (2026-09-29, `low` default effort) are self-described the same way, from their roster-pinned
 rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt-in ceiling,
 `medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
 it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so
