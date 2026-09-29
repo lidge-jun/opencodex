@@ -503,7 +503,7 @@ No pool timer or shutdown registration exists before eligible traffic activates 
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
 the same byte-bounded, discard-and-resynchronize frame policy and ensures the
-request-log, first-output, and terminal observers share one payload parse.
+request-log, first-output, and terminal observers share one payload parse. First-output timing recognizes nonempty text, reasoning, function-argument, and custom-tool-input deltas; empty deltas, tool scaffolding, control/echo frames, and terminal snapshots do not start it.
 The inspector records a structured `response.failed` status before invoking the
 terminal observer. Native Responses, Chat Completions, Claude Messages, and WebSocket
 request logs must therefore finalize through the context-aware terminal mapper; recognized
