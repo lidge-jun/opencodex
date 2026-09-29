@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_ACTIVE_TURNS, abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../../src/server/lifecycle";
@@ -22,144 +22,176 @@ import {
   bindAnthropicSessionAffinity,
   clearAnthropicAccountPoolState,
 } from "../../src/oauth/anthropic-routing";
-import { saveConfig } from "../../src/config";
-import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { currentServerFixtureConfig, settleServerAuthFixture, startManagementServerFixture, type ManagementServerFixture } from "../helpers/server-auth-fixture";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 describe("active registry admission", () => {
-  test("active turn 257 returns structured server_busy before handler work", async () => {
-    const leases = Array.from({ length: 256 }, () => tryAdmitTurn());
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-active-turn-"));
-    process.env.OPENCODEX_HOME = home;
-    saveConfig({
-      port: 0,
-      hostname: "127.0.0.1",
-      defaultProvider: "openai",
-      providers: {
-        openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "forward" },
-      },
-    } as OcxConfig);
-    const server = startServer(0);
-    try {
-      expect(leases.every(Boolean)).toBe(true);
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "not-json",
-      });
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: { code: "server_busy" } });
-    } finally {
-      for (const lease of leases) lease?.release();
-      await server.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("websocket 129 rejects at the real upgrade boundary without entering account registry", async () => {
-    const leases = Array.from({ length: MAX_TRACKED_CODEX_WEBSOCKETS }, () => tryReserveCodexWebSocket());
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-websocket-cap-"));
-    process.env.OPENCODEX_HOME = home;
-    saveConfig({
-      port: 0,
-      hostname: "127.0.0.1",
-      websockets: true,
-      defaultProvider: "openai",
-      providers: {
-        openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", authMode: "forward" },
-      },
-    } as OcxConfig);
-    const server = startServer(0);
-    try {
-      expect(leases.every(Boolean)).toBe(true);
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        headers: { connection: "Upgrade", upgrade: "websocket" },
-      });
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: { code: "server_busy" } });
-      expect(getTrackedCodexWebSocketCountForAccount("not-admitted")).toBe(0);
-    } finally {
-      for (const lease of leases) lease?.release();
-      await server.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("non-SSE streamed response keeps its admitted turn until the body settles", async () => {
+  describe("real HTTP boundaries", () => {
+    let root: string;
+    let home: string;
+    let codexHome: string;
+    let previousHome: string | undefined;
+    let previousCodexHome: string | undefined;
+    let fixture: ManagementServerFixture | undefined;
+    let upstream: ReturnType<typeof Bun.serve> | undefined;
+    let settle: (() => void) | undefined;
     const phase = (name: string) => {
-      if (process.env.CI) process.stderr.write(`[active-registry-stream] phase=${name}\n`);
+      if (process.env.CI) process.stderr.write(`[active-registry-http] phase=${name}\n`);
     };
-    phase("setup:start");
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-non-sse-turn-"));
-    process.env.OPENCODEX_HOME = home;
-    let settle!: () => void;
-    let settled = false;
-    const upstream = Bun.serve({
-      port: 0,
-      fetch() {
-        return new Response(new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("chunk"));
-            settle = () => {
-              if (settled) return;
-              settled = true;
-              controller.close();
-            };
-          },
-        }), { headers: { "content-type": "application/octet-stream" } });
-      },
-    });
-    phase("setup:upstream-bound");
-    saveConfig({
-      port: 0,
-      hostname: "127.0.0.1",
-      defaultProvider: "fixture",
-      providers: {
-        fixture: { adapter: "openai-responses", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true, apiKey: "test-key" },
-      },
-    } as OcxConfig);
-    phase("setup:config-saved");
-    const server = startServer(0);
-    phase("setup:proxy-bound");
-    const before = activeRegistryMetrics().activeTurns.active;
-    try {
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-codex-parent-thread-id": "stream-root",
-          "thread-id": "stream-child",
-        },
-        body: JSON.stringify({ model: "fixture/model", input: "hello", stream: true }),
-      });
-      phase("request:headers");
-      expect(response.status).toBe(200);
-      expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
-      expect(workflowBudgetSnapshot("stream-root")?.active).toBe(1);
-      settle();
-      expect(await response.text()).toBe("chunk");
-      phase("request:body-settled");
-      expect(activeRegistryMetrics().activeTurns.active).toBe(before);
-      expect(workflowBudgetSnapshot("stream-root")?.active).toBe(0);
-    } finally {
+
+    async function closeFixture() {
       phase("cleanup:start");
       settle?.();
-      await server.stop(true);
-      phase("cleanup:proxy-stopped");
-      upstream.stop(true);
+      // Cancel and join the test body before restoring its homes. A Bun test timeout
+      // does not itself cancel fetch or wait for the body's finally to release leases.
+      await Promise.all([fixture?.close(), upstream?.stop(true)]);
+      await settleServerAuthFixture(home, codexHome);
+      fixture = undefined;
+      upstream = undefined;
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeWithRetry(home);
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      removeTreeWithRetry(root);
       phase("cleanup:end");
     }
+
+    beforeEach(async () => {
+      phase("setup:start");
+      previousHome = process.env.OPENCODEX_HOME;
+      previousCodexHome = process.env.CODEX_HOME;
+      root = mkdtempSync(join(tmpdir(), "ocx-active-registry-"));
+      home = join(root, "ocx");
+      codexHome = join(root, "codex");
+      mkdirSync(codexHome);
+      process.env.CODEX_HOME = codexHome;
+      settle = undefined;
+      try {
+        upstream = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch() {
+            let settled = false;
+            return new Response(new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("chunk"));
+                settle = () => {
+                  if (settled) return;
+                  settled = true;
+                  controller.close();
+                };
+              },
+              cancel() { settled = true; },
+            }), { headers: { "content-type": "application/octet-stream" } });
+          },
+        });
+        phase("setup:upstream-bound");
+        fixture = await startManagementServerFixture(home, currentServerFixtureConfig({
+          port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "fixture",
+          providers: {
+            fixture: { adapter: "openai-responses", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true, apiKey: "test-key" },
+          },
+        } as OcxConfig));
+        phase("setup:proxy-bound");
+      } catch (error) {
+        await closeFixture();
+        throw error;
+      }
+    }, SERVER_BUDGET_MS);
+
+    afterEach(async () => {
+      if (fixture || upstream) await closeFixture();
+    }, SERVER_BUDGET_MS);
+
+    test("active turn 257 returns structured server_busy before handler work", async () => {
+      await fixture!.run(async () => {
+        const leases = Array.from({ length: 256 }, () => tryAdmitTurn());
+        try {
+          expect(leases.every(Boolean)).toBe(true);
+          const response = await fetch(new URL("/v1/responses", fixture!.server.url), {
+            signal: fixture!.signal,
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "not-json",
+          });
+          expect(response.status).toBe(503);
+          expect(await response.json()).toMatchObject({ error: { code: "server_busy" } });
+        } finally {
+          for (const lease of leases) lease?.release();
+        }
+      });
+    });
+
+    test("websocket 129 rejects at the real upgrade boundary without entering account registry", async () => {
+      await fixture!.run(async () => {
+        const leases = Array.from({ length: MAX_TRACKED_CODEX_WEBSOCKETS }, () => tryReserveCodexWebSocket());
+        try {
+          expect(leases.every(Boolean)).toBe(true);
+          const response = await fetch(new URL("/v1/responses", fixture!.server.url), {
+            signal: fixture!.signal,
+            headers: { connection: "Upgrade", upgrade: "websocket" },
+          });
+          expect(response.status).toBe(503);
+          expect(await response.json()).toMatchObject({ error: { code: "server_busy" } });
+          expect(getTrackedCodexWebSocketCountForAccount("not-admitted")).toBe(0);
+        } finally {
+          for (const lease of leases) lease?.release();
+        }
+      });
+    });
+
+    test("non-SSE streamed response keeps its admitted turn until the body settles", async () => {
+      await fixture!.run(async () => {
+        const before = activeRegistryMetrics().activeTurns.active;
+        try {
+          const response = await fetch(new URL("/v1/responses", fixture!.server.url), {
+            signal: fixture!.signal,
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-codex-parent-thread-id": "stream-root",
+              "thread-id": "stream-child",
+            },
+            body: JSON.stringify({ model: "fixture/model", input: "hello", stream: true }),
+          });
+          phase("request:headers");
+          expect(response.status).toBe(200);
+          expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
+          expect(workflowBudgetSnapshot("stream-root")?.active).toBe(1);
+          settle!();
+          expect(await response.text()).toBe("chunk");
+          phase("request:body-settled");
+          expect(activeRegistryMetrics().activeTurns.active).toBe(before);
+          expect(workflowBudgetSnapshot("stream-root")?.active).toBe(0);
+        } finally {
+          settle?.();
+        }
+      });
+    });
+
+    test("fixture teardown cancels and joins an unfinished admitted response", async () => {
+      const before = activeRegistryMetrics().activeTurns.active;
+      let receivedHeaders!: () => void;
+      const headers = new Promise<void>(resolve => { receivedHeaders = resolve; });
+      const running = fixture!.run(async () => {
+        const response = await fetch(new URL("/v1/responses", fixture!.server.url), {
+          signal: fixture!.signal,
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "fixture/model", input: "hello", stream: true }),
+        });
+        expect(response.status).toBe(200);
+        receivedHeaders();
+        await response.text();
+      });
+      await Promise.race([headers, running.then(() => { throw new Error("response ended before headers"); })]);
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
+      await fixture!.close();
+      await running;
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before);
+    });
   });
 
   test("storage home slot 33 returns storage_mutation_busy without dropping active slots", () => {
