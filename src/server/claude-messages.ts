@@ -318,26 +318,33 @@ export function tapAnthropicSseForLog(
   const encoder = new TextEncoder();
   let buffer = "";
   let usageAcc: Rec = {};
+  // message_stop or an upstream error event: the turn's own terminal already went through.
+  let terminalSeen = false;
+  const inspectFrame = (frame: string) => {
+    const dataLine = frame
+      .split("\n")
+      .map(l => sseFieldValue(l, "data"))
+      .filter((v): v is string => v !== null)
+      .join("");
+    if (!dataLine) return;
+    let data: unknown;
+    try { data = JSON.parse(dataLine); } catch { return; }
+    if (!isRec(data)) return;
+    if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
+      usageAcc = { ...usageAcc, ...data.message.usage };
+    } else if (data.type === "message_delta" && isRec(data.usage)) {
+      usageAcc = { ...usageAcc, ...data.usage };
+    } else if (data.type === "message_stop" || data.type === "error") {
+      terminalSeen = true;
+    }
+  };
   const inspect = (chunk: Uint8Array) => {
     buffer += decoder.decode(chunk, { stream: true });
     let sep: number;
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
-      const dataLine = frame
-        .split("\n")
-        .map(l => sseFieldValue(l, "data"))
-        .filter((v): v is string => v !== null)
-        .join("");
-      if (!dataLine) continue;
-      let data: unknown;
-      try { data = JSON.parse(dataLine); } catch { continue; }
-      if (!isRec(data)) continue;
-      if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
-        usageAcc = { ...usageAcc, ...data.message.usage };
-      } else if (data.type === "message_delta" && isRec(data.usage)) {
-        usageAcc = { ...usageAcc, ...data.usage };
-      }
+      inspectFrame(frame);
     }
   };
   const reader = upstream.getReader();
@@ -433,15 +440,35 @@ export function tapAnthropicSseForLog(
         controller.enqueue(value);
       } catch (err) {
         if (settled) return;
+        // Bun can settle a fetch body read before it dispatches the abort listeners
+        // (consumeForInspection in relay.ts): read the signal itself before calling this
+        // rejection an upstream failure.
+        if (guard?.reqSignal?.aborted) {
+          onClientAbort();
+          return;
+        }
         settled = true;
         idle.cancel();
         detachAbort();
+        // A read error can follow the last SSE block before its blank-line delimiter. Count
+        // that block before deciding how the turn ended, as the Responses relay does.
+        const tail = buffer + decoder.decode();
+        buffer = "";
+        if (tail) inspectFrame(tail);
         recordUsage();
         if (isTranslatorBudgetExceededError(err)) {
           // A local cap, not an upstream failure: the non-streaming native Messages fold
           // maps this error to a 413 itself, so it still errors the stream.
           finalize(200, { closeReason: "terminal" });
           try { controller.error(err); } catch { /* torn down */ }
+          return;
+        }
+        if (terminalSeen) {
+          // Only the transport trailer was lost; the client already has the turn's terminal.
+          // The Responses relay likewise reports a read error only without a seen terminal.
+          finalize(200, { closeReason: "terminal" });
+          try { controller.close(); } catch { /* torn down */ }
+          reader.cancel(err).catch(() => {});
           return;
         }
         // The upstream read failed after the 200 went out (a mid-stream socket reset). Log it
@@ -456,6 +483,7 @@ export function tapAnthropicSseForLog(
         if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
         closeWithErrorFrame("api_error", message);
+        reader.cancel(err).catch(() => {});
       }
     },
     cancel(reason) {

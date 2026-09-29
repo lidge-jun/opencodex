@@ -597,7 +597,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
+    // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
+    // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
+    const bodyGuard = resolvePassthroughBodyGuard(config, upstream.signal);
     const observed = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)

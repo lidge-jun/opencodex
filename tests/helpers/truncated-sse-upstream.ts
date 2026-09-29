@@ -12,6 +12,7 @@ export function startTruncatedSseUpstream(sse: string): { port: number; requests
   const body = new TextEncoder().encode(sse);
   const head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
   const answered = new WeakSet<object>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
   let requests = 0;
   const listener = Bun.listen({
     hostname: "127.0.0.1",
@@ -24,10 +25,23 @@ export function startTruncatedSseUpstream(sse: string): { port: number; requests
         socket.write(`${head}${body.byteLength.toString(16)}\r\n`);
         socket.write(body);
         socket.write("\r\n");
-        // Give the partial body time to reach the reader before the reset.
-        setTimeout(() => socket.end(), 20);
+        // Give the partial body time to reach the reader before the reset: ending the socket
+        // right after the write lets Bun 1.3 fail the fetch before the headers are read.
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          socket.end();
+        }, 20);
+        timers.add(timer);
       },
     },
   });
-  return { port: listener.port, requests: () => requests, stop: () => listener.stop(true) };
+  return {
+    port: listener.port,
+    requests: () => requests,
+    stop: () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      listener.stop(true);
+    },
+  };
 }

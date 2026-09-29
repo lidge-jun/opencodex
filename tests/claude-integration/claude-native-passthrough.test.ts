@@ -822,7 +822,7 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
     const errorFrame = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim()) as { type: string; error: { type: string; message: string } };
     expect(errorFrame.type).toBe("error");
     expect(errorFrame.error.type).toBe("api_error");
-    expect(errorFrame.error.message).toContain("socket connection was closed unexpectedly");
+    expect(errorFrame.error.message).toContain("anthropic passthrough upstream stream failed: ");
     // The committed request is not replayed.
     expect(upstream.requests()).toBe(1);
 
@@ -831,6 +831,8 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
       terminalStatus?: string;
       closeReason?: string;
       transportPhase?: string;
+      terminalSource?: string;
+      failureCause?: string;
       upstreamError?: string;
       usage?: { inputTokens?: number };
     }>(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
@@ -842,7 +844,9 @@ test("a mid-stream upstream reset ends the native stream with an Anthropic error
     expect(row.terminalStatus).toBe("failed");
     expect(row.closeReason).toBe("terminal");
     expect(row.transportPhase).toBe("mid_stream");
-    expect(row.upstreamError).toContain("socket connection was closed unexpectedly");
+    expect(row.terminalSource).toBe("synthetic");
+    expect(row.failureCause).toBe("transport-ambiguous");
+    expect(row.upstreamError).toContain("anthropic passthrough upstream stream failed: ");
     // Usage seen before the reset is still recorded.
     expect(row.usage?.inputTokens).toBe(12);
   } finally {
@@ -872,4 +876,94 @@ test("a translator budget overflow still errors the tapped stream for callers th
   await expect(new Response(tapped).text()).rejects.toBe(overflow);
   expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
   expect(logCtx.transportPhase).toBeUndefined();
+});
+
+test("a read rejection that lands before the client abort listener still finalizes as a client cancel", async () => {
+  // Bun can settle a fetch body read before it dispatches the abort listeners (see
+  // consumeForInspection in src/server/relay.ts). Model that order: the signal is already
+  // aborted when the read rejects, and its listener has not run.
+  const signal = { aborted: false, reason: undefined as unknown, addEventListener() {}, removeEventListener() {} };
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) {
+        signal.aborted = true;
+        signal.reason = new DOMException("client went away", "AbortError");
+        controller.error(signal.reason);
+        return;
+      }
+      sent = true;
+      controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), {
+    stallMs: 5_000,
+    maxBytes: 0,
+    reqSignal: signal as unknown as AbortSignal,
+  });
+  const text = await new Response(tapped).text();
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 499, closeReason: "client_cancel" }]);
+  expect(logCtx.transportPhase).toBeUndefined();
+  expect(logCtx.upstreamError).toBeUndefined();
+});
+
+const COMPLETE_TURN_SSE = PARTIAL_TURN_SSE + [
+  `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`,
+  `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 } })}\n\n`,
+  `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+].join("");
+
+test("a reset after message_stop is a finished turn: no error event and a completed row", async () => {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  // Only the chunked-encoding trailer is lost; the turn itself arrived whole.
+  const upstream = startTruncatedSseUpstream(COMPLETE_TURN_SSE);
+  saveConfig(cfg(`http://127.0.0.1:${upstream.port}`));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify(claudeBody()),
+    });
+    const text = await res.text();
+    expect(text.endsWith(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`)).toBe(true);
+    expect(text).not.toContain("event: error");
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; transportPhase?: string; upstreamError?: string }>(
+      await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
+    );
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ status: 200, closeReason: "terminal" });
+    expect(logs[0]!.transportPhase).toBeUndefined();
+    expect(logs[0]!.upstreamError).toBeUndefined();
+  } finally {
+    await server.stop(true);
+    upstream.stop();
+  }
+});
+
+test("a terminal frame still in the buffer when the read fails counts as seen", async () => {
+  // The reset can land after message_stop but before its blank-line delimiter.
+  const withoutDelimiter = COMPLETE_TURN_SSE.slice(0, -2);
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) {
+        controller.error(new Error("The socket connection was closed unexpectedly."));
+        return;
+      }
+      sent = true;
+      controller.enqueue(new TextEncoder().encode(withoutDelimiter));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 5_000, maxBytes: 0 });
+  const text = await new Response(tapped).text();
+  expect(text).toBe(withoutDelimiter);
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
 });
