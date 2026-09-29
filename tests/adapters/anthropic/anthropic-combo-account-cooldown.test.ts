@@ -146,8 +146,16 @@ test("a spent pool account does not cool the combo target for the accounts that 
   expect(served.status).toBe(200);
   // The retry left through an account the first request had not spent.
   expect(sentTokens.length).toBeGreaterThan(0);
-  const cooledTokens = cooled.map((_, index) => `Bearer ${credential(index).access}`);
+  // Map each COOLED id back to its own token. `cooled` is a filtered subset of `ids`, so its
+  // positions are not account indexes: with accounts 0 and 2 cooled, indexing by position would
+  // check tokens 0 and 1 and let a retry through cooled account 2 unnoticed.
+  const cooledTokens = cooled.map(id => `Bearer ${credential(ids.indexOf(id)).access}`);
   expect(cooledTokens).not.toContain(sentTokens[0]!);
+  // Stated the other way round, from the token actually sent: resolve it back to its account and
+  // assert that account is one the first request never cooled.
+  const servedIndex = ids.findIndex((_, index) => sentTokens[0] === `Bearer ${credential(index).access}`);
+  expect(servedIndex).toBeGreaterThanOrEqual(0);
+  expect(cooled).not.toContain(ids[servedIndex]!);
 }, 20_000);
 
 test("every pool account spent still cools the combo target", async () => {
