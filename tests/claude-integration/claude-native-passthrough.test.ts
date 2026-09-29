@@ -963,7 +963,8 @@ test("a terminal frame still in the buffer when the read fails counts as seen", 
   const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
   const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 5_000, maxBytes: 0 });
   const text = await new Response(tapped).text();
-  expect(text).toBe(withoutDelimiter);
+  // The delimiter is restored: an SSE parser drops an event that EOF cuts off before its blank line.
+  expect(text).toBe(`${withoutDelimiter}\n\n`);
   expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
   expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
 });

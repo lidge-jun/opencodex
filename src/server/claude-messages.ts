@@ -452,6 +452,7 @@ export function tapAnthropicSseForLog(
         detachAbort();
         // A read error can follow the last SSE block before its blank-line delimiter. Count
         // that block before deciding how the turn ended, as the Responses relay does.
+        const terminalBeforeTail = terminalSeen;
         const tail = buffer + decoder.decode();
         buffer = "";
         if (tail) inspectFrame(tail);
@@ -467,7 +468,12 @@ export function tapAnthropicSseForLog(
           // Only the transport trailer was lost; the client already has the turn's terminal.
           // The Responses relay likewise reports a read error only without a seen terminal.
           finalize(200, { closeReason: "terminal" });
-          try { controller.close(); } catch { /* torn down */ }
+          try {
+            // An SSE parser drops an event that EOF cuts off before its blank line, so restore
+            // the delimiter when the terminal was only found in that unterminated tail.
+            if (!terminalBeforeTail) controller.enqueue(encoder.encode("\n\n"));
+            controller.close();
+          } catch { /* torn down */ }
           reader.cancel(err).catch(() => {});
           return;
         }

@@ -638,8 +638,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (message.type === "error") {
         const error = isRec(message.error) ? message.error : {};
         const text = typeof error.message === "string" ? error.message : "upstream stream failed";
-        // A mid-stream reset closes this row with the same meta as the streaming lane's row.
-        if (tapState.meta?.terminalStatus) finishLog(502, text, tapState.meta);
+        // The tap's own verdict (a reset, a stall, the byte cap) closes this row with the same meta
+        // as the streaming lane's row; a plain upstream error event keeps the non_stream row.
+        const tapMeta = tapState.meta;
+        if (tapMeta && (tapMeta.terminalStatus || tapMeta.closeReason !== "terminal")) finishLog(502, text, tapMeta);
         return fail(502, text, "api_error");
       }
       finishLog(200);
