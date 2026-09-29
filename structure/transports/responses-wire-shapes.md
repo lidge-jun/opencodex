@@ -375,6 +375,8 @@ destination receives unchanged whenever a caller sends one itself.
 
 ## Passthrough SSE stream shapes (#314)
 
+Local Codex hosted-image results use the [client-only image projection](../data-planes/images.md#hosted-responses-image-display) after continuation-cache observers. It emits consistent message lifecycle events and terminal snapshots with `phase: final_answer`, suppresses replaced hosted-image progress frames, and adjusts numeric sequence numbers for inserted or removed events. Both relay shapes apply the same projection.
+
 Native passthrough SSE has TWO shapes, selected per request in
 `src/server/responses/core.ts`:
 

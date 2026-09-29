@@ -235,7 +235,7 @@
       "path": "data-planes/images.md",
       "tier": 3,
       "title": "Images Data Plane",
-      "scope": "Standalone image generation and edit relay.",
+      "scope": "Standalone image generation/edit relay and local hosted Responses image display.",
       "documents": [
         "src/server/"
       ]

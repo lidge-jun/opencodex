@@ -11,6 +11,8 @@
     "service-desktop-startup.test.ts": "service",
     "startup-health-packaged-probe.test.ts": "server",
     "discovered-native-models.test.ts": "codex-integration",
+    "responses-hosted-image-delivery.test.ts": "responses",
+    "responses-hosted-image-display.test.ts": "responses",
     "cursor-local-installer.test.ts": "providers/cursor",
     "codex-quota-query-backoff.test.ts": "codex-integration",
     "pnpm-command-isolation.test.ts": "update", "provider-antigravity-quota-retry.test.ts": "providers", "project-config-warning-snapshot.test.ts": "codex-integration", "codex-quota-auto-refresh-generation.test.ts": "codex-integration", "codex-account-clear-paused.test.ts": "codex-integration",
