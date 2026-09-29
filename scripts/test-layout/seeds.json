@@ -55,12 +55,13 @@
           "^(?:anthropic)-"
         ],
         "openai": [
-          "^(?:openai)-"
+          "^openai-(?!responses-summary-none\\.test\\.ts$)"
         ]
       }
     },
     "responses": {
       "match": [
+        "^openai-responses-summary-none\\.test\\.ts$",
         "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"
       ]
     },

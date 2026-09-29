@@ -66,6 +66,8 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "claude-fable-5-1": 1_000_000,
+  // 260929 preemptive: Claude Sonnet 5.5 (1M per Anthropic) seeded before Devin's live catalog lists it.
+  "claude-sonnet-5-5": 1_000_000,
   "claude-sonnet-5": 1_000_000,
   "glm-5-2": 200_000,
   "glm-5-3": 1_048_576,

@@ -156,6 +156,21 @@ export function sanitizeReasoningInputContent(
   return changed ? { ...raw, input } : body;
 }
 
+/**
+ * `reasoning.summary: "none"` is an internal "hide the thinking summary" marker: Claude's
+ * `thinking.display: "omitted"` maps to it, and the parser reads it into
+ * `options.hideThinkingSummary`. It is not a Responses API value (valid: auto, concise,
+ * detailed), so drop it from the body that is serialized to the upstream.
+ */
+export function stripNoneReasoningSummary(body: unknown): unknown {
+  if (!isPlainObject(body) || !isPlainObject(body.reasoning) || body.reasoning.summary !== "none") return body;
+  const { summary: _summary, ...rest } = body.reasoning;
+  const next = { ...body };
+  if (Object.keys(rest).length > 0) next.reasoning = rest;
+  else delete next.reasoning;
+  return next;
+}
+
 export function stripUnsupportedReasoningSummaryDelivery(body: unknown, modelId: string): unknown {
   if (catalogModelSupportsReasoningSummaries(modelId) !== false) return body;
   if (!isPlainObject(body) || !isPlainObject(body.stream_options)) return body;

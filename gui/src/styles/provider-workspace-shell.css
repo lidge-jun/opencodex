@@ -679,6 +679,7 @@
 }
 
 /* Notes section */
+/* One sponsor card per sponsor preset; every brand shares this layout, so only copy differs. */
 .pws-sponsor {
   display: flex;
   align-items: center;
@@ -688,7 +689,7 @@
   padding: 22px 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: linear-gradient(135deg, var(--accent-soft), transparent 55%), var(--surface);
 }
 
 .pws-sponsor-copy { flex: 1 1 320px; min-width: 0; }
@@ -728,10 +729,10 @@
 .pws-sponsor-actions {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
 }
-.pws-sponsor-actions a { gap: 8px; min-height: 36px; white-space: nowrap; }
+.pws-sponsor-actions a { justify-content: center; gap: 8px; min-height: 36px; white-space: nowrap; }
 .pws-sponsor-console {
   display: inline-flex;
   align-items: center;

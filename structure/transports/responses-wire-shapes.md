@@ -1,5 +1,14 @@
 # Responses Wire Shapes
 
+## Client rate-limit retry advice
+
+With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes
+`resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`.
+`src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest
+lower bound first; competing original hints are retained under an explicit provider-detail label.
+Other explicit verdicts, proxy replay budgets and event ordering are unchanged. This creates
+no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
+
 ## Compaction image input
 
 For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
@@ -560,7 +569,7 @@ An injected combo default supplies `summary: "auto"` only when no summary was sp
 summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
-active effort and omits summary; explicit `summary: "none"` still hides it.
+active effort and omits summary; explicit `summary: "none"` still hides it (passthrough strips that internal marker before the upstream send).
 The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only —
 openai-chat `reasoning_content`, kiro tags, and Gemini thought parts on routes that do not return
 thought summaries (direct and Vertex Gemini; a `cloud-code-assist` Gemini route emits its thought

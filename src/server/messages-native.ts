@@ -150,7 +150,7 @@ export interface HandleNativeMessagesOptions {
   callerAnthropicBeta?: string | null;
 }
 
-type FinishLog = (status: number, message?: string, closeReason?: FinalRequestLogMeta["closeReason"]) => void;
+type FinishLog = (status: number, message?: string, meta?: FinalRequestLogMeta) => void;
 
 /** Relay an upstream body unchanged, recording first output on its first non-empty chunk. */
 function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void): ReadableStream<Uint8Array> {
@@ -311,10 +311,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   attemptHandle.seal(logCtx.accountLogLabel);
   const { attempt } = attemptHandle;
   const finalLog = createFinalRequestLog(logIds, logCtx);
-  const finishLog: FinishLog = (status, message, closeReason = "non_stream") => {
+  const finishLog: FinishLog = (status, message, meta = { closeReason: "non_stream" }) => {
     if (finalLog.finished()) return;
     if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
-    finalLog.finish(status, { closeReason });
+    finalLog.finish(status, meta);
   };
   const bindUsage = (usage: OcxUsage | undefined) => {
     if (!usage) return;
@@ -597,7 +597,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
+    // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
+    // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
+    const bodyGuard = resolvePassthroughBodyGuard(config, upstream.signal);
     const observed = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
@@ -609,7 +611,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         try {
           cleanupAbort();
           bindUsage(logCtx.usage);
-          finishLog(status, undefined, meta.closeReason);
+          finishLog(status, undefined, meta);
           if (meta.closeReason !== "terminal") upstream.abort();
         } finally {
           releaseStreamTurn();
@@ -621,9 +623,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       });
     }
     // A non-streaming caller whose upstream streamed anyway: fold the stream into one message.
-    const tapState: { closeReason?: FinalRequestLogMeta["closeReason"] } = {};
+    const tapState: { closeReason?: FinalRequestLogMeta["closeReason"]; meta?: FinalRequestLogMeta } = {};
     const tapped = tapAnthropicSseForLog(source, logCtx, (_status, meta) => {
       tapState.closeReason = meta.closeReason;
+      tapState.meta = meta;
     }, bodyGuard);
     try {
       const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget);
@@ -634,7 +637,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       bindUsage(logCtx.usage);
       if (message.type === "error") {
         const error = isRec(message.error) ? message.error : {};
-        return fail(502, typeof error.message === "string" ? error.message : "upstream stream failed", "api_error");
+        const text = typeof error.message === "string" ? error.message : "upstream stream failed";
+        // The tap's own verdict (a reset, a stall, the byte cap) closes this row with the same meta
+        // as the streaming lane's row; a plain upstream error event keeps the non_stream row.
+        const tapMeta = tapState.meta;
+        if (tapMeta && (tapMeta.terminalStatus || tapMeta.closeReason !== "terminal")) finishLog(502, text, tapMeta);
+        return fail(502, text, "api_error");
       }
       finishLog(200);
       return Response.json(message);

@@ -60,11 +60,11 @@ provider-wide fallback. Exact model output limits precede the provider default o
   explicitly configured canonical `openai/gpt-daybreak-blue-latest` Codex-forward row from the
   pinned Sol capability metadata while preserving its selector and Daybreak wire identity;
   this never expands the bare/API-key model lists or rewrites the wire model to `gpt-5.6-sol`;
-- clones a native template for routed `provider/model` entries without its `comp_hash`, and resets
-  that value on opencodex rows kept from disk while their provider's discovery is degraded, so these
-  rows carry the fixed `"opencodex"` marker instead of whichever native row a rebuild found first;
-  Codex compacts a thread whenever that value changes (#5796). Codex-forward aliases keep their
-  native value and rows written by other tools keep theirs;
+- clones a native template for routed `provider/model` entries without its `comp_hash`, and clears
+  copied or synthetic hashes on opencodex rows kept during degraded discovery (#5796). Unknown
+  compatibility is `null`: Codex's hash-change trigger requires two non-null, unequal hashes, so
+  native/routed switches do not compact merely because of a synthetic marker. Native rows and
+  Codex-forward aliases keep upstream hashes; foreign rows keep valid hashes. Token limits are unchanged;
 - forces strict Codex catalog fields required by the current parser;
 - hides `disabledModels` without blocking direct routing (routed provider ids are excluded;
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row

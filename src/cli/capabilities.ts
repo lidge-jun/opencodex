@@ -986,7 +986,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["integration", "native"],
-    summary: "Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen).",
+    summary: "Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen) and, on request, the Private Inference installer Cursor's update channel advertises.",
     routes: [
       { method: "GET", path: "/api/native-integrations" },
       { method: "PUT", path: "/api/native-integrations/claude" },
@@ -994,6 +994,7 @@ export const CAPABILITIES: readonly Capability[] = [
       { method: "PUT", path: "/api/native-integrations/codex" },
       { method: "PUT", path: "/api/native-integrations/grok" },
       { method: "GET", path: "/api/native-integrations/cursor" },
+      { method: "GET", path: "/api/native-integrations/cursor/local-installer" },
     ],
     flags: [{ name: "--json", value: "boolean", summary: "Emit the client rows or toggle result as JSON." }],
     mutates: true,

@@ -47,8 +47,8 @@ sponsor receives:
   policy. A second-language blurb (for example Chinese) may run alongside the English one.
 - A built-in provider preset (`ocx provider add <id>`) shipped in a public npm release,
   listed near the top of the provider picker in the dashboard and CLI and marked as a sponsor
-  there. (The registry field and picker ordering that back this land with the first sponsor
-  preset; today the picker follows registry order.)
+  there. The dashboard picker, `ocx init` and `ocx provider presets` list sponsor rows Main
+  before Standard, then alphabetically by label, an order no sponsor can buy.
 - A detailed entry on the [providers page](https://opencodex.me/guides/providers/) of the docs
   site.
 - Maintenance: if a release breaks the preset or its adapter, the maintainer fixes it; issues
@@ -66,9 +66,8 @@ and the placements themselves:
 The README says nothing else about sponsorship; tiers, pricing, and contact channels live only on
 this page.
 
-The translated READMEs under [`readme/`](./readme) carry one linking line right after their
-own quick-start block instead of duplicating the section, so a sponsor change is one edit in
-English.
+The translated READMEs under [`readme/`](./readme) carry the same sponsor section, with each
+row's thanks line and blurb translated, so a sponsor change updates every README together.
 
 ## Pricing
 

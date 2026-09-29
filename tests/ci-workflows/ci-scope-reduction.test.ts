@@ -318,8 +318,12 @@ describe("the native path filter", () => {
       "bun.lock",
       "desktop/**",
       "package.json",
+      "scripts/build-standalone.ts",
+      "scripts/standalone-keyring.ts",
       "src/cli/index.ts",
       "src/lib/bun-runtime.ts",
+      "src/lib/keyring-native.ts",
+      "src/lib/standalone.ts",
       "src/service/**",
     ]);
   });

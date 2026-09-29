@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
+import { protectGlmSummaryBudget } from "../../../src/adapters/openai-chat/summary-budget";
 import { chatCompletionsToResponsesBody } from "../../../src/chat/inbound";
 import { concreteComboRequestBody } from "../../../src/combos/request";
 import { parseRequest } from "../../../src/responses/parser";
@@ -83,6 +84,51 @@ describe("GLM summary mitigation stays inside its boundary (#5953 review)", () =
   test("a checkpoint transcript under the minimum length is not rewritten", () => {
     const short = [messages[0], { role: "user", content: "<conversation>User: hi.</conversation>" }];
     for (const body of bodies({ messages: short })) untouched(body);
+  });
+  /** The only patterns detection may scan the transcript with: the two fixed tags. */
+  const FIXED_TAG_SCANS = ["<conversation>", "<\\/conversation>"];
+  /** Runs detection while counting scans/copies targeted at the transcript — deterministic, unlike a wall-clock bound. */
+  const detectWithProbe = (userContent: string) => {
+    const scans: string[] = [];
+    const copies: string[] = [];
+    const origExec = RegExp.prototype.exec;
+    const execProbe = spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, str: string) {
+      if (str === userContent) scans.push(this.source);
+      return origExec.call(this, str);
+    });
+    const copyProbes = (["toLowerCase", "toUpperCase", "toLocaleLowerCase", "toLocaleUpperCase"] as const).map(name => {
+      const orig = String.prototype[name];
+      return spyOn(String.prototype, name).mockImplementation(function (this: unknown) {
+        if (String(this) === userContent) copies.push(name);
+        return orig.call(this as string);
+      });
+    });
+    try {
+      const result = protectGlmSummaryBudget({
+        model, max_tokens: 512,
+        messages: [messages[0], { role: "user", content: userContent }],
+      }, provider.baseUrl, "max");
+      // A call count cannot bound work inside one scan — pinning every transcript scan to a
+      // fixed tag is what fails the original greedy `[\s\S]*` pass, not the count alone.
+      for (const source of scans) expect(FIXED_TAG_SCANS).toContain(source);
+      return { result, scans, copies };
+    } finally {
+      execProbe.mockRestore();
+      for (const probe of copyProbes) probe.mockRestore();
+    }
+  };
+  test("rejects many unmatched conversation openings with a bounded number of transcript scans", () => {
+    const { result, scans, copies } = detectWithProbe("<conversation>".repeat(32_000));
+    expect(result).toBeFalse();
+    expect(scans.length).toBeLessThanOrEqual(2);
+    expect(copies).toEqual([]);
+  });
+  test("detects an uppercase checkpoint in place, without a transcript-sized normalized copy", () => {
+    const transcript = `<CONVERSATION>${"LOREM IPSUM DOLOR SIT AMET.\n".repeat(200)}</CONVERSATION>`;
+    const { result, scans, copies } = detectWithProbe(transcript);
+    expect(result).toBeTrue();
+    expect(scans.length).toBeLessThanOrEqual(2);
+    expect(copies).toEqual([]);
   });
   test.each(["low", "medium"])("an effective %s effort is not overridden", effort => {
     for (const body of bodies({ reasoning_effort: effort })) untouched(body, effort);

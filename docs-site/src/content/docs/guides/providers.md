@@ -456,7 +456,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 99 built-in presets: 82 key-based, 13 OAuth, three local, and one default
+opencodex ships 100 built-in presets: 83 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -548,9 +548,28 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
+| TokenLab | `https://api.tokenlab.sh/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
+operated by TOKENLAB AI INC.
+Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
+`ocx provider add tokenlab` or select **TokenLab** in the dashboard's **Add provider** picker.
+The preset uses [Chat Completions](https://docs.tokenlab.sh/quickstart) and discovers models at
+`GET /v1/models?category=chat`, keeping only entries that declare `tool-use` capability.
+Image, video, audio, embedding and decision models are excluded from this chat preset.
+
+The [model catalog](https://docs.tokenlab.sh/api-reference/models/list-models) is public without
+a key, but a supplied key is validated and scopes results to its model permissions and delivery
+policy. Use a valid key with a funded workspace for inference. `gpt-5.6-terra` is the seeded
+default; choose another discovered model if your key does not allow it. The provider and model
+prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstream.
+TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
+apply to requests sent to this service. The preset pins the row near the top of the Add provider
+picker and marks it as a sponsor, and nothing else about routing or defaults changes.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
