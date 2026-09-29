@@ -41,6 +41,7 @@ import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_MAIN_DRAIN_SENTINEL_MODELS } from "./catalog/native-models";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import { decodeTomlBasicString } from "./prompt-layers/encoding";
 import {
   getUpstreamHostHealth,
   normalizeUpstreamHostCircuitThreshold,
@@ -771,10 +772,14 @@ function findTomlMultilineStringEnd(text: string, from: number, quote: string): 
   const delimiter = quote.repeat(3);
   let index = text.indexOf(delimiter, from);
   while (index !== -1) {
-    if (quote === "'") return index;
     let backslashes = 0;
-    for (let j = index - 1; j >= 0 && text[j] === "\\"; j--) backslashes += 1;
-    if (backslashes % 2 === 0) return index;
+    if (quote === '"') for (let j = index - 1; j >= 0 && text[j] === "\\"; j--) backslashes += 1;
+    if (backslashes % 2 === 0) {
+      // TOML lets one or two quotes sit right before the closing delimiter, so """a""""" ends on its last three.
+      let extra = 0;
+      while (extra < 2 && text[index + 3 + extra] === quote) extra += 1;
+      return index + extra;
+    }
     index = text.indexOf(delimiter, index + 1);
   }
   return -1;
@@ -918,8 +923,14 @@ export function scanCodexAgentRolesWithTomlModelFallback(
   }
 }
 
-const TOML_MODEL_KEY = /^\s*(?:model|"model"|'model')\s*=/;
+const TOML_ROOT_KEY = /^\s*(?:([A-Za-z0-9_-]+)|("(?:\\.|[^"\\])*")|'([^'\n]*)')\s*=/;
 const TOML_TABLE_HEADER = /^\s*\[/;
+
+function tomlKeyName(match: RegExpMatchArray): string | undefined {
+  if (match[1] !== undefined) return match[1];
+  if (match[3] !== undefined) return match[3];
+  return decodeTomlBasicString(match[2]!) ?? undefined;
+}
 
 export interface TomlModelKeyLocation {
   /** Index into `content.split("\n")`; a trailing `\r` stays on the line. */
@@ -940,6 +951,7 @@ export function locateTomlModelKey(content: string): TomlModelKeyLocation | null
   const lines = content.split(/\r?\n/);
   const state: TomlScanState = { inMultilineString: null, arrayDepth: 0 };
   let inRootTable = true;
+  let undecodedRootKeyLine: number | null = null;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
     if (state.inMultilineString) {
@@ -951,8 +963,10 @@ export function locateTomlModelKey(content: string): TomlModelKeyLocation | null
     }
     if (state.arrayDepth === 0) {
       if (TOML_TABLE_HEADER.test(line)) inRootTable = false;
-      const key = line.match(TOML_MODEL_KEY);
-      if (key) {
+      const key = line.match(TOML_ROOT_KEY);
+      const name = key ? tomlKeyName(key) : null;
+      if (key && name === undefined && inRootTable) undecodedRootKeyLine ??= i;
+      if (key && name === "model") {
         const rest = `${line.slice(key[0].length)}\n${lines.slice(i + 1).join("\n")}`;
         let at = 0;
         while (at < rest.length && (rest[at] === " " || rest[at] === "\t")) at += 1;
@@ -970,7 +984,8 @@ export function locateTomlModelKey(content: string): TomlModelKeyLocation | null
     }
     scanTomlLine(line, state);
   }
-  return null;
+  // A root key that might spell model cannot be ruled out, so a writer must not add a second one.
+  return undecodedRootKeyLine === null ? null : { line: undecodedRootKeyLine, inRootTable: true, span: null, value: null };
 }
 
 /**

@@ -52,6 +52,26 @@ describe("setTomlRootModel", () => {
   test("a non-string model value is refused rather than duplicated", () => {
     expect(() => setTomlRootModel("model = 5\n", "m")).toThrow(AgentRoleModelError);
   });
+
+  test("an escaped quoted model key is replaced rather than duplicated", () => {
+    const escaped = 'name = "r"\n"mod\\u0065l" = "old" # pinned\nkeep = 1\n';
+    const next = setTomlRootModel(escaped, "new");
+    expect(next).toBe('name = "r"\n"mod\\u0065l" = "new" # pinned\nkeep = 1\n');
+    expect(Bun.TOML.parse(next)).toEqual({ name: "r", model: "new", keep: 1 });
+    expect(setTomlRootModel("'model' = 'old'\n", "new")).toBe("'model' = 'new'\n");
+  });
+
+  test("a quoted root key that cannot be decoded refuses the write", () => {
+    expect(() => setTomlRootModel('"mo\\x64el" = "old"\n', "new")).toThrow(AgentRoleModelError);
+  });
+
+  test("a multiline model value closing on extra quotes is replaced whole", () => {
+    for (const pinned of ['model = """old""""\nkeep = 1\n', "model = '''old''''\nkeep = 1\n", 'model = """old"""""\nkeep = 1\n']) {
+      const next = setTomlRootModel(pinned, "new");
+      expect(next).toBe(pinned.startsWith("model = '") ? "model = 'new'\nkeep = 1\n" : 'model = "new"\nkeep = 1\n');
+      expect(Bun.TOML.parse(next)).toEqual({ model: "new", keep: 1 });
+    }
+  });
 });
 
 describe("writeCodexAgentRoleModel", () => {
