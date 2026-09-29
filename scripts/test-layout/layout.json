@@ -1677,6 +1677,7 @@
     "subagent-fallback-preview-sites.test.ts": "routing",
     "subagent-model-fallback-api.test.ts": "routing",
     "subagent-model-fallback.test.ts": "routing",
+    "codex-agent-role-models.test.ts": "routing",
     "subagent-roster-retention.test.ts": "routing",
     "sync-client-integrations.test.ts": "clients",
     "synthetic-tool.test.ts": "images",

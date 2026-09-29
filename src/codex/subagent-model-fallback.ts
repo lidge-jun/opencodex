@@ -919,6 +919,59 @@ export function scanCodexAgentRolesWithTomlModelFallback(
 }
 
 const TOML_MODEL_KEY = /^\s*(?:model|"model"|'model')\s*=/;
+const TOML_TABLE_HEADER = /^\s*\[/;
+
+export interface TomlModelKeyLocation {
+  /** Index into `content.split("\n")`; a trailing `\r` stays on the line. */
+  readonly line: number;
+  readonly inRootTable: boolean;
+  /** Column span of the quoted value on `line`; null when it is not a one-line string. */
+  readonly span: { readonly start: number; readonly end: number } | null;
+  readonly value: string | null;
+}
+
+/**
+ * Locate the first `model` key outside multiline strings and arrays.
+ *
+ * The one scan behind both the read ({@link parseTomlModelPin}) and the dashboard's write of a
+ * role's model, so the line the writer edits is the line the reader reports.
+ */
+export function locateTomlModelKey(content: string): TomlModelKeyLocation | null {
+  const lines = content.split(/\r?\n/);
+  const state: TomlScanState = { inMultilineString: null, arrayDepth: 0 };
+  let inRootTable = true;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (state.inMultilineString) {
+      const end = findTomlMultilineStringEnd(line, 0, state.inMultilineString[0]!);
+      if (end === -1) continue;
+      state.inMultilineString = null;
+      scanTomlLine(line.slice(end + 3), state);
+      continue;
+    }
+    if (state.arrayDepth === 0) {
+      if (TOML_TABLE_HEADER.test(line)) inRootTable = false;
+      const key = line.match(TOML_MODEL_KEY);
+      if (key) {
+        const rest = `${line.slice(key[0].length)}\n${lines.slice(i + 1).join("\n")}`;
+        let at = 0;
+        while (at < rest.length && (rest[at] === " " || rest[at] === "\t")) at += 1;
+        if (rest[at] !== '"' && rest[at] !== "'") return { line: i, inRootTable, span: null, value: null };
+        const parsed = parseTomlStringAt(rest, at);
+        const value = parsed?.value.trim() ?? "";
+        const onLine = parsed !== null && parsed.end <= line.length - key[0].length;
+        return {
+          line: i,
+          inRootTable,
+          span: onLine ? { start: key[0].length + at, end: key[0].length + parsed.end } : null,
+          value: value === "" ? null : value,
+        };
+      }
+    }
+    scanTomlLine(line, state);
+  }
+  return null;
+}
 
 /**
  * TOML-aware read of the root `model` pin, or null when there is none.
@@ -938,31 +991,7 @@ const TOML_MODEL_KEY = /^\s*(?:model|"model"|'model')\s*=/;
  * warning the conservative direction is to stay quiet.
  */
 function parseTomlModelPin(content: string): string | null {
-  const lines = content.split(/\r?\n/);
-  const state: TomlScanState = { inMultilineString: null, arrayDepth: 0 };
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]!;
-    if (state.inMultilineString) {
-      const end = findTomlMultilineStringEnd(line, 0, state.inMultilineString[0]!);
-      if (end === -1) continue;
-      state.inMultilineString = null;
-      scanTomlLine(line.slice(end + 3), state);
-      continue;
-    }
-    if (state.arrayDepth === 0) {
-      const key = line.match(TOML_MODEL_KEY);
-      if (key) {
-        const rest = `${line.slice(key[0].length)}\n${lines.slice(i + 1).join("\n")}`;
-        let at = 0;
-        while (at < rest.length && (rest[at] === " " || rest[at] === "\t")) at += 1;
-        if (rest[at] !== '"' && rest[at] !== "'") return null;
-        const value = parseTomlStringAt(rest, at)?.value.trim() ?? "";
-        return value === "" ? null : value;
-      }
-    }
-    scanTomlLine(line, state);
-  }
-  return null;
+  return locateTomlModelKey(content)?.value ?? null;
 }
 
 /** Filename prefix opencodex gives the Claude agents it generates. */
@@ -981,7 +1010,9 @@ const OPENCODEX_DERIVED_ROLE_MARKERS = ["generated-by: opencodex", "ocx-route:"]
 /**
  * Roles that look opencodex-derived but pin no model, so Codex runs them on the parent model.
  *
- * opencodex does not write Codex role TOMLs. These arrive when the Codex desktop external-agent
+ * opencodex does not create, repair, or remove Codex role TOMLs. Its one write into them is the
+ * root `model` value, and only when a user picks a model for that role in the dashboard or with
+ * `ocx agent roles set` (`src/codex/agent-role-models.ts`). These arrive when the Codex desktop external-agent
  * import converts `~/.claude/agents/ocx-*.md` into `$CODEX_HOME/agents/ocx-*.toml`, dropping the
  * `model:` frontmatter because a `claude-ocx-native--` id is not a Codex model and keeping only the
  * instructions. The surviving `ocx-route` directive cannot make up the difference: it is honoured
