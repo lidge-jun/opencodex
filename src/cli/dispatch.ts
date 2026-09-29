@@ -359,19 +359,23 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   login: async deps => {
     const loginArgs = deps.args.slice(1);
+    // `--code` is the only flag this command takes; the provider is the first bare word, so
+    // `ocx login --code anthropic` and `ocx login anthropic --code` mean the same thing.
+    const codeMode = loginArgs.includes("--code");
+    const positional = loginArgs.filter(arg => !arg.startsWith("--"));
     // 'ocx login codex' is the command people type first, and until now it answered with
     // the full provider wall because the Codex pool lives behind 'ocx account login'.
     // Route the three Codex spellings to that flow instead of making the user discover
     // a second noun. Everything else stays on the local OAuth/API-key path.
     const { isCodexAccountLoginName, handleAccountAuthCommand } = await import("./account-auth");
-    if (isCodexAccountLoginName(loginArgs[0] ?? "")) {
+    if (isCodexAccountLoginName(positional[0] ?? "")) {
       // null means "unknown subcommand", which "login" never is; the coalesce exists because
       // the shared signature serves callers that do pass an unknown one.
       const code = await handleAccountAuthCommand("login", loginArgs, { findLiveProxy: deps.findLiveProxy });
       return code ?? 1;
     }
     const { handleLogin } = await import("../oauth/login-cli");
-    await handleLogin(loginArgs[0]);
+    await handleLogin(positional[0], {}, { codeMode });
     return 0;
   },
   logout: async deps => {
