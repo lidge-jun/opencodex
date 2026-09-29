@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { adapterFailureFromMessage, parseRetryAfterFromMessage } from "../../src/lib/errors";
+import { formatRetryAfterAdvice } from "../../src/lib/retry-delay";
 
 describe("stated reset duration boundaries", () => {
   test("the error adapter retains a local parser binding after extraction", () => {
@@ -45,5 +46,35 @@ describe("stated reset duration boundaries", () => {
     "reset in 999999999999999999999999999999999999999999 hours",
   ])("does not salvage a misleading partial duration: %s", message => {
     expect(parseRetryAfterFromMessage(message)).toBeUndefined();
+  });
+});
+
+// These are wire-advice checks, not elapsed-time or Desktop-rendering tests.
+describe("Codex long-wait advice", () => {
+  test.each([120, 900, 1800, 2460, 3600])("preserves a %i-second hint without shortening it", seconds => {
+    const message = `Devin rate limit; retry after ~${seconds}s`;
+    const formatted = formatRetryAfterAdvice(message);
+    expect(formatted).toBe(`Please try again in ${seconds}s. ${message}`);
+    expect(parseRetryAfterFromMessage(formatted!)).toBe(seconds);
+    expect(formatRetryAfterAdvice(formatted!)).toBe(formatted);
+  });
+
+  test.each([2460, 3600])("puts the %i-second lower bound before shorter advice", seconds => {
+    const message = `Please try again in 1s. retry after ~${seconds}s`;
+    const formatted = formatRetryAfterAdvice(message);
+    expect(formatted).toBe(`Please try again in ${seconds}s. Provider detail: ${message}`);
+    expect(parseRetryAfterFromMessage(formatted!)).toBe(seconds);
+    expect(formatRetryAfterAdvice(formatted!)).toBe(formatted);
+  });
+
+  test("a later refusal uses its own delay; an intervening disconnect has no invented advice", () => {
+    const first = "Devin rate limit; retry after ~2460s";
+    const disconnect = "upstream_server_error: socket closed";
+    const later = "Devin rate limit; retry after ~120s";
+    expect(formatRetryAfterAdvice(first)).toBe(`Please try again in 2460s. ${first}`);
+    expect(parseRetryAfterFromMessage(disconnect)).toBeUndefined();
+    expect(formatRetryAfterAdvice(disconnect)).toBeUndefined();
+    expect(formatRetryAfterAdvice(later)).toBe(`Please try again in 120s. ${later}`);
+    expect(formatRetryAfterAdvice("resource_exhausted")).toBeUndefined();
   });
 });
