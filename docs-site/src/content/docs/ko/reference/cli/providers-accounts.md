@@ -254,6 +254,10 @@ Codex pool selection applies to the next request after clearing existing affinit
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+CLI 명령은 Anthropic OAuth 계정을 id 또는 유일한 alias로 일시 정지하거나 재개합니다. alias는 정확히 일치하는 값을 먼저 찾고, 없으면 대소문자를 구분하지 않고 찾습니다. 대시보드와 같은 `PUT /api/oauth/accounts/pause`에 `{ provider: "anthropic", accountId, paused }`를 보냅니다. 계정에 저장되는 `paused` 상태는 `GET /api/oauth/accounts`에도 표시됩니다. 사전 계정 전환 풀이 꺼져 있어도 정지된 계정은 선택, 세션 바인딩, 429 대체 후보에서 제외됩니다. 모든 계정이 정지되면 하나를 재개할 때까지 요청은 403을 반환합니다. 이미 전송한 요청은 유지하며 자격 증명과 건강 상태를 지우지 않습니다. 재시작·재로그인 후에도 정지는 유지되고, 계정을 삭제하면 함께 제거됩니다. 계정별 전환 임계값은 이 기능에 포함되지 않습니다.
+
 ### `ocx account clear <provider> [--json]`
 
 계정 id를 해석하지 않고 Codex 계정의 수동 선택을 지우므로 `auto`라는 id의 계정이 있어도 동작합니다. Codex 풀 전용이며 다른 공급자 유형에는 복원할 자동 선택이 없습니다.

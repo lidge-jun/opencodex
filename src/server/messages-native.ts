@@ -58,9 +58,9 @@ import {
   selectProactiveApiKeyTransport,
   transientRetryPolicyFor,
 } from "../providers/key-failover";
-import { stampApiKeyAccountLabel, stampOAuthAccountLabel } from "../providers/label";
-import { publicOAuthAuthenticationErrorMessage } from "../oauth";
-import { hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
+import { stampApiKeyAccountLabel } from "../providers/label";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
 import { resolveProtocolSettings } from "../protocols/settings";
 import { addProtocolEntryReason, markProtocolBlocked } from "../protocols/trace";
 import type { OcxProviderTransport } from "../providers/xai-transport";
@@ -328,6 +328,16 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     finishLog(status, safeMessage);
     return anthropicErrorResponse(status, safeMessage, type, code);
   };
+  const localOAuthFailure = (error: unknown): Response | null => {
+    if (error instanceof AnthropicAccountCooldownError) {
+      const response = fail(429, error.message, "rate_limit_error");
+      if (error.retryAfterSeconds !== null) response.headers.set("retry-after", String(error.retryAfterSeconds));
+      return response;
+    }
+    if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error");
+    if (error instanceof OAuthLoginRequiredError) return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+    return null;
+  };
 
   try {
     await prepareNativeBody(body, req.signal);
@@ -366,6 +376,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       cleanupAbort();
       upstream.abort();
       if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
+      const localRefusal = localOAuthFailure(error);
+      if (localRefusal) return localRefusal;
       if (error instanceof NativeOAuthSelectionChangedError) return fail(409, error.message, "api_error");
       return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
     }
@@ -376,7 +388,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   }
   let activeProvider: OcxProviderConfig = oauthBinding ? oauthProvider(oauthBinding) : route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-  if (oauthBinding) stampOAuthAccountLabel(logCtx, route.providerName, activeProvider, oauthBinding.snapshot.accountId);
+  if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = attachRequestSpendTracker(req, logCtx);
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
@@ -460,14 +472,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             if (oauthBinding) {
               // The OAuth twin of the key check below: re-resolve through the same selection
               // owner when the committed account or its credential moved since the build.
-              if (!nativeOAuthBindingIsCurrent(oauthBinding)) {
+              for (let attempt = 0; !nativeOAuthBindingIsCurrent(oauthBinding); attempt++) {
+                if (attempt >= 3) throw new NativeOAuthSelectionChangedError();
                 try {
                   oauthBinding = await resolveNativeOAuthBinding(config);
-                } catch {
+                } catch (error) {
+                  if (error instanceof OAuthAccountPausedError || error instanceof OAuthLoginRequiredError
+                    || error instanceof AnthropicAccountCooldownError) throw error;
                   throw new NativeOAuthSelectionChangedError();
                 }
                 rebuildFor(oauthProvider(oauthBinding));
-                stampOAuthAccountLabel(logCtx, route.providerName, activeProvider, oauthBinding.snapshot.accountId);
+                logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
               }
             } else if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
               const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
@@ -569,6 +584,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       finishLog(429);
       return refusal;
     }
+    const localRefusal = localOAuthFailure(sendError);
+    if (localRefusal) return localRefusal;
     if (sendError instanceof NativeOAuthSelectionChangedError) return fail(409, sendError.message, "api_error");
     if (sendError instanceof NativeOpaqueStateRefusal) {
       logCtx.errorCode = "unsupported_feature";

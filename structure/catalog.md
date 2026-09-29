@@ -34,7 +34,7 @@ may fill an absent static one only inside that call-local projection — the fro
 unchanged and never widened — max input never exceeds the resolved context window, and the
 projection mutates neither input. Gather admission freezes an enriched provider
 snapshot before discovery; per-model hint projection resolves from that snapshot, so no post-admission
-registry read can change a running gather flight.
+registry read can change a running gather flight. Anthropic OAuth discovery in `src/codex/catalog/provider-models.ts` rechecks the live pause, selection, and bearer generation at dispatch and after outbound DNS; a superseded flight degrades to configured models without sending.
 
 Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
 diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit

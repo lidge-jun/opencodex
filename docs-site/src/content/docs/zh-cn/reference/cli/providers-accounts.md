@@ -173,6 +173,10 @@ Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+CLI 命令通过 id 或唯一别名暂停或恢复 Anthropic OAuth 账户。别名先精确匹配，再进行不区分大小写的匹配。CLI 和仪表板使用同一个 `PUT /api/oauth/accounts/pause`，请求体为 `{ provider: "anthropic", accountId, paused }`。`paused` 保存在账户中，并通过 `GET /api/oauth/accounts` 返回。即使主动账户池已关闭，暂停账户也会从选择、会话绑定和 429 后继候选中排除。所有账户暂停时，请求返回 403，直到恢复一个账户。已经发送的请求继续执行，凭证和健康状态保持不变。重启或重新登录仍保留暂停，删除账户时一并清除。此操作不包含账户级自动切换阈值。
+
 ### `ocx account clear <provider> [--json]`
 
 在不解析账号 id 的情况下清除 Codex 账号的手动选择，因此即使存在名为 `auto` 的账号也有效。仅适用于 Codex Pool；其他提供商类型没有可恢复的自动选择。

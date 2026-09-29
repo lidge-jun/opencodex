@@ -396,7 +396,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { isGenericFailoverProvider, kiroAutoSelection } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
     const supportsPause = effectiveProvider !== undefined
-      && isGenericFailoverProvider(provider, effectiveProvider);
+      && (provider === "anthropic" && effectiveProvider.authMode === "oauth"
+        || isGenericFailoverProvider(provider, effectiveProvider));
     const {
       oauthAccountHealthFields,
       projectOAuthAccountHealth,
@@ -504,7 +505,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
 
     const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
-    if (!effectiveProvider || !isGenericFailoverProvider(provider, effectiveProvider)) {
+    if (!effectiveProvider || !(provider === "anthropic" && effectiveProvider.authMode === "oauth"
+      || isGenericFailoverProvider(provider, effectiveProvider))) {
       return jsonResponse({ error: "account pause is not supported for this OAuth provider" }, 400);
     }
 
@@ -513,8 +515,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
 
     if (result.activeAccountChanged) {
-      const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-      seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+      if (provider === "anthropic") {
+        const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
+        resetAnthropicRoutingForManualSelection(result.activeAccountId);
+      } else {
+        const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
+        seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+      }
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
       clearModelCache(provider);

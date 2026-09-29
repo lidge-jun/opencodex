@@ -46,6 +46,11 @@ import {
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
+import { poolAccountProviderLabel } from "../../providers/label";
+import { getAccountSet } from "../../oauth/store";
+import { formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot } from "../../oauth/anthropic-routing";
+import { codexAccountLogLabel } from "../../codex/account-label";
+import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import {
@@ -96,6 +101,22 @@ import { clientWireOf } from "../inference/client-wire";
  * allowance rather than a separate number to keep in sync.
  */
 export const COMBO_TARGET_BASE_SENDS = CODEX_TEXT_GUARDED_BUDGET_POLICY.baseSendAllowance;
+
+function cooledPoolAccountLabel(config: OcxConfig, providerName: string, modelId: string, label: string | undefined): string | undefined {
+  if (!label) return undefined;
+  if (providerName === "anthropic") {
+    const matches = getAccountSet("anthropic")?.accounts.filter(account =>
+      formatAnthropicProviderForLog("anthropic", account.id) === label) ?? [];
+    return matches.length === 1 && getAnthropicAccountHealthSnapshot(matches[0]!.id) ? label : undefined;
+  }
+  const provider = config.providers[providerName];
+  if (!provider || !isCanonicalOpenAiForwardProvider(provider)) return undefined;
+  const matches = (config.codexAccounts ?? []).filter(account =>
+    `${providerName}-${codexAccountLogLabel(account)}` === label);
+  return matches.length === 1
+    && getCodexQuotaHealthSnapshot(matches[0]!.id, codexQuotaScopeForModel(modelId))
+    ? label : undefined;
+}
 
 
 /**
@@ -977,6 +998,13 @@ export async function executeComboResponses(
       status: failure.response.status,
       code: failure.upstreamCode,
       message: failure.classificationText,
+      // The dispatch rewrote this to name the pool account that actually served the turn.
+      failedAccount: cooledPoolAccountLabel(
+        config,
+        pick.target.provider,
+        pick.target.model,
+        poolAccountProviderLabel(childLog.provider, pick.target.provider),
+      ),
       onCooldownRecorded: target => {
         failedTargetCooldownRecorded ||= targetKey(target) === failedTargetKey;
       },

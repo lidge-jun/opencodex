@@ -469,15 +469,20 @@ Clear the manual Codex account selection without resolving an account id, so it 
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-Pause or resume one account in the Codex pool or a generic OAuth provider pool, including
+Pause or resume one account in the Codex, Anthropic, or generic OAuth provider pool, including
 `google-antigravity`. For the Codex pool, `main` identifies only the built-in Codex account;
-generic OAuth accounts must be identified by id or a unique alias. A paused generic OAuth account
+OAuth accounts must be identified by id or a unique alias. A paused OAuth account
 is excluded from request selection, 429 failover, and proactive token refresh, and cannot be
 selected manually. Pausing the active account switches to the next usable account when one exists.
 If every account is paused, requests that need that pool return 403 until an account is resumed.
 
-For a generic OAuth provider, identify the account by id or by a unique exact or case-insensitive
+For Anthropic and generic OAuth providers, identify the account by id or by a unique exact or case-insensitive
 alias. The JSON response reports the account id, pause state, and active account id.
+
+Anthropic pause applies even when proactive pooling is disabled, including session affinity and
+429 successors. It survives restart and reauthentication, preserves credentials and health,
+and does not interrupt a turn already sent. Removing the account removes its pause state.
+Per-account Anthropic auto-switch thresholds are not part of this control.
 
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>

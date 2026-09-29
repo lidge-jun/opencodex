@@ -285,6 +285,16 @@
       ]
     },
     {
+      "path": "providers/anthropic-account-pool.md",
+      "tier": 4,
+      "title": "Anthropic Account Pool",
+      "scope": "Anthropic OAuth account pause, model routes, and quota labels.",
+      "documents": [
+        "src/oauth/",
+        "src/providers/"
+      ]
+    },
+    {
       "path": "providers/openai-tiers.md",
       "tier": 4,
       "title": "OpenAI Provider Account Modes",

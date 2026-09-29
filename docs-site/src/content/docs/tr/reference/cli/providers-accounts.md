@@ -235,6 +235,10 @@ ayar yalnızca kullanıma dayalı proaktif geçişi devre dışı bırakır.
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+CLI komutu Anthropic OAuth hesabını id veya benzersiz takma ad ile duraklatır ya da sürdürür. Önce tam eşleşme, ardından büyük/küçük harf duyarsız eşleşme aranır. CLI ve kontrol paneli aynı `PUT /api/oauth/accounts/pause` uç noktasına `{ provider: "anthropic", accountId, paused }` gönderir. `paused` hesapta saklanır ve `GET /api/oauth/accounts` yanıtında gösterilir. Proaktif havuz kapalı olsa bile duraklatılan hesap seçimden, oturum bağlarından ve 429 sonrası adaylardan çıkarılır. Tüm hesaplar duraklatılmışsa biri sürdürülene kadar istekler 403 döndürür. Önceden gönderilmiş istekler devam eder; kimlik bilgileri ve sağlık durumu korunur. Duraklatma yeniden başlatma ve yeniden girişten sonra da sürer, hesap silinince kaldırılır. Hesaba özel eşikler bu işleme dahil değildir.
+
 ### `ocx account clear <provider> [--json]`
 
 Bir hesap id'si çözümlemeden Codex hesabının elle seçimini temizler; `auto` adında bir hesap olsa bile çalışır. Yalnızca Codex havuzları içindir; diğer sağlayıcı türlerinde geri yüklenecek otomatik seçim yoktur.

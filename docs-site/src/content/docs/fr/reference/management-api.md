@@ -283,6 +283,7 @@ Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT va
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Lire ou mettre à jour la stratégie du pool OAuth Anthropic | 400 fournisseur non Anthropic ou stratégie invalide |
 | `POST /api/oauth/accounts/clear-cooldown` | Effacer le temps de recharge d'un compte OAuth | 400 invalide provider/account |
 | `PUT /api/oauth/accounts/alias` | Définir ou supprimer un alias de compte OAuth | 400 invalide provider/account/alias |
+| `PUT /api/oauth/accounts/pause` | Suspendre/reprendre Anthropic ou un compte OAuth générique. Body `{ provider, accountId, paused }` ; la suspension du compte actif sélectionne un autre compte utilisable s’il existe. | 400 fournisseur non pris en charge ou body invalide ; 404 compte absent ; `oauth_mutation_busy` |
 | `GET, POST, DELETE /api/providers/keys` | Répertorier les clés de fournisseur masquées, en ajouter ou en activer une, ou en supprimer une | 400 saisie invalide ; 404 fournisseur ou clé manquante |
 | `PUT /api/providers/keys/active` | Sélectionnez la clé active d'un fournisseur | 400 saisie invalide ; 404 provider/key manquant |
 | `PUT /api/providers/keys/alias` | Définir ou supprimer un alias de clé de fournisseur | 400 saisie invalide ; 404 provider/key manquant |
@@ -290,6 +291,10 @@ Tant qu’une liste initiale fiable n’est pas disponible, les requêtes PUT va
 
 Les réponses qui répertorient les identifiants sont délibérément masquées. Les jetons d'accès OAuth et les clés API complètes des
 fournisseurs ne sont pas renvoyés aux clients du tableau de bord.
+
+#### Anthropic OAuth: `pause` / `resume`
+
+La commande CLI suspend ou reprend un compte Anthropic OAuth par id ou alias unique (correspondance exacte, puis sans distinction de casse). Utilise `PUT /api/oauth/accounts/pause` avec `{ provider: "anthropic", accountId, paused }`, également utilisé par le tableau de bord. L’état `paused` est enregistré dans le compte et exposé par `GET /api/oauth/accounts`. La suspension s’applique même si le pool proactif est désactivé : le compte est exclu de la sélection, des affinités et des successeurs 429. Si tous les comptes sont suspendus, les requêtes renvoient 403 jusqu’à une reprise. Les requêtes déjà envoyées continuent ; les identifiants et l’état de santé sont conservés. La suspension survit au redémarrage et à une nouvelle connexion, et disparaît avec la suppression du compte. Les seuils individuels ne font pas partie de cette commande.
 
 ### Fournisseurs
 

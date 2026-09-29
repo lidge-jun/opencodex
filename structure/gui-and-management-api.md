@@ -1,5 +1,13 @@
 # GUI And Management API
 
+Anthropic account rows now expose the shared boolean `paused` DTO and use the existing
+`PUT /api/oauth/accounts/pause` body `{ provider, accountId, paused }`. The dashboard's
+`ProviderAuthPanel` and `useProviderAccountPools` reuse the translated pause/resume actions,
+disabled manual selection, and separate mutation-versus-refresh failure notices. CLI
+`ocx account pause|resume anthropic <id|unique-alias> [--json]` uses that same endpoint.
+Only OAuth routes support this operation; API-key routes remain outside this switch.
+Selection and persistence semantics: [Anthropic account pause](providers/anthropic-account-pool.md#anthropic-account-pause).
+
 `src/server/management/oauth-account-routes.ts` exposes Anthropic `routes` through both unified `/api/pool/settings` and legacy `/api/oauth/accounts/pool`. Omitted rules survive other setting writes, `null` clears them, and other pool kinds reject supplied rules. The unified DTO declares `routes` supported only for Anthropic and reports null otherwise. Both Anthropic settings GETs validate saved rules before projection: malformed hand edits yield `routes: null` plus `routesError` without changing the stored value; valid and absent rules omit that diagnostic. Config and management responses retain route names; request logs use only the rule’s 1-based `route:#<n>` position. `src/cli/account-extended.ts` reads, replaces and clears these rules with `ocx account routes anthropic`; the server validates content.
 
 The provider management API validates `modelContextTiers` as a strict per-model map,

@@ -803,7 +803,7 @@ JSON mode: `payload`.
 
 ### `ocx account pause`
 
-Exclude one account in a Codex or supported generic OAuth pool from automatic selection.
+Exclude one account in a Codex, Anthropic or supported generic OAuth pool from automatic selection.
 
 | Method | Route |
 |---|---|
@@ -817,11 +817,11 @@ Exclude one account in a Codex or supported generic OAuth pool from automatic se
 
 JSON mode: `envelope`.
 
-- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Generic OAuth pause never dispatches to that account: it is excluded from new requests, failover and refresh, and an all-paused pool answers 403. Anthropic is unsupported.
+- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
 
 ### `ocx account resume`
 
-Return a paused account to a Codex or supported generic OAuth pool.
+Return a paused account to a Codex, Anthropic or supported generic OAuth pool.
 
 | Method | Route |
 |---|---|
