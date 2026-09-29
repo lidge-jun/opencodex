@@ -114,6 +114,24 @@ test("advance reports only the current failure's committed cooldown", () => {
   expect(recorded).toEqual([]);
   expect(isComboTargetInCooldown("free", target)).toBe(true);
 });
+test("a pool account's 429 cools nothing at the combo layer, other failures still cool the target", () => {
+  const cfg = config();
+  const account = { failedAccount: "anthropic-p2e22d0" };
+  const cool = (options: Parameters<typeof advanceComboAfterFailure>[2]): boolean => {
+    clearComboTargetCooldowns();
+    advanceComboAfterFailure(cfg, pickComboTarget(cfg, "free")!, { cooldownScope: "target", ...options });
+    return isComboTargetInCooldown("free", target);
+  };
+  // The outage's own header, attributed to one account of a pool.
+  expect(cool({ status: 429, retryAfter: "318747", ...account })).toBe(false);
+  // Unknown account: nothing else holds the target back, so the target cooldown still must.
+  expect(cool({ status: 429, retryAfter: "318747" })).toBe(true);
+  // A genuine target-level failure is not the account's fault and cools as it always did.
+  expect(cool({ status: 503, ...account })).toBe(true);
+  expect(cool({ status: 410, code: "model_not_found", ...account })).toBe(true);
+  // Provider-scoped evidence (a rejected credential) outranks the account attribution.
+  expect(cool({ status: 429, cooldownScope: "provider", ...account })).toBe(true);
+});
 test("a stale in-flight single-target request does not replay a reconciled-away target", async () => {
   let hits = 0;
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
