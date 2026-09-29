@@ -573,6 +573,25 @@ test("a registry listing too deep to scan fully reports truncation instead of a 
   expect(verdict.kind).toBe("indeterminate");
 });
 
+test("an unlocated owner refuses start and ensure rather than claiming an unmarked sibling", async () => {
+  const fx = fixture();
+  mkdirSync(ownerRegistryDir(), { recursive: true });
+  // Existing but malformed records pass the registry's existence check without
+  // supplying a port to probe. Its result cap leaves ownership indeterminate.
+  for (let i = 0; i < 65; i++) {
+    const home = join(fx.root, "unlocated-" + i);
+    mkdirSync(home);
+    writeFileSync(join(home, "runtime-port.json"), "{}\n");
+    writeFileSync(join(ownerRegistryDir(), "unlocated-" + i + ".json"), JSON.stringify({ home }));
+  }
+  expect(readOwnerRegistry().truncated).toBe(true);
+  expect(await findCrossHomeOwnerDetailed({ homeDir: fx.home })).toMatchObject({ kind: "indeterminate", port: null });
+  await expect(markCrossHomeSibling()).rejects.toThrow("refusing startup");
+  expect(siblingOfLivePort()).toBeNull();
+  await expect(markLiveHomeSibling({ pid: process.pid, port: 42101 })).rejects.toThrow("refusing startup");
+  expect(siblingOfLivePort()).toBeNull();
+});
+
 /**
  * Shared start-to-shutdown acceptance for the ownership topologies that must veto
  * shared-client writes: the managed Grok/Codex routing and the Claude roster keep

@@ -294,6 +294,7 @@ export async function findCrossHomeOwnerDetailed(options: { homeDir?: string; io
 export async function markCrossHomeSibling(): Promise<boolean> {
   const verdict = await findCrossHomeOwnerDetailed();
   if (verdict.kind === "none") return false;
+  if (verdict.port === null) throw new Error("Shared-client owner could not be located; refusing startup before any shared-client write.");
   if (verdict.kind === "indeterminate") {
     // Fail closed: an owner the reader could not verify still owns the shared
     // writes. Marking the best port hint keeps every sibling gate engaged even
@@ -304,7 +305,6 @@ export async function markCrossHomeSibling(): Promise<boolean> {
     );
   }
   const port = verdict.port;
-  if (port === null) return true;
   markSiblingStart(port);
   return true;
 }
@@ -319,7 +319,8 @@ export async function markLiveHomeSibling(live: { pid: number | null; port: numb
   }
   const verdict = await findCrossHomeOwnerDetailed();
   if (verdict.kind === "none" || verdict.port === live.port) return false;
-  if (verdict.port !== null) markSiblingStart(verdict.port);
+  if (verdict.port === null) throw new Error("Shared-client owner could not be located; refusing startup before any shared-client write.");
+  markSiblingStart(verdict.port);
   return true;
 }
 
