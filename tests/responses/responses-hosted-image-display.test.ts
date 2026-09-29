@@ -50,6 +50,46 @@ test('added/done/terminal have one consistent message identity and monotonic seq
   rewrite.dispose?.();
 });
 
+test('image events without an identity pass through without consuming shared state', () => {
+  const rewrite = factory();
+  try {
+    for (const output_index of [undefined, -1, 0.5, '0', null]) {
+      for (const id of [undefined, 123]) {
+        for (const type of ['response.output_item.added', 'response.output_item.done']) {
+          const value = block({ type, output_index, item: { ...item, id } });
+          expect(rewrite(value)).toEqual([value]);
+        }
+      }
+    }
+    expect(existsSync(home.path('artifacts'))).toBe(false);
+    const result = events(rewrite(block({ type: 'response.output_item.done', output_index: 0,
+      item: { ...item, id: undefined } })));
+    expect(result.at(-1).item.type).toBe('message');
+    expect(result.at(-1).output_index).toBe(0);
+    expect(readdirSync(home.path('artifacts'))).toHaveLength(1);
+  } finally { rewrite.dispose?.(); }
+});
+
+test('image events with either an index or a string id retain distinct display state', () => {
+  const rewrite = factory();
+  try {
+    const results = [
+      { output_index: 1, item: { ...item, id: undefined } },
+      { output_index: 2, item: { ...item, id: undefined } },
+      { item },
+      { item: { ...item, id: 'ig_second' } },
+    ].map(value => {
+      const added = events(rewrite(block({ ...value, type: 'response.output_item.added' })))[0].item;
+      const done = events(rewrite(block({ ...value, type: 'response.output_item.done' }))).at(-1).item;
+      expect(done.id).toBe(added.id);
+      expect(done.type).toBe('message');
+      return done.id;
+    });
+    expect(new Set(results).size).toBe(4);
+    expect(readdirSync(home.path('artifacts'))).toHaveLength(4);
+  } finally { rewrite.dispose?.(); }
+});
+
 test('terminal-only responses emit the missing complete message lifecycle', () => {
   const rewrite = factory();
   const result = events(rewrite(block({ type: 'response.completed', response: { status: 'completed', output: [item] } })));

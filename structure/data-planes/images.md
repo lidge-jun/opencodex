@@ -26,7 +26,9 @@ artifacts. The final phase keeps the image outside collapsible progress output.
 observers, on the client branch only, for SSE, JSON and JSON synthesized into SSE.
 Hosted items in the continuation cache retain their upstream representation; other
 client rewrites keep their existing cache policy. Generic, remotely admitted and non-Responses
-clients do not receive this filesystem projection.
+clients do not receive this filesystem projection. Individual image item events without
+a string item id or a valid non-negative integer output index pass through without
+allocating display state, so unidentified items cannot collide at a synthetic index.
 
 Full-history assistant messages can replay the display Markdown without their generated
 item ids. At Responses request preparation, exact generated links under the current

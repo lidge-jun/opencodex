@@ -156,8 +156,10 @@ export function createHostedImageDisplayRewrite(): SseBlockRewrite & { json(text
     try { event = JSON.parse(payload); } catch { return [block]; }
     if (!object(event)) return [block];
     let result: Row[] = [event];
-    const index = Number.isSafeInteger(event.output_index) && event.output_index >= 0 ? event.output_index : 0;
-    if (object(event.item) && event.item.type === "image_generation_call") {
+    const hasIndex = Number.isSafeInteger(event.output_index) && event.output_index >= 0;
+    const index = hasIndex ? event.output_index : 0;
+    if (object(event.item) && event.item.type === "image_generation_call"
+      && (hasIndex || typeof event.item.id === "string")) {
       if (event.type === "response.output_item.added") {
         const state = stateFor(event.item, index);
         result = state.added ? [] : [{ ...event, item: state.message }];
