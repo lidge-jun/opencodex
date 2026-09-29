@@ -3,7 +3,7 @@
 // R2 before starting ocx and uploads them again while it runs and on SIGTERM.
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { copyFile, cp, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, symlink } from "node:fs/promises";
+import { copyFile, cp, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, statfs, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
@@ -12,6 +12,8 @@ const STATE_ORIGIN = "http://state.ocx.internal";
 // The Worker reaches ocx only here; see defaultPort in deploy/cloudflare/src/index.ts.
 export const OCX_PORT = 10100;
 const SQLITE_HEADER = "SQLite format 3\0";
+// Free space that must remain after staging, on top of two copies of the state (tree + archive).
+const SNAPSHOT_HEADROOM_BYTES = 256 * 1024 * 1024;
 // These hold a lock for the life of their owner. Restoring one would hand a new process a lock
 // row naming a dead one, and copying one can block on the owner's open transaction.
 const LOCK_DATABASE = /(lock|mutation|owner|claim|serialization|publication|lifecycle)[^/]*\.(sqlite|db)$/i;
@@ -78,17 +80,92 @@ export async function copySqlite(source: string, target: string): Promise<boolea
   }
 }
 
+export class StagingInterrupted extends Error {}
+
+// One record format for staging and for hashing an extracted snapshot, so the two digests agree.
+const dirRecord = (rel: string, mode: number) => `dir\0${rel}\0${mode & 0o777}\0`;
+const linkRecord = (rel: string, link: string) => `link\0${rel}\0${link}\0`;
+const fileRecord = (rel: string, mode: number) => `file\0${rel}\0${mode & 0o777}\0`;
+
+/**
+ * Cheap change detector: a stat-only walk (no copy, no hash, no VACUUM) whose key moves whenever a
+ * saved entry could differ, and the bytes a snapshot of it would stage. A database's `-wal` counts,
+ * since a committed write can land there without touching the main file.
+ */
+export async function fingerprintState(roots: StateRoot[]): Promise<{ key: string; bytes: number }> {
+  const hasher = new Bun.CryptoHasher("sha256");
+  let bytes = 0;
+  for (const root of roots) {
+    if (!existsSync(root.dir)) continue;
+    const walk = async (dir: string): Promise<void> => {
+      const names = (await readdir(dir).catch(ignoreVanished)) ?? [];
+      for (const name of names.sort()) {
+        if (SQLITE_SIDECAR.test(name) && !name.endsWith("-wal")) continue;
+        if (REGENERATED_SECRETS.has(name) || LOCK_DATABASE.test(name)) continue;
+        const source = join(dir, name);
+        const stat = await lstat(source).catch(ignoreVanished);
+        if (!stat) continue;
+        const rel = join(root.prefix, relative(root.dir, source));
+        if (stat.isDirectory()) {
+          hasher.update(dirRecord(rel, stat.mode));
+          await walk(source);
+        } else if (stat.isSymbolicLink()) {
+          hasher.update(linkRecord(rel, await readlink(source).catch(() => "")));
+        } else if (stat.isFile()) {
+          if (!name.endsWith("-wal")) bytes += stat.size;
+          hasher.update(`${fileRecord(rel, stat.mode)}${stat.size}\0${stat.mtimeMs}\0`);
+        }
+      }
+    };
+    await walk(root.dir);
+  }
+  return { key: hasher.digest("hex"), bytes };
+}
+
+/** The digest stageSnapshot would report for an already extracted snapshot, without copying it again. */
+export async function digestTree(roots: StateRoot[], tree: string): Promise<string> {
+  const hasher = new Bun.CryptoHasher("sha256");
+  for (const root of roots) {
+    const base = join(tree, root.prefix);
+    if (!existsSync(base)) continue;
+    const walk = async (dir: string): Promise<void> => {
+      for (const name of (await readdir(dir)).sort()) {
+        const source = join(dir, name);
+        const rel = join(root.prefix, relative(base, source));
+        const stat = await lstat(source);
+        if (stat.isDirectory()) {
+          hasher.update(dirRecord(rel, stat.mode));
+          await walk(source);
+        } else if (stat.isSymbolicLink()) {
+          hasher.update(linkRecord(rel, await readlink(source)));
+        } else if (stat.isFile()) {
+          hasher.update(fileRecord(rel, stat.mode));
+          for await (const chunk of Bun.file(source).stream()) hasher.update(chunk);
+        }
+      }
+    };
+    await walk(base);
+  }
+  return hasher.digest("hex");
+}
+
 /**
  * Copies a consistent view of each root into staging/<prefix>; returns a digest of what it staged.
  * Asynchronous on purpose: a synchronous walk of a large home would starve the lease heartbeat
  * past LEASE_STALE_MS and let a second container take over while this one still serves.
  */
-export async function stageSnapshot(roots: StateRoot[], staging: string): Promise<string> {
+export async function stageSnapshot(
+  roots: StateRoot[],
+  staging: string,
+  shouldStop: () => boolean = () => false,
+): Promise<string> {
   const hasher = new Bun.CryptoHasher("sha256");
   for (const root of roots) {
     if (!existsSync(root.dir)) continue;
     const walk = async (dir: string): Promise<void> => {
       for (const name of (await readdir(dir)).sort()) {
+        // A periodic pass yields to shutdown, whose final upload is queued behind it.
+        if (shouldStop()) throw new StagingInterrupted("staging interrupted");
         // Skipped by name before any stat: SQLite deletes and recreates these while we walk.
         if (SQLITE_SIDECAR.test(name)) continue;
         const source = join(dir, name);
@@ -100,13 +177,13 @@ export async function stageSnapshot(roots: StateRoot[], staging: string): Promis
         if (stat.isDirectory()) {
           await mkdir(target, { recursive: true, mode: stat.mode & 0o777 });
           // An empty or re-permissioned directory is state too; without this it never triggers an upload.
-          hasher.update(`dir\0${rel}\0${stat.mode & 0o777}\0`);
+          hasher.update(dirRecord(rel, stat.mode));
           await walk(source);
         } else if (stat.isSymbolicLink()) {
           const link = await readlink(source);
           await mkdir(dirname(target), { recursive: true });
           await symlink(link, target);
-          hasher.update(`link\0${rel}\0${link}\0`);
+          hasher.update(linkRecord(rel, link));
         } else if (stat.isFile()) {
           const header = await readHeader(source).catch(ignoreVanished);
           if (header === undefined) continue;
@@ -116,7 +193,7 @@ export async function stageSnapshot(roots: StateRoot[], staging: string): Promis
           if (kind === "sqlite") {
             if (!(await copySqlite(source, target))) continue;
           } else if ((await copyFile(source, target).then(() => true, ignoreVanished)) === undefined) continue;
-          hasher.update(`file\0${rel}\0${stat.mode & 0o777}\0`);
+          hasher.update(fileRecord(rel, stat.mode));
           for await (const chunk of Bun.file(target).stream()) hasher.update(chunk);
         }
       }
@@ -173,6 +250,7 @@ export class Supervisor {
   // Aborted by fence(): an upload already in flight must not keep running after the lease is gone.
   private readonly fenced = new AbortController();
   private lastDigest: string | undefined;
+  private lastFingerprint: string | undefined;
   private child: Bun.Subprocess | undefined;
   private placeholder: ReturnType<typeof Bun.serve> | undefined;
   private leaseHeld = false;
@@ -263,30 +341,49 @@ export class Supervisor {
       await Bun.write(archive, response);
       const staging = join(work, "tree");
       await mkdir(staging);
+      const archiveBytes = Bun.file(archive).size;
       await run(["tar", "-xzf", archive, "-C", staging, "--no-same-owner"]);
+      // Peak disk stays at live + extracted tree, below what the upload that wrote it needed.
+      await rm(archive);
+      this.lastDigest = await digestTree(this.roots, staging);
       await applySnapshot(this.roots, staging);
-      this.lastDigest = await stageSnapshot(this.roots, join(work, "digest"));
-      console.log(`Restored state snapshot (${Bun.file(archive).size} bytes).`);
+      this.lastFingerprint = (await fingerprintState(this.roots)).key;
+      console.log(`Restored state snapshot (${archiveBytes} bytes).`);
       return true;
     } finally {
       await rm(work, { recursive: true, force: true });
     }
   }
 
-  private upload(): Promise<void> {
-    const next = this.uploads.then(() => this.uploadNow());
+  private upload(final = false): Promise<void> {
+    const next = this.uploads.then(() => this.uploadNow(final));
     this.uploads = next.catch(() => {});
     return next;
   }
 
-  private async uploadNow(): Promise<void> {
+  private async uploadNow(final: boolean): Promise<void> {
     if (this.fenced.signal.aborted) throw new LeaseLostError("fenced");
+    // Only the final upload may keep working once shutdown has begun.
+    const shouldStop = final ? undefined : () => this.stopping;
+    if (shouldStop?.()) return;
+    const before = await fingerprintState(this.roots);
+    if (before.key === this.lastFingerprint) return;
+    // Staging needs one more copy of the state and the archive up to another: refuse rather than
+    // fill the disk the running ocx also writes to.
+    const free = await statfs(tmpdir());
+    const available = Number(free.bavail) * Number(free.bsize);
+    if (available < before.bytes * 2 + SNAPSHOT_HEADROOM_BYTES) {
+      throw new Error(`not enough free disk to stage ${before.bytes} bytes of state (${available} free)`);
+    }
     const work = await mkdtemp(join(tmpdir(), "ocx-snapshot-"));
     try {
       const staging = join(work, "tree");
       await mkdir(staging);
-      const digest = await stageSnapshot(this.roots, staging);
-      if (digest === this.lastDigest) return;
+      const digest = await stageSnapshot(this.roots, staging, shouldStop);
+      if (digest === this.lastDigest) {
+        this.lastFingerprint = before.key;
+        return;
+      }
       const archive = join(work, "snapshot.tar.gz");
       await run(["tar", "-czf", archive, "-C", staging, "."]);
       const file = Bun.file(archive);
@@ -298,6 +395,8 @@ export class Supervisor {
       if (response.status === 409) throw new LeaseLostError("state lease lost before upload");
       if (!response.ok) throw new Error(`snapshot upload failed: ${response.status}`);
       this.lastDigest = digest;
+      // Taken before staging, so a write that landed meanwhile is picked up by the next cycle.
+      this.lastFingerprint = before.key;
       console.log(`Uploaded state snapshot (${file.size} bytes).`);
     } finally {
       await rm(work, { recursive: true, force: true });
@@ -339,7 +438,7 @@ export class Supervisor {
       // The platform allows 15 minutes between SIGTERM and SIGKILL; spend some of it on retries.
       for (let attempt = 1; attempt <= 6 && !saved; attempt++) {
         try {
-          await this.upload();
+          await this.upload(true);
           saved = true;
         } catch (error) {
           if (error instanceof LeaseLostError) return this.fence(error);
@@ -388,14 +487,19 @@ export class Supervisor {
     this.child = Bun.spawn(command, { stdio: ["inherit", "inherit", "inherit"] });
     void this.child.exited.then(() => this.shutdown("SIGTERM"));
 
+    let failures = 0;
     while (!this.stopping) {
-      await Bun.sleep(this.intervalMs);
+      // Back off while snapshots keep failing, so a state too big to stage does not retry at full rate.
+      await Bun.sleep(this.intervalMs * Math.min(2 ** failures, 8));
       if (this.stopping) break;
       try {
         await this.upload();
+        failures = 0;
       } catch (error) {
         if (error instanceof LeaseLostError) return this.fence(error);
-        // A busy database or a transient network error: the next interval retries.
+        if (error instanceof StagingInterrupted) break;
+        failures++;
+        // A busy database or a transient network error: a later interval retries.
         console.error(`Periodic snapshot skipped: ${errorText(error)}`);
       }
     }

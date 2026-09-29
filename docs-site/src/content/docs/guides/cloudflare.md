@@ -152,6 +152,18 @@ The container's entrypoint is `docker/cloudflare-supervisor.ts`. It:
    releases the lease. Cloudflare allows up to 15 minutes between `SIGTERM` and `SIGKILL`, and
    stops the old container before starting the new one.
 
+Each interval starts with a stat-only pass over both homes (no copying or hashing). Only when a
+saved file, directory, link or a database's `-wal` file changed does the supervisor stage a copy and
+hash it, and it uploads only if that hash differs from the last upload. A restored hub compares
+against the snapshot it restored, so an idle hub uploads nothing after a restart.
+
+Staging needs a second copy of the state plus a compressed archive on the container disk. Before
+staging, the supervisor checks for twice the state's size plus 256 MiB of free disk and skips the
+snapshot with a log line when there is less; repeated failures back the interval off up to eight
+times. A very large `~/.codex` therefore costs disk and CPU on every change, so keep session
+history and caches small. Restore extracts the archive, deletes it, then copies the tree into the
+homes, so it never needs more disk than the upload that wrote the snapshot.
+
 SQLite databases are copied with `VACUUM INTO`, so a snapshot never holds a half-written database.
 Lock databases and the generated management token are left out. Other files are copied as they
 are; the final snapshot is taken after `ocx` has exited, so it cannot catch a file mid-write.

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { decideLease, isHolder, LEASE_STALE_MS, LeaseState, type LeaseStorage } from "../../deploy/cloudflare/src/lease";
 import { handleStateRequest, snapshotPrefix, sweepOrphans, type StateBucket } from "../../deploy/cloudflare/src/state-routes";
 import { containerEnv, edgeDecision, envFingerprint, forwardableRequest } from "../../deploy/cloudflare/src/container-env";
-import { applySnapshot, classifyFile, copySqlite, seedBootstrapConfig, stageSnapshot, Supervisor, type StateRoot } from "../../docker/cloudflare-supervisor";
+import { applySnapshot, classifyFile, copySqlite, digestTree, fingerprintState, seedBootstrapConfig, stageSnapshot, StagingInterrupted, Supervisor, type StateRoot } from "../../docker/cloudflare-supervisor";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -121,6 +121,51 @@ describe("cloudflare supervisor snapshots", () => {
     const before = await stageSnapshot(roots, join(scratch(), "a"));
     writeFileSync(join(dir, "config.json"), "{\"x\":1}");
     expect(await stageSnapshot(roots, join(scratch(), "b"))).not.toBe(before);
+  });
+
+  test("hashing an extracted snapshot gives the digest staging reported, with no second copy", async () => {
+    const home = scratch();
+    const ocx = join(home, "ocx");
+    mkdirSync(join(ocx, "empty"), { recursive: true });
+    writeFileSync(join(ocx, "config.json"), "{\"port\":10100}\n", { mode: 0o600 });
+    symlinkSync("config.json", join(ocx, "link.json"));
+    const db = new Database(join(ocx, "usage.sqlite"));
+    db.exec("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('row')");
+    db.close();
+    const roots: StateRoot[] = [{ prefix: "opencodex", dir: ocx }, { prefix: "codex", dir: join(home, "absent") }];
+    const staging = join(scratch(), "tree");
+    const digest = await stageSnapshot(roots, staging);
+    expect(await digestTree(roots, staging)).toBe(digest);
+    writeFileSync(join(staging, "opencodex", "config.json"), "{}");
+    expect(await digestTree(roots, staging)).not.toBe(digest);
+  });
+
+  test("the change fingerprint moves for saved state and ignores lock, shm and token churn", async () => {
+    const dir = scratch();
+    const roots = [{ prefix: "opencodex", dir }];
+    writeFileSync(join(dir, "config.json"), "{}");
+    const base = await fingerprintState(roots);
+    expect(base.bytes).toBe(2);
+    expect((await fingerprintState(roots)).key).toBe(base.key);
+
+    writeFileSync(join(dir, "spend-ledger-owner.sqlite"), `${SQLITE}lock`);
+    writeFileSync(join(dir, "usage.sqlite-shm"), "churn");
+    writeFileSync(join(dir, "admin-api-token"), "secret");
+    expect((await fingerprintState(roots)).key).toBe(base.key);
+
+    // A committed write can sit in the WAL without touching the main file.
+    writeFileSync(join(dir, "usage.sqlite-wal"), "frames");
+    const withWal = await fingerprintState(roots);
+    expect(withWal.key).not.toBe(base.key);
+    expect(withWal.bytes).toBe(2);
+    writeFileSync(join(dir, "config.json"), "{\"x\":1}");
+    expect((await fingerprintState(roots)).key).not.toBe(withWal.key);
+  });
+
+  test("a periodic staging pass stops when shutdown begins", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "config.json"), "{}");
+    await expect(stageSnapshot([{ prefix: "opencodex", dir }], join(scratch(), "tree"), () => true)).rejects.toBeInstanceOf(StagingInterrupted);
   });
 
   test("seeds the bootstrap config only from a JSON object, bound where the Worker can reach it", () => {
@@ -579,6 +624,37 @@ describe("cloudflare supervisor lifecycle", () => {
       expect(await code).toBe(0);
       expect(state.maxConcurrentUploads()).toBe(1);
       expect(await readArchive(state.snapshot()!, "opencodex/config.json")).toBe("{\"v\":2}");
+    } finally {
+      state.stop();
+    }
+  });
+
+  test("a restored hub that has not changed uploads nothing, and does not restage to find out", async () => {
+    const state = fakeStateServer();
+    const first = scratch();
+    writeFileSync(join(first, "config.json"), "{\"v\":1}");
+    const one = recordingExit();
+    const before = new Supervisor({ roots: [{ prefix: "opencodex", dir: first }], intervalMs: 60_000, port: 0, stateOrigin: state.origin, exit: one.exit, handleSignals: false });
+    void before.main(IDLE_CHILD);
+    try {
+      await until(() => state.events.includes("GET /snapshot"));
+      void before.shutdown("SIGTERM");
+      expect(await one.code).toBe(0);
+      expect(state.snapshot()).not.toBeNull();
+
+      const second = scratch();
+      const uploadsBefore = state.events.filter(event => event === "PUT /snapshot").length;
+      const two = recordingExit();
+      const after = new Supervisor({ roots: [{ prefix: "opencodex", dir: second }], intervalMs: 100, port: 0, stateOrigin: state.origin, exit: two.exit, handleSignals: false });
+      void after.main(IDLE_CHILD);
+      await until(() => existsSync(join(second, "config.json")));
+      // Several idle intervals pass; the restored digest and fingerprint mean none uploads.
+      await Bun.sleep(600);
+      expect(state.events.filter(event => event === "PUT /snapshot")).toHaveLength(uploadsBefore);
+      writeFileSync(join(second, "config.json"), "{\"v\":2}");
+      await until(() => state.events.filter(event => event === "PUT /snapshot").length > uploadsBefore);
+      void after.shutdown("SIGTERM");
+      await two.code;
     } finally {
       state.stop();
     }
