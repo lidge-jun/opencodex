@@ -387,26 +387,15 @@ Native passthrough SSE has TWO shapes, selected per request in
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
   including the #44 late-terminal semantics.
 
-Both client readers also retain a bounded, redacted message from a bare upstream
-`error` event. If EOF arrives without a real Responses terminal, they synthesize
-one `response.failed` with that message instead of replacing it with `adapter_eof`. The shared outbound block rewrite masks diagnostic fields on real failed and incomplete terminals before streaming delivery or buffered JSON reconstruction, preserving status and output; failed turns are not retained as continuation state.
-That synthesized terminal also carries the upstream's own verdict. Codex classifies
-a `response.failed` by `error.code` alone and retries every code outside its fatal
-set, so a refusal stamped `upstream_server_error` reached the client as a retryable
-disconnect and drove a reconnect loop (#5176). The readers now read a refusal code
-and the message from the same candidate precedence, taking the first code present so
-a refusal nested below a transient one cannot overrule it, and fall back to
-recognized refusal copy only when the event carried no code at all. A refusal code
-with no message still produces a terminal, and a read that fails after a refusal was
-captured reports the refusal rather than a generic reset. Request-log accounting is
-unchanged: a row that ends on a refusal still records the transport-level status.
-The delivering reader owns this evidence; an asynchronous tee inspection branch
-cannot reliably supply it before EOF. Inspection independently applies the same
-bare-error rule when EOF arrives, so account health records failure instead of
-clearing avoidance as if the turn had succeeded. Existing real terminals and
-caller cancellation retain precedence on both branches. Native recovery preflight
-also preserves a rejected body reader and its bounded prefix for the normal
-mid-stream failure path; it does not turn that rejection into a decrypt retry.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`.
+At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
+produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
+recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
+The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
+while preserving status and output; failed turns are not retained as continuation state. Request logs keep transport status.
+The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
+Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
+Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.
 
 Native Responses may rebuild once when encrypted function/custom-tool output or
 agent-message content receives the exact known decrypt rejection before output
