@@ -11,6 +11,10 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
+import { tapAnthropicSseForLog } from "../../src/server/claude-messages";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -787,4 +791,85 @@ test("an overlength id is rewritten within 64 characters and a colliding valid i
     await server.stop(true);
     upstream.stop(true);
   }
+});
+
+// --- Mid-stream upstream reset: the stream had started, then the upstream socket went away ---
+
+const PARTIAL_TURN_SSE = [
+  `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "msg_up", type: "message", role: "assistant", content: [], model: "claude-fable-5", stop_reason: null, usage: { input_tokens: 12, output_tokens: 1 } } })}\n\n`,
+  `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`,
+  `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "half an ans" } })}\n\n`,
+].join("");
+
+test("a mid-stream upstream reset ends the native stream with an Anthropic error event and logs a failed turn", async () => {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  const upstream = startTruncatedSseUpstream(PARTIAL_TURN_SSE);
+  saveConfig(cfg(`http://127.0.0.1:${upstream.port}`));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify(claudeBody()),
+    });
+    expect(res.status).toBe(200);
+    // The body ends cleanly with a protocol terminal the client can act on, instead of a
+    // connection reset (or, on some Bun releases, a bare chunked EOF) after "half an ans".
+    const text = await res.text();
+    expect(text).toContain("half an ans");
+    expect(text).toContain("\n\nevent: error\ndata: ");
+    const errorFrame = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim()) as { type: string; error: { type: string; message: string } };
+    expect(errorFrame.type).toBe("error");
+    expect(errorFrame.error.type).toBe("api_error");
+    expect(errorFrame.error.message).toContain("socket connection was closed unexpectedly");
+    // The committed request is not replayed.
+    expect(upstream.requests()).toBe(1);
+
+    const logs = logsFromApiBody<{
+      status?: number;
+      terminalStatus?: string;
+      closeReason?: string;
+      transportPhase?: string;
+      upstreamError?: string;
+      usage?: { inputTokens?: number };
+    }>(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
+    expect(logs).toHaveLength(1);
+    const row = logs[0]!;
+    // Same row the Responses relay writes for a mid-stream reset: a truncated 200 body is not a
+    // completed turn.
+    expect(row.status).toBe(502);
+    expect(row.terminalStatus).toBe("failed");
+    expect(row.closeReason).toBe("terminal");
+    expect(row.transportPhase).toBe("mid_stream");
+    expect(row.upstreamError).toContain("socket connection was closed unexpectedly");
+    // Usage seen before the reset is still recorded.
+    expect(row.usage?.inputTokens).toBe(12);
+  } finally {
+    await server.stop(true);
+    upstream.stop();
+  }
+});
+
+test("a translator budget overflow still errors the tapped stream for callers that map it", async () => {
+  const overflow = new TranslatorBudgetExceededError("live_transient", 1024);
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) {
+        controller.error(overflow);
+        return;
+      }
+      sent = true;
+      controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 5_000, maxBytes: 0 });
+  // The non-streaming native Messages fold turns this error into a 413; an error frame would
+  // have reached it as a generic 502 instead.
+  await expect(new Response(tapped).text()).rejects.toBe(overflow);
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.transportPhase).toBeUndefined();
 });

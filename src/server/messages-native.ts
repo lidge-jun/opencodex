@@ -150,7 +150,7 @@ export interface HandleNativeMessagesOptions {
   callerAnthropicBeta?: string | null;
 }
 
-type FinishLog = (status: number, message?: string, closeReason?: FinalRequestLogMeta["closeReason"]) => void;
+type FinishLog = (status: number, message?: string, meta?: FinalRequestLogMeta) => void;
 
 /** Relay an upstream body unchanged, recording first output on its first non-empty chunk. */
 function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void): ReadableStream<Uint8Array> {
@@ -311,10 +311,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   attemptHandle.seal(logCtx.accountLogLabel);
   const { attempt } = attemptHandle;
   const finalLog = createFinalRequestLog(logIds, logCtx);
-  const finishLog: FinishLog = (status, message, closeReason = "non_stream") => {
+  const finishLog: FinishLog = (status, message, meta = { closeReason: "non_stream" }) => {
     if (finalLog.finished()) return;
     if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
-    finalLog.finish(status, { closeReason });
+    finalLog.finish(status, meta);
   };
   const bindUsage = (usage: OcxUsage | undefined) => {
     if (!usage) return;
@@ -609,7 +609,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         try {
           cleanupAbort();
           bindUsage(logCtx.usage);
-          finishLog(status, undefined, meta.closeReason);
+          finishLog(status, undefined, meta);
           if (meta.closeReason !== "terminal") upstream.abort();
         } finally {
           releaseStreamTurn();

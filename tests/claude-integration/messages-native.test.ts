@@ -16,6 +16,7 @@ import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
 
 interface Seen {
   path: string;
@@ -252,6 +253,43 @@ describe("managed native Messages", () => {
     expect(seen).toHaveLength(0);
     expect(callerForwardSeen).toHaveLength(1);
     expect(callerForwardSeen[0]!.headers.get("x-api-key")).toBe("sk-ant-fixture-caller");
+  });
+
+  test("a mid-stream upstream reset ends the relayed stream with an Anthropic error event and a failed row", async () => {
+    const truncated = startTruncatedSseUpstream(sseText(SSE_FRAMES.slice(0, 3)));
+    try {
+      const config = fixtureConfig(truncated.port);
+      const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
+      expect(response.status).toBe(200);
+      expect(text).toContain("streamed");
+      expect(text).toContain("\n\nevent: error\ndata: ");
+      expect(text).toContain('"type":"api_error"');
+      expect(text).toContain("socket connection was closed unexpectedly");
+      expect(truncated.requests()).toBe(1);
+      const row = rowFor(requestId);
+      expect(row.status).toBe(502);
+      expect(row.terminalStatus).toBe("failed");
+      expect(row.closeReason).toBe("terminal");
+      expect(row.transportPhase).toBe("mid_stream");
+      expect(row.upstreamError).toContain("socket connection was closed unexpectedly");
+      expect(JSON.stringify(row)).not.toContain("fixture-key-alpha");
+    } finally {
+      truncated.stop();
+    }
+  });
+
+  test("a non-streaming caller whose upstream stream resets still gets an Anthropic 502", async () => {
+    const truncated = startTruncatedSseUpstream(sseText(SSE_FRAMES.slice(0, 3)));
+    try {
+      const config = fixtureConfig(truncated.port);
+      const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false });
+      expect(response.status).toBe(502);
+      expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "api_error" } });
+      expect(text).toContain("socket connection was closed unexpectedly");
+      expect(rowFor(requestId).status).toBe(502);
+    } finally {
+      truncated.stop();
+    }
   });
 
   test("count_tokens counts the body the native lane sends", async () => {
