@@ -85,7 +85,7 @@ import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
-import { applyDroidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
+import { applyDroidReasoningDefault, droidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
 
 type Rec = Record<string, unknown>;
 
@@ -157,6 +157,9 @@ async function handleChatCompletionsWithBudget(
 
   const requestedModel = chatBody.model as string;
   const { fastRow, effortRow } = parseSyntheticRowId(requestedModel, config);
+  const droidDefaultEffort = effortRow
+    ? undefined
+    : droidReasoningDefault(req.headers.get(DROID_DEFAULT_EFFORT_HEADER));
   if (effortRow) chatBody.model = effortRow.baseId;
   if (fastRow) {
     chatBody.model = fastRow.baseId;
@@ -194,13 +197,9 @@ async function handleChatCompletionsWithBudget(
       getOrAllocateRequestSessionLane(req),
       routedProvider,
     );
-    if (!effortRow) applyDroidReasoningDefault(
-      chatBody,
-      req.headers.get(DROID_DEFAULT_EFFORT_HEADER),
-      route.combo || route.routeKind === "policy"
-        ? undefined
-        : { provider: route.provider, modelId: route.modelId },
-    );
+    if (!route.combo && route.routeKind !== "policy") {
+      applyDroidReasoningDefault(chatBody, droidDefaultEffort, { provider: route.provider, modelId: route.modelId });
+    }
     logCtx.model = route.modelId;
     logCtx.providerAdapter = route.provider.adapter;
     logCtx.requestedModel = requestedModel;
@@ -445,6 +444,9 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    ...((settledRoute?.combo || settledRoute?.routeKind === "policy") && droidDefaultEffort
+      ? { droidDefaultEffort }
+      : {}),
     // PF-07: the combo sends eligible candidates natively from this envelope.
     ...(envelope && nativeChatCombos ? {
       protocolSource: createNativeChatComboSource({

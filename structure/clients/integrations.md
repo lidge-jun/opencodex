@@ -84,7 +84,8 @@ unsupported saved value does not block unrelated refresh. Removing models uses t
 ordinary removal preview. Disable and restore remove or restore the rows and their
 defaults as one owned value.
 
-The request preference is interpreted before Chat route selection under the
+The request preference is interpreted after initial Chat route selection and before
+concrete dispatch under the
 [inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
 It never authenticates a client or changes admission policy.
 

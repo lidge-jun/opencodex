@@ -38,6 +38,7 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { recordAttemptRequestedEffort } from "../request-log";
 import type { ResolvedFastPolicy } from "../../providers/fastwire";
+import { applyDroidResponsesReasoningDefault } from "../droid-reasoning-default";
 
 export const MAX_FAST_WIRE_CAPABILITY_WARNINGS = 256;
 
@@ -120,9 +121,15 @@ export async function applyFinalRouteRequestNormalization(args: {
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
   claudeGoAffinity?: HandleResponsesOptions["claudeGoAffinity"];
+  droidDefaultEffort?: HandleResponsesOptions["droidDefaultEffort"];
 }): Promise<void> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
   const effortSelector = prepareEffortNormalization(parsed, route);
+  if (applyDroidResponsesReasoningDefault(
+    parsed._rawBody,
+    args.droidDefaultEffort,
+    { provider: route.provider, modelId: route.modelId },
+  )) parsed.options.reasoning = args.droidDefaultEffort;
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
   // their existing response.model contract even when their public and wire model ids differ.

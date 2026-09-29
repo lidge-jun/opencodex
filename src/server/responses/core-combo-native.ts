@@ -34,6 +34,7 @@ import {
 import { captureRouteStaticPolicy, routeConcreteModel } from "../../router";
 import { comboDefaultEffort, concreteComboRequestBody, getCombo } from "../../combos";
 import { supportedLadderFor } from "../effort-policy";
+import { applyDroidReasoningDefault } from "../droid-reasoning-default";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
@@ -105,10 +106,11 @@ export function createComboProtocolLanes(input: {
   config: OcxConfig;
   logCtx: RequestLogContext;
   admission: DataPlaneAdmission | undefined;
+  droidDefaultEffort?: string;
   comboId: string;
   targets: readonly ComboTarget[];
 }): ComboProtocolLanes | undefined {
-  const { source, req, config, logCtx, admission, comboId, targets } = input;
+  const { source, req, config, logCtx, admission, droidDefaultEffort, comboId, targets } = input;
   if (!source) return undefined;
   const envelope = source.envelope;
   const reject = resolveProtocolSettings(config).unrepresentable === "reject";
@@ -207,6 +209,10 @@ export function createComboProtocolLanes(input: {
       const route = settle(target, targetRoute);
       const body = nativeBody(target, route);
       if (!route || !body) return undefined;
+      applyDroidReasoningDefault(body, droidDefaultEffort, {
+        provider: targetRoute.provider,
+        modelId: targetRoute.modelId,
+      });
       applyComboEffort(body, config, comboId, target, targetRoute);
       return { route, body, sendBudget: targetSendBudget };
     },

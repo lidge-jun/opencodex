@@ -1,16 +1,27 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { effortRowId } from "../../src/server/effort-row";
+import { clearHealthHistoryCacheForTests } from "../../src/routing/health";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const upstreamServers: Array<ReturnType<typeof Bun.serve>> = [];
 let releaseSpendHome: (() => void) | undefined;
+let testHome: TempHome;
+
+beforeEach(() => {
+  testHome = createTempHome("ocx-droid-reasoning-default-");
+});
 
 afterEach(() => {
   for (const server of upstreamServers.splice(0)) server.stop(true);
   releaseSpendHome?.();
   releaseSpendHome = undefined;
+  clearHealthHistoryCacheForTests();
+  closeRequestHistoryIndex();
+  testHome.remove();
 });
 
 function upstream() {
@@ -33,6 +44,21 @@ function upstream() {
         choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       });
+    },
+  });
+  upstreamServers.push(server);
+  return { captured, baseUrl: `${server.url}v1` };
+}
+
+function failingUpstream() {
+  const captured: Array<{ headers: Headers; body: Record<string, unknown> }> = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push({ headers: new Headers(req.headers), body: await req.json() as Record<string, unknown> });
+      return Response.json({
+        error: { type: "server_error", code: "upstream_server_error", message: "busy" },
+      }, { status: 500 });
     },
   });
   upstreamServers.push(server);
@@ -172,57 +198,86 @@ test("Chat synthetic low effort row takes precedence over the Droid high default
   expect(sent.body.reasoning?.effort ?? sent.body.reasoning_effort).toBe("low");
 });
 
-test("translated Chat preserves a Droid default for a later compatible combo target", async () => {
-  releaseSpendHome ??= acquireOwnedSpendHome();
-  const firstBodies: Record<string, unknown>[] = [];
-  const firstHeaders: Headers[] = [];
-  const first = Bun.serve({
-    port: 0,
-    async fetch(req) {
-      firstHeaders.push(new Headers(req.headers));
-      firstBodies.push(await req.json() as Record<string, unknown>);
-      return Response.json({
-        error: { type: "server_error", code: "upstream_server_error", message: "busy" },
-      }, { status: 500 });
-    },
-  });
-  upstreamServers.push(first);
-  const second = upstream();
-  const config = {
-    defaultProvider: "first",
-    providers: {
-      first: {
-        adapter: "openai-chat", baseUrl: `${first.url}v1`, apiKey: "fixture",
-        allowPrivateNetwork: true, modelReasoningEfforts: { m1: [] },
-      },
-      second: {
-        adapter: "openai-chat", baseUrl: second.baseUrl, apiKey: "fixture",
-        allowPrivateNetwork: true, modelReasoningEfforts: { m2: ["high"] },
-      },
-    },
-    combos: {
-      fallback: {
-        strategy: "failover",
-        targets: [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }],
-      },
-    },
-  } as OcxConfig;
+function sentEffort(captured: { body: Record<string, unknown> }) {
+  return captured.body.reasoning_effort ?? (captured.body.reasoning as Record<string, unknown> | undefined)?.effort;
+}
+
+const fallbackProviders = (firstUrl: string, secondUrl: string) => ({
+  first: {
+    adapter: "openai-chat", baseUrl: firstUrl, apiKey: "fixture", models: ["m1"],
+    allowPrivateNetwork: true, modelReasoningEfforts: { m1: ["low", "high"] },
+    transientRetryOn5xx: { attempts: 1 },
+  },
+  second: {
+    adapter: "openai-chat", baseUrl: secondUrl, apiKey: "fixture", models: ["m2"],
+    allowPrivateNetwork: true, modelReasoningEfforts: { m2: ["low"] },
+  },
+});
+
+async function sendFallback(config: OcxConfig, model: string, explicitEffort: boolean) {
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", "x-opencodex-droid-default-effort": "high" },
     body: JSON.stringify({
-      model: "combo/fallback", stream: false, messages: [{ role: "user", content: "hello" }],
+      model,
+      stream: false,
+      messages: [{ role: "user", content: "hello" }],
+      ...(explicitEffort ? { reasoning_effort: "low" } : {}),
     }),
   }), config, { model: "", provider: "" });
   await response.text();
-
   expect(response.status).toBe(200);
-  expect(firstBodies).toHaveLength(1);
-  expect(Object.hasOwn(firstBodies[0]!, "reasoning_effort")).toBe(false);
-  expect(Object.hasOwn(firstBodies[0]!, "reasoning")).toBe(false);
+}
+
+function expectFallbackEfforts(
+  first: { captured: Array<{ headers: Headers; body: Record<string, unknown> }> },
+  second: { captured: Array<{ headers: Headers; body: Record<string, unknown> }> },
+  explicitEffort: boolean,
+) {
+  expect(first.captured).toHaveLength(1);
   expect(second.captured).toHaveLength(1);
-  expect(second.captured[0]!.body.reasoning_effort
-    ?? (second.captured[0]!.body.reasoning as Record<string, unknown> | undefined)?.effort).toBe("high");
-  expect(firstHeaders[0]!.has("x-opencodex-droid-default-effort")).toBe(false);
+  expect(sentEffort(first.captured[0]!)).toBe(explicitEffort ? "low" : "high");
+  expect(sentEffort(second.captured[0]!)).toBe(explicitEffort ? "low" : undefined);
+  expect(first.captured[0]!.headers.has("x-opencodex-droid-default-effort")).toBe(false);
   expect(second.captured[0]!.headers.has("x-opencodex-droid-default-effort")).toBe(false);
-});
+}
+
+for (const nativeChatCombos of [false, true]) {
+  for (const explicitEffort of [false, true]) {
+    test(`Chat validates ${explicitEffort ? "explicit effort before the" : "the"} Droid default per combo target (native=${nativeChatCombos})`, async () => {
+      releaseSpendHome ??= acquireOwnedSpendHome();
+      const first = failingUpstream();
+      const second = upstream();
+      const comboId = `fallback-${nativeChatCombos ? "native" : "bridge"}-${explicitEffort ? "explicit" : "default"}`;
+      await sendFallback({
+        defaultProvider: "first",
+        providers: fallbackProviders(first.baseUrl, second.baseUrl),
+        combos: {
+          [comboId]: {
+            strategy: "failover",
+            targets: [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }],
+          },
+        },
+        ...(nativeChatCombos ? { protocols: { rollout: { nativeChatCombos: true } } } : {}),
+      } as OcxConfig, `combo/${comboId}`, explicitEffort);
+      expectFallbackEfforts(first, second, explicitEffort);
+      expect(first.captured[0]!.body.stream).toBe(!nativeChatCombos);
+    });
+  }
+}
+
+for (const explicitEffort of [false, true]) {
+  test(`translated Chat validates ${explicitEffort ? "explicit effort before the" : "the"} Droid default per policy candidate`, async () => {
+    releaseSpendHome ??= acquireOwnedSpendHome();
+    const first = failingUpstream();
+    const second = upstream();
+    await sendFallback({
+      defaultProvider: "first",
+      providers: fallbackProviders(first.baseUrl, second.baseUrl),
+      routingProfiles: {
+        fallback: { candidates: [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }] },
+      },
+    } as OcxConfig, "policy/fallback", explicitEffort);
+    expectFallbackEfforts(first, second, explicitEffort);
+  });
+}

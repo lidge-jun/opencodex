@@ -1187,6 +1187,7 @@ export async function prepareResponsesRequest(
     inboundWire,
     inboundTransport: options.inboundTransport,
     claudeGoAffinity: options.claudeGoAffinity,
+    droidDefaultEffort: options.droidDefaultEffort,
   });
   // Normalization is the last thing that can move the destination: resolving an
   // OpenAI virtual model rewrites route.modelId to the wire id that will
