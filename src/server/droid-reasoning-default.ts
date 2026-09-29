@@ -7,8 +7,14 @@ export { DROID_DEFAULT_EFFORT_HEADER } from "../clients/config-export/contracts"
 type ChatRequestBody = Record<string, unknown>;
 type DroidReasoningTarget = { provider: OcxProviderConfig; modelId: string };
 
-export function droidReasoningDefault(header: string | null): string | undefined {
-  return header && isDeclaredReasoningEffort(header) ? header : undefined;
+function hasExplicitEffort(body: ChatRequestBody): boolean {
+  return Object.hasOwn(body, "reasoning_effort")
+    || (isPlainObject(body.reasoning) && Object.hasOwn(body.reasoning, "effort"));
+}
+
+/** Read before the Chat body is bridged: the bridge drops null and unknown efforts, which still count as explicit. */
+export function droidReasoningDefault(header: string | null, chatBody: ChatRequestBody): string | undefined {
+  return header && isDeclaredReasoningEffort(header) && !hasExplicitEffort(chatBody) ? header : undefined;
 }
 
 function pendingDefault(
@@ -16,8 +22,7 @@ function pendingDefault(
   defaultEffort: string | undefined,
   target: DroidReasoningTarget,
 ): string | undefined {
-  if (!defaultEffort || Object.hasOwn(body, "reasoning_effort")) return undefined;
-  if (isPlainObject(body.reasoning) && Object.hasOwn(body.reasoning, "effort")) return undefined;
+  if (!defaultEffort || hasExplicitEffort(body)) return undefined;
   const supportedEfforts = configuredReasoningEfforts(target.provider, target.modelId)
     ?? CODEX_REASONING_LEVELS.map(level => level.effort);
   return supportedEfforts.includes(defaultEffort) ? defaultEffort : undefined;

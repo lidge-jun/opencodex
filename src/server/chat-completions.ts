@@ -159,7 +159,7 @@ async function handleChatCompletionsWithBudget(
   const { fastRow, effortRow } = parseSyntheticRowId(requestedModel, config);
   const droidDefaultEffort = effortRow
     ? undefined
-    : droidReasoningDefault(req.headers.get(DROID_DEFAULT_EFFORT_HEADER));
+    : droidReasoningDefault(req.headers.get(DROID_DEFAULT_EFFORT_HEADER), chatBody);
   if (effortRow) chatBody.model = effortRow.baseId;
   if (fastRow) {
     chatBody.model = fastRow.baseId;

@@ -202,82 +202,66 @@ function sentEffort(captured: { body: Record<string, unknown> }) {
   return captured.body.reasoning_effort ?? (captured.body.reasoning as Record<string, unknown> | undefined)?.effort;
 }
 
-const fallbackProviders = (firstUrl: string, secondUrl: string) => ({
-  first: {
-    adapter: "openai-chat", baseUrl: firstUrl, apiKey: "fixture", models: ["m1"],
-    allowPrivateNetwork: true, modelReasoningEfforts: { m1: ["low", "high"] },
-    transientRetryOn5xx: { attempts: 1 },
-  },
-  second: {
-    adapter: "openai-chat", baseUrl: secondUrl, apiKey: "fixture", models: ["m2"],
-    allowPrivateNetwork: true, modelReasoningEfforts: { m2: ["low"] },
-  },
-});
+type FallbackRoute = "bridge combo" | "native combo" | "policy";
+let fallbackRun = 0;
 
-async function sendFallback(config: OcxConfig, model: string, explicitEffort: boolean) {
+async function sendFallback(route: FallbackRoute, extraBody: Record<string, unknown>, droidHeader: boolean) {
+  releaseSpendHome ??= acquireOwnedSpendHome();
+  const first = failingUpstream();
+  const second = upstream();
+  const routeId = `fallback-${++fallbackRun}`;
+  const targets = [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }];
+  const config = {
+    defaultProvider: "first",
+    providers: {
+      first: {
+        adapter: "openai-chat", baseUrl: first.baseUrl, apiKey: "fixture", models: ["m1"],
+        allowPrivateNetwork: true, modelReasoningEfforts: { m1: ["low", "high"] },
+        transientRetryOn5xx: { attempts: 1 },
+      },
+      second: {
+        adapter: "openai-chat", baseUrl: second.baseUrl, apiKey: "fixture", models: ["m2"],
+        allowPrivateNetwork: true, modelReasoningEfforts: { m2: ["low"] },
+      },
+    },
+    ...(route === "policy"
+      ? { routingProfiles: { [routeId]: { candidates: targets } } }
+      : { combos: { [routeId]: { strategy: "failover", targets } } }),
+    ...(route === "native combo" ? { protocols: { rollout: { nativeChatCombos: true } } } : {}),
+  } as OcxConfig;
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-opencodex-droid-default-effort": "high" },
+    headers: {
+      "content-type": "application/json",
+      ...(droidHeader ? { "x-opencodex-droid-default-effort": "high" } : {}),
+    },
     body: JSON.stringify({
-      model,
+      model: `${route === "policy" ? "policy" : "combo"}/${routeId}`,
       stream: false,
       messages: [{ role: "user", content: "hello" }],
-      ...(explicitEffort ? { reasoning_effort: "low" } : {}),
+      ...extraBody,
     }),
   }), config, { model: "", provider: "" });
   await response.text();
   expect(response.status).toBe(200);
-}
-
-function expectFallbackEfforts(
-  first: { captured: Array<{ headers: Headers; body: Record<string, unknown> }> },
-  second: { captured: Array<{ headers: Headers; body: Record<string, unknown> }> },
-  explicitEffort: boolean,
-) {
   expect(first.captured).toHaveLength(1);
   expect(second.captured).toHaveLength(1);
-  expect(sentEffort(first.captured[0]!)).toBe(explicitEffort ? "low" : "high");
-  expect(sentEffort(second.captured[0]!)).toBe(explicitEffort ? "low" : undefined);
   expect(first.captured[0]!.headers.has("x-opencodex-droid-default-effort")).toBe(false);
   expect(second.captured[0]!.headers.has("x-opencodex-droid-default-effort")).toBe(false);
+  if (route !== "policy") expect(first.captured[0]!.body.stream).toBe(route === "bridge combo");
+  return [sentEffort(first.captured[0]!), sentEffort(second.captured[0]!)];
 }
 
-for (const nativeChatCombos of [false, true]) {
-  for (const explicitEffort of [false, true]) {
-    test(`Chat validates ${explicitEffort ? "explicit effort before the" : "the"} Droid default per combo target (native=${nativeChatCombos})`, async () => {
-      releaseSpendHome ??= acquireOwnedSpendHome();
-      const first = failingUpstream();
-      const second = upstream();
-      const comboId = `fallback-${nativeChatCombos ? "native" : "bridge"}-${explicitEffort ? "explicit" : "default"}`;
-      await sendFallback({
-        defaultProvider: "first",
-        providers: fallbackProviders(first.baseUrl, second.baseUrl),
-        combos: {
-          [comboId]: {
-            strategy: "failover",
-            targets: [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }],
-          },
-        },
-        ...(nativeChatCombos ? { protocols: { rollout: { nativeChatCombos: true } } } : {}),
-      } as OcxConfig, `combo/${comboId}`, explicitEffort);
-      expectFallbackEfforts(first, second, explicitEffort);
-      expect(first.captured[0]!.body.stream).toBe(!nativeChatCombos);
-    });
-  }
-}
+for (const route of ["bridge combo", "native combo", "policy"] as const) {
+  test(`Chat ${route} applies the Droid default only on targets whose ladder has it`, async () => {
+    expect(await sendFallback(route, {}, true)).toEqual(["high", undefined]);
+  });
 
-for (const explicitEffort of [false, true]) {
-  test(`translated Chat validates ${explicitEffort ? "explicit effort before the" : "the"} Droid default per policy candidate`, async () => {
-    releaseSpendHome ??= acquireOwnedSpendHome();
-    const first = failingUpstream();
-    const second = upstream();
-    await sendFallback({
-      defaultProvider: "first",
-      providers: fallbackProviders(first.baseUrl, second.baseUrl),
-      routingProfiles: {
-        fallback: { candidates: [{ provider: "first", model: "m1" }, { provider: "second", model: "m2" }] },
-      },
-    } as OcxConfig, "policy/fallback", explicitEffort);
-    expectFallbackEfforts(first, second, explicitEffort);
+  test(`Chat ${route} keeps explicit caller effort ahead of the Droid default`, async () => {
+    expect(await sendFallback(route, { reasoning_effort: "low" }, true)).toEqual(["low", "low"]);
+    for (const reasoning_effort of [null, "not-a-canonical-effort"]) {
+      const baseline = await sendFallback(route, { reasoning_effort }, false);
+      expect(await sendFallback(route, { reasoning_effort }, true)).toEqual(baseline);
+    }
   });
 }
