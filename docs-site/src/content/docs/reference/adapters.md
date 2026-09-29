@@ -55,6 +55,12 @@ transport; it does not infer subscription attribution from the inbound protocol.
   tool message as the anchor.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
+- For translated `Qwen3.8-27B` requests, a text-only developer reminder after the leading system
+  message stays in its conversation slot but is sent as `user`. The model's
+  [chat template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja)
+  rejects later `system` messages and does not accept `developer`, while later `user` messages
+  are valid. This preserves order but cannot preserve developer-role precedence. Other models
+  keep their configured developer-role behavior; native Chat passthrough is unchanged.
 - **Clamps `reasoning_effort`** to the model's advertised subset when an exact tier is unavailable;
   `xhigh` and `max` remain distinct labels unless a provider explicitly configures an alias. The
   adapter **omits it entirely** for ids in `provider.noReasoningModels`.
