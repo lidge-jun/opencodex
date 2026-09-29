@@ -635,6 +635,7 @@ describe("cloudflare supervisor lifecycle", () => {
     writeFileSync(join(first, "config.json"), "{\"v\":1}");
     const one = recordingExit();
     const before = new Supervisor({ roots: [{ prefix: "opencodex", dir: first }], intervalMs: 60_000, port: 0, stateOrigin: state.origin, exit: one.exit, handleSignals: false });
+    let after: Supervisor | undefined;
     void before.main(IDLE_CHILD);
     try {
       await until(() => state.events.includes("GET /snapshot"));
@@ -645,10 +646,15 @@ describe("cloudflare supervisor lifecycle", () => {
       const second = scratch();
       const uploadsBefore = state.events.filter(event => event === "PUT /snapshot").length;
       const two = recordingExit();
-      const after = new Supervisor({ roots: [{ prefix: "opencodex", dir: second }], intervalMs: 100, port: 0, stateOrigin: state.origin, exit: two.exit, handleSignals: false });
+      after = new Supervisor({ roots: [{ prefix: "opencodex", dir: second }], intervalMs: 100, port: 0, stateOrigin: state.origin, exit: two.exit, handleSignals: false });
       void after.main(IDLE_CHILD);
       await until(() => existsSync(join(second, "config.json")));
       // Several idle intervals pass; the restored digest and fingerprint mean none uploads.
+      await Bun.sleep(600);
+      expect(state.events.filter(event => event === "PUT /snapshot")).toHaveLength(uploadsBefore);
+      // Same bytes, new mtime: the fingerprint moves, so staging runs, and only the digest seeded
+      // from the restored snapshot keeps it from uploading identical state.
+      writeFileSync(join(second, "config.json"), "{\"v\":1}");
       await Bun.sleep(600);
       expect(state.events.filter(event => event === "PUT /snapshot")).toHaveLength(uploadsBefore);
       writeFileSync(join(second, "config.json"), "{\"v\":2}");
@@ -656,6 +662,40 @@ describe("cloudflare supervisor lifecycle", () => {
       void after.shutdown("SIGTERM");
       await two.code;
     } finally {
+      void before.shutdown("SIGTERM");
+      void after?.shutdown("SIGTERM");
+      state.stop();
+    }
+  });
+
+  test("staging is refused on a disk too small for two copies, and an unchanged hub never checks", async () => {
+    const state = fakeStateServer();
+    const home = scratch();
+    writeFileSync(join(home, "config.json"), "x".repeat(1000));
+    let checks = 0;
+    let free = 1_000;
+    const { code, exit } = recordingExit();
+    const supervisor = new Supervisor({
+      roots: [{ prefix: "opencodex", dir: home }], intervalMs: 100, port: 0, stateOrigin: state.origin, exit, handleSignals: false,
+      freeBytes: async () => { checks++; return free; },
+    });
+    void supervisor.main(IDLE_CHILD);
+    try {
+      await until(() => checks > 0);
+      await Bun.sleep(300);
+      expect(state.events).not.toContain("PUT /snapshot");
+      // Nothing changed since the refusal was recorded as a failure, but the fingerprint was never
+      // stored, so it is retried (with backoff) once space returns.
+      free = 10_000_000_000;
+      await until(() => state.events.includes("PUT /snapshot"), 5_000);
+      // Uploaded and unchanged: further intervals do not even reach the disk check.
+      const settled = checks;
+      await Bun.sleep(500);
+      expect(checks).toBe(settled);
+      void supervisor.shutdown("SIGTERM");
+      await code;
+    } finally {
+      void supervisor.shutdown("SIGTERM");
       state.stop();
     }
   });

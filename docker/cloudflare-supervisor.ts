@@ -234,6 +234,8 @@ export type SupervisorOptions = {
   handleSignals?: boolean;
   /** The Durable Object's lease staleness window (LEASE_STALE_MS in deploy/cloudflare/src/lease.ts). */
   leaseStaleMs?: number;
+  /** Free bytes where snapshots are staged; tests substitute a constrained disk. */
+  freeBytes?: () => Promise<number>;
 };
 
 export class Supervisor {
@@ -244,6 +246,7 @@ export class Supervisor {
   private readonly stateOrigin: string;
   private readonly exitProcess: (code: number) => Promise<never>;
   private readonly leaseStaleMs: number;
+  private readonly freeBytes: () => Promise<number>;
   private lastRenewedAt = 0;
   private readonly handleSignals: boolean;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -268,6 +271,10 @@ export class Supervisor {
     this.exitProcess = options.exit ?? (code => process.exit(code));
     this.handleSignals = options.handleSignals ?? true;
     this.leaseStaleMs = options.leaseStaleMs ?? 120_000;
+    this.freeBytes = options.freeBytes ?? (async () => {
+      const free = await statfs(tmpdir());
+      return Number(free.bavail) * Number(free.bsize);
+    });
   }
 
   private async exit(code: number): Promise<never> {
@@ -370,8 +377,7 @@ export class Supervisor {
     if (before.key === this.lastFingerprint) return;
     // Staging needs one more copy of the state and the archive up to another: refuse rather than
     // fill the disk the running ocx also writes to.
-    const free = await statfs(tmpdir());
-    const available = Number(free.bavail) * Number(free.bsize);
+    const available = await this.freeBytes();
     if (available < before.bytes * 2 + SNAPSHOT_HEADROOM_BYTES) {
       throw new Error(`not enough free disk to stage ${before.bytes} bytes of state (${available} free)`);
     }
