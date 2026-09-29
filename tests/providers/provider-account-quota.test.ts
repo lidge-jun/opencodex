@@ -367,7 +367,10 @@ describe("fetchProviderAccountQuotas", () => {
     // Switch active mid-flight before Anthropic responds.
     await setActiveAccount("anthropic", second!.id);
     releaseUsage();
-    await reportPromise;
+    const switchedReport = await reportPromise;
+    expect(switchedReport.reports).toEqual([]);
+    expect(getCachedProviderAccountQuota("anthropic", first!.id)?.fiveHourPercent).toBe(70);
+    expect(getCachedProviderAccountQuota("anthropic", second!.id)).toBeNull();
 
     // First account still owns token-first — seed must land on first, not second.
     clearProviderQuotaCache();

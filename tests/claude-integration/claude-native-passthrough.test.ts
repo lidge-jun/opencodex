@@ -11,6 +11,10 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
+import { tapAnthropicSseForLog } from "../../src/server/claude-messages";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -787,4 +791,180 @@ test("an overlength id is rewritten within 64 characters and a colliding valid i
     await server.stop(true);
     upstream.stop(true);
   }
+});
+
+// --- Mid-stream upstream reset: the stream had started, then the upstream socket went away ---
+
+const PARTIAL_TURN_SSE = [
+  `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "msg_up", type: "message", role: "assistant", content: [], model: "claude-fable-5", stop_reason: null, usage: { input_tokens: 12, output_tokens: 1 } } })}\n\n`,
+  `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`,
+  `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "half an ans" } })}\n\n`,
+].join("");
+
+test("a mid-stream upstream reset ends the native stream with an Anthropic error event and logs a failed turn", async () => {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  const upstream = startTruncatedSseUpstream(PARTIAL_TURN_SSE);
+  saveConfig(cfg(`http://127.0.0.1:${upstream.port}`));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify(claudeBody()),
+    });
+    expect(res.status).toBe(200);
+    // The body ends cleanly with a protocol terminal the client can act on, instead of a
+    // connection reset (or, on some Bun releases, a bare chunked EOF) after "half an ans".
+    const text = await res.text();
+    expect(text).toContain("half an ans");
+    expect(text).toContain("\n\nevent: error\ndata: ");
+    const errorFrame = JSON.parse(text.slice(text.lastIndexOf("data: ") + 6).trim()) as { type: string; error: { type: string; message: string } };
+    expect(errorFrame.type).toBe("error");
+    expect(errorFrame.error.type).toBe("api_error");
+    expect(errorFrame.error.message).toContain("anthropic passthrough upstream stream failed: ");
+    // The committed request is not replayed.
+    expect(upstream.requests()).toBe(1);
+
+    const logs = logsFromApiBody<{
+      status?: number;
+      terminalStatus?: string;
+      closeReason?: string;
+      transportPhase?: string;
+      terminalSource?: string;
+      failureCause?: string;
+      upstreamError?: string;
+      usage?: { inputTokens?: number };
+    }>(await (await fetch(new URL("/api/logs?tail=1", server.url))).json());
+    expect(logs).toHaveLength(1);
+    const row = logs[0]!;
+    // Same row the Responses relay writes for a mid-stream reset: a truncated 200 body is not a
+    // completed turn.
+    expect(row.status).toBe(502);
+    expect(row.terminalStatus).toBe("failed");
+    expect(row.closeReason).toBe("terminal");
+    expect(row.transportPhase).toBe("mid_stream");
+    expect(row.terminalSource).toBe("synthetic");
+    expect(row.failureCause).toBe("transport-ambiguous");
+    expect(row.upstreamError).toContain("anthropic passthrough upstream stream failed: ");
+    // Usage seen before the reset is still recorded.
+    expect(row.usage?.inputTokens).toBe(12);
+  } finally {
+    await server.stop(true);
+    upstream.stop();
+  }
+});
+
+test("a translator budget overflow still errors the tapped stream for callers that map it", async () => {
+  const overflow = new TranslatorBudgetExceededError("live_transient", 1024);
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) {
+        controller.error(overflow);
+        return;
+      }
+      sent = true;
+      controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 5_000, maxBytes: 0 });
+  // The non-streaming native Messages fold turns this error into a 413; an error frame would
+  // have reached it as a generic 502 instead.
+  await expect(new Response(tapped).text()).rejects.toBe(overflow);
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.transportPhase).toBeUndefined();
+});
+
+test("a read rejection that lands before the client abort listener still finalizes as a client cancel", async () => {
+  // Bun can settle a fetch body read before it dispatches the abort listeners (see
+  // consumeForInspection in src/server/relay.ts). Model that order: the signal is already
+  // aborted when the read rejects, and its listener has not run.
+  const signal = { aborted: false, reason: undefined as unknown, addEventListener() {}, removeEventListener() {} };
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) {
+        signal.aborted = true;
+        signal.reason = new DOMException("client went away", "AbortError");
+        controller.error(signal.reason);
+        return;
+      }
+      sent = true;
+      controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), {
+    stallMs: 5_000,
+    maxBytes: 0,
+    reqSignal: signal as unknown as AbortSignal,
+  });
+  const text = await new Response(tapped).text();
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 499, closeReason: "client_cancel" }]);
+  expect(logCtx.transportPhase).toBeUndefined();
+  expect(logCtx.upstreamError).toBeUndefined();
+});
+
+const COMPLETE_TURN_SSE = PARTIAL_TURN_SSE + [
+  `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`,
+  `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 } })}\n\n`,
+  `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+].join("");
+
+test("a reset after message_stop is a finished turn: no error event and a completed row", async () => {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  // Only the chunked-encoding trailer is lost; the turn itself arrived whole.
+  const upstream = startTruncatedSseUpstream(COMPLETE_TURN_SSE);
+  saveConfig(cfg(`http://127.0.0.1:${upstream.port}`));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify(claudeBody()),
+    });
+    const text = await res.text();
+    expect(text.endsWith(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`)).toBe(true);
+    expect(text).not.toContain("event: error");
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; transportPhase?: string; upstreamError?: string }>(
+      await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
+    );
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ status: 200, closeReason: "terminal" });
+    expect(logs[0]!.transportPhase).toBeUndefined();
+    expect(logs[0]!.upstreamError).toBeUndefined();
+  } finally {
+    await server.stop(true);
+    upstream.stop();
+  }
+});
+
+test("a terminal frame still in the buffer when the read fails counts as seen", async () => {
+  // The reset can land after message_stop but before its blank-line delimiter.
+  const withoutDelimiter = COMPLETE_TURN_SSE.slice(0, -2);
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent) {
+        controller.error(new Error("The socket connection was closed unexpectedly."));
+        return;
+      }
+      sent = true;
+      controller.enqueue(new TextEncoder().encode(withoutDelimiter));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 5_000, maxBytes: 0 });
+  const text = await new Response(tapped).text();
+  // The delimiter is restored: an SSE parser drops an event that EOF cuts off before its blank line.
+  expect(text).toBe(`${withoutDelimiter}\n\n`);
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
 });

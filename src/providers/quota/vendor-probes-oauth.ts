@@ -1,7 +1,7 @@
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
-import { getAccountCredential, getAccountSet } from "../../oauth/store";
+import { captureOAuthAccountSelection, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
@@ -18,6 +18,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
+  accountReportCurrent,
   TERMINAL_QUOTA_FAILURE,
   hasQuotaRows,
   providerLabel,
@@ -339,7 +340,8 @@ export async function fetchAnthropicUsageQuota(accessToken: string): Promise<Pro
 export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
   // Capture the account we intend to probe before awaiting — a mid-flight active
   // switch must not seed the wrong account's cache with this response.
-  const probedAccountId = getAccountSet("anthropic")?.activeAccountId;
+  const selection = captureOAuthAccountSelection("anthropic");
+  const probedAccountId = selection?.accountId;
   const probedAccountKey = probedAccountId ? accountCacheKey("anthropic", probedAccountId) : null;
   const writerGeneration = captureConfigGeneration();
   let accessToken: string;
@@ -348,6 +350,10 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
   } catch {
     return null;
   }
+  const row = probedAccountId ? getAccountCredentialWithStatus("anthropic", probedAccountId) : null;
+  // Pause, reauth and a replaced token stop the send; an active-account switch does not, because
+  // the reading is attributed to probedAccountId and still seeds that account's row.
+  if (!row || row.paused || row.needsReauth || row.credential.access !== accessToken) return null;
   const quota = await fetchAnthropicUsageQuota(accessToken);
   if (!quota) return null;
   // Share the active-account probe with the per-account cache so Providers-page
@@ -358,7 +364,11 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
       accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
     }
   }
-  return report(provider, "anthropic:oauth-usage", quota);
+  const result = report(provider, "anthropic:oauth-usage", quota);
+  if (result && probedAccountId) {
+    accountReportCurrent.set(result, () => getAccountSet("anthropic")?.activeAccountId === probedAccountId);
+  }
+  return result;
 }
 
 /**

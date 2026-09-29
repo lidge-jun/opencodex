@@ -14,6 +14,7 @@ import {
   resolveAdmissionModelScope,
 } from "./admission-model-scope";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
+import { redactSecretString } from "../lib/redact";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
@@ -295,46 +296,55 @@ export interface PassthroughBodyGuard {
 }
 
 type PassthroughCloseReason = "terminal" | "client_cancel" | "body_stall" | "body_overflow";
+type PassthroughFinalizeMeta = { closeReason: PassthroughCloseReason; terminalStatus?: "failed" };
 
 /**
  * Tap an Anthropic-vocabulary SSE stream for the request log (usage + terminal),
  * bounding body occupancy: idle (silence-only, timed ONLY while a reader.read() is
  * pending so downstream backpressure never counts as upstream inactivity) and a
- * cumulative byte cap. On stall/overflow it appends a protocol-compatible Anthropic
- * `event: error` terminal frame after a blank-line boundary, closes, and cancels the
- * upstream reader — never a total-wall-clock bound (slow-but-alive streams live).
+ * cumulative byte cap. On stall/overflow, or when the upstream read fails after the
+ * headers went out, it appends a protocol-compatible Anthropic `event: error` terminal
+ * frame after a blank-line boundary, closes, and cancels the upstream reader — never a
+ * total-wall-clock bound (slow-but-alive streams live).
  * Exported for deterministic unit tests.
  */
 export function tapAnthropicSseForLog(
   upstream: ReadableStream<Uint8Array>,
   logCtx: RequestLogContext,
-  finalize: (status: number, meta: { closeReason: PassthroughCloseReason }) => void,
+  finalize: (status: number, meta: PassthroughFinalizeMeta) => void,
   guard?: PassthroughBodyGuard,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
   let usageAcc: Rec = {};
+  // message_stop or an upstream error event: the turn's own terminal already went through.
+  let terminalSeen = false;
+  const inspectFrame = (frame: string) => {
+    const dataLine = frame
+      .split("\n")
+      .map(l => sseFieldValue(l, "data"))
+      .filter((v): v is string => v !== null)
+      .join("");
+    if (!dataLine) return;
+    let data: unknown;
+    try { data = JSON.parse(dataLine); } catch { return; }
+    if (!isRec(data)) return;
+    if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
+      usageAcc = { ...usageAcc, ...data.message.usage };
+    } else if (data.type === "message_delta" && isRec(data.usage)) {
+      usageAcc = { ...usageAcc, ...data.usage };
+    } else if (data.type === "message_stop" || data.type === "error") {
+      terminalSeen = true;
+    }
+  };
   const inspect = (chunk: Uint8Array) => {
     buffer += decoder.decode(chunk, { stream: true });
     let sep: number;
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
-      const dataLine = frame
-        .split("\n")
-        .map(l => sseFieldValue(l, "data"))
-        .filter((v): v is string => v !== null)
-        .join("");
-      if (!dataLine) continue;
-      let data: unknown;
-      try { data = JSON.parse(dataLine); } catch { continue; }
-      if (!isRec(data)) continue;
-      if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
-        usageAcc = { ...usageAcc, ...data.message.usage };
-      } else if (data.type === "message_delta" && isRec(data.usage)) {
-        usageAcc = { ...usageAcc, ...data.usage };
-      }
+      inspectFrame(frame);
     }
   };
   const reader = upstream.getReader();
@@ -345,13 +355,7 @@ export function tapAnthropicSseForLog(
   const recordUsage = () => {
     logCtx.usage = anthropicUsageToOcx(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
   };
-  const failBody = (closeReason: "body_stall" | "body_overflow", errType: string, message: string) => {
-    if (settled) return;
-    settled = true;
-    idle.cancel();
-    detachAbort();
-    recordUsage();
-    finalize(200, { closeReason });
+  const closeWithErrorFrame = (errType: string, message: string) => {
     const payload = JSON.stringify({ type: "error", error: { type: errType, message } });
     try {
       // Leading blank line terminates any partial SSE block so the frame parses cleanly
@@ -359,6 +363,15 @@ export function tapAnthropicSseForLog(
       tapController?.enqueue(encoder.encode(`\n\nevent: error\ndata: ${payload}\n\n`));
       tapController?.close();
     } catch { /* client already torn down */ }
+  };
+  const failBody = (closeReason: "body_stall" | "body_overflow", errType: string, message: string) => {
+    if (settled) return;
+    settled = true;
+    idle.cancel();
+    detachAbort();
+    recordUsage();
+    finalize(200, { closeReason });
+    closeWithErrorFrame(errType, message);
     reader.cancel(new DOMException(message, closeReason === "body_stall" ? "TimeoutError" : "QuotaExceededError")).catch(() => {});
   };
   const idle = idleDeadline(guard?.stallMs ?? 0, () => {
@@ -427,12 +440,56 @@ export function tapAnthropicSseForLog(
         controller.enqueue(value);
       } catch (err) {
         if (settled) return;
+        // Bun can settle a fetch body read before it dispatches the abort listeners
+        // (consumeForInspection in relay.ts): read the signal itself before calling this
+        // rejection an upstream failure.
+        if (guard?.reqSignal?.aborted) {
+          onClientAbort();
+          return;
+        }
         settled = true;
         idle.cancel();
         detachAbort();
+        // A read error can follow the last SSE block before its blank-line delimiter. Count
+        // that block before deciding how the turn ended, as the Responses relay does.
+        const terminalBeforeTail = terminalSeen;
+        const tail = buffer + decoder.decode();
+        buffer = "";
+        if (tail) inspectFrame(tail);
         recordUsage();
-        finalize(200, { closeReason: "terminal" });
-        try { controller.error(err); } catch { /* torn down */ }
+        if (isTranslatorBudgetExceededError(err)) {
+          // A local cap, not an upstream failure: the non-streaming native Messages fold
+          // maps this error to a 413 itself, so it still errors the stream.
+          finalize(200, { closeReason: "terminal" });
+          try { controller.error(err); } catch { /* torn down */ }
+          return;
+        }
+        if (terminalSeen) {
+          // Only the transport trailer was lost; the client already has the turn's terminal.
+          // The Responses relay likewise reports a read error only without a seen terminal.
+          finalize(200, { closeReason: "terminal" });
+          try {
+            // An SSE parser drops an event that EOF cuts off before its blank line, so restore
+            // the delimiter when the terminal was only found in that unterminated tail.
+            if (!terminalBeforeTail) controller.enqueue(encoder.encode("\n\n"));
+            controller.close();
+          } catch { /* torn down */ }
+          reader.cancel(err).catch(() => {});
+          return;
+        }
+        // The upstream read failed after the 200 went out (a mid-stream socket reset). Log it
+        // the way the Responses relay does (onReadError): a truncated body is a failed turn,
+        // not a completed one. The client gets the same Anthropic error terminal as a stall,
+        // instead of a connection reset — or, on some Bun releases, a bare EOF that reads as
+        // a finished message.
+        const message = redactSecretString(`anthropic passthrough upstream stream failed: ${err instanceof Error ? err.message : String(err)}`);
+        logCtx.transportPhase = "mid_stream";
+        logCtx.terminalSource = "synthetic";
+        logCtx.upstreamError = message.slice(0, 500);
+        if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
+        finalize(502, { terminalStatus: "failed", closeReason: "terminal" });
+        closeWithErrorFrame("api_error", message);
+        reader.cancel(err).catch(() => {});
       }
     },
     cancel(reason) {

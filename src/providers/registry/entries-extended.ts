@@ -1138,6 +1138,37 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "EU-hosted AI gateway: one OpenAI-compatible endpoint and one key in front of 30+ providers. Bare model ids are pools (claude-sonnet-4-6, gpt-5.5) and Opper picks the route per request; vendor/model ids (anthropic/claude-sonnet-4-6) pin one provider. The catalogue is discovered live from /v3/compat/models with your key; the public list is at opper.ai/models. Token rates are the model providers' rates with no markup; Opper charges a 3% fee when you buy credits.",
   },
   {
+    // Public contract checked 2026-09-29: https://docs.tokenlab.sh/api-reference/models/list-models
+    // A supplied key is validated and scopes the catalog; anonymous discovery is also public.
+    id: "tokenlab",
+    label: "TokenLab",
+    adapter: "openai-chat",
+    baseUrl: "https://api.tokenlab.sh/v1",
+    authKind: "key",
+    dashboardUrl: "https://tokenlab.sh/dashboard/api?tab=keys",
+    // Standard sponsor under SPONSORS.md (agreement dated 2026-09-29). Pins the row in the
+    // picker and adds the chip; nothing about routing, discovery or defaults changes.
+    sponsor: { tier: "standard", url: "https://tokenlab.sh/r/OPENCODEX" },
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "gpt-5.6-terra",
+    models: ["gpt-5.6-terra"],
+    modelContextWindows: { "gpt-5.6-terra": 1_050_000 },
+    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000 },
+    modelInputModalities: { "gpt-5.6-terra": ["text", "image"] },
+    modelDiscovery: {
+      path: "models",
+      query: { category: "chat" },
+      filter: {
+        allOf: [
+          { path: ["tokenlab", "category"], equalsAny: ["chat"] },
+          { path: ["tokenlab", "capabilities"], containsAny: ["tool-use"] },
+        ],
+      },
+    },
+    note: "OpenAI-compatible API gateway. Create a workspace API key at tokenlab.sh. Live discovery lists tool-capable chat models available to your key and delivery policy.",
+  },
+  {
     id: "opencode-free",
     label: "OpenCode Free",
     adapter: "openai-chat",

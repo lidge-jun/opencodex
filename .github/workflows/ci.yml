@@ -261,6 +261,10 @@ jobs:
               - 'src/service/**'
               - 'src/cli/index.ts'
               - 'src/lib/bun-runtime.ts'
+              - 'src/lib/standalone.ts'
+              - 'src/lib/keyring-native.ts'
+              - 'scripts/build-standalone.ts'
+              - 'scripts/standalone-keyring.ts'
               - 'package.json'
               - 'bun.lock'
               - '.github/workflows/ci.yml'
@@ -276,6 +280,7 @@ jobs:
               - 'gui/**'
               - 'src/**'
               - 'scripts/build-standalone.ts'
+              - 'scripts/standalone-keyring.ts'
               - 'scripts/standalone-targets.ts'
               - 'package.json'
               - 'bun.lock'
@@ -1400,10 +1405,11 @@ jobs:
         run: |
           set -euo pipefail
           triple="$(rustc -vV | sed -n 's/^host: //p')"
-          mkdir -p desktop/src-tauri/binaries desktop/src-tauri/resources/gui/dist
+          mkdir -p desktop/src-tauri/binaries desktop/src-tauri/resources/gui/dist desktop/src-tauri/resources/keyring
           : > "desktop/src-tauri/binaries/ocx-${triple}"
           chmod +x "desktop/src-tauri/binaries/ocx-${triple}"
           : > desktop/src-tauri/resources/gui/dist/.keep
+          : > desktop/src-tauri/resources/keyring/.keep
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
@@ -1460,6 +1466,12 @@ jobs:
           cp -a "$APPIMAGE_BUNDLE/." "$BUNDLE_ROOT/appimage/"
           cp -a "$DEB_BUNDLE/." "$BUNDLE_ROOT/deb/"
           chmod -R a-w "$BUNDLE_ROOT"
+
+      - name: Verify packaged Linux sidecar keyring
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          BUNDLE_ROOT: ${{ runner.temp }}/opencodex-linux-bundles
+        run: bash desktop/scripts/verify-linux-sidecar.sh "$BUNDLE_ROOT/appimage"
 
       - name: Run Linux packaged-shell E2E
         if: needs.changes.outputs.desktop == 'true'

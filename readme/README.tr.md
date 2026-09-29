@@ -160,6 +160,10 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>Bu projeye sponsor olduğu için <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>'a teşekkürler! PackyCode, Claude Code, Codex, Gemini ve daha fazlası için aktarma hizmeti sunan istikrarlı ve yüksek başarımlı bir API aktarma sağlayıcısıdır. Otomatik failover, akıllı yönlendirme ve sınırsız eşzamanlılıkla yapay zekâyı gerçek bir üretkenlik aracına dönüştürür. <a href="https://www.packyapi.com/register?aff=k5KT">Bu bağlantıdan kaydolun</a> ve hemen başlayın! Add provider seçicisinden <code>PackyCode</code> seçin ya da <code>ocx provider add packycode</code> çalıştırın.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>Bu projeye sponsor olduğu için <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a>'a teşekkürler! TokenLab, kodlama ajanlarına önde gelen modeller için tek bir API anahtarı sunar; OpenAI Responses ve Chat Completions, Anthropic Messages ve Gemini'nin yerel API biçimleri, akış ve araç çağırma ile desteklenir. Kolay entegrasyon için bir MCP sunucusu ve ajan Skills'i de sağlar. Teslimat modunuzu seçin, kullandıkça ödeyin. Add provider seçicisinden <code>TokenLab</code> seçin ya da <code>ocx provider add tokenlab</code> çalıştırın.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
 </tbody>
 </table>
 

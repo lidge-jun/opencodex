@@ -156,6 +156,10 @@ failover、アカウントの除外、affinity の失効、401/403 や 429 か�
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>このプロジェクトを支援してくださる <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> に感謝します。PackyCode は安定した高性能の API リレープロバイダーで、Claude Code、Codex、Gemini などのリレーを提供しています。自動 failover、スマートルーティング、無制限の同時実行によって、AI を実際の生産性ツールに変えます。<a href="https://www.packyapi.com/register?aff=k5KT">このリンクから登録</a>してすぐに始めてください。Add provider ピッカーで <code>PackyCode</code> を選ぶか <code>ocx provider add packycode</code> を実行してください。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>このプロジェクトを支援してくださる <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> に感謝します。TokenLab はコーディングエージェントに主要モデル向けの API キーを 1 つだけ提供し、OpenAI Responses と Chat Completions、Anthropic Messages、Gemini ネイティブ API の各形式に、ストリーミングとツール呼び出し込みで対応しています。MCP サーバーとエージェント Skills も用意されており、簡単に組み込めます。配信モードを選び、使った分だけ支払えます。Add provider ピッカーで <code>TokenLab</code> を選ぶか <code>ocx provider add tokenlab</code> を実行してください。<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
 </tbody>
 </table>
 

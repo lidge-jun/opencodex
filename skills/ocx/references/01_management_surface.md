@@ -1100,7 +1100,7 @@ JSON mode: `none`.
 
 ### `ocx integration native`
 
-Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen).
+Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen) and, on request, the Private Inference installer Cursor's update channel advertises.
 
 | Method | Route |
 |---|---|
@@ -1110,6 +1110,7 @@ Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, 
 | PUT | `/api/native-integrations/codex` |
 | PUT | `/api/native-integrations/grok` |
 | GET | `/api/native-integrations/cursor` |
+| GET | `/api/native-integrations/cursor/local-installer` |
 
 | Flag | Value | Meaning |
 |---|---|---|

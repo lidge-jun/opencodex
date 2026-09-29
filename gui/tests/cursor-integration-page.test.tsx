@@ -22,6 +22,7 @@ let requests: string[] = [];
 let mountCount = 0;
 let apiBase = "";
 let statusResponse: () => Response;
+let installerResponse: () => Response;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -60,9 +61,11 @@ beforeEach(() => {
   mountCount += 1;
   apiBase = `http://ocx-cursor-${mountCount}.invalid`;
   statusResponse = () => json(payload());
+  installerResponse = () => json({ available: false, url: null, version: null, reason: "unreachable" });
   const mockFetch = (async (input: RequestInfo | URL) => {
-    requests.push(String(input instanceof Request ? input.url : input));
-    return statusResponse();
+    const url = String(input instanceof Request ? input.url : input);
+    requests.push(url);
+    return url.endsWith("/api/native-integrations/cursor/local-installer") ? installerResponse() : statusResponse();
   }) as typeof fetch;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
   Object.defineProperty(testWindow, "fetch", { configurable: true, value: mockFetch });
@@ -137,16 +140,65 @@ test("a stale request keeps the timestamp but drops the green badge", async () =
   expect(container.querySelector("[data-seen='true'] .badge-muted")).not.toBeNull();
 });
 
-test("regular Cursor alone gets the tunnel explanation, not a gateway promise", async () => {
-  statusResponse = () => json(payload({ privateInference: { installed: false, path: null, version: null } }));
+const REGULAR_ONLY = { privateInference: { installed: false, path: null, version: null } };
+
+async function pressInstallerCheck(): Promise<void> {
+  const button = container.querySelector("button[data-cursor-installer-check]") as HTMLButtonElement | null;
+  if (!button) throw new Error("installer lookup button missing");
+  await act(async () => { button.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+}
+
+test("regular Cursor alone makes no installer lookup until the user asks for one", async () => {
+  statusResponse = () => json(payload(REGULAR_ONLY));
   await mount();
+  await flipVisibility();
+  expect(requests.length).toBeGreaterThan(1);
+  expect(requests.every(url => url === `${apiBase}/api/native-integrations/cursor`)).toBe(true);
   const text = textOf();
   expect(text).toContain("Only regular Cursor was found");
-  expect(text).toContain("public tunnel");
+  expect(text).toContain("Look up the Private Inference installer");
+  expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
+  expect(container.querySelector("a[data-cursor-guide='notice']")).not.toBeNull();
+});
+
+test("the lookup button surfaces the local-mode installer the channel advertises", async () => {
+  statusResponse = () => json(payload(REGULAR_ONLY));
+  installerResponse = () => json({ available: true, url: "https://downloads.cursor.com/local-mode/x/win32/x64/user-setup/CursorUserSetup-x64-3.21.18.exe", version: "3.21.18", reason: null });
+  await mount();
+  await pressInstallerCheck();
+  expect(requests.filter(url => url === `${apiBase}/api/native-integrations/cursor/local-installer`)).toHaveLength(1);
+  const text = textOf();
+  expect(text).toContain("separate local-mode build");
+  expect(text).toContain("version 3.21.18");
   expect(container.querySelectorAll("[data-installed='false']").length).toBe(1);
-  // The remediation is a link inside the warning itself, not a footer the user must scroll to.
+  const installer = container.querySelector("a[data-cursor-installer-url]");
+  expect(installer?.getAttribute("href")).toContain("downloads.cursor.com/local-mode/");
+  expect(container.querySelector("button[data-cursor-installer-check]")).toBeNull();
+  // The remediation still ends at the guide link inside the warning itself.
   const notice = container.querySelector("a[data-cursor-guide='notice']");
   expect(notice?.getAttribute("href")).toBe("https://example.invalid/guides/cursor-private-inference/");
+});
+
+test("a lookup with no resolvable installer says so and offers to try again", async () => {
+  statusResponse = () => json(payload(REGULAR_ONLY));
+  await mount();
+  await pressInstallerCheck();
+  const text = textOf();
+  expect(text).toContain("could not be resolved");
+  // The notice still says why regular Cursor needs the separate build.
+  expect(text).toContain("unreachable without a public tunnel");
+  expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
+  expect(container.querySelector("button[data-cursor-installer-check]")).not.toBeNull();
+});
+
+test("a hub that predates the installer route renders the unavailable notice", async () => {
+  statusResponse = () => json(payload(REGULAR_ONLY));
+  installerResponse = () => json({ error: "not found" }, 404);
+  await mount();
+  await pressInstallerCheck();
+  expect(textOf()).toContain("could not be resolved");
+  expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
 });
 
 test("no Cursor at all still hands over the gateway values", async () => {

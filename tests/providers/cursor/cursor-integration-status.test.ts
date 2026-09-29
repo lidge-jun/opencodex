@@ -8,10 +8,11 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../../../src/codex/model-entitlements";
 import { cursorProductJsonCandidates, detectCursorInstalls, type CursorDetectDeps } from "../../../src/integrations/cursor-detect";
+import { resetCursorLocalInstallerCacheForTests } from "../../../src/integrations/cursor-local-installer";
 import { parseCursorEffortTable, type CursorEffortTable } from "../../../src/integrations/cursor-effort-table";
 import { cursorLastSeen, recordCursorSeen, resetCursorSeenForTests } from "../../../src/integrations/cursor-seen";
 import { cursorEffortFamily } from "../../../src/server/models-capabilities";
-import { buildCursorIntegrationStatus } from "../../../src/server/management/cursor-integration-routes";
+import { buildCursorIntegrationStatus, resolveCursorLocalInstaller } from "../../../src/server/management/cursor-integration-routes";
 import { startServer } from "../../../src/server";
 import type { OcxConfig } from "../../../src/types";
 import { SERVER_BUDGET_MS } from "../../helpers/test-budget";
@@ -60,6 +61,16 @@ describe("detectCursorInstalls", () => {
     const installs = detectCursorInstalls(deps);
     expect(installs.map(install => install.build)).toEqual(["private-inference"]);
     expect(installs[0].version).toBeNull();
+  });
+
+  test("finds the /usr/share distro-style tarball layout on Linux", () => {
+    const deps = fakeDeps("linux", {
+      "/usr/share": ["cursor"],
+      "/usr/share/cursor/resources/app/product.json": JSON.stringify({ nameLong: "Cursor Private Inference", version: "3.22.9" }),
+    });
+    expect(detectCursorInstalls(deps)).toEqual([
+      { build: "private-inference", path: "/usr/share/cursor", version: "3.22.9" },
+    ]);
   });
 
   test("finds nothing when no candidate directory exists", () => {
@@ -297,5 +308,52 @@ describe("GET /api/native-integrations/cursor", () => {
     } finally {
       await server.stop(true);
     }
+  });
+
+  /**
+   * The Cursor tab polls the status route while it is open, so the status must stay local: the
+   * cursor-local installer lookup is a remote request and runs only from its own route, on an
+   * explicit user action (#5679). A regular-only install is exactly the state that used to
+   * trigger the lookup, so it is the state this pins.
+   */
+  test("a regular-only status makes no remote request and carries no installer lookup", async () => {
+    const requested: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      requested.push(input instanceof Request ? input.url : String(input));
+      throw new Error("the status route must not reach the network");
+    }) as typeof fetch;
+    try {
+      const status = await buildCursorIntegrationStatus(
+        { config: statusConfig(), deps: { readRuntimePort: () => undefined, loadCursorEffortTable: () => null }, url: new URL("http://127.0.0.1:10100/api/native-integrations/cursor") },
+        [{ build: "regular", path: "/opt/cursor", version: null }],
+      );
+      expect(status.regularCursor.installed).toBe(true);
+      expect(status.privateInference.installed).toBe(false);
+      expect("localInstaller" in status).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(requested).toEqual([]);
+  });
+
+  test("the installer route resolves the channel only for a regular-only install", async () => {
+    resetCursorLocalInstallerCacheForTests();
+    const asked: string[] = [];
+    const deps = {
+      platform: "linux",
+      arch: "x64",
+      fetchJson: async (url: string) => {
+        asked.push(url);
+        return { version: "3.22.7", url: "https://downloads.cursor.com/local-mode/c/linux/x64/Cursor_Private_Inference-3.22.7-x86_64.AppImage" };
+      },
+    };
+    const regular = { build: "regular" as const, path: "/opt/cursor", version: null };
+    const privateInference = { build: "private-inference" as const, path: "/usr/share/cursor", version: "3.22.7" };
+    expect(await resolveCursorLocalInstaller([privateInference, regular], deps)).toMatchObject({ available: false, reason: null });
+    expect(await resolveCursorLocalInstaller([], deps)).toMatchObject({ available: false, reason: "no-regular-install" });
+    expect(asked).toEqual([]);
+    expect(await resolveCursorLocalInstaller([regular], deps)).toMatchObject({ available: true, version: "3.22.7" });
+    expect(asked).toHaveLength(1);
   });
 });

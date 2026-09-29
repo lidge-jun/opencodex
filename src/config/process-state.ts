@@ -9,6 +9,7 @@ import {
 } from "../lib/windows-elevation";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir, hardenConfigDir } from "./paths";
+import { registerOwnHome, unregisterOwnerRegistryHome } from "./owner-registry";
 
 export function getPidPath(): string {
   return join(getConfigDir(), "ocx.pid");
@@ -64,6 +65,10 @@ function isValidRuntimePortState(value: unknown): value is RuntimePortState {
 export function writeRuntimePort(state: RuntimePortState): void {
   ensureProcessStateDir();
   atomicWriteFile(getRuntimePortPath(), JSON.stringify(state, null, 2) + "\n");
+  // The record proves this home's owner only to a reader that knows where it lives.
+  // One pointer in the shared registry makes the record findable from every home;
+  // it is best-effort because ownership never depends on the registry write landing.
+  registerOwnHome();
 }
 
 export function parsePidFile(raw: string): number | null {
@@ -100,6 +105,9 @@ export function removePid(expectedPid?: number): void {
 export function removeRuntimePort(expectedPid?: number): void {
   if (expectedPid !== undefined && readRuntimePort(expectedPid) === null) return;
   try { unlinkSync(getRuntimePortPath()); } catch { /* ignore */ }
+  // The record is gone, so the registry pointer names a dead home. Retire it
+  // beside the record or stale pointers accumulate toward the reader's cap.
+  unregisterOwnerRegistryHome(getConfigDir());
 }
 
 /**

@@ -1,6 +1,6 @@
 import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { resolveEnvValue } from "../config";
-import { getAccountCredential, getAccountSet } from "../oauth/store";
+import { getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../oauth/store";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, CACHE_TTL_MS } from "./quota-wire";
@@ -403,7 +403,6 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
   accountQuotaInflight.set(flightKey, flight);
   return flight;
 }
-
 async function fetchExplicitCurrentQuota(provider: string, config: OcxProviderConfig, liveConfig: OcxConfig): Promise<ProviderQuotaProbeResult> {
   const id = getAccountSet(provider)?.activeAccountId;
   if (!id) return null;
@@ -439,7 +438,6 @@ async function fetchAccountQuota(
     return provider !== "kiro" || joined.identity === kiroIdentity
       ? joined : fetchAccountQuota(provider, accountId, true, providerConfig);
   }
-
   const epoch = explicitAccountEpoch;
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     let diagnosticIdentity: string | undefined;
@@ -469,6 +467,8 @@ async function fetchAccountQuota(
           quota = result.kind === "available" ? result.quota : null;
           if (result.kind === "unavailable") quotaFailure = result.failure;
         } else if (provider === "anthropic") {
+          const row = getAccountCredentialWithStatus(provider, accountId);
+          if (!row || row.paused || row.needsReauth || row.credential.access !== token) return { ts: Date.now(), quota: null, unavailable: true };
           quota = await fetchAnthropicUsageQuota(token);
         } else {
           return { ts: Date.now(), quota: null, unavailable: true };
@@ -524,7 +524,6 @@ async function fetchAccountQuota(
   accountQuotaInflight.set(key, probe);
   return probe;
 }
-
 /**
  * Per-account quota rows for a provider's logged-in accounts. Probes run in parallel; a
  * single failing account never blocks the others.

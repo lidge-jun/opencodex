@@ -584,8 +584,8 @@ count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bri
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in
 `sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
 keeps only allowlisted transport verdict codes. Adapter error events take a different path:
-`src/bridge/internal.ts` carries an event's own `code` into the SSE and JSON failure, after
-mapping cyber-policy codes to HTTP 400. The same file holds the shared usage shaping; `input_tokens_details` and
+`src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
+([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). The shared usage shaping's `input_tokens_details` and
 `output_tokens_details` are always emitted, with zero defaults, because strict Responses clients
 deserialize them as required fields.
 

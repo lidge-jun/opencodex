@@ -120,6 +120,8 @@ export interface CatalogGatherProviderModelOutcome {
 export interface ModelsAuthResolution {
   readonly apiKey: string | undefined;
   readonly observed: boolean;
+  readonly oauthAccountId?: string;
+  readonly oauthGeneration?: string;
   readonly oauthApiBaseUrl?: string;
   readonly oauthProjectId?: string;
 }

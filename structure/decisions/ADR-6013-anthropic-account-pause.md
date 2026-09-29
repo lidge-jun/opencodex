@@ -1,6 +1,6 @@
 # ADR-6013 — decision recorded under "Anthropic account pause"
 
-- Contract owner: [Providers and adapters](../providers-and-adapters.md#anthropic-account-pause)
+- Contract owner: [Anthropic account pool](../providers/anthropic-account-pool.md#anthropic-account-pause)
 
 ## Decision Log
 

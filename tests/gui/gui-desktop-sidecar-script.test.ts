@@ -14,5 +14,7 @@ test("desktop sidecar preparation maps supported Rust targets", () => {
   expect(script).toContain("build:standalone");
   expect(script).toContain("binaries");
   expect(script).toContain("resources");
+  expect(script).toContain("keyringResources");
   expect(script).toContain("ocx-${triple}");
+  expect(script).not.toContain("if (!existsSync(executable))");
 });

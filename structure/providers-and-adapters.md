@@ -1,34 +1,10 @@
 # Providers And Adapters
 
-## Anthropic account pause
+Anthropic account pause, model routes, and quota labels follow the
+[Anthropic account-pool contract](providers/anthropic-account-pool.md).
 
-Anthropic OAuth shares `ProviderAccount.paused` in the protected auth store with generic
-OAuth, not a second list in provider config. `setAccountPaused` serializes pause/resume
-with credential and selection writes, advances the selection revision, and only publishes
-invalidation after persistence. Removing an account removes its pause; reauthentication
-preserves it. The store moves active selection to an unpaused, non-reauth row if available.
-Pause does not clear cooldowns, quota, or credentials and does not cancel an already-sent turn. [Per-account thresholds](providers/anthropic-account-thresholds.md) are a separate usage policy.
-
-`src/oauth/anthropic-routing.ts` excludes paused rows from quota, round-robin, fill-first,
-manual, affinity, model-route and reactive 429 candidates, including when proactive pooling
-is off. All-paused requests return 403 with resume guidance. Quorum is invalidated on pause
-and resume; a sent account paused before its 429 may still recover on its sole unpaused
-successor. Credential resolution, refresh-lock acquisition, selection commit and physical
-dispatch recheck live eligibility after asynchronous waits. Responses and native Messages
-preserve typed 401 authentication, 403 pause and 429 cooldown refusals after pacing, including pool-off recovery;
-they do not report local rejection as 502. Only cooled usable survivors of a strict route
-produce its scoped 429 and Retry-After, not a login error. An already-dispatched refresh
-retains a successful rotated credential without unpausing; a late failure cannot mark the
-paused row for reauthentication. Token Guardian and quota probes use their existing pause
-guards. Pool-off keeps a healthy active account; pause/prior-429 recovery uses `only-eligible`, and logs name the committed account.
-
-> Decision record: [ADR-6013](decisions/ADR-6013-anthropic-account-pause.md)
-
-Regression coverage: `tests/adapters/anthropic/anthropic-account-pause.test.ts`,
-`tests/adapters/anthropic/anthropic-model-routes.test.ts`, `tests/oauth/oauth-accounts-api.test.ts`,
-`tests/cli/cli-account-pool-verbs.test.ts`, and `gui/tests/provider-quota-refresh-controls.test.tsx`.
-
-For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
+Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
+An Anthropic 429 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling is skipped only after the matching account cooldown is present.
 
 GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses
 adapters set `contextTier` only when the canonical routed provider is `github-copilot`
@@ -99,9 +75,6 @@ the registry; sharing authentication does not implicitly share a usage-price nam
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
-
-Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
-only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
 
 MiniMax and MiniMax CN Coding Plan quota in `src/providers/quota/vendor-probes-key.ts` uses the
 region-matched `/v1/api/openplatform/coding_plan/remains` endpoint. It publishes the `general`
@@ -199,6 +172,7 @@ rewrite rules and the routed-id settlement.
 | `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
 | `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `parallel-tool-calls.ts`, `reasoning-wire.ts`, `serialized-tool-call-content.ts`, `tool-call-validation.ts`, `tool-call-id-remint.ts`, `tool-schema.ts`, `errors.ts`). `parallel-tool-calls.ts` owns the `parallel_tool_calls` wire value for both the translated and native builders, so the three provider states — configured opt-out, configured opt-in, and the unset default that forwards only a caller's explicit `false` — cannot drift between them. `reasoning-wire.ts` applies explicit gateway-object and tool-bearing effort-omission declarations to both builders; absent declarations leave native raw forwarding unchanged. Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
 | `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. It is the wire that defines `tools[*].strict` and `tools[*].allowed_callers`, so a rebuilt declaration carries both: an explicit `strict: true` and any `allowed_callers` the caller declared. An absent `strict` stays absent, because the Messages inbound records it as `false` and a `false` on the wire would read as an opt-out nobody asked for. Anthropic Fast uses the native `anthropic-speed` FastWire: a set decision sends `speed: "fast"` with `fast-mode-2026-02-01` in one case-insensitively merged, deduplicated `anthropic-beta` header that preserves OAuth betas. Stream and buffered `usage.speed` echoes confirm fast or downgrade to standard; no echo leaves the request assumed. `tests/adapters/anthropic/anthropic-fast-speed.test.ts` pins the wire and echoes. Anthropic Fast is opt-in: the registry marks both Anthropic entries `fastOptIn`, and `src/providers/fast-opt-in.ts` (`providerFastSwitchOff`) keeps Fast off until `providers.<name>.fastEnabled` is `true`. An off switch is provider capability `false`, applied in the FastPolicy authority (`service-tier.ts`), `resolveModelPolicy`, and router registry enrichment, so no model-level Fast toggle, `--fast` row, or proxy-generated `speed` field is produced. Native Claude Messages passthrough still forwards a `speed` field the caller sends itself, outside the proxy Fast policy. `tests/adapters/anthropic/anthropic-fast-opt-in.test.ts` pins the default, the switch, and the management PATCH/GET. |
+| `src/adapters/anthropic-model-contract.ts` | Per-family Anthropic Messages wire rules, shared by the adapter and the web-search and vision sidecars, measured live on 2026-09-29: adaptive vs budget thinking; explicit `thinking: disabled` (Sonnet 5.0 up to but excluding 5.5); the `between_tools` floor that replaces it on Sonnet 5.5+ (sent without an effort, since xhigh/max reject it); forced `tool_choice` downgraded to `auto` on Opus 5.5, Fable 5.1+ and Sonnet 5.5+; `temperature`/`top_p` dropped on Opus 4.7+, Sonnet 5+ and every Fable, which 400 on any non-default value; `top_p` dropped when sent with `temperature` on the 4.5/4.6 families, which take either alone but not both; and sidecar thinking-off fields, a low effort with no `thinking` for Opus 5.5 and Fable, which reject both off switches. Dotted Bedrock ids do not parse as a family, and the Messages-native passthrough forwards caller fields unchanged. `tests/adapters/anthropic/anthropic-sonnet-5-5-contract.test.ts` pins the family table. |
 | `src/adapters/google.ts` | Gemini bridge. The final wire compiler owns [endpoint-scoped tool-schema loss policy](providers/google.md#google-tool-schema-loss-reporting): compatible mode changes no request bytes, strict initial loss creates no physical send, and strict non-direct repair creates no changed repair send. A caller-declared strict tool selects `functionCallingConfig.mode: "VALIDATED"` in place of the absent-choice default; `NONE`, `ANY` and a forced-name choice are stronger constraints the caller asked for and are never overwritten. |
 | `src/adapters/unique-tool-call-ids.ts` | Request-scoped tool-call-id uniqueness for every `openai-chat` provider. An upstream that mints an id from the call's position in its response repeats `call-0-0` on every turn; a Messages client has already paired that id, drops the duplicate, and is left with a call that has no result, so the turn reads as empty and the model re-issues it indefinitely. Only a **repeat** is rewritten — the first occurrence stays byte-identical, leaving prompt-cache keys, reasoning-replay lookups and already-unique upstreams untouched. The ids to avoid come from the caller's history, captured in `buildRequest` (the only point that sees it) and applied at emission, never at ingestion: ingestion matches streamed deltas against the id upstream sent, so rewriting there would strip a pending call of its identity mid-stream. A repeat takes a `-<n>` suffix, never `_<n>`, because `<earlier>_<digits>` reads as a batch sub-call of `<earlier>`; occupied-set search resumes by suffix width and retained base prefix, including when siblings converge as `-9` becomes `-10`. Covered by `tests/adapters/openai/openai-chat-tool-call-id-remint.test.ts`. |
 | `src/adapters/declaration-carrier.ts`, `src/adapters/input-media-guard.ts` | Default-deny allowlists for constraints the normalized request carries but a wire may not be able to express: `tools[*].allowed_callers`, which fences a tool off from callers, and inline document bytes. Both are refused with a 400 at the single guard every registered adapter passes through, rather than left to each adapter, because an adapter that never learned about the carrier rebuilds without it and answers normally. `allowed_callers` reaches the `anthropic` wire; document bytes reach `anthropic`, `openai-chat` and `google`; the `openai-responses` wire is exempt from the whole guard because it forwards the original body. Adding an `AdapterWire` member makes the omission visible in these lists instead of at a customer's upstream. The unrestricted `["direct"]` caller default is not a restriction. |
@@ -299,6 +273,16 @@ soft on further work. Timed-out or admission-degraded loads are not cached, so a
 healthy request can retry; stable missing files still cache as empty. Symlinked skill
 directories pass through canonical confinement: inside-cwd targets load, outside targets
 do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
+
+## TokenLab chat provider
+
+The `tokenlab` key preset uses the existing OpenAI Chat adapter at
+`https://api.tokenlab.sh/v1`. Registry-owned discovery requests the chat category and requires
+the row's `tokenlab.capabilities` to include `tool-use`, excluding non-chat and unclassified
+rows. A supplied key scopes the catalog to its model permissions and delivery policy; the
+anonymous catalog does not establish authentication. Newly promoted preset collision protection
+preserves an older same-named custom destination. `tests/providers/tokenlab-provider.test.ts`
+covers derived entry points, scoped discovery, destination preservation and model routing.
 
 ## TypeSafe JEV decision provider
 

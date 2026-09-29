@@ -1,6 +1,7 @@
 import type { OcxProviderConfig } from "../types";
 import { getValidAccessToken, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
+import { sidecarThinkingOff } from "../adapters/anthropic-model-contract";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -189,8 +190,9 @@ export async function runAnthropicWebSearch(
   const body = {
     model: settings.model,
     max_tokens: ANTHROPIC_MAX_TOKENS,
-    // sonnet-5 defaults to adaptive thinking when omitted; keep the sidecar fast/cheap (audit F2).
-    thinking: { type: "disabled" },
+    // Sonnet 5 defaults to adaptive thinking when omitted; keep the sidecar fast/cheap (audit F2).
+    // The per-family off switch (disabled, between_tools or a low effort) lives in the model contract.
+    ...sidecarThinkingOff(settings.model),
     // OAuth fingerprint requires the Claude Code identity as the FIRST system block (audit F6/anthropic.ts).
     system: [
       { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
