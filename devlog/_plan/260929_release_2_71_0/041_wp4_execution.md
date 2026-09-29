@@ -13,8 +13,9 @@ d161c0e83ea8a88027b2cef28c125ff3c1f29f8a.
    `gh workflow run dev-version-bump.yml -R lidge-jun/opencodex --ref main -f intended-version=2.71.0 -f mode=pre-move`
    -> PR `codex/dev-version-2.72.0`. Accept only if its files are exactly the four version sources and
    each reads 2.72.0. Its PR CI runs while steps 2-3 proceed; merge it (`--admin --squash
-   --match-head-commit`, as #6213) once its Cross-platform CI and gates are green. It must be merged
-   before any release dispatch (release.yml preflight refuses until dev outranks 2.71.0).
+   --match-head-commit`, as #6213) once its Cross-platform CI and gates are green. It is merged
+   before any release dispatch; the stable dispatch strictly requires it (release-preflight.sh
+   assert-ahead), and doing it first for both keeps one order.
 2. Preview branch (managed worktree, clean tree):
    ```sh
    git switch -c codex/promote-preview-2.71.0 d161c0e83ea8a88027b2cef28c125ff3c1f29f8a

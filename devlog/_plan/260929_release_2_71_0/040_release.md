@@ -7,8 +7,8 @@ that merge commit is informative; the gating runs are on the promotion SHAs.
 
 1. Pre-move dev: `gh workflow run dev-version-bump.yml --ref main -f intended-version=2.71.0 -f mode=pre-move`;
    the opened PR must change only the four version sources to 2.72.0 (package.json,
-   desktop/src-tauri/Cargo.toml, Cargo.lock, tauri.conf.json); merge it with --admin --merge
-   --match-head-commit.
+   desktop/src-tauri/Cargo.toml, Cargo.lock, tauri.conf.json); merge it with --admin --squash
+   --match-head-commit (as #6213).
 2. Preview: branch `codex/promote-preview-2-71-0` from the candidate, `git merge -s ours origin/preview`,
    `bun scripts/release-version-sources.ts sync 2.71.0-preview.20260929`, commit, PR to preview,
    merge commit. Wait for push-event Cross-platform CI and Service lifecycle success on the
@@ -28,4 +28,3 @@ Guards: verify preview tree differs from candidate only in the four version sour
 equals the candidate. A failing promotion run is fixed through dev and re-promoted. If a release
 run fails after npm acknowledged publication, re-dispatch with resume-after-npm-publish=true and the
 same expected-sha; never republish.
-
