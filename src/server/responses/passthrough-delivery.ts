@@ -961,12 +961,20 @@ export async function deliverPassthroughResponse(
           return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
         }
 
+        const cancelAfterValidation = (): Response => {
+          responseEffects.responseCompletionCancelled = true;
+          options.onNativePassthroughCancel?.();
+          return clientCancelledResponse();
+        };
+        if (signal.aborted) return cancelAfterValidation();
+
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
         commitReasoningReplayServingRoute(nativeExchange.request.headers);
         const reportNativeTerminal = recordTerminalOutcomes
           ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
+            if (signal.aborted) return;
             terminalRecorder?.(status, httpStatusOverride);
             if (status === "failed" || status === "incomplete") {
               const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
@@ -996,13 +1004,19 @@ export async function deliverPassthroughResponse(
           // event-loop monopoly. Keep decoder input small and yield between MiB groups; the
           // aggregate frame cap was already enforced by both validation passes.
           for (let offset = 0; offset < rawBytes.byteLength; offset += 64 * 1024) {
+            if (signal.aborted) return cancelAfterValidation();
             effectInspector.feed(rawBytes.subarray(offset, Math.min(rawBytes.byteLength, offset + 64 * 1024)));
-            if (offset > 0 && offset % (1024 * 1024) === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
+            if (offset > 0 && offset % (1024 * 1024) === 0) {
+              await new Promise<void>(resolve => setTimeout(resolve, 0));
+              if (signal.aborted) return cancelAfterValidation();
+            }
           }
+          if (signal.aborted) return cancelAfterValidation();
           effectInspector.finish();
         } finally {
           effectInspector.dispose();
         }
+        if (signal.aborted) return cancelAfterValidation();
         rawBytes = undefined;
         if (client.terminal.status === "completed") {
           rememberPassthroughResponseChecked(client.terminal.response);

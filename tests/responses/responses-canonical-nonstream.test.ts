@@ -359,6 +359,49 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(cancelled).toBe(1);
   });
 
+  test("client abort during deferred replay yields returns 499 without publishing completion", async () => {
+    const abort = new AbortController();
+    const item = {
+      type: "message", id: "msg_disconnect", status: "completed", role: "assistant",
+      content: [{ type: "output_text", text: "done", annotations: [] }],
+    };
+    const transcript = [
+      ...Array.from({ length: 14_000 }, () => sseEvent("response.output_text.delta", {
+        output_index: 0, item_id: "msg_disconnect", delta: "x",
+      })),
+      sseEvent("response.output_item.done", { output_index: 0, item }),
+      sseEvent("response.completed", { response: {
+        id: "resp_disconnected", status: "completed", model: "gpt-5.6-sol", output: [item],
+      } }),
+    ].join("");
+    expect(new TextEncoder().encode(transcript).byteLength).toBeGreaterThan(1024 * 1024);
+    globalThis.fetch = (async () => new Response(transcript, {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+    const terminals: string[] = [];
+    const completedModels: string[] = [];
+    let nativeCancels = 0;
+    let firstOutputs = 0;
+
+    const response = await call(requestBody(false, true), {
+      abortSignal: abort.signal,
+      onFirstOutput: () => {
+        firstOutputs += 1;
+        setTimeout(() => abort.abort(new Error("fixture client gone")), 0);
+      },
+      onNativePassthroughTerminal: status => terminals.push(status),
+      onResponseComplete: model => completedModels.push(model),
+      onNativePassthroughCancel: () => { nativeCancels += 1; },
+    });
+
+    expect(firstOutputs).toBe(1);
+    expect(abort.signal.aborted).toBe(true);
+    expect(response.status).toBe(499);
+    expect(terminals).toEqual([]);
+    expect(completedModels).toEqual([]);
+    expect(nativeCancels).toBe(1);
+  });
+
   test("canonical buffered serving-state commit is ordered after both validations", () => {
     const source = readFileSync(repoPath("src/server/responses/passthrough-delivery.ts"), "utf8");
     const branch = source.indexOf("if (canonicalBufferedJson) {");

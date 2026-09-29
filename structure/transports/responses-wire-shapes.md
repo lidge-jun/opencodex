@@ -431,11 +431,11 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
-A non-streaming client on the canonical ChatGPT route is not a third streaming relay shape. The
-adapter satisfies that destination's SSE-only requirement, then the [Responses HTTP/SSE owner](responses.md#responses-httpsse)
-requires the first terminal to be valid and folds its strictly covered output indices into JSON before
-any response or serving-state mutation is published; see [ADR-6162](../decisions/ADR-6162-responses-http-sse.md).
-No tee/eager platform choice is made for that fully buffered client contract; ordinary `stream:true`
+A non-streaming canonical ChatGPT client still uses the destination's SSE-only upstream path.
+The [Responses HTTP/SSE owner](responses.md#responses-httpsse) validates the first terminal
+and strictly covered output indices before publishing JSON or serving state; see [ADR-6162](../decisions/ADR-6162-responses-http-sse.md).
+Deferred inspection checks cancellation after each yield and before terminal/cache publication;
+a disconnect returns 499. This buffered path makes no tee/eager choice; ordinary `stream:true`
 traffic retains the two shapes above.
 
 > Decision record: [ADR-6162](../decisions/ADR-6162-responses-http-sse.md)
