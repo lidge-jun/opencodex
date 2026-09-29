@@ -226,7 +226,7 @@ in-flight publication; unrelated unscoped rows require no credential lookup.
 A Devin live row spreads its measured `inputModalities` before
 `catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy
 `modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live
-value survives only when none of them applies.
+value survives only when none of them applies. Devin live rows collapse by catalog family (so `swe-1-6-fast` stays its own row), read their ladder from the family effort axis (including `minimal`), and carry the effective enabled default member's effort as `defaultReasoningEffort` when the family marks a default; `swe-1-6` is marked text-only because it drops images without an error.
 
 For `liveModels: false`, a static provider publishes the ordered union of `models` and `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
 union before retained ids; a nonempty explicit list does not import a different default.
@@ -296,7 +296,7 @@ a label edit refresh Codex output.
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger
-opt-in context tier uses that effective long window in both shapes; invalid values are omitted.
+opt-in context tier uses that effective long window in both shapes; invalid values are omitted. For `github-copilot`, `modelContextTiers` raises a selected long-context window only when an exact `modelContextWindows` value supplies per-model evidence; that value wins before the provider cap, while unknown models retain observed metadata. The gather fingerprint includes the map.
 
 Supported bare native GPT rows also consume `providers.openai.modelDisplayNames`. Retained sync
 and convergence pass the same map to the observed-state merge. After native normalization and

@@ -390,7 +390,7 @@ describe("start probes the configured port before shadowing it (source-level)", 
   test("handleStart waits out its restart parent and refuses it on both paths after the wait", () => {
     const start = cliSource.slice(cliSource.indexOf("async function handleStart("));
     expect(start).toContain("takeRestartHandoffMarkers(process.env)");
-    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true }), restartParent)");
+    expect(start).toContain("await probeOwnerPastRestartParent(() => findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true, deferPidCleanup: supervisedServiceChild }), restartParent)");
     expect(start.match(/decision === "refuse" \|\| decision === "await-parent"/g)?.length).toBe(2);
     expect(start).toContain("livePid: fencedLive.pid, restartParentPid: restartParent.restartParentPid,");
   });
@@ -489,7 +489,7 @@ describe("a busy preferred port never becomes a second proxy (#5004)", () => {
     expect(fn).toContain("await findLiveProxy(START_OWNERSHIP_LIVENESS)");
     // A negative answer here removes this home's pid record. That is the other half of why
     // one unanswered probe must not be enough.
-    expect(fn).toContain("removePidIfValueIs(pidSnapshot)");
+    expect(fn).toContain("if (!options.deferPidCleanup) removePidIfValueIs(pidSnapshot)");
   });
 });
 
@@ -657,8 +657,11 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     expect(owner).not.toContain("reconcileJournal(");
     expect(start.indexOf("markCrossHomeSibling()")).toBeGreaterThan(-1);
     expect(start.indexOf("markCrossHomeSibling()")).toBeLessThan(start.indexOf("reconcileStartupJournal()"));
-    expect(slice("function detachedStartEnvironment(", "async function handleEnsure("))
-      .toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
+    const detached = slice("function detachedStartEnvironment(", "async function handleEnsure(");
+    expect(detached).toContain("const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);");
+    expect(detached).toContain("delete env.OCX_SERVICE;");
+    expect(detached).toContain("delete env[SERVICE_MANAGED_ENV];");
+    expect(detached).toContain("delete env[WINDOWS_WRAPPER_PROTOCOL_ENV];");
     expect(cliSource).toContain("env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),");
     // Every other detached `ocx start` is an ordinary owner too: the client auto-starts and the
     // updater's restart. A stray marker would mark them before any probe.

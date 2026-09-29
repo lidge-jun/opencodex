@@ -136,6 +136,8 @@ export interface ClientEncodeHooks {
 export interface AdapterEventEncodeOptions {
   translatorBudget: TranslatorBudget;
   hideThinkingSummary?: boolean;
+  /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
+  hideRawReasoning?: boolean;
   toolNsMap?: ReadonlyMap<string, { namespace: string; name: string; freeform?: true }>;
   declaredToolNames?: ReadonlySet<string>;
   toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
@@ -613,7 +615,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "reasoning_raw_delta": {
-            if (options.hideThinkingSummary) {
+            if (options.hideThinkingSummary || options.hideRawReasoning) {
               hiddenRawBytes += Buffer.byteLength(event.text);
               break;
             }

@@ -45,6 +45,7 @@ import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
+import { githubCopilotCatalogContextWindow } from "../../providers/github-copilot-context";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
 import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
@@ -310,9 +311,8 @@ export function applyProviderConfigHints(
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
-  const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
-    ? model.contextWindow
-    : undefined;
+  const discoveredWindow = githubCopilotCatalogContextWindow(name, prov, model.id,
+    typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
   const projectedLimits = clampObservedModelLimits(staticPolicy.model, {
     ...(discoveredWindow !== undefined ? { contextWindow: discoveredWindow } : {}),
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),

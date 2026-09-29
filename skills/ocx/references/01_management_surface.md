@@ -890,6 +890,25 @@ JSON mode: `envelope`.
 
 - Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting.
 
+### `ocx account routes`
+
+Read, replace, or clear Anthropic OAuth model account routes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/pool/settings` |
+| PUT | `/api/pool/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--file` | string | Read a bounded JSON route array from a local file. |
+| `--clear` | boolean | Remove the stored routes. |
+| `--json` | boolean | Emit the unified settings response as JSON. |
+
+JSON mode: `envelope`.
+
+- Only anthropic is supported. The server validates route names, patterns, and account IDs.
+
 ### `ocx account auto-switch`
 
 Show or set the usage percentage at which a pool moves to another account.
@@ -1183,6 +1202,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 66
-- of those, state-changing: 36
+- declared capabilities: 67
+- of those, state-changing: 37
 - head-resolved invocations: 2

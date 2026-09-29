@@ -478,6 +478,8 @@ the desktop thinking band shows the "Thinking…" placeholder, and raw text appe
 #45 display intent, intentionally reverted 260911) put unsummarized thinking in the desktop band,
 which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
 grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
+Provider policy `hideRawReasoning` hides only this raw channel (summaries keep streaming); it controls
+display, not confidentiality ([Responses wire shapes](../transports/responses-wire-shapes.md)).
 
 For models that require a reasoning placeholder, a preserved thinking-only assistant turn with no
 plaintext receives that placeholder even when it has no tool call. Otherwise the Chat serializer
@@ -546,9 +548,9 @@ The flag constrains the model's output, not execution ordering. Sequential tool 
 is enforced by the caller's own loop returning each `tool_result` before issuing the
 next request; this mapping does not provide that.
 
-Claude Opus 5.5 is an upstream exception to the forced-choice mapping: Anthropic rejects
+Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-choice mapping: Anthropic rejects
 `tool_choice: {type:"any"}` and `{type:"tool",name:...}` for that model, with or without
-adaptive thinking. The Anthropic adapter sends `{type:"auto"}` for those choices so the
+adaptive thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the
 request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
 must provide any required tool-use instruction. Other Claude model families retain the
 normal forced-choice mapping unless their own upstream contract says otherwise.

@@ -1,4 +1,4 @@
-import { modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -530,6 +530,13 @@ function applyProviderPatchFields(
     else next.modelCapabilities = capabilities;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelContextTiers")) {
+    const error = contextTierRecordConfigError(rawBody.modelContextTiers, true);
+    if (error) return { error };
+    if (rawBody.modelContextTiers === null) delete next.modelContextTiers;
+    else next.modelContextTiers = Object.assign(Object.create(null), next.modelContextTiers ?? {}, rawBody.modelContextTiers);
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "modelContextWindows")) {
     const value = rawBody.modelContextWindows;
     if (value === null) {
@@ -933,6 +940,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelContextTiers: p.modelContextTiers,
       modelCapabilities: p.modelCapabilities,
       pinnedReasoningEffort: p.pinnedReasoningEffort,
       modelPinnedReasoningEfforts: p.modelPinnedReasoningEfforts,
@@ -1213,6 +1221,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
+    const submittedModelContextTiers = Object.hasOwn(prov, "modelContextTiers");
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
@@ -1298,7 +1307,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!submittedFastEnabled && liveFastEnabled !== undefined) prov.fastEnabled = liveFastEnabled;
     // The form sends none of the compatibility settings either (#5563). Read the live row rather
     // than `existing`, like the alias overlays below: a PATCH that saved one of them while DNS
-    // validation awaited must not be undone. Nothing is carried to a new destination.
+    // validation awaited must not be undone. Only the hideRawReasoning display policy follows the
+    // provider to a new destination; the upstream compatibility settings do not.
     carryProviderCompatFields(prov, config.providers[name], overwriteSample);
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When
@@ -1342,48 +1352,51 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         prov.zaiResponsesDefaultVersion = latest.zaiResponsesDefaultVersion;
       }
     }
-    // Reapply pins to the latest live row after DNS/import awaits, then validate the
-    // complete draft before adopting any provider/default state.
+    // Reapply pins after DNS/import awaits; validate the complete draft before adoption.
     const latest = config.providers[name];
     const latestPinError = applyProviderPinFields(prov, body.provider, latest);
     if (latestPinError) return jsonResponse({ error: latestPinError }, 400);
     const pinsOwned = Object.hasOwn(body.provider, "pinnedReasoningEffort")
       || Object.hasOwn(body.provider, "modelPinnedReasoningEfforts")
       || latest?.pinnedReasoningEffort !== undefined || latest?.modelPinnedReasoningEfforts !== undefined;
-    // New registration also edits discovery/disabled-model state; stage those
-    // side effects with the registration draft instead of mutating live state
-    // before validation.
+    // Stage new-registration discovery state in a draft until validation passes.
     const registrationDraft = !latest ? {
       ...config,
       ...(config.modelDiscovery === undefined ? {} : { modelDiscovery: structuredClone(config.modelDiscovery) }),
     } : undefined;
     initializeProviderModelSelection(name, prov, latest, registrationDraft ?? config);
     const candidate = stripRegistryOnlyStaticHeaders(name, prov);
-    const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate },
-      ...(body.setDefault === true ? { defaultProvider: name } : {}) };
-    const validation = validateConfigCandidate(draft);
-    if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
     const previous = Object.getOwnPropertyDescriptor(config.providers, name);
     const rollback = pinsOwned ? captureConfigTopLevelRollback(config, ["defaultProvider", "modelDiscovery", "disabledModels"]) : undefined;
-    try {
-      if (registrationDraft) {
-        for (const key of ["modelDiscovery", "disabledModels"] as const) {
-          if (Object.hasOwn(registrationDraft, key)) Object.defineProperty(config, key, {
-            value: registrationDraft[key], writable: true, enumerable: true, configurable: true,
-          });
+    let validationError: string | undefined;
+    withConfigMutationLockSync(() => {
+      const liveTiers = config.providers[name]?.modelContextTiers;
+      if (submittedModelContextTiers && liveTiers) candidate.modelContextTiers = Object.assign(Object.create(null), liveTiers, candidate.modelContextTiers ?? {});
+      else if (!submittedModelContextTiers && liveTiers) candidate.modelContextTiers = { ...liveTiers };
+      else if (!submittedModelContextTiers) delete candidate.modelContextTiers;
+      const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate }, ...(body.setDefault === true ? { defaultProvider: name } : {}) };
+      const validation = validateConfigCandidate(draft); if (!validation.ok) { validationError = validation.error; return; }
+      try {
+        if (registrationDraft) {
+          for (const key of ["modelDiscovery", "disabledModels"] as const) {
+            if (Object.hasOwn(registrationDraft, key)) Object.defineProperty(config, key, {
+              value: registrationDraft[key], writable: true, enumerable: true, configurable: true,
+            });
+          }
         }
+        config.providers[name] = candidate;
+        if (body.setDefault === true) config.defaultProvider = name;
+        (deps.saveConfigPreservingClaudeCode ?? save)(config);
+      } catch (error) {
+        if (rollback) {
+          if (previous) Object.defineProperty(config.providers, name, previous);
+          else delete config.providers[name];
+          rollback();
+        }
+        throw error;
       }
-      config.providers[name] = candidate;
-      if (body.setDefault === true) config.defaultProvider = name;
-      (deps.saveConfigPreservingClaudeCode ?? save)(config);
-    } catch (error) {
-      if (rollback) {
-        if (previous) Object.defineProperty(config.providers, name, previous);
-        else delete config.providers[name];
-        rollback();
-      }
-      throw error;
-    }
+    });
+    if (validationError !== undefined) return jsonResponse({ error: validationError }, 400);
     reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
       const { addProviderApiKey } = await import("../../providers/api-keys");

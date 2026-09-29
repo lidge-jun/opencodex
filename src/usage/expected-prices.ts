@@ -116,9 +116,15 @@ const CURSOR_OPUS_48 = CLAUDE_OPUS_46;
 // hits are 0.05x base input (0.20), a model-specific footnote on the pricing page, NOT the
 // 0.1x most families use. 1M context and 128K output at one flat rate (no long-context tier).
 const CLAUDE_OPUS_55: Cost4 = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
+// Claude Sonnet 5.5 (claude-sonnet-5-5, released 2026-09-28): the Sonnet 5 tuple, 2 / 10, 5m cache
+// write 2.50, cache hit at the standard 0.1x (0.20). No fast mode and no long-context tier.
+const CLAUDE_SONNET_55: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
 const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing (official; 5m cache-write tier)";
 const CLAUDE_OPUS_5_SOURCE = `anthropic official Claude Opus 5 ${ANTHROPIC_PRICING}`;
 const CLAUDE_OPUS_55_SOURCE = `anthropic official Claude Opus 5.5 ${ANTHROPIC_PRICING}; cache hit = 0.05x base input`;
+const CLAUDE_SONNET_55_SOURCE = `anthropic official Claude Sonnet 5.5 ${ANTHROPIC_PRICING}`;
+const CURSOR_SONNET_55_PRICING = "https://cursor.com/docs/models/claude-sonnet-5-5 (same list rate as Anthropic)";
+const DEVIN_SONNET_55_SOURCE = `derived (preemptive): Devin's live catalog and modelCostData table do not list claude-sonnet-5-5 yet; Anthropic list price shown as estimate ${ANTHROPIC_PRICING}`;
 const CURSOR_OPUS_55_PRICING = "https://cursor.com/docs/models/claude-opus-5-5 (Cursor Other Models pool; same list rate as Anthropic, Fast Mode billed separately)";
 const CURSOR_OPUS_48_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-4-8";
 const CURSOR_OPUS_5_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5";
@@ -277,6 +283,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "anthropic-apikey", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: CLAUDE_OPUS_55_SOURCE, verifiedAt: "2026-09-23", status: "verified" },
   // Cursor canonicalizes every Opus 5.5 spelling (thinking/effort/fast suffixes) onto this row.
   { provider: "cursor", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: CURSOR_OPUS_55_PRICING, verifiedAt: "2026-09-23", status: "verified" },
+  // Claude Sonnet 5.5. Same layering as Opus 5.5: the anthropic bundle row wins for the bare id,
+  // these cover account-label namespaces, and Cursor publishes the list rate on its model page.
+  { provider: "anthropic", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: CLAUDE_SONNET_55_SOURCE, verifiedAt: "2026-09-29", status: "verified" },
+  { provider: "anthropic-apikey", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: CLAUDE_SONNET_55_SOURCE, verifiedAt: "2026-09-29", status: "verified" },
+  { provider: "cursor", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: CURSOR_SONNET_55_PRICING, verifiedAt: "2026-09-29", status: "verified" },
   // MiniMax M2.1 highspeed — published PAYG price (verified).
   { provider: "minimax", modelId: "MiniMax-M2.1-highspeed", cost4: MINIMAX_M21_HIGHSPEED, source: MINIMAX_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   { provider: "minimax-cn", modelId: "MiniMax-M2.1-highspeed", cost4: MINIMAX_M21_HIGHSPEED, source: MINIMAX_PRICING, verifiedAt: "2026-07-20", status: "verified" },
@@ -453,6 +464,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin-cli", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: `derived: live Devin catalog lists claude-opus-5-5 but Devin's modelCostData table does not yet; Anthropic list price shown as estimate ${ANTHROPIC_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: DEVIN_SONNET_55_SOURCE, verifiedAt: "2026-09-29", status: "verified-derived" },
   { provider: "devin-cli", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "glm-5-3", cost4: GLM_53, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin-cli", modelId: "kimi-k3", cost4: DEVIN_KIMI_K3, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
@@ -470,6 +482,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "devin", modelId: "claude-opus-4-8", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "claude-opus-5-5", cost4: CLAUDE_OPUS_55, source: `derived: live Devin catalog lists claude-opus-5-5 but Devin's modelCostData table does not yet; Anthropic list price shown as estimate ${ANTHROPIC_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "devin", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-sonnet-5-5", cost4: CLAUDE_SONNET_55, source: DEVIN_SONNET_55_SOURCE, verifiedAt: "2026-09-29", status: "verified-derived" },
   { provider: "devin", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "glm-5-2", cost4: GLM_52, source: `enterprise list column (self-serve shows an unannounced 0 promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
   { provider: "devin", modelId: "kimi-k2-7", cost4: DEVIN_KIMI_K27, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },

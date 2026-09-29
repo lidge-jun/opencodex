@@ -205,7 +205,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
-| `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login first imports the credential the installed Devin CLI already holds (`devin auth login` writes a `devin-session-token` to its own `credentials.toml`); when none is present it opens Auth0 browser sign-in and exchanges the pasted token via Cognition's `RegisterUser` for a long-lived API key. `ocx login devin-cli` remains as a deprecated alias. Models are discovered per account with `GetCascadeModelConfigs`. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
+| `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login first imports the credential the installed Devin CLI already holds (`devin auth login` writes a `devin-session-token` to its own `credentials.toml`); when none is present it opens Auth0 browser sign-in and exchanges the pasted token via Cognition's `RegisterUser` for a long-lived API key. `ocx login devin-cli` remains as a deprecated alias. Models are discovered per account with `GetCascadeModelConfigs`. Account quota comes from `GetUserStatus` under one eight-second request and body deadline: dated daily and weekly windows, plus the monthly prompt and flex credit pool for a credit-billed plan or an unknown strategy with both reset dates absent when a balance field is present. Negative used credits omit the monthly window; valid zero available credits mark it exhausted. A timed-out probe keeps the last good quota. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
@@ -697,6 +697,23 @@ complete declared-tool call with no native counterpart is restored only after a 
 interrupted or filtered turns leave the markup as text. Create Provider-API keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
+For a provider using the native `command-code` adapter, `projectContext: "on"` opts into
+sending local project files in the `/alpha/generate` `memory`, `taste`, and `skills` fields.
+With `projectContext` unset or `"off"`, no project files (`AGENTS.md`, taste, or skills)
+are read or sent; the existing `config` metadata payload is unchanged.
+The roots are resolved from the **opencodex proxy process working directory**, not from a
+caller's remote workspace. The loader reads `AGENTS.md`, `.commandcode/taste/taste.md`,
+and `SKILL.md` files in immediate child directories of `.commandcode/skills`,
+`.agents/skills`, and `.pi/skills` under that working directory. Enabling the option sends
+the collected contents upstream to the configured Command Code endpoint. It is rejected
+for other adapters. Asynchronous path checks keep reads inside the resolved working
+directory, including when that directory is a filesystem root; only regular-file
+content is read. Skill-directory symlinks resolving inside that directory are allowed;
+those resolving outside are rejected. Every visited entry counts toward the scan budget; at
+most 16 skills are selected. File bytes, total skill bytes, and loading time are bounded;
+unreadable or missing files produce empty fields. Stable results are cached for 30 seconds;
+timeouts and filesystem-admission refusals are not cached, so a later request can retry.
+
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for
 one-click browser authorization or `ocx login orcarouter` to paste an existing API key. The PKCE
 flow starts a loopback listener first, sends a fresh S256 challenge and state to
@@ -972,6 +989,14 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
   no API key and no key field is offered for it. An API key saved on this row by other means is never
   handed to the harness — key billing belongs to the `anthropic-apikey` preset.
+- **In the dashboard:** the Add provider picker lists this preset under **Paid**, with the API rows,
+  and marks it with a **Subscription CLI** badge instead of **Free** — keyless here means the CLI
+  owns the account, not that the traffic is free. Selecting it shows a warning in place of the key
+  field: this is not an API-key path, it drives the signed-in CLI (`claude -p`) and bills that
+  subscription, and a key entered for it is never used. The Providers workspace counts and filters
+  it as paid and shows **Subscription CLI** as its auth mode. Any provider with
+  `"adapter": "claude-cli"` is treated the same way, including a renamed or hand-written row: the
+  dashboard lists it as ready without a key and never prompts for one.
 - **One sign-in serves the whole proxy:** the harness reads the Claude Code sign-in of the user
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;

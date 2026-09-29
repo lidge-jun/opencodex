@@ -147,6 +147,8 @@
 }
 
 .usw-section .tbl-wrap {
+  /* Keep absolute screen-reader captions inside the table's scrollable overflow. */
+  position: relative;
   min-width: 0;
   /* Inset table from border+surface so cells aren't flush to the frame. */
   padding: var(--space-3);

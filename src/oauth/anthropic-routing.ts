@@ -33,6 +33,7 @@ import {
 import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
+import { routeCandidates, type AnthropicRouteDecision } from "./anthropic-model-routes";
 
 /**
  * The read side of a `Headers` object, so a caller can pass the live upstream response's
@@ -54,17 +55,7 @@ const VALID_QUOTA_WINDOWS = new Set<OcxAccountPoolQuotaWindow>(["five-hour", "we
 /** Cap same-request 429 rotations so short Retry-After cannot infinite-loop. */
 export const ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST = 3;
 
-export interface AnthropicAccountPoolConfig {
-  enabled?: boolean;
-  /** Usage % for new-session pick. Default 80. 0 = disable quota-based pick (active / affinity only). */
-  autoSwitchThreshold?: number;
-  /** New-session rotation strategy. Default quota (today's behaviour). */
-  strategy?: OcxAccountPoolRotationStrategy;
-  /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
-  stickyLimit?: number;
-  /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
-  quotaWindow?: OcxAccountPoolQuotaWindow;
-}
+export type AnthropicAccountPoolConfig = NonNullable<OcxConfig["anthropicAccountPool"]>;
 
 /**
  * Where a cooldown's length came from. Same vocabulary as `CodexCooldownSource`, because it
@@ -355,11 +346,17 @@ export function forgetAnthropicFailoverQuorum(): void {
 }
 
 /** Earliest remaining cooldown among cooled Anthropic accounts, for client Retry-After. */
-export function getAnthropicPoolRetryAfterSeconds(now = Date.now()): number | null {
+export function getAnthropicPoolRetryAfterSeconds(now = Date.now(), decision: AnthropicRouteDecision | null = null): number | null {
   const set = getAccountSet(PROVIDER);
   if (!set) return null;
+  // Once an explicit fallback route has no eligible declared account, selection may use
+  // the ordinary pool. Its earliest usable cooldown must determine the advertised wait.
+  const fallbackExpanded = decision?.fallback === true
+    && !getEligibleAnthropicAccounts(now).some(id => decision.accounts.includes(id));
   let earliest: number | null = null;
   for (const account of set.accounts) {
+    if (decision && !fallbackExpanded && !decision.accounts.includes(account.id)) continue;
+    if (fallbackExpanded && (account.needsReauth === true || !isPoolCredentialUsable(account.id, now))) continue;
     const snap = getAnthropicAccountHealthSnapshot(account.id, now);
     if (!snap?.cooldownUntil) continue;
     if (earliest === null || snap.cooldownUntil < earliest) earliest = snap.cooldownUntil;
@@ -388,9 +385,9 @@ function compareScoredAccounts(a: ScoredAccount, b: ScoredAccount): number {
   return a.score - b.score || a.fiveHourTieBreak - b.fiveHourTieBreak;
 }
 
-function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number): string | null {
+function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: number, decision: AnthropicRouteDecision | null = null): string | null {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
-  const unfiltered = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
+  const unfiltered = routeCandidates(getEligibleAnthropicAccounts(now), decision).filter(id => id !== excludeId);
   const available = window === "weekly" ? unfiltered.filter(id => !exhausted5h(id)) : unfiltered;
   const eligible = available.length > 0 ? available : unfiltered;
   if (eligible.length === 0) return null;
@@ -412,19 +409,26 @@ function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: 
   return best.accountId;
 }
 
+/** A fallback route uses ordinary ordering only after it widens beyond its declared accounts. */
+function usesDeclaredRouteOrder(eligible: readonly string[], decision: AnthropicRouteDecision | null): boolean {
+  return decision !== null && (!decision.fallback || eligible.some(id => decision.accounts.includes(id)));
+}
+
 /** Next eligible Anthropic account in stable order after `afterId` (wrapping). */
 function pickNextFillFirstAnthropicAccount(
   config: OcxConfig,
   afterId: string,
   eligible: string[],
+  decision: AnthropicRouteDecision | null,
 ): string | null {
   const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
   const available = window === "weekly" ? eligible.filter(id => !exhausted5h(id)) : eligible;
   const candidates = available.length > 0 ? available : eligible;
   if (candidates.length === 0) return null;
-  const ordered = [...candidates].sort((a, b) => a.localeCompare(b));
+  const routeOrder = usesDeclaredRouteOrder(eligible, decision);
+  const ordered = routeOrder ? candidates : [...candidates].sort((a, b) => a.localeCompare(b));
   const set = getAccountSet(PROVIDER);
-  const stableAll = set
+  const stableAll = routeOrder ? [...decision!.accounts] : set
     ? [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b))
     : ordered;
   const startIdx = stableAll.indexOf(afterId);
@@ -449,16 +453,17 @@ function pickAlternateAnthropicAccount(
   config: OcxConfig,
   excludeId: string,
   now: number,
+  decision: AnthropicRouteDecision | null,
 ): string | null {
   const strategy = anthropicPoolStrategy(config);
-  const eligible = getEligibleAnthropicAccounts(now).filter(id => id !== excludeId);
+  const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision).filter(id => id !== excludeId);
   if (strategy === "round-robin") {
     return peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, stickyLimitForPool(config));
   }
   if (strategy === "fill-first") {
-    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
+    return pickNextFillFirstAnthropicAccount(config, excludeId, eligible, decision);
   }
-  return pickLowestUsage(config, excludeId, now);
+  return pickLowestUsage(config, excludeId, now, decision);
 }
 
 function pruneExpiredAffinity(now: number): void {
@@ -486,6 +491,7 @@ export type AnthropicAccountSelectionReason =
 export interface AnthropicAccountSelection {
   accountId: string | null;
   reason: AnthropicAccountSelectionReason;
+  routePosition?: number;
 }
 
 function stickyLimitForPool(config: OcxConfig): number {
@@ -510,8 +516,8 @@ function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): 
  * Fill-first: keep eligible active under threshold; otherwise advance to the next
  * eligible id in stable sorted order after the current active (wrapping).
  */
-function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string | null {
-  const eligible = getEligibleAnthropicAccounts(now);
+function pickFillFirstAnthropicAccount(config: OcxConfig, now: number, decision: AnthropicRouteDecision | null): string | null {
+  const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision);
   if (eligible.length === 0) return null;
 
   const set = getAccountSet(PROVIDER);
@@ -521,14 +527,14 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
   }
 
   if (!active || !set) {
-    const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+    const ordered = usesDeclaredRouteOrder(eligible, decision) ? eligible : [...eligible].sort((a, b) => a.localeCompare(b));
     for (const id of ordered) {
       if (isActiveUnderFillFirstThreshold(config, id)) return id;
     }
     return ordered[0] ?? null;
   }
 
-  return pickNextFillFirstAnthropicAccount(config, active, eligible);
+  return pickNextFillFirstAnthropicAccount(config, active, eligible, decision);
 }
 
 /**
@@ -538,12 +544,13 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
 function pickUnboundStrategyAccount(
   config: OcxConfig,
   now: number,
+  decision: AnthropicRouteDecision | null,
 ): { accountId: string; reason: "round-robin" | "fill-first" } | null {
   const strategy = anthropicPoolStrategy(config);
   if (strategy === "quota") return null;
 
   if (strategy === "round-robin") {
-    const eligible = getEligibleAnthropicAccounts(now);
+    const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision);
     const limit = stickyLimitForPool(config);
     const picked = peekRoundRobinAccount(POOL_KEY_ANTHROPIC, eligible, limit);
     if (!picked) return null;
@@ -551,7 +558,7 @@ function pickUnboundStrategyAccount(
   }
 
   if (strategy === "fill-first") {
-    const picked = pickFillFirstAnthropicAccount(config, now);
+    const picked = pickFillFirstAnthropicAccount(config, now, decision);
     if (!picked) return null;
     return { accountId: picked, reason: "fill-first" };
   }
@@ -567,10 +574,11 @@ export function resolveAnthropicAccountForSession(
   sessionKey: string | null | undefined,
   config: OcxConfig,
   now = Date.now(),
+  decision: AnthropicRouteDecision | null = null,
 ): AnthropicAccountSelection {
   pruneExpiredAffinity(now);
   const set = getAccountSet(PROVIDER);
-  if (!set || set.accounts.length === 0) return { accountId: null, reason: "none" };
+  if (!set || set.accounts.length === 0) return { accountId: null, reason: "none", ...(decision ? { routePosition: decision.position } : {}) };
 
   if (manualPreference === undefined) {
     manualPreference = set.selectionRevision !== undefined
@@ -580,6 +588,21 @@ export function resolveAnthropicAccountForSession(
 
   if (!isAnthropicAccountPoolEnabled(config)) {
     return { accountId: set.activeAccountId, reason: "pool-disabled" };
+  }
+
+  const eligible = routeCandidates(getEligibleAnthropicAccounts(now), decision);
+  if (decision && eligible.length === 0) {
+    let cooled: boolean;
+    if (decision.fallback) {
+      // A removed route member is not a candidate, but fallback can still use the
+      // ordinary pool once those accounts recover. Only usable stored accounts count.
+      const ordinary = set.accounts.filter(account =>
+        account.needsReauth !== true && isPoolCredentialUsable(account.id, now));
+      cooled = ordinary.length > 0 && ordinary.every(account => isCooled(account.id, now));
+    } else {
+      cooled = decision.accounts.every(id => set.accounts.some(account => account.id === id && isCooled(id, now)));
+    }
+    return { accountId: null, reason: cooled ? "all-cooled" : "none", routePosition: decision.position };
   }
 
   // A manual choice is a one-dispatch preference, not a lower-priority quota hint.
@@ -593,8 +616,8 @@ export function resolveAnthropicAccountForSession(
       const exhausted = [quota?.fiveHourPercent, quota?.weeklyPercent, quota?.monthlyPercent,
         ...(quota?.customWindows ?? []).map(window => window.percent)]
         .some(percent => typeof percent === "number" && percent >= 100);
-      if (!exhausted && getEligibleAnthropicAccounts(now).includes(chosen)) {
-        return { accountId: chosen, reason: "manual" };
+      if (!exhausted && eligible.includes(chosen)) {
+        return { accountId: chosen, reason: "manual", routePosition: decision?.position };
       }
     }
   }
@@ -604,10 +627,14 @@ export function resolveAnthropicAccountForSession(
     const affined = sessionAffinity.get(key);
     if (affined && now - affined.lastUsedAt <= AFFINITY_IDLE_TTL_MS) {
       const stillThere = set.accounts.some(a => a.id === affined.accountId && a.needsReauth !== true);
-      if (stillThere && !isCooled(affined.accountId, now) && isPoolCredentialUsable(affined.accountId, now)) {
-        return { accountId: affined.accountId, reason: "affinity" };
+      const stillUsable = stillThere && !isCooled(affined.accountId, now)
+        && isPoolCredentialUsable(affined.accountId, now);
+      if (stillUsable && eligible.includes(affined.accountId)) {
+        return { accountId: affined.accountId, reason: "affinity", routePosition: decision?.position };
       }
-      sessionAffinity.delete(key);
+      // A model route may exclude a healthy binding only for this request. Keep it for
+      // another model; remove bindings only when the account itself became unusable.
+      if (!stillUsable) sessionAffinity.delete(key);
     }
   }
 
@@ -618,21 +645,21 @@ export function resolveAnthropicAccountForSession(
   if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
     const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
       && !isCooled(set.activeAccountId, now)
-      && isPoolCredentialUsable(set.activeAccountId, now);
+      && eligible.includes(set.activeAccountId);
     if (activeOk) {
-      return { accountId: set.activeAccountId, reason: "active" };
+      return { accountId: set.activeAccountId, reason: "active", routePosition: decision?.position };
     }
   }
 
-  const strategyPick = pickUnboundStrategyAccount(config, now);
+  const strategyPick = pickUnboundStrategyAccount(config, now, decision);
   if (strategyPick) {
-    return { accountId: strategyPick.accountId, reason: strategyPick.reason };
+    return { accountId: strategyPick.accountId, reason: strategyPick.reason, routePosition: decision?.position };
   }
 
   const threshold = anthropicAutoSwitchThreshold(config);
   const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
     && !isCooled(set.activeAccountId, now)
-    && isPoolCredentialUsable(set.activeAccountId, now);
+    && eligible.includes(set.activeAccountId);
 
   let accountId: string | null = null;
   let reason: AnthropicAccountSelectionReason = "none";
@@ -646,7 +673,7 @@ export function resolveAnthropicAccountForSession(
       accountId = set.activeAccountId;
       reason = "active";
     } else {
-      const picked = pickLowestUsage(config, undefined, now);
+      const picked = pickLowestUsage(config, undefined, now, decision);
       if (picked) {
         accountId = picked;
         reason = activeOk && picked === set.activeAccountId ? "active" : "lowest-usage";
@@ -659,7 +686,7 @@ export function resolveAnthropicAccountForSession(
     accountId = set.activeAccountId;
     reason = "active";
   } else {
-    const picked = pickLowestUsage(config, set.activeAccountId, now);
+    const picked = pickLowestUsage(config, set.activeAccountId, now, decision);
     if (picked) {
       accountId = picked;
       reason = "only-eligible";
@@ -667,11 +694,11 @@ export function resolveAnthropicAccountForSession(
   }
 
   if (!accountId) {
-    const anyCooled = set.accounts.some(a => isCooled(a.id, now));
-    return { accountId: null, reason: anyCooled ? "all-cooled" : "none" };
+    const anyCooled = set.accounts.some(a => (!decision || decision.accounts.includes(a.id)) && isCooled(a.id, now));
+    return { accountId: null, reason: anyCooled ? "all-cooled" : "none", routePosition: decision?.position };
   }
 
-  return { accountId, reason };
+  return { accountId, reason, routePosition: decision?.position };
 }
 
 export function bindAnthropicSessionAffinity(
@@ -707,6 +734,7 @@ export function rotateAnthropicAccountOn429(
   sessionKey?: string | null,
   now = Date.now(),
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
+  decision: AnthropicRouteDecision | null = null,
 ): string | null {
   // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
   // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
@@ -741,15 +769,15 @@ export function rotateAnthropicAccountOn429(
   // because those dormant values remain in config. The quota picker is the neutral
   // recovery policy already used by the default strategy.
   const next = isAnthropicAccountPoolEnabled(config)
-    ? pickAlternateAnthropicAccount(config, failedAccountId, now)
+    ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision)
     : pickLowestUsage(config, failedAccountId, now);
   if (!next) {
-    console.warn("[anthropic-pool] all eligible Anthropic OAuth accounts are in cooldown; returning 429");
+    console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning 429`);
     return null;
   }
 
   console.warn(
-    `[anthropic-pool] 429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
+    `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
   );
   return next;
 }
@@ -759,6 +787,7 @@ export interface AnthropicSelectionRoutingOptions {
   sessionKey?: string | null;
   reason?: AnthropicAccountSelectionReason;
   expectedCredentialGeneration?: string;
+  routeDecision?: AnthropicRouteDecision | null;
 }
 
 /** Commit the selected account before dispatch; rejected proposals have no routing side effects. */
@@ -767,7 +796,7 @@ export async function promoteAnthropicActiveAccount(
   expectedSelection: OAuthAccountSelection | null,
   options: AnthropicSelectionRoutingOptions,
 ): Promise<OAuthAccountSelection | null> {
-  if (!expectedSelection || !isPoolCredentialUsable(accountId, Date.now()) || isCooled(accountId, Date.now())) return null;
+  if (!expectedSelection || !routeCandidates(getEligibleAnthropicAccounts(), options.routeDecision ?? null).includes(accountId)) return null;
   const committed = await commitOAuthAccountSelection(PROVIDER, accountId, {
     expectedSelection,
     expectedCredentialGeneration: options.expectedCredentialGeneration,
@@ -784,17 +813,25 @@ export function commitAnthropicSelectionRouting(
   committed: OAuthAccountSelection,
   options: AnthropicSelectionRoutingOptions,
 ): boolean {
-  if (committed.accountId !== accountId) return false;
+  if (committed.accountId !== accountId || (options.routeDecision
+    && !routeCandidates(getEligibleAnthropicAccounts(), options.routeDecision).includes(accountId))) return false;
   const current = captureOAuthAccountSelection(PROVIDER);
   if (current?.accountId !== committed.accountId || current.revision !== committed.revision) return false;
   if (isAnthropicAccountPoolEnabled(options.config)) {
     if (anthropicPoolStrategy(options.config) === "round-robin" && options.reason !== "affinity") {
       const limit = stickyLimitForPool(options.config);
-      const picked = pickRoundRobinAccount(POOL_KEY_ANTHROPIC, getEligibleAnthropicAccounts(), limit);
+      const picked = pickRoundRobinAccount(POOL_KEY_ANTHROPIC, routeCandidates(getEligibleAnthropicAccounts(), options.routeDecision ?? null), limit);
       if (picked !== accountId) seedPoolRotationAccount(POOL_KEY_ANTHROPIC, accountId);
       notePoolRotationSuccess(POOL_KEY_ANTHROPIC, accountId, limit);
     }
-    bindAnthropicSessionAffinity(options.sessionKey, accountId);
+    const key = normalizeAffinityComponent(options.sessionKey);
+    const bound = key ? sessionAffinity.get(key) : undefined;
+    const eligibleAtCommit = options.routeDecision && bound ? getEligibleAnthropicAccounts() : [];
+    const preserveExcludedAffinity = options.routeDecision && bound && bound.accountId !== accountId
+      && Date.now() - bound.lastUsedAt <= AFFINITY_IDLE_TTL_MS
+      && eligibleAtCommit.includes(bound.accountId)
+      && !routeCandidates(eligibleAtCommit, options.routeDecision).includes(bound.accountId);
+    if (!preserveExcludedAffinity) bindAnthropicSessionAffinity(options.sessionKey, accountId);
   }
   if (manualPreference === undefined || (manualPreference?.accountId === expectedSelection.accountId
     && manualPreference.revision === expectedSelection.revision)) manualPreference = null;

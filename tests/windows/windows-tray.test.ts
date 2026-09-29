@@ -347,6 +347,7 @@ describe("Windows tray packaging and command safety", () => {
     const typescript = readFileSync(repoPath("src", "tray", "windows.ts"), "utf8");
     const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
     const cli = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
+    const restart = readFileSync(repoPath("src", "cli", "tray-proxy.ts"), "utf8");
     expect(typescript).not.toContain("\u0000");
     expect(typescript).toContain("OCX_TRAY_ENTRY_B64");
     expect(typescript).not.toContain("$startInfo.UseShellExecute = $true");
@@ -379,10 +380,10 @@ describe("Windows tray packaging and command safety", () => {
     expect(cli).toContain("requestBoundSystemRestart(previous, deadlineAt)");
     expect(cli).toContain("Date.now() + PROXY_RESTART_OBSERVE_MS");
     expect(cli).toContain("discoverStableProxyForRestart");
-    expect(cli).toContain("isProxyReplacement(previous, live)");
+    expect(restart).toContain("isProxyReplacement(previous, live)");
     expect(cli).toContain("process.exitCode = result.ok ? 0 : 1");
     expect(cli).toContain("waitForProxy(40_000)");
-    expect(cli).toContain("await handleProxyRestart(() => handleTrayProxyStart(false))");
+    expect(cli).toContain("await handleProxyRestart(async () => (await handleTrayProxyStart(false))");
     expect(cli).toContain("function detachedStartEnvironment()");
     expect(cli).toContain("delete env.OCX_SERVICE");
     expect(cli).not.toContain("OCX_KEEP_ROUTING");

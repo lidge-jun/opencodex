@@ -424,6 +424,8 @@ export async function fetchProviderModelsWithAuth(
           // away, and every client that keys an effort control off this field —
           // the Pi-shaped exports — renders no control at all.
           ...(liveResult.efforts[id]?.length ? { reasoningEfforts: liveResult.efforts[id] } : {}),
+          // The family's effective enabled default, matching an unset effort at request time.
+          ...(liveResult.defaultEfforts[id] ? { defaultReasoningEffort: liveResult.defaultEfforts[id] } : {}),
           // The account catalog's per-base supportsImages vote collapses to one
           // modalities value. It spreads before the hints so exact
           // modelCapabilities declarations, the legacy modelInputModalities

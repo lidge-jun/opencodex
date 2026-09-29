@@ -176,6 +176,10 @@ export async function applyFinalRouteRequestNormalization(args: {
       || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
         && route.provider.showThinkingSummary !== true);
   }
+  // Provider policy, recomputed per final route like the summary default above so a fallback
+  // cannot inherit the previous target's choice. Raw content-channel reasoning is suppressed;
+  // provider-authored summaries stay on the summary channel and remain visible.
+  parsed.options.hideRawReasoning = route.provider.hideRawReasoning === true;
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = virtualModel?.selectedModelId ?? route.modelId;
   logCtx.provider = route.providerName;

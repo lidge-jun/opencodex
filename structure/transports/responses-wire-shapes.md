@@ -1,5 +1,17 @@
 # Responses Wire Shapes
 
+## Compaction image input
+
+For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
+tool-result images with a short reopening note only when a later nonempty `final_answer` message
+exists. This structural boundary does not prove the image was analyzed: text and source references
+remain, and the note asks the next model to reopen unresolved visual evidence. Pending images and
+commentary-only or unphased histories stay intact. Sidecar preparation projects parsed messages before
+vision planning. The projection does not rewrite `_rawBody` or stored history; later vision preprocessing
+may rewrite the request-local raw body for transport safety. Normal generation and native compaction
+stay unchanged. Both routed v1 and v2 pass through this boundary;
+raw Responses gateways retain their existing text-only compaction conversion.
+
 ## Direct MCP calls in code mode
 
 On routed bridge or converted-custom passthrough paths, when the request declares a
@@ -549,6 +561,19 @@ summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
 active effort and omits summary; explicit `summary: "none"` still hides it.
+The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only —
+openai-chat `reasoning_content`, kiro tags, and Gemini thought parts on routes that do not return
+thought summaries (direct and Vertex Gemini; a `cloud-code-assist` Gemini route emits its thought
+parts as `thinking_delta` instead, so the switch leaves them visible) — while `thinking_delta`
+summaries keep streaming. The option controls display, not confidentiality: a Responses bridge
+route still sends the suppressed text to the client inside the txt-only `ocxr1` envelope
+(`encrypted_content`, base64 JSON, echoed back for replay), while the direct Chat and Messages
+encoders emit no envelope at all (the Chat wire has no field for one, and the Messages encoder
+emits no thinking block for a signature-less close), leaving replay to the server-side cache the
+delivery's terminal fold fills. That fold builds no `ocxr1` envelope (`omitHiddenReasoningEnvelope`),
+so a block that fit the live stream cannot overflow the translator budget there and skip the cache
+write. A fallback route without the option shows raw reasoning again. A native passthrough route
+relays the upstream's own frames and ignores the option.
 
 ## Codex App visualization references
 

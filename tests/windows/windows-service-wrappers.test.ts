@@ -38,12 +38,16 @@ const launcher = (home: string) => join(home, "opencodex-service-launcher.vbs");
 function killsCommandLine(commandLine: string, patterns: readonly string[]): boolean {
   const boundary = /[\s"']/;
   for (const pattern of patterns) {
-    const at = commandLine.toLowerCase().indexOf(pattern.toLowerCase());
-    if (at < 0) continue;
-    const before = at > 0 ? commandLine[at - 1]! : " ";
-    const end = at + pattern.length;
-    const after = end < commandLine.length ? commandLine[end]! : " ";
-    if (boundary.test(before) && boundary.test(after)) return true;
+    let at = 0;
+    while (at < commandLine.length) {
+      at = commandLine.toLowerCase().indexOf(pattern.toLowerCase(), at);
+      if (at < 0) break;
+      const before = at > 0 ? commandLine[at - 1]! : " ";
+      const end = at + pattern.length;
+      const after = end < commandLine.length ? commandLine[end]! : " ";
+      if (boundary.test(before) && boundary.test(after)) return true;
+      at += 1;
+    }
   }
   return false;
 }
@@ -82,13 +86,20 @@ describe("which command lines the wrapper killer stops", () => {
   });
 });
 
+test("a look-alike prefix does not hide the real token behind it", () => {
+  // A first occurrence that is only a glued suffix must not end the scan: the
+  // genuine wrapper path later in the same command line is still a kill match.
+  expect(killsCommandLine("cmd.exe /c " + script(HOME_A) + ".bak ^& " + script(HOME_A), patterns)).toBe(true);
+  expect(killsCommandLine("cmd.exe /c " + script(HOME_A) + ".bak", patterns)).toBe(false);
+});
+
 describe("the generated script still implements that rule", () => {
   test("matchRuleMatchesScript", () => {
     // Pins the JS port above to the shipped PowerShell. If the script stops
     // using ordinal-insensitive IndexOf plus both boundary checks, the port is
     // no longer a faithful model and the cases above prove nothing.
     const ps = windowsWrapperKillScript(patterns);
-    expect(ps).toContain("IndexOf($p, [System.StringComparison]::OrdinalIgnoreCase)");
+    expect(ps).toContain("IndexOf($p, $i, [System.StringComparison]::OrdinalIgnoreCase)");
     expect(ps).toContain("$before = if ($i -gt 0)");
     expect(ps).toContain("$after = if ($end -lt $c.Length)");
     expect(ps).toContain("if ($before -match");

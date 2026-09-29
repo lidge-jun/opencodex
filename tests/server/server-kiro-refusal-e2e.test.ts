@@ -474,6 +474,28 @@ describe("Kiro refusal recovery through Responses", () => {
     } finally { await server.stop(true); }
   });
 
+  test("a transient Kiro refresh failure does not enter terminal failover", async () => {
+    const [a] = await seed(); saveConfig(config());
+    const sends: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.endsWith("/refreshToken")) return new Response("", { status: 503 });
+      if (url.startsWith("https://runtime.") && url.endsWith(".kiro.dev/")) {
+        const auth = new Headers(init?.headers).get("authorization") ?? "";
+        sends.push(auth);
+        return auth === "Bearer access-a" ? new Response("expired", { status: 401 }) : answer("served by b");
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(401);
+      expect(sends).toEqual(["Bearer access-a"]);
+      expect(getAccountSet("kiro")!.accounts.find(row => row.id === a!.id)?.needsReauth).not.toBe(true);
+    } finally { await server.stop(true); }
+  });
+
   for (const [status, reason] of [[400, "MONTHLY_REQUEST_COUNT"], [403, "TEMPORARILY_SUSPENDED"]] as const) {
     test(`failed alternate resolution returns original ${status} with normalized Kiro message`, async () => {
       const [, b] = await seed(); saveConfig(config());

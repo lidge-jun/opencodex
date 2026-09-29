@@ -43,13 +43,7 @@ olabileceğinde açık ad alanları kullanın.
 
 ### Engellenen model yeniden yönlendirmeleri
 
-`blockedModelRedirects`, varsayılan olarak ayarlanmamış, tam çözümlenmiş model
-kimliği değiştirmelerinden oluşan isteğe bağlı üst düzey bir
-`Record<string, string>` eşlemesidir. Yukarıdaki çözümleme sırasından sonra
-çalışır: bir eşleşme önceden seçilmiş sağlayıcı ve hesap rotasını korur, yalnızca
-yukarı akış model kimliğini değiştirir ve rota nedenini
-`blocked-model-redirect` olarak kaydeder. Anahtarın atlanması yönlendirmeyi
-değiştirmez.
+`blockedModelRedirects`, varsayılan olarak tanımlanmayan isteğe bağlı bir tam eşleşme tablosudur. Çıplak model anahtarı sağlayıcı, hesap ve takma ad çözümlendikten sonra uygulanır. Başka bir yapılandırılmış sağlayıcıyı açıkça belirtmeyen hedef, değer `/` içerse bile seçilen sağlayıcı ve hesapta model kimliğini yalnızca bir kez değiştirir. Yalnızca başka bir yapılandırılmış sağlayıcıyı açıkça belirten hedef sağlayıcıyı değiştirir; bu durumda `<kaynak-sağlayıcı>/<çözümlenmiş-model>` anahtarı çıplak anahtardan önce gelir. Zincir en fazla beş geçişe izin verir ve döngüleri saptar. Sabitlenmiş hesap seçicisi başka sağlayıcıya geçemez. Hedef kendi kimlik bilgilerini ve kotalarını kullanır; yönlendirme nedeni `blocked-model-redirect` olur.
 
 ```json
 {

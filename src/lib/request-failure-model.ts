@@ -217,6 +217,7 @@ const RECOVERY_KIND_CAUSE = {
   "transient-5xx": "upstream-fault",
   "connection-reset": "transport-ambiguous",
   "oauth-401": "credential-rejected",
+  "oauth-account-403": "credential-rejected",
   "key-401": "credential-rejected",
   "key-429": "rate-limit",
   "rate-limit-429": "rate-limit",

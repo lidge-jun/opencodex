@@ -5,6 +5,7 @@ import { chatCompletionsToResponsesBody } from "../../../src/chat/inbound";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../../src/bridge";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 import { parseRequest } from "../../../src/responses/parser";
+import { omitEarlierCompactionImages } from "../../../src/responses/compaction-images";
 import type { AdapterEvent, OcxParsedRequest } from "../../../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
@@ -33,6 +34,21 @@ const REJECTED_CLAUDE_SDK_PARAGRAPH =
   "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
 describe("google adapter — tool result images", () => {
+  test("compaction projection avoids historical inline_data but keeps a pending image on Gemini wire", async () => {
+    const parsed = parsedWith([
+      { role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,b2xk" }], timestamp: 1 },
+      { role: "assistant", phase: "final_answer", content: [{ type: "text", text: "Prior chart total is 42." }], timestamp: 2 },
+      { role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,bmV3" }], timestamp: 3 },
+    ]);
+    parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
+    const parts = (await geminiContents(parsed)).flatMap(turn => turn.parts);
+    expect(parts.filter(part => "inline_data" in part)).toEqual([
+      { inline_data: { mime_type: "image/png", data: "bmV3" } },
+    ]);
+    expect(JSON.stringify(parts)).toContain("Prior chart total is 42.");
+    expect(JSON.stringify(parts)).toContain("reopen the original attachment");
+  });
+
   test("tool-result screenshots ride along as inline_data beside the functionResponse", async () => {
     const contents = await geminiContents(parsedWith([
       {

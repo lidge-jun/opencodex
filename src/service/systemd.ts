@@ -10,7 +10,7 @@ import { systemdProperty } from "../service-manager-probe";
 import { writeServiceApiTokenFile, sh } from "./guards";
 import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv } from "./health";
 import type { ServiceInstallCleanupOps } from "./orchestration";
-import { SERVICE_MANAGED_ENV, TASK, cliEntry, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, writeServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, writeServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 
 /** The `--port <n>` baked into the installed systemd user unit. Linux only. */
@@ -59,7 +59,7 @@ export function buildUnit(
   // independent of the host PATH.
   const launcher = deps.launcher ?? null;
   const log = logPath();
-  const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+  const path = filterTransientServicePath(process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ":", "linux");
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
   const codexSqliteHome = systemdEnvironmentAssignment("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
