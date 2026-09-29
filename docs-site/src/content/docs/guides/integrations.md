@@ -521,6 +521,28 @@ key) in the app's API key field. The app sends it as `Authorization: Bearer`, wh
 `/v1/chat/completions` accepts as proxy admission and never forwards upstream; see the
 [authentication matrix](/reference/proxy-formats/#authentication-matrix).
 
+## Codex agent role models on the omo tab
+
+The omo tab also lists every Codex agent role found in `$CODEX_HOME/agents/*.toml`, with the
+model each one is pinned to. Codex runs a role on that pin no matter which model the parent asks
+for, so this is where a role's model is actually decided. Pick a model on a row and press Save:
+
+- opencodex rewrites only the root `model = "..."` line of that role's file. The role's
+  instructions, comments, and other keys are left exactly as they were. A role with no pin gets
+  one added near the top of the file.
+- The same value is written to `codex.agents.<role>.model` in `~/.omo/omo.jsonc`, which
+  LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
+  comments it is left untouched, because saving would remove them; the tab says so, and you can
+  set the value there by hand.
+
+Nothing happens until you press Save; syncing or restarting opencodex never changes a role file.
+New Codex sessions pick up the change. The same controls exist on the command line:
+
+```bash
+ocx agent roles
+ocx agent roles set explorer xai/grok-4.5
+```
+
 ## Kilo
 
 Kilo CLI, VS Code, and JetBrains share one global config. This integration writes

@@ -7,7 +7,7 @@ These commands control agent policy and routing, inspect the live proxy, and con
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
+### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
@@ -15,6 +15,16 @@ surface modes, delegation, effort, and fallback behavior fit together.
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+```
+
+`ocx agent roles` lists each Codex agent role in `$CODEX_HOME/agents` with its model pin and
+whether `~/.omo/omo.jsonc` can be updated. `ocx agent roles set <role> <model>` rewrites only
+that role's root `model` line and mirrors the value into omo.jsonc at
+`codex.agents.<role>.model`. A missing omo.jsonc, or one containing comments, is left unchanged
+and the command says so. See [Codex agent role models](/guides/integrations/#codex-agent-role-models-on-the-omo-tab).
+
+```bash
+ocx agent roles set explorer xai/grok-4.5
 ```
 
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
