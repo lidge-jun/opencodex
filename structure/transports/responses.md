@@ -576,7 +576,7 @@ reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 
 ## Adapter-to-Responses bridge
 
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
-`src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream,
+`src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
 from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
 caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they

@@ -71,6 +71,11 @@ host and port over a LAN IP or an alias.
 
 ## Dashboard layout
 
+Responses first-output timing includes streamed function arguments and custom-tool input, as well
+as text and reasoning. A tool-only turn can therefore have a first-output time even without prose.
+Empty deltas and tool-start notifications do not start this timer. It measures the proxy's first
+observed output, not the start of hidden model reasoning or exact model decoding throughput.
+
 Overview uses matching status cards and full-width settings rows. On wide screens, labels share
 one column and model/effort controls share another. On narrower screens, controls move below their
 labels in the same reading order. Long version labels are shortened visually; hover the version
