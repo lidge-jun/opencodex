@@ -576,11 +576,15 @@ function wrapperLaunchShape(body: string): "source" | { standaloneBun: string } 
   const launchLines = body.split(/\r?\n/).filter(line => /^\s*"%OCX_BUN%"/i.test(line));
   if (launchLines.length !== 1) return null;
   const launch = launchLines[0]!.trim();
-  const sourceLaunch = /^"%OCX_BUN%" "%OCX_CLI%" start\b[^\r\n]*$/i;
+  const sourceLaunch = /^"%OCX_BUN%" "%OCX_CLI%" start --port ([0-9]{1,5}) >>"%OCX_SERVICE_LOG%" 2>&1$/i;
   const standaloneLaunch = /^"%OCX_BUN%" start --port ([0-9]{1,5}) >>"%OCX_SERVICE_LOG%" 2>&1$/i;
+  const bun = generatedBatchSetValue(body, "OCX_BUN");
+  if (!bun) return null;
   const cliAssignments = body.split(/\r?\n/).filter(line => /^\s*@?set\s+"?OCX_CLI=/i.test(line));
   if (cliAssignments.length > 0) {
-    return cliAssignments.length === 1 && generatedBatchSetValue(body, "OCX_CLI") !== null && sourceLaunch.test(launch)
+    const port = sourceLaunch.exec(launch)?.[1];
+    return cliAssignments.length === 1 && Boolean(generatedBatchSetValue(body, "OCX_CLI"))
+      && Boolean(port) && Number(port) >= 1 && Number(port) <= 65535
       ? "source" : null;
   }
   const port = standaloneLaunch.exec(launch)?.[1];
@@ -595,7 +599,6 @@ function wrapperLaunchShape(body: string): "source" | { standaloneBun: string } 
   ]) {
     if (generatedBatchSetValue(body, name) !== value) return null;
   }
-  const bun = generatedBatchSetValue(body, "OCX_BUN");
   const runtimePath = generatedBatchSetValue(body, BUN_RUNTIME_PATH_ENV);
   if (!bun || !runtimePath || normalizeWindowsPath(decodeBatchPathValue(bun)) !== normalizeWindowsPath(decodeBatchPathValue(runtimePath))) return null;
   for (const name of ["CODEX_HOME", "OPENCODEX_HOME"]) {

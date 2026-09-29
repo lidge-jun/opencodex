@@ -378,7 +378,7 @@ describe("the Windows chain walk", () => {
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
       '>>"%OCX_SERVICE_LOG%" echo start',
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     );
     writeFileSync(path, lines.join("\r\n"));
     return path;
@@ -542,9 +542,36 @@ describe("the Windows chain walk", () => {
   test("a source wrapper with an extra standalone launch is unknown", () => {
     const wrapper = writeWindowsWrapper("C:\\a\\.codex", "C:\\a\\.opencodex");
     writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
       '"%OCX_BUN%" "%OCX_CLI%" start --port 10100\r\n"%OCX_BUN%" start --port 10100',
     ));
+    const launcher = writeWindowsLauncher(wrapper);
+    writeWindowsTask(launcher);
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+
+    expect(inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent",
+    }).kind).toBe("unknown");
+  });
+
+  test("a source wrapper with an appended shell command is unknown", () => {
+    const wrapper = writeWindowsWrapper("C:\\a\\.codex", "C:\\a\\.opencodex");
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1 & echo foreign',
+    ));
+    const launcher = writeWindowsLauncher(wrapper);
+    writeWindowsTask(launcher);
+    const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
+
+    expect(inspectServiceManagerInstallation({
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent",
+    }).kind).toBe("unknown");
+  });
+
+  test("a source wrapper without an OCX_BUN assignment is unknown", () => {
+    const wrapper = writeWindowsWrapper("C:\\a\\.codex", "C:\\a\\.opencodex");
+    writeFileSync(wrapper, readFileSync(wrapper, "utf8").replace(/^set "OCX_BUN=.*"\r?\n/im, ""));
     const launcher = writeWindowsLauncher(wrapper);
     writeWindowsTask(launcher);
     const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
@@ -564,12 +591,13 @@ describe("the Windows chain walk", () => {
       '"%OCX_BUN%" start --port 10100',
       '"%OCX_BUN%" "%OCX_CLI%" start --port 10100\r\n"%OCX_BUN%" start --port 10100',
     ));
+    const statePath = writeStandaloneState();
     const launcher = writeWindowsLauncher(wrapper);
     writeWindowsTask(launcher);
     const { runRaw } = recorder(() => ({ status: 1, stderr: "ERROR: The system cannot find the file specified." }));
 
     expect(inspectServiceManagerInstallation({
-      platform: "win32", home, runRaw, winswStatus: () => "nonexistent",
+      platform: "win32", home, runRaw, winswStatus: () => "nonexistent", statePaths: [statePath],
     }).kind).toBe("unknown");
   });
 
@@ -587,7 +615,7 @@ describe("the Windows chain walk", () => {
       'set "OCX_BUN=C:\\bun\\bun.exe"',
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     ].join("\r\n"));
     const foreignLauncher = join(home, ".opencodex", "foreign-launcher.vbs");
     writeFileSync(foreignLauncher, `shell.Run """${foreignWrapper}""", 0, True\r\n`);
@@ -615,7 +643,7 @@ describe("the Windows chain walk", () => {
       'set "OCX_BUN=C:\\bun\\bun.exe"',
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     ].join("\r\n"));
     const launcher = writeWindowsLauncher(wrapper);
     writeWindowsTask(launcher);
@@ -642,7 +670,7 @@ describe("the Windows chain walk", () => {
       'set "OCX_BUN=C:\\bun\\bun.exe"',
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     ].join("\r\n"));
     const launcher = writeWindowsLauncher(wrapper);
     writeWindowsTask(launcher);
@@ -694,7 +722,7 @@ describe("the Windows chain walk", () => {
       'set "OCX_BUN=C:\\bun\\bun.exe"',
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     ].join("\r\n"));
     const launcher = join(custom, "opencodex-service-launcher.vbs");
     writeFileSync(launcher, `shell.Run """${wrapper}""", 0, True\r\n`);
@@ -1173,7 +1201,7 @@ describe("ownership refuses what it cannot prove", () => {
       'set "OCX_BUN=C:\\bun\\bun.exe"',
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     ].join("\r\n"));
     const launcher = join(opencodexHome, "opencodex-service-launcher.vbs");
     writeFileSync(launcher, `shell.Run """${wrapper}""", 0, True\r\n`);
@@ -1209,7 +1237,7 @@ describe("ownership refuses what it cannot prove", () => {
       'set "OCX_BUN=C:\\bun\\bun.exe"',
       'set "OCX_CLI=C:\\opencodex\\src\\cli\\index.ts"',
       ":loop",
-      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100',
+      '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1',
     ].join("\r\n"));
     const launcher = join(opencodexHome, "opencodex-service-launcher.vbs");
     writeFileSync(launcher, `shell.Run """${wrapper}""", 0, True\r\n`);
