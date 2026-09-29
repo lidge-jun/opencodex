@@ -93,6 +93,10 @@ describe("active registry admission", () => {
   });
 
   test("non-SSE streamed response keeps its admitted turn until the body settles", async () => {
+    const phase = (name: string) => {
+      if (process.env.CI) process.stderr.write(`[active-registry-stream] phase=${name}\n`);
+    };
+    phase("setup:start");
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-non-sse-turn-"));
     process.env.OPENCODEX_HOME = home;
@@ -113,6 +117,7 @@ describe("active registry admission", () => {
         }), { headers: { "content-type": "application/octet-stream" } });
       },
     });
+    phase("setup:upstream-bound");
     saveConfig({
       port: 0,
       hostname: "127.0.0.1",
@@ -121,7 +126,9 @@ describe("active registry admission", () => {
         fixture: { adapter: "openai-responses", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true, apiKey: "test-key" },
       },
     } as OcxConfig);
+    phase("setup:config-saved");
     const server = startServer(0);
+    phase("setup:proxy-bound");
     const before = activeRegistryMetrics().activeTurns.active;
     try {
       const response = await fetch(new URL("/v1/responses", server.url), {
@@ -133,20 +140,25 @@ describe("active registry admission", () => {
         },
         body: JSON.stringify({ model: "fixture/model", input: "hello", stream: true }),
       });
+      phase("request:headers");
       expect(response.status).toBe(200);
       expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
       expect(workflowBudgetSnapshot("stream-root")?.active).toBe(1);
       settle();
       expect(await response.text()).toBe("chunk");
+      phase("request:body-settled");
       expect(activeRegistryMetrics().activeTurns.active).toBe(before);
       expect(workflowBudgetSnapshot("stream-root")?.active).toBe(0);
     } finally {
+      phase("cleanup:start");
       settle?.();
       await server.stop(true);
+      phase("cleanup:proxy-stopped");
       upstream.stop(true);
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
+      phase("cleanup:end");
     }
   });
 
