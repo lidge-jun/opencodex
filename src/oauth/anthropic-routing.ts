@@ -736,33 +736,7 @@ export function rotateAnthropicAccountOn429(
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
   decision: AnthropicRouteDecision | null = null,
 ): string | null {
-  // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
-  // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
-  // of which move a HEALTHY request and stay opt-in. Rotating away from an account upstream has
-  // just rate-limited is a different thing: it only ever runs after a refusal, and stranding a
-  // 429 while a second logged-in account sits idle is a defect, not a configuration choice.
-  // Presence is the activation rule, the same one an apiKeyPool of two keys already uses.
-  if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)) return null;
-
-  // Retry-After first: it is the header written FOR this decision. The rejected window's
-  // reset is the fallback, because a 429 that omits Retry-After still carries it -- and
-  // without that fallback such a refusal cools for the 60s default and the exhausted
-  // account is back in the rotation a minute later.
-  const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
-  const resetDerived = parsedRetry === undefined ? parseRateLimitResetMs(rateLimitHeaders, now) : undefined;
-  const cooldownMs = parsedRetry ?? resetDerived ?? DEFAULT_COOLDOWN_MS;
-  upstreamHealth.set(failedAccountId, {
-    cooldownUntil: now + cooldownMs,
-    cooldownSource: parsedRetry !== undefined
-      ? "retry-after"
-      : resetDerived !== undefined ? "reset-derived" : "default",
-  });
-  sweepExpiredOnWrite(now);
-  clearAnthropicSessionAffinityForAccount(failedAccountId);
-  notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
-  // A rotation means the roster in use just changed; do not answer the next activation question
-  // from a count read taken before the failure.
-  quorumCache = null;
+  if (!recordAnthropicAccount429(config, failedAccountId, retryAfterHeader, now, rateLimitHeaders)) return null;
 
   // The pool's strategy is a PROACTIVE policy. When the pool is disabled, reactive
   // presence-only recovery must not silently reactivate round-robin/fill-first merely
@@ -780,6 +754,44 @@ export function rotateAnthropicAccountOn429(
     `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
   );
   return next;
+}
+
+/** Record the account refusal even when this request has no remaining retry sends. */
+export function recordAnthropicAccount429(
+  config: OcxConfig,
+  failedAccountId: string,
+  retryAfterHeader: string | null | undefined,
+  now = Date.now(),
+  rateLimitHeaders?: AnthropicRateLimitHeaders | null,
+): boolean {
+  // Reactive 429 failover is NOT gated on the pool flag. That flag buys PROACTIVE routing --
+  // session affinity, quota-ranked new-session selection, autoSwitchThreshold, strategy -- all
+  // of which move a HEALTHY request and stay opt-in. Rotating away from an account upstream has
+  // just rate-limited is a different thing: it only ever runs after a refusal, and stranding a
+  // 429 while a second logged-in account sits idle is a defect, not a configuration choice.
+  // Presence is the activation rule, the same one an apiKeyPool of two keys already uses.
+  if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)) return false;
+
+  // Retry-After first: it is the header written FOR this decision. The rejected window's
+  // reset is the fallback, because a 429 that omits Retry-After still carries it -- and
+  // without that fallback such a refusal cools for the 60s default and the exhausted
+  // account is back in the rotation a minute later.
+  const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
+  const resetDerived = parsedRetry === undefined ? parseRateLimitResetMs(rateLimitHeaders, now) : undefined;
+  const cooldownMs = parsedRetry ?? resetDerived ?? DEFAULT_COOLDOWN_MS;
+  upstreamHealth.set(failedAccountId, {
+    cooldownUntil: now + cooldownMs,
+    cooldownSource: parsedRetry !== undefined
+      ? "retry-after"
+      : resetDerived !== undefined ? "reset-derived" : "default",
+  });
+  sweepExpiredOnWrite(now);
+  clearAnthropicSessionAffinityForAccount(failedAccountId);
+  notePoolRotationFailure(POOL_KEY_ANTHROPIC, failedAccountId);
+  // The refused account changed the eligible roster even when no retry send remains.
+  quorumCache = null;
+
+  return true;
 }
 
 export interface AnthropicSelectionRoutingOptions {

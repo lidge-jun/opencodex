@@ -354,6 +354,10 @@ five seconds. A valid immediate
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
 
+For an Anthropic OAuth or Codex pool, a 429 tied to one account that the pool has cooled does
+not cool the whole combo target. Other accounts behind that target remain available. A 429 with
+no identified, cooled pool account still cools the target, as do provider-wide failures.
+
 ### Last-resort targets
 
 A brief cooldown on a preferred target otherwise routes straight to whatever

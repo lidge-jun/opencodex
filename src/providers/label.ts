@@ -39,10 +39,9 @@ export function poolAccountProviderLabel(
   loggedProvider: string | undefined,
   configuredProvider: string,
 ): string | undefined {
-  if (!loggedProvider || loggedProvider === configuredProvider) return undefined;
-  const cut = loggedProvider.lastIndexOf("-");
-  if (cut <= 0) return undefined;
-  return ACCOUNT_LOG_LABEL_RE.test(loggedProvider.slice(cut + 1)) ? loggedProvider : undefined;
+  if (!loggedProvider?.startsWith(`${configuredProvider}-`)) return undefined;
+  return ACCOUNT_LOG_LABEL_RE.test(loggedProvider.slice(configuredProvider.length + 1))
+    ? loggedProvider : undefined;
 }
 
 export function baseProviderLabel(provider: string): string {

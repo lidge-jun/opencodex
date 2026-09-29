@@ -107,6 +107,7 @@
   "ambiguous-resend-composition.test.ts": "lib",
   "ambiguous-resend-gate.test.ts": "lib",
   "anthropic-account-pool.test.ts": "adapters/anthropic",
+  "anthropic-combo-account-cooldown.test.ts": "adapters/anthropic",
     "anthropic-model-routes.test.ts": "adapters/anthropic",
   "anthropic-agentrouter-language-framing.test.ts": "adapters/anthropic",
   "anthropic-baseurl-override.test.ts": "adapters/anthropic",

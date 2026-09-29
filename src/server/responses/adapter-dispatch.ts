@@ -56,6 +56,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   rotateAnthropicAccountOn429,
+  recordAnthropicAccount429,
   getAnthropicPoolAccessSnapshot,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -999,6 +1000,11 @@ export async function prepareAdapterExchange(
        } catch {
           break;
         }
+      }
+      if (upstreamResponse.status === 429 && transportState.anthropicPoolAccountId
+        && transportState.anthropicPoolFailovers >= ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST) {
+        recordAnthropicAccount429(config, transportState.anthropicPoolAccountId,
+          upstreamResponse.headers.get("retry-after"), Date.now(), upstreamResponse.headers);
       }
       // Generic OAuth account failover (#2568) rotates reactively after a refusal when
       // two accounts are stored. Kiro additionally classifies bounded 400/403 refusals;

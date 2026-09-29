@@ -68,7 +68,7 @@ function answered(): Response {
   });
 }
 
-function configFor(reply: () => Response): OcxConfig {
+function configFor(reply: () => Response, poolEnabled = true): OcxConfig {
   const transport = (async (_input, init) => {
     sentTokens.push(String(new Headers(init?.headers).get("authorization")));
     return reply();
@@ -79,7 +79,7 @@ function configFor(reply: () => Response): OcxConfig {
   };
   return {
     port: 0, defaultProvider: "anthropic",
-    anthropicAccountPool: { enabled: true, strategy: "round-robin" },
+    anthropicAccountPool: { enabled: poolEnabled, strategy: "round-robin" },
     providers: { anthropic: provider },
     combos: { pooled: { strategy: "failover", targets: [TARGET] } },
   };
@@ -138,6 +138,8 @@ test("a spent pool account does not cool the combo target for the accounts that 
   const cooled = ids.filter(id => getAnthropicAccountHealthSnapshot(id) !== null);
   expect(cooled.length).toBeGreaterThan(0);
   expect(cooled.length).toBeLessThan(ids.length);
+  // The last refused account must be recorded even though the request spent its retry budget.
+  expect(cooled).toHaveLength(4);
   expect(isComboTargetInCooldown("pooled", TARGET)).toBe(false);
 
   refuse = false;
@@ -172,3 +174,11 @@ test("every pool account spent still cools the combo target", async () => {
   expect((await post(config)).status).toBe(503);
   expect(sentTokens.length).toBe(sendsBefore);
 }, 20_000);
+
+test("a lone OAuth account without pool cooldown still cools the combo target", async () => {
+  await seed(1);
+  const config = configFor(spent, false);
+  expect((await post(config)).status).toBe(429);
+  expect(isComboTargetInCooldown("pooled", TARGET)).toBe(true);
+  expect(sentTokens).toHaveLength(1);
+});
