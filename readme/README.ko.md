@@ -153,6 +153,10 @@ Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td><a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>의 후원에 감사합니다. PackyCode는 안정적인 고성능 API 릴레이 프로바이더로, Claude Code, Codex, Gemini 등의 릴레이를 제공합니다. 자동 failover, 스마트 라우팅, 무제한 동시성으로 AI를 실제 생산성 도구로 만듭니다. <a href="https://www.packyapi.com/register?aff=k5KT">이 링크로 등록</a>하고 바로 시작하세요. Add provider 선택기에서 <code>PackyCode</code>를 고르거나 <code>ocx provider add packycode</code>를 실행하세요.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td><a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme">TokenLab</a>의 후원에 감사합니다. TokenLab은 코딩 에이전트에게 주요 모델용 API 키 하나를 제공하며, Responses, Chat Completions, 스트리밍, 도구 호출을 지원합니다. 전달 모드를 고르고 쓴 만큼 결제하세요. Add provider 선택기에서 <code>TokenLab</code>을 고르거나 <code>ocx provider add tokenlab</code>을 실행하세요.</td>
+</tr>
 </tbody>
 </table>
 

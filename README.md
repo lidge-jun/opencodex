@@ -157,6 +157,10 @@ See [SPONSORS.md](./SPONSORS.md).
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>Thanks to <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> for sponsoring this project! PackyCode is a stable, high-performance API relay provider, offering relay services for Claude Code, Codex, Gemini, and more. With automatic failover, smart routing, and unlimited concurrency, it turns AI into a real productivity tool. <a href="https://www.packyapi.com/register?aff=k5KT">Register via this link</a> and get started! Pick <code>PackyCode</code> in the Add provider picker or run <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/sponsors/tokenlab-dark.png"><img src="assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>Thanks to <a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme">TokenLab</a> for sponsoring this project! TokenLab gives coding agents one API key for leading models, with Responses, Chat Completions, streaming, and tool calling. Choose your delivery mode and pay as you go. Pick <code>TokenLab</code> in the Add provider picker or run <code>ocx provider add tokenlab</code>.</td>
+</tr>
 </tbody>
 </table>
 

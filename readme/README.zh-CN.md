@@ -154,6 +154,10 @@ opencodex 还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多�
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>感谢 <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> 赞助本项目！PackyCode 是一家稳定、高性能的 API 中转提供商，为 Claude Code、Codex、Gemini 等提供中转服务。凭借自动故障转移、智能路由和无限并发，它让 AI 成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">通过此链接注册</a>并开始使用！在添加提供商选择器中选择 <code>PackyCode</code>，或运行 <code>ocx provider add packycode</code>。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>感谢 <a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme">TokenLab</a> 赞助本项目！TokenLab 为编程代理提供一个 API 密钥即可使用主流模型，支持 Responses、Chat Completions、流式输出和工具调用。选择你的交付模式，按量付费。在添加提供商选择器中选择 <code>TokenLab</code>，或运行 <code>ocx provider add tokenlab</code>。</td>
+</tr>
 </tbody>
 </table>
 

@@ -553,7 +553,9 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
-**TokenLab** is an OpenAI-compatible API gateway operated by TOKENLAB AI INC.
+**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme),
+operated by TOKENLAB AI INC.
 Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
 `ocx provider add tokenlab` or select **TokenLab** in the dashboard's **Add provider** picker.
 The preset uses [Chat Completions](https://docs.tokenlab.sh/quickstart) and discovers models at
@@ -566,7 +568,8 @@ policy. Use a valid key with a funded workspace for inference. `gpt-5.6-terra` i
 default; choose another discovered model if your key does not allow it. The provider and model
 prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstream.
 TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
-apply to requests sent to this service.
+apply to requests sent to this service. The preset pins the row near the top of the Add provider
+picker and marks it as a sponsor, and nothing else about routing or defaults changes.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly

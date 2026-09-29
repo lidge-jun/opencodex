@@ -1464,6 +1464,8 @@ export const fr: Record<TKey, string> = {
   "pws.sponsor.orcaDescription": "Une passerelle compatible OpenAI avec routage adaptatif et basculement automatique.",
   "pws.sponsor.packyTitle": "Claude Code, Codex et Gemini au même endroit",
   "pws.sponsor.packyDescription": "Un relais API pour vos outils de développement IA. Commencez avec un jeton du groupe Codex.",
+  "pws.sponsor.tokenlabTitle": "Une seule clé API pour les principaux modèles",
+  "pws.sponsor.tokenlabDescription": "Responses, Chat Completions, streaming et appels d’outils pour les agents de code, avec le mode de livraison de votre choix et un paiement à l’usage.",
   "pws.sponsor.visit": "Découvrir {provider}",
   "pws.sponsor.console": "Ouvrir la console",
   "modal.invalidPreset": "Ce préréglage de fournisseur intégré est incomplet. Redémarrez le proxy et réessayez.",

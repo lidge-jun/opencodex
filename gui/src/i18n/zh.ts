@@ -2476,6 +2476,8 @@ export const zh: Record<TKey, string> = {
   "pws.sponsor.orcaDescription": "兼容 OpenAI 的网关，支持自适应路由和自动故障转移。",
   "pws.sponsor.packyTitle": "一站连接 Claude Code、Codex 和 Gemini",
   "pws.sponsor.packyDescription": "面向 AI 编程工具的 API 中转服务。使用 Codex 分组令牌开始。",
+  "pws.sponsor.tokenlabTitle": "一个 API 密钥，连接主流模型",
+  "pws.sponsor.tokenlabDescription": "为编程智能体提供 Responses、Chat Completions、流式输出和工具调用，可选择交付模式并按量付费。",
   "pws.sponsor.visit": "了解 {provider}",
   "pws.sponsor.console": "打开控制台",
   "modal.invalidPreset": "此内置提供方预设不完整。请重启代理后重试。",

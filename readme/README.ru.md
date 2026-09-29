@@ -164,6 +164,10 @@ opencodex также умеет управлять **пулом аккаунто
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>Благодарим <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> за спонсорскую поддержку проекта! PackyCode — стабильный высокопроизводительный API-релей, предоставляющий релей-сервисы для Claude Code, Codex, Gemini и других. Автоматический failover, умная маршрутизация и неограниченная конкурентность превращают AI в настоящий инструмент продуктивности. <a href="https://www.packyapi.com/register?aff=k5KT">Зарегистрируйтесь по этой ссылке</a> и начните работу! Выберите <code>PackyCode</code> в селекторе Add provider или выполните <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>Благодарим <a href="https://tokenlab.sh/?utm_source=opencodex&utm_medium=readme">TokenLab</a> за спонсорскую поддержку проекта! TokenLab даёт агентам для программирования один API-ключ для ведущих моделей с поддержкой Responses, Chat Completions, стриминга и вызова инструментов. Выберите режим доставки и платите по мере использования. Выберите <code>TokenLab</code> в селекторе Add provider или выполните <code>ocx provider add tokenlab</code>.</td>
+</tr>
 </tbody>
 </table>
 

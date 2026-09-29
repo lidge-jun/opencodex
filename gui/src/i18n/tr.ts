@@ -1477,6 +1477,8 @@ export const tr: Record<TKey, string> = {
   "pws.sponsor.orcaDescription": "Uyarlanabilir yönlendirme ve otomatik yük devretme sunan OpenAI uyumlu bir ağ geçidi.",
   "pws.sponsor.packyTitle": "Claude Code, Codex ve Gemini tek yerde",
   "pws.sponsor.packyDescription": "Yapay zekâ kodlama araçlarınız için API aktarma hizmeti. Codex grubu belirteciyle başlayın.",
+  "pws.sponsor.tokenlabTitle": "Önde gelen modeller için tek API anahtarı",
+  "pws.sponsor.tokenlabDescription": "Kodlama ajanları için Responses, Chat Completions, akış ve araç çağırma desteği; teslim modunu seçip kullandıkça ödersiniz.",
   "pws.sponsor.visit": "{provider} hakkında",
   "pws.sponsor.console": "Konsolu aç",
   "modal.invalidPreset": "Bu yerleşik sağlayıcı ayarı eksik.",
