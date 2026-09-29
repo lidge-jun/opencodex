@@ -1742,6 +1742,7 @@ export const ko: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "평가 안 됨: {reason}",
   "integrations.omoRoles.auto.unassigned": "모델 없음: {reason}",
   "integrations.omoRoles.auto.applied": "적용됨",
+  "integrations.omoRoles.auto.alreadySet": "이미 설정됨",
   "integrations.omoRoles.auto.apply": "적용",
   "integrations.omoRoles.auto.moveUp": "올릴 조건: {text}",
   "integrations.omoRoles.auto.moveDown": "내릴 조건: {text}",

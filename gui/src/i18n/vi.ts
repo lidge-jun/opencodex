@@ -2264,6 +2264,7 @@ export const vi: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "Chưa đánh giá: {reason}",
   "integrations.omoRoles.auto.unassigned": "Không có mô hình: {reason}",
   "integrations.omoRoles.auto.applied": "Đã áp dụng",
+  "integrations.omoRoles.auto.alreadySet": "Đã đặt sẵn",
   "integrations.omoRoles.auto.apply": "Áp dụng",
   "integrations.omoRoles.auto.moveUp": "Nâng lên nếu: {text}",
   "integrations.omoRoles.auto.moveDown": "Hạ xuống nếu: {text}",

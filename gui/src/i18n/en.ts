@@ -2309,6 +2309,7 @@ export const en = {
   "integrations.omoRoles.auto.unsized": "Not sized: {reason}",
   "integrations.omoRoles.auto.unassigned": "No model: {reason}",
   "integrations.omoRoles.auto.applied": "Applied",
+  "integrations.omoRoles.auto.alreadySet": "Already set",
   "integrations.omoRoles.auto.apply": "Apply",
   "integrations.omoRoles.auto.moveUp": "Move up if: {text}",
   "integrations.omoRoles.auto.moveDown": "Move down if: {text}",

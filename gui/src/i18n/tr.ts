@@ -2248,6 +2248,7 @@ export const tr: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "Değerlendirilmedi: {reason}",
   "integrations.omoRoles.auto.unassigned": "Model yok: {reason}",
   "integrations.omoRoles.auto.applied": "Uygulandı",
+  "integrations.omoRoles.auto.alreadySet": "Zaten ayarlı",
   "integrations.omoRoles.auto.apply": "Uygula",
   "integrations.omoRoles.auto.moveUp": "Yükselt, eğer: {text}",
   "integrations.omoRoles.auto.moveDown": "Düşür, eğer: {text}",

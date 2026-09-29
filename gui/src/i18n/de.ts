@@ -1706,6 +1706,7 @@ export const de: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "Nicht eingestuft: {reason}",
   "integrations.omoRoles.auto.unassigned": "Kein Modell: {reason}",
   "integrations.omoRoles.auto.applied": "Übernommen",
+  "integrations.omoRoles.auto.alreadySet": "Bereits gesetzt",
   "integrations.omoRoles.auto.apply": "Übernehmen",
   "integrations.omoRoles.auto.moveUp": "Höher, wenn: {text}",
   "integrations.omoRoles.auto.moveDown": "Niedriger, wenn: {text}",

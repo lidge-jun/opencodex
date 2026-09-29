@@ -2139,6 +2139,7 @@ export const ja: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "未評価: {reason}",
   "integrations.omoRoles.auto.unassigned": "モデルなし: {reason}",
   "integrations.omoRoles.auto.applied": "適用済み",
+  "integrations.omoRoles.auto.alreadySet": "設定済み",
   "integrations.omoRoles.auto.apply": "適用",
   "integrations.omoRoles.auto.moveUp": "上げる条件: {text}",
   "integrations.omoRoles.auto.moveDown": "下げる条件: {text}",

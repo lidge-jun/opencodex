@@ -78,7 +78,10 @@ export default function OmoRoleAutoAssign({
     }
   };
 
-  const applicable = (result?.proposals ?? []).filter(p => p.status === "proposed" && p.proposedModel && !applied[p.role]);
+  const alreadySet = (p: RoleProposal) =>
+    p.proposedModel === p.model && (p.proposedEffort == null || p.proposedEffort === p.effort);
+  const applicable = (result?.proposals ?? []).filter(p =>
+    p.status === "proposed" && p.proposedModel && !applied[p.role] && !alreadySet(p));
 
   const applyOne = async (proposal: RoleProposal): Promise<boolean> => {
     const ok = await apply(proposal.role, proposal.proposedModel!, proposal.proposedEffort ?? null);
@@ -146,8 +149,12 @@ export default function OmoRoleAutoAssign({
                       {proposal.proposedModel
                         ? <code>{proposal.proposedModel}{proposal.proposedEffort ? ` · ${proposal.proposedEffort}` : ""}</code>
                         : <span className="integration-meta">{t("integrations.omoRoles.auto.unassigned", { reason: proposal.reason ?? "" })}</span>}
-                      {proposal.status === "proposed" && (applied[proposal.role]
-                        ? <span className="omo-auto-assign-done">{t("integrations.omoRoles.auto.applied")}</span>
+                      {proposal.status === "proposed" && (applied[proposal.role] || alreadySet(proposal)
+                        ? (
+                          <span className="omo-auto-assign-done">
+                            {applied[proposal.role] ? t("integrations.omoRoles.auto.applied") : t("integrations.omoRoles.auto.alreadySet")}
+                          </span>
+                        )
                         : (
                           <button type="button" className="btn btn-sm" disabled={locked} onClick={() => void applyOne(proposal)}>
                             {t("integrations.omoRoles.auto.apply")}

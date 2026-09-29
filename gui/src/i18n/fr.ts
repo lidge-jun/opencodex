@@ -2236,6 +2236,7 @@ export const fr: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "Non évalué : {reason}",
   "integrations.omoRoles.auto.unassigned": "Aucun modèle : {reason}",
   "integrations.omoRoles.auto.applied": "Appliqué",
+  "integrations.omoRoles.auto.alreadySet": "Déjà appliqué",
   "integrations.omoRoles.auto.apply": "Appliquer",
   "integrations.omoRoles.auto.moveUp": "Monter si : {text}",
   "integrations.omoRoles.auto.moveDown": "Descendre si : {text}",

@@ -1723,6 +1723,7 @@ export const zh: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "未评估：{reason}",
   "integrations.omoRoles.auto.unassigned": "没有模型：{reason}",
   "integrations.omoRoles.auto.applied": "已应用",
+  "integrations.omoRoles.auto.alreadySet": "已设置",
   "integrations.omoRoles.auto.apply": "应用",
   "integrations.omoRoles.auto.moveUp": "提高的条件：{text}",
   "integrations.omoRoles.auto.moveDown": "降低的条件：{text}",

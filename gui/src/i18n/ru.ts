@@ -2230,6 +2230,7 @@ export const ru: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "Не оценено: {reason}",
   "integrations.omoRoles.auto.unassigned": "Нет модели: {reason}",
   "integrations.omoRoles.auto.applied": "Применено",
+  "integrations.omoRoles.auto.alreadySet": "Уже задано",
   "integrations.omoRoles.auto.apply": "Применить",
   "integrations.omoRoles.auto.moveUp": "Повысить, если: {text}",
   "integrations.omoRoles.auto.moveDown": "Понизить, если: {text}",

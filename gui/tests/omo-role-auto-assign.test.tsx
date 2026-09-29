@@ -138,3 +138,17 @@ test("apply all writes each remaining proposal once and skips unsized roles", as
   expect(container.textContent).toContain("Applied 2 of 2 proposals.");
   expect(button("Apply all").disabled).toBe(true);
 });
+
+test("a proposal that matches the role's current model and effort is shown as already set", async () => {
+  PROPOSALS.proposals[0] = { ...PROPOSALS.proposals[0]!, model: "a/small", effort: "low" };
+  try {
+    await mount();
+    await click(button("Auto-assign"));
+    expect(proposal("explorer").textContent).toContain("Already set");
+    expect(proposal("explorer").querySelector("button")).toBeNull();
+    await click(button("Apply all"));
+    expect(requests.slice(1).map(r => r.url)).toEqual([`${apiBase}/api/codex-agent-roles/worker`]);
+  } finally {
+    PROPOSALS.proposals[0] = { ...PROPOSALS.proposals[0]!, model: "gpt-5.5", effort: "high" };
+  }
+});

@@ -3041,6 +3041,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.omoRoles.auto.unsized": "未評估：{reason}",
   "integrations.omoRoles.auto.unassigned": "沒有模型：{reason}",
   "integrations.omoRoles.auto.applied": "已套用",
+  "integrations.omoRoles.auto.alreadySet": "已設定",
   "integrations.omoRoles.auto.apply": "套用",
   "integrations.omoRoles.auto.moveUp": "提高的條件：{text}",
   "integrations.omoRoles.auto.moveDown": "降低的條件：{text}",
