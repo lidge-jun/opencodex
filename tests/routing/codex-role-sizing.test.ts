@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DELEGATED_WORK_SIZING_SYSTEM_PROMPT,
   ROLE_INSTRUCTIONS_EXCERPT_CHARS,
   ROLE_SIZING_SYSTEM_PROMPT,
   SIZING_EFFORTS,
@@ -22,6 +23,13 @@ describe("role sizing rubric", () => {
     for (const word of [...SIZING_TIERS, ...SIZING_EFFORTS]) expect(ROLE_SIZING_SYSTEM_PROMPT).toContain(word);
     expect(ROLE_SIZING_SYSTEM_PROMPT).toContain("Do not name concrete model products");
     expect(ROLE_SIZING_SYSTEM_PROMPT).toContain('"move_down_if"');
+  });
+
+  test("the role rubric keeps its exact bytes, and one-shot work gets the rubric plus an addendum", () => {
+    const digest = new Bun.CryptoHasher("sha256").update(ROLE_SIZING_SYSTEM_PROMPT).digest("hex");
+    expect(digest).toBe("5b611bbea1629e217d9d3ef77aeb02a331d99b1aed1d7d0074082ac7a1c11ff4");
+    expect(DELEGATED_WORK_SIZING_SYSTEM_PROMPT.startsWith(`${ROLE_SIZING_SYSTEM_PROMPT}\n\n`)).toBe(true);
+    expect(DELEGATED_WORK_SIZING_SYSTEM_PROMPT).toContain("one-shot");
   });
 
   test("the user message carries each role's name and excerpt", () => {

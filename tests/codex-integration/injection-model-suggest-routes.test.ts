@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCatalogNativeSlugs, type CatalogModel } from "../../src/codex/catalog";
 import { buildRoleProposals, classifyRoleModelCandidates } from "../../src/codex/role-auto-assign";
+import { DELEGATED_WORK_SIZING_SYSTEM_PROMPT } from "../../src/codex/role-sizing";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { RoleSizingCall } from "../../src/server/management/codex-role-auto-assign";
 import type { OcxConfig } from "../../src/types";
@@ -111,6 +112,7 @@ describe("POST /api/injection-model/suggest", () => {
     expect(calls).toHaveLength(1);
     expect(catalogLoads).toBe(1);
     expect(calls[0]!.model).toBe("stub/sizer");
+    expect(calls[0]!.system).toBe(DELEGATED_WORK_SIZING_SYSTEM_PROMPT);
     expect(calls[0]!.user).toContain("Rename symbols across one file");
     expect(result.body.sizingModel).toBe("stub/sizer");
     expect(result.body.sizingError).toBeNull();
