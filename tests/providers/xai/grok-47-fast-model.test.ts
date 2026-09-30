@@ -133,6 +133,17 @@ describe("xAI OAuth Grok 4.7 serialized Fast model", () => {
     { label: "another provider", decision: SET, route: { ...oauthRoute(), providerName: "cursor" } },
     { label: "Grok 4.6", decision: SET, route: oauthRoute("grok-4.6") },
     { label: "explicit build-fast route", decision: SET, route: oauthRoute(VARIANT) },
+    {
+      label: "operator-declared FastWire",
+      decision: { kind: "set", value: "custom-priority" },
+      route: {
+        ...oauthRoute(),
+        provider: {
+          authMode: "oauth",
+          fastWire: { kind: "service-tier", canonicalToWire: { priority: "custom-priority" }, foreignCallerTiers: "verbatim" },
+        },
+      },
+    },
   ];
   for (const { label, decision, route } of unchangedCases) {
     test(`${label} leaves request and log unchanged`, () => {

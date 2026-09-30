@@ -50,12 +50,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function applyXaiOauthFastModel(
   parsed: OcxParsedRequest,
-  route: { providerName: string; provider: Pick<OcxProviderConfig, "authMode">; modelId: string },
+  route: { providerName: string; provider: Pick<OcxProviderConfig, "authMode" | "fastWire">; modelId: string },
   logCtx?: { wireModel?: string },
 ): void {
   const raw = isRecord(parsed._rawBody) ? parsed._rawBody : undefined;
   const previous = parsed._wireModelOverride;
-  const variant = parsed.options.tierDecision?.kind === "set"
+  // The lane switch replaces the registry's service-tier Fast only. The xai registry entry declares no
+  // FastWire, so a provider-level `fastWire` is always the operator's own (service-tier.ts reads it
+  // first): that decision carries a wire value they verified, and it is sent unchanged.
+  const variant = parsed.options.tierDecision?.kind === "set" && route.provider.fastWire === undefined
     ? xaiOauthFastModel(route.providerName, route.provider, route.modelId)
     : undefined;
   if (!variant) {
