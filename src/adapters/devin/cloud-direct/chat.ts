@@ -628,8 +628,6 @@ const MAX_TOOL_DESC_LEN = 6998;
  * for "whether to allow", verified live to clear the filter while preserving
  * the instruction's meaning.
  *
- * Scope note: the first entries only ever appeared in tool descriptions, but
- * this one lives in request #2 (the system prompt) and could equally appear
  * Scope note: the sanitizer only ever touches *instruction surfaces* —
  * tool descriptions and the #2 system prompt, where a meaning-preserving
  * reword loses nothing. It deliberately does NOT touch data fields:
@@ -669,7 +667,7 @@ export function sanitizeToolDescriptionForCognitionForTests(description: string)
   return sanitizeTextForCognition(description);
 }
 
-/** Text sanitizer applied to every string the adapter puts on the wire. */
+/** Test-only: exercise the sanitizer used for system text and tool descriptions. */
 export function sanitizeTextForCognitionForTests(text: string): string {
   return sanitizeTextForCognition(text);
 }

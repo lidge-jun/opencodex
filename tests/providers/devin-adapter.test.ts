@@ -6,7 +6,7 @@ import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevi
 import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
-import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES, OAUTH_PROVIDERS, resolveRefreshPolicy } from "../../src/oauth";
 import { DEVIN_DEFAULT_API_SERVER } from "../../src/oauth/devin";
 import { saveCredential } from "../../src/oauth/store";
@@ -304,7 +304,7 @@ describe("devin adapter", () => {
     expect(sanitizeToolDescriptionForCognitionForTests(nearMiss)).toBe(nearMiss);
   });
 
-  test("rewrites the Codex escalation-instruction phrase in every wire field", () => {
+  test("rewrites the Codex escalation phrase on instruction surfaces and preserves data", () => {
     // This trigger lives in Codex's <permissions instructions> boilerplate,
     // which Codex sends as system prompt — not in a tool description. The
     // clause was isolated live: the full sentence is refused while every
@@ -318,6 +318,9 @@ describe("devin adapter", () => {
     // Flexible whitespace/case, same as the other Codex entries.
     expect(sanitizeTextForCognitionForTests(trigger.toUpperCase()))
       .toContain("whether to allow the action");
+    expect(sanitizeTextForCognitionForTests(trigger.replaceAll(" ", "\n  "))).toBe(
+      "asking the user whether to allow the action in the `justification` parameter",
+    );
 
     // The phrase is rewritten on instruction surfaces — #2 (system prompt)
     // and tool descriptions — but data fields must stay byte-exact: a user
@@ -342,17 +345,23 @@ describe("devin adapter", () => {
           thinking: `the prompt says: ${trigger}`,
           tool_calls: [{ id: "c1", name: "apply_patch", arguments: `{"patch":"${trigger}"}` }],
         },
+        { role: "tool", tool_call_id: "c1", content: `file bytes: ${trigger}` },
         { role: "user", content: "hello" },
       ],
       tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
     });
-    // Instruction surfaces rewritten...
-    expect(req.includes(Buffer.from("asking the user whether to allow the action", "utf8"))).toBe(true);
+    // Decode #2 independently: a rewritten tool description cannot mask an
+    // unsanitized system prompt in a whole-buffer substring assertion.
+    const systemField = [...iterFields(req)].find((field) => field.num === 2);
+    expect(systemField?.value).toEqual(Buffer.from(
+      `<permissions instructions>\n- Include a short question asking the user whether to allow the action in the \`justification\` parameter. e.g. "Do it?"\n</permissions>`,
+    ));
     // ...but data fields preserve the literal bytes (user text, thinking,
     // tool-call arguments all still carry the verbatim trigger).
     expect(req.includes(Buffer.from(`here is a quote: ${trigger}`, "utf8"))).toBe(true);
     expect(req.includes(Buffer.from(`the prompt says: ${trigger}`, "utf8"))).toBe(true);
     expect(req.includes(Buffer.from(`{"patch":"${trigger}"}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`file bytes: ${trigger}`, "utf8"))).toBe(true);
 
     // A request where the ONLY trigger carrier is a tool description must
     // come out clean — pins encodeToolDef specifically.
