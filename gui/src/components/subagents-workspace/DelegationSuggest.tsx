@@ -10,7 +10,7 @@ import { readJsonOrThrow } from "../../fetch-json";
 import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
 import { formatNamespacedModelId } from "../../provider-icons";
-import type { RoleProposal } from "../../pages/integrations/OmoRoleAutoAssign";
+import type { RoleProposal } from "../../pages/integrations/LazyCodexRoleAutoAssign";
 import { EFFORT_LABEL, TIER_LABEL } from "../../pages/integrations/sizing-labels";
 import type { DelegationModelOption, DelegationPatch } from "../../pages/use-subagent-delegation";
 
@@ -93,14 +93,14 @@ export default function DelegationSuggest({
           <div className="swi-suggest-head">
             {p.tier && p.effortIntent && (
               <span className="font-semibold">
-                {t("integrations.omoRoles.auto.tierEffort", { tier: t(TIER_LABEL[p.tier]), effort: t(EFFORT_LABEL[p.effortIntent]) })}
+                {t("integrations.lazycodexRoles.auto.tierEffort", { tier: t(TIER_LABEL[p.tier]), effort: t(EFFORT_LABEL[p.effortIntent]) })}
               </span>
             )}
-            <span className="muted setting-hint">{t("integrations.omoRoles.auto.sizedWith", { model: result.sizingModel })}</span>
+            <span className="muted setting-hint">{t("integrations.lazycodexRoles.auto.sizedWith", { model: result.sizingModel })}</span>
           </div>
-          {result.sizingError && <Notice tone="warn">{t("integrations.omoRoles.auto.sizingFailed", { error: result.sizingError })}</Notice>}
+          {result.sizingError && <Notice tone="warn">{t("integrations.lazycodexRoles.auto.sizingFailed", { error: result.sizingError })}</Notice>}
           {p.status === "unsized" ? (
-            <p className="muted setting-hint">{t("integrations.omoRoles.auto.unsized", { reason: p.reason ?? "" })}</p>
+            <p className="muted setting-hint">{t("integrations.lazycodexRoles.auto.unsized", { reason: p.reason ?? "" })}</p>
           ) : (
             <>
               <div className="swi-suggest-change">
@@ -108,16 +108,16 @@ export default function DelegationSuggest({
                 <span aria-hidden="true">→</span>
                 {p.proposedModel
                   ? <strong>{label(p.proposedModel)}{p.proposedEffort ? ` · ${p.proposedEffort}` : ""}</strong>
-                  : <span className="muted">{t("integrations.omoRoles.auto.unassigned", { reason: p.reason ?? "" })}</span>}
+                  : <span className="muted">{t("integrations.lazycodexRoles.auto.unassigned", { reason: p.reason ?? "" })}</span>}
               </div>
               {p.rationale && <p>{p.rationale}</p>}
-              {p.moveUpIf && <p className="muted setting-hint">{t("integrations.omoRoles.auto.moveUp", { text: p.moveUpIf })}</p>}
-              {p.moveDownIf && <p className="muted setting-hint">{t("integrations.omoRoles.auto.moveDown", { text: p.moveDownIf })}</p>}
+              {p.moveUpIf && <p className="muted setting-hint">{t("integrations.lazycodexRoles.auto.moveUp", { text: p.moveUpIf })}</p>}
+              {p.moveDownIf && <p className="muted setting-hint">{t("integrations.lazycodexRoles.auto.moveDown", { text: p.moveDownIf })}</p>}
             </>
           )}
           <div className="swi-suggest-actions">
             {alreadySet
-              ? <span className="swi-suggest-done">{t("integrations.omoRoles.auto.alreadySet")}</span>
+              ? <span className="swi-suggest-done">{t("integrations.lazycodexRoles.auto.alreadySet")}</span>
               : p.status === "proposed" && p.proposedModel && (
                 <button
                   type="button"
@@ -129,7 +129,7 @@ export default function DelegationSuggest({
                 </button>
               )}
             <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setResult(null)}>
-              {t("integrations.omoRoles.auto.discard")}
+              {t("integrations.lazycodexRoles.auto.discard")}
             </button>
           </div>
         </section>
