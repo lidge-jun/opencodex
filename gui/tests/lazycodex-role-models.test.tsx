@@ -15,6 +15,7 @@ let puts: Array<{ url: string; body: unknown }> = [];
 let omoWriteStatus = "written";
 let putFailure: { status: number; body: unknown } | null = null;
 let rolesBody: unknown;
+let fetched: string[] = [];
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -33,19 +34,22 @@ beforeEach(() => {
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mountCount += 1;
-  apiBase = `http://ocx-omo-roles-${mountCount}.invalid`;
+  apiBase = `http://ocx-lazycodex-roles-${mountCount}.invalid`;
   puts = [];
+  fetched = [];
   omoWriteStatus = "written";
   putFailure = null;
   rolesBody = {
+    lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
+    omoJsonc: { state: "present" },
     roles: [
-      { role: "explorer", model: "gpt-5.5", omoModel: null },
-      { role: "librarian", model: null, omoModel: null },
+      { role: "explorer", model: "gpt-5.5", omoJsoncModel: null },
+      { role: "librarian", model: null, omoJsoncModel: null },
     ],
-    omo: { state: "present" },
   };
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
+    fetched.push(url);
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
       puts.push({ url, body });
@@ -53,7 +57,7 @@ beforeEach(() => {
       const role = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
       const current = rolesBody as { roles: Array<{ role: string; model: string | null }> };
       rolesBody = { ...current, roles: current.roles.map(row => row.role === role ? { ...row, model: body.model } : row) };
-      return json({ ok: true, toml: { status: "written" }, omo: { status: omoWriteStatus } });
+      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
     return json(rolesBody);
@@ -80,14 +84,14 @@ async function settle(): Promise<void> {
 }
 
 async function mount(): Promise<void> {
-  const [{ createRoot }, { LanguageProvider }, { default: OmoRoleModels }] = await Promise.all([
+  const [{ createRoot }, { LanguageProvider }, { default: LazyCodexRoleModels }] = await Promise.all([
     import("react-dom/client"),
     import("../src/i18n/provider"),
-    import("../src/pages/integrations/OmoRoleModels"),
+    import("../src/pages/integrations/LazyCodexRoleModels"),
   ]);
   await act(async () => {
     root = createRoot(container);
-    root.render(<LanguageProvider><OmoRoleModels apiBase={apiBase} active /></LanguageProvider>);
+    root.render(<LanguageProvider><LazyCodexRoleModels apiBase={apiBase} active /></LanguageProvider>);
   });
   await settle();
 }
@@ -106,6 +110,7 @@ async function pick(role: string, model: string): Promise<void> {
 
 test("lists roles with their pins and saves a picked model for one row", async () => {
   await mount();
+  expect(container.textContent).toContain("omo (Codex / LazyCodex)");
   expect(container.textContent).toContain("explorer");
   expect(container.textContent).toContain("gpt-5.5");
   expect(container.textContent).toContain("No model pin");
@@ -118,8 +123,15 @@ test("lists roles with their pins and saves a picked model for one row", async (
   expect(container.textContent).toContain("explorer now runs on xai/grok-4.5.");
 });
 
+test("renders nothing and loads no model list when LazyCodex is not detected", async () => {
+  rolesBody = { lazycodex: { detected: false, pluginEnabled: false, pluginInstalled: false }, omoJsonc: null, roles: [] };
+  await mount();
+  expect(container.innerHTML).toBe("");
+  expect(fetched).toEqual([`${apiBase}/api/codex-agent-roles`]);
+});
+
 test("says when omo.jsonc was skipped because of its comments", async () => {
-  rolesBody = { ...(rolesBody as object), omo: { state: "comments" } };
+  rolesBody = { ...(rolesBody as object), omoJsonc: { state: "comments" } };
   omoWriteStatus = "skipped_comments";
   await mount();
   expect(container.textContent).toContain("omo.jsonc contains comments");

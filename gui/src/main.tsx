@@ -15,7 +15,7 @@ import "./styles/sidebar-brand.css";
 import "./styles/fast-rows-setting.css";
 import "./styles/claude-desktop-mode-picker.css";
 import "./styles/claude-first-party-bindings.css";
-import "./styles/omo-role-models.css";
+import "./styles/lazycodex-role-models.css";
 import "./styles/claude-desktop-picker.css";
 import "./styles/anthropic-reset-grants.css";
 import "./styles/star-onboarding.css";

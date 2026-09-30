@@ -1,0 +1,10 @@
+/* omo (Codex / LazyCodex) role models on the Codex integration tab. Existing tokens only. */
+.lazycodex-role-models { margin: 14px 0; }
+.lazycodex-role-models .tbl td { vertical-align: middle; }
+.lazycodex-role-models-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lazycodex-role-models-edit > :first-child { flex: 1 1 220px; min-width: 0; }
+/* Overrides the shared 460px .tbl floor, which pushed the picker off-screen; the picker shows the pin. */
+@media (max-width: 760px) {
+  .lazycodex-role-models .tbl { min-width: 0; }
+  .lazycodex-role-models .tbl :is(th, td):nth-child(2) { display: none; }
+}

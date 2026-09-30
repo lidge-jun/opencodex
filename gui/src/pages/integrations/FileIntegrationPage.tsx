@@ -9,7 +9,6 @@ import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import RaycastPlanNotice from "./RaycastPlanNotice";
-import OmoRoleModels from "./OmoRoleModels";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
 import {
@@ -358,8 +357,6 @@ export default function FileIntegrationPage({
         <Notice tone="err">{t("integrations.retention.degraded")}</Notice>
       )}
       {failure && <Notice tone="err">{failure}</Notice>}
-
-      {client === "omo" && profileId === undefined && <OmoRoleModels apiBase={apiBase} active={active} />}
 
       <h4>{t("integrations.rollback.title")}</h4>
       {/*
