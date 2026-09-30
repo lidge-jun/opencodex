@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
-import { sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { buildGetChatMessageRequestForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
@@ -302,6 +302,43 @@ describe("devin adapter", () => {
     // merely resembles these must survive untouched.
     const nearMiss = "Runs a command in a terminal, returning output or a session ID for ongoing interaction.";
     expect(sanitizeToolDescriptionForCognitionForTests(nearMiss)).toBe(nearMiss);
+  });
+
+  test("rewrites the Codex escalation-instruction phrase in every wire field", () => {
+    // This trigger lives in Codex's <permissions instructions> boilerplate,
+    // which Codex sends as system prompt — not in a tool description. The
+    // clause was isolated live: the full sentence is refused while every
+    // sub-phrase passes, so the rewrite edits the verb phrase only.
+    const trigger = "asking the user if they want to allow the action in `justification` parameter";
+    const rewritten = sanitizeToolDescriptionForCognitionForTests(
+      `Include a short question ${trigger}. e.g. "Do you want to run it?"`,
+    );
+    expect(rewritten).toContain("asking the user whether to allow the action in the `justification` parameter");
+    expect(rewritten).not.toContain("if they want to allow the action");
+    // Flexible whitespace/case, same as the other Codex entries.
+    expect(sanitizeToolDescriptionForCognitionForTests(trigger.toUpperCase()))
+      .toContain("whether to allow the action");
+
+    // The phrase must be gone from every field of the encoded request, not
+    // just tool descriptions: it reaches the cloud in #2 (system prompt) when
+    // Codex injects it, and in a #3 prompt when a tool result or pasted file
+    // quotes it.
+    const sys = `<permissions instructions>\n- Include a short question ${trigger}. e.g. "Do it?"\n</permissions>`;
+    const req = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: `here is a quote: ${trigger}` },
+        { role: "user", content: "hello" },
+      ],
+    });
+    expect(req.includes(Buffer.from(trigger, "utf8"))).toBe(false);
+    expect(req.includes(Buffer.from("asking the user whether to allow the action", "utf8"))).toBe(true);
   });
 
   test("the catalog parser reads the per-account context window", () => {

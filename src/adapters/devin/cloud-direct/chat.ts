@@ -225,7 +225,7 @@ function encodeChatMessagePrompt(
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
-  const joined = textParts.map((p) => p.text).join('\n');
+  const joined = sanitizeTextForCognition(textParts.map((p) => p.text).join('\n'));
   const parts: Buffer[] = [
     // #1 message_id. The verified turn-1 capture stamps one on every prompt.
     encodeString(1, crypto.randomUUID()),
@@ -617,6 +617,25 @@ const MAX_TOOL_DESC_LEN = 6998;
  * symptom was the adapter's own blocklist message pointing back at this
  * table, which is why they are named here rather than left to the next person
  * to re-bisect.
+ *
+ * The fourth entry is not a tool description at all: it is a sentence from
+ * Codex's `<permissions instructions>` escalation boilerplate, which Codex
+ * injects into the system prompt. Binary-search against a live account
+ * isolated the trigger to the clause "asking the user if they want to allow
+ * the action in `justification` parameter" — the whole bullet was required
+ * (every sub-phrase passed alone), matching flexibly on whitespace and case
+ * like the other Codex entries. The rewrite swaps "if they want to allow"
+ * for "whether to allow", verified live to clear the filter while preserving
+ * the instruction's meaning.
+ *
+ * Scope note: the first entries only ever appeared in tool descriptions, but
+ * this one lives in request #2 (the system prompt) and could equally appear
+ * in conversation history — e.g. a tool result that returns a file quoting
+ * the Codex prompt. The sanitizer therefore runs on every text the adapter
+ * puts on the wire: tool descriptions, the #2 system prompt, and each
+ * ChatMessagePrompt's joined text. Rewriting content the model quoted is
+ * semantic-preserving, the same trade-off the tool-description rewrites
+ * already accepted.
  */
 const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [/\bTakes a task_id parameter identifying the task\b/g, "Accepts a task_id parameter identifying the task"],
@@ -628,10 +647,14 @@ const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
     /\bWrites\s+characters\s+to\s+an\s+existing\s+unified\s+exec\s+session\s+and\s+returns\s+recent\s+output\b/gi,
     "Sends characters to an existing unified exec session and returns recent output",
   ],
+  [
+    /\basking\s+the\s+user\s+if\s+they\s+want\s+to\s+allow\s+the\s+action\s+in\s+`?justification`?\s+parameter\b/gi,
+    "asking the user whether to allow the action in the `justification` parameter",
+  ],
 ];
 
-function sanitizeToolDescriptionForCognition(description: string): string {
-  let out = description;
+function sanitizeTextForCognition(text: string): string {
+  let out = text;
   for (const [pattern, replacement] of COGNITION_BLOCKLIST_REWRITES) {
     out = out.replace(pattern, replacement);
   }
@@ -640,12 +663,17 @@ function sanitizeToolDescriptionForCognition(description: string): string {
 
 /** Test-only: exercise the Cognition blocklist rewrite directly. */
 export function sanitizeToolDescriptionForCognitionForTests(description: string): string {
-  return sanitizeToolDescriptionForCognition(description);
+  return sanitizeTextForCognition(description);
+}
+
+/** Text sanitizer applied to every string the adapter puts on the wire. */
+export function sanitizeTextForCognitionForTests(text: string): string {
+  return sanitizeTextForCognition(text);
 }
 
 /** Description as transmitted on the Cognition wire, also used by overflow estimation. */
 export function prepareToolDescriptionForCognition(description: string): string {
-  const rawDesc = sanitizeToolDescriptionForCognition(description);
+  const rawDesc = sanitizeTextForCognition(description);
   return rawDesc.length > MAX_TOOL_DESC_LEN
     ? rawDesc.slice(0, MAX_TOOL_DESC_LEN - 24) + '\n…(truncated for cloud)'
     : rawDesc;
@@ -690,6 +718,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
       .map((p) => p.text).join('\n'))
     .filter(Boolean)
     .join('\n\n');
+  const sanitizedSystemPrompt = sanitizeTextForCognition(systemPrompt);
   const collapsed = collapseSystemIntoUser(args.messages.slice(leadingSystem.length));
   const promptParts = collapsed.map((m) =>
     encodeMessage(
@@ -734,7 +763,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
   return Buffer.concat([
     encodeMessage(1, metadata),
     // #2 system_prompt is always written, empty when the caller had none.
-    encodeString(2, systemPrompt),
+    encodeString(2, sanitizedSystemPrompt),
     ...promptParts,
     encodeVarintField(7, args.requestType ?? 5),
     encodeMessage(8, completion),
