@@ -3165,7 +3165,7 @@ export const vi: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Không khả dụng cho đến khi mọi mục tiêu được chọn đều hỗ trợ đầu vào hình ảnh (image input).",
   "cws.capability.imageInputHint": "Được bật theo mặc định khi mọi mục tiêu đều hỗ trợ hình ảnh. Tắt để chỉ chấp nhận văn bản.",
   "cws.capability.imageInputSidecarHint": "Bật theo mặc định. {models} sẽ được khai báo chỉ-text khi lưu và dùng Vision Sidecar cho hình ảnh.",
-  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar đang tắt — {models} sẽ từ chối hình ảnh cho đến khi được bật trong cài đặt bảng điều khiển.",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar đang tắt — hình ảnh gửi tới {models} sẽ được thay bằng ghi chú bỏ qua và yêu cầu vẫn tiếp tục. Bật nó trong cài đặt bảng điều khiển để khôi phục mô tả hình ảnh.",
   "cws.capability.imageInputBlockedHint": "{models} không thể được Vision Sidecar hỗ trợ: modalities đầu vào không rõ hoặc không có văn bản.",
   "cws.capability.imageInput": "Hình ảnh / đa phương thức (multimodal)",
   "cws.capability.adaptiveEffort": "Thang suy luận thích ứng (Adaptive reasoning ladder)",

@@ -896,6 +896,17 @@ describe("comboImagesSupported", () => {
     expect(comboVisionSidecarTargets([{ provider: "a", model: "m1" }], reloaded))
       .toEqual([{ provider: "a", model: "m1" }]);
   });
+
+  test("visionSidecarConsumer beats image-advertised modalities when no declaration exists", () => {
+    // Legacy `noVisionModels` rows carry no declaration while the catalog widens
+    // them to image; the runtime flag alone keeps them sidecar members.
+    const reloaded = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"], visionSidecarConsumer: true },
+    ];
+    expect(comboImagesSupported([{ provider: "a", model: "m1" }], reloaded)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "a", model: "m1" }], reloaded))
+      .toEqual([{ provider: "a", model: "m1" }]);
+  });
 });
 
 describe("comboVisionSidecarTargets", () => {

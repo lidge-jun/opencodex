@@ -3167,7 +3167,7 @@ export const ko: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "먼저 모든 대상을 카탈로그에서 선택하세요. 알 수 없는 모델은 Vision Sidecar로 처리할 수 없습니다.",
   "cws.capability.imageInputHint": "모든 대상이 이미지를 지원하면 기본으로 켜집니다. 끄면 텍스트만 허용합니다.",
   "cws.capability.imageInputSidecarHint": "기본으로 켜짐. {models}은(는) 저장 시 텍스트 전용으로 선언되어 이미지에 Vision Sidecar를 사용합니다.",
-  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar가 꺼져 있어 {models}은(는) 대시보드 설정에서 활성화할 때까지 이미지를 거부합니다.",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar가 꺼져 있어 {models}에 전송되는 이미지는 생략 안내 텍스트로 대체되고 요청은 계속 진행됩니다. 이미지 설명을 복원하려면 대시보드 설정에서 활성화하세요.",
   "cws.capability.imageInputBlockedHint": "{models}은(는) Vision Sidecar로 처리할 수 없습니다: 입력 모달리티를 알 수 없거나 텍스트가 없습니다.",
   "cws.capability.imageInput": "이미지 / 멀티모달",
   "cws.capability.adaptiveEffort": "적응형 추론 단계",

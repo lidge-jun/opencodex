@@ -5,9 +5,11 @@ type ComboImageMemberKind = "vision" | "sidecar" | "blocked" | "missing";
 
 /**
  * One combo member's image story. Classification must survive a reload, so it
- * reads the DECLARED modalities (`inputModalitiesDeclared`) when present: an
- * enrolled member advertises image in the catalog, and only the declaration
- * still says "declared text-only, covered by the sidecar". Rows with no known
+ * reads `visionSidecarConsumer` — the runtime predicate's verdict served on the
+ * /api/models row — before falling back to the DECLARED modalities
+ * (`inputModalitiesDeclared`). A model covered only by legacy `noVisionModels`
+ * has no declaration and its advertised modalities are widened to image, so the
+ * flag is what keeps it a sidecar member after reload. Rows with no known
  * modalities, or modalities without text, cannot be covered and block the combo.
  */
 function imageMemberKind(target: ComboTarget, models: ModelOption[]): ComboImageMemberKind {
@@ -16,6 +18,7 @@ function imageMemberKind(target: ComboTarget, models: ModelOption[]): ComboImage
   if (!provider || !modelId) return "missing";
   const model = models.find((row) => row.provider === provider && row.id === modelId);
   if (!model) return "missing";
+  if (model.visionSidecarConsumer === true) return "sidecar";
   const declared = model.inputModalitiesDeclared ?? model.inputModalities;
   if (!declared || declared.length === 0) return "blocked";
   if (declared.includes("image")) return "vision";

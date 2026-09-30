@@ -2,6 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { comboImagesSupported, comboVisionSidecarTargets } from "../../gui/src/combo-capabilities";
+import type { ModelOption } from "../../gui/src/components/combo-workspace-types";
 import {
   advanceComboAfterFailure,
   clearComboSelectionState,
@@ -1582,6 +1584,86 @@ describe("combo management API", () => {
     expect(disabledRows.filter(row => row.namespaced === "gpt-5.6-sol")).toEqual([
       expect.objectContaining({ provider: "combo", id: "free", disabled: true }),
     ]);
+  });
+
+  test("GET models flags a legacy noVisionModels member as the sidecar consumer the runtime sees", async () => {
+    const config = baseConfig();
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
+    config.providers.a!.noVisionModels = ["m1"];
+
+    const response = await comboApi(config, "GET", "/api/models");
+    expect(response?.status).toBe(200);
+    const rows = await response!.json() as Array<{
+      provider: string;
+      id: string;
+      inputModalities?: string[];
+      inputModalitiesDeclared?: string[];
+      visionSidecarConsumer?: boolean;
+    }>;
+    const row = rows.find(r => r.provider === "a" && r.id === "m1");
+    // Legacy `noVisionModels` carries no declaration while the catalog widens the
+    // row to image: only the flag keeps the GUI from calling this native vision.
+    expect(row).toMatchObject({ visionSidecarConsumer: true });
+    expect(row!.inputModalitiesDeclared).toBeUndefined();
+    expect(row!.inputModalities).toContain("image");
+
+    // The Combos page parses exactly these whitelisted fields off the row.
+    const models: ModelOption[] = rows
+      .filter(r => r.provider !== "combo")
+      .map(r => ({
+        provider: r.provider,
+        id: r.id,
+        ...(r.inputModalities?.length ? { inputModalities: r.inputModalities } : {}),
+        ...(r.inputModalitiesDeclared?.length ? { inputModalitiesDeclared: r.inputModalitiesDeclared } : {}),
+        ...(r.visionSidecarConsumer === true ? { visionSidecarConsumer: true } : {}),
+      }));
+    expect(comboImagesSupported([{ provider: "a", model: "m1" }], models)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "a", model: "m1" }], models))
+      .toEqual([{ provider: "a", model: "m1" }]);
+  });
+
+  test("GET models flags registry-seeded noVisionModels rows as sidecar consumers", async () => {
+    const config = baseConfig({
+      providers: {
+        ...baseConfig().providers,
+        umans: {
+          adapter: "anthropic",
+          baseUrl: "https://api.code.umans.ai",
+          models: ["umans-glm-5.2"],
+          liveModels: false,
+        },
+      },
+    });
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
+
+    const response = await comboApi(config, "GET", "/api/models");
+    expect(response?.status).toBe(200);
+    const rows = await response!.json() as Array<{
+      provider: string;
+      id: string;
+      inputModalities?: string[];
+      inputModalitiesDeclared?: string[];
+      visionSidecarConsumer?: boolean;
+    }>;
+    const row = rows.find(r => r.provider === "umans" && r.id === "umans-glm-5.2");
+    // Registry enrichment classifies the row at read time and also seeds its
+    // declaration, but the flag stays the authoritative verdict for the GUI.
+    expect(row).toMatchObject({ visionSidecarConsumer: true });
+    expect(row!.inputModalitiesDeclared).toEqual(["text"]);
+    expect(row!.inputModalities).toContain("image");
+
+    const models: ModelOption[] = rows
+      .filter(r => r.provider !== "combo")
+      .map(r => ({
+        provider: r.provider,
+        id: r.id,
+        ...(r.inputModalities?.length ? { inputModalities: r.inputModalities } : {}),
+        ...(r.inputModalitiesDeclared?.length ? { inputModalitiesDeclared: r.inputModalitiesDeclared } : {}),
+        ...(r.visionSidecarConsumer === true ? { visionSidecarConsumer: true } : {}),
+      }));
+    expect(comboImagesSupported([{ provider: "umans", model: "umans-glm-5.2" }], models)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "umans", model: "umans-glm-5.2" }], models))
+      .toEqual([{ provider: "umans", model: "umans-glm-5.2" }]);
   });
 
   test("PUT alias changes reject a migrated shadow-call self-target (#2706)", async () => {
