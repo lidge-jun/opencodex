@@ -1013,6 +1013,22 @@ describe("headless GUI parity CLI", () => {
     expect(output).toContain("Applied 2 of 4 roles. Skipped 2 already set: explorer, reviewer.");
   });
 
+  test("agent roles suggest --apply stops at the lazycodex_not_detected refusal and writes nothing", async () => {
+    const runtime = fakeRuntime(req => req.method === "POST"
+      ? Response.json({ error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME", code: "lazycodex_not_detected" }, { status: 409 })
+      : { ok: true });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    let output = "";
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).not.toBe(0);
+      output = errorSpy.mock.calls.flat().join("\n");
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([{ path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} }]);
+    expect(output).toContain("omo (Codex / LazyCodex) is not installed");
+  });
+
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
       ? { id: "key-1", name: "deploy", key: "ocx_secret" }

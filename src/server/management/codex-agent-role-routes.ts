@@ -13,6 +13,13 @@ import type { ManagementContext } from "./context";
 const ROLE_PATH_PREFIX = "/api/codex-agent-roles/";
 const AUTO_ASSIGN_PATH = "/api/codex-agent-roles/auto-assign";
 
+function lazycodexNotDetected(ctx: ManagementContext): Response {
+  return jsonResponse({
+    error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME",
+    code: "lazycodex_not_detected",
+  }, 409, ctx.req, ctx.config);
+}
+
 export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
   const [{ getCodexHome }, roles, omo, { detectLazyCodex }] = await Promise.all([
@@ -39,6 +46,8 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   }
 
   if (url.pathname === AUTO_ASSIGN_PATH && req.method === "POST") {
+    const codexHome = getCodexHome();
+    if (!detectLazyCodex(codexHome).detected) return lazycodexNotDetected(ctx);
     let body: { model?: unknown };
     try {
       body = await readManagementJsonBody(req);
@@ -56,7 +65,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     try {
       return jsonResponse(await proposeCodexRoleModels({
         config,
-        codexHome: getCodexHome(),
+        codexHome,
         ...(typeof body?.model === "string" ? { sizingModel: body.model } : {}),
         fetchAllModels: deps.fetchAllModels ?? fetchAllModels,
         ...(deps.completeCodexRoleSizing ? { completeRoleSizing: deps.completeCodexRoleSizing } : {}),
@@ -71,12 +80,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
 
   if (!url.pathname.startsWith(ROLE_PATH_PREFIX) || req.method !== "PUT") return null;
   const codexHome = getCodexHome();
-  if (!detectLazyCodex(codexHome).detected) {
-    return jsonResponse({
-      error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME",
-      code: "lazycodex_not_detected",
-    }, 409, req, config);
-  }
+  if (!detectLazyCodex(codexHome).detected) return lazycodexNotDetected(ctx);
   let role: string;
   try {
     role = decodeURIComponent(url.pathname.slice(ROLE_PATH_PREFIX.length));

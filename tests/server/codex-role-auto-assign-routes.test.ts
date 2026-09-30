@@ -28,6 +28,7 @@ beforeEach(() => {
   writeFileSync(join(root, "codex", "agents", "worker.toml"), WORKER);
   writeFileSync(join(root, "codex", "agents", "bare.toml"), BARE);
   writeFileSync(join(root, "codex", "config.toml"), 'model = "stub/sizer"\n');
+  installLazyCodex();
   process.env.CODEX_HOME = join(root, "codex");
   process.env.HOME = join(root, "home");
   process.env.USERPROFILE = join(root, "home");
@@ -44,6 +45,15 @@ afterEach(() => {
 });
 
 const routed = (id: string, efforts: string[]): CatalogModel => ({ id, provider: "stub", reasoningEfforts: efforts, defaultReasoningEffort: "medium" });
+
+const LAZYCODEX_ENABLED = '[plugins."omo@sisyphuslabs"]\nenabled = true\n';
+
+function installLazyCodex(): void {
+  const plugin = join(root, "codex", "plugins", "cache", "sisyphuslabs", "omo", "5.1.1");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "lazycodex-install.json"), "{}");
+  writeFileSync(join(root, "codex", "config.toml"), 'model = "stub/sizer"\n' + LAZYCODEX_ENABLED);
+}
 
 const config = {
   port: 10100,
@@ -101,11 +111,21 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
   });
 
   test("refuses without a sizing model and never calls one", async () => {
-    writeFileSync(join(root, "codex", "config.toml"), "");
+    writeFileSync(join(root, "codex", "config.toml"), LAZYCODEX_ENABLED);
     const result = await call("/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" });
     expect(result.status).toBe(409);
     expect(result.body.code).toBe("no_sizing_model");
     expect(calls).toHaveLength(0);
+  });
+
+  test("refuses without LazyCodex before reading the body or calling the sizing model", async () => {
+    writeFileSync(join(root, "codex", "config.toml"), 'model = "stub/sizer"\n');
+    const before = snapshot();
+    const result = await call("/api/codex-agent-roles/auto-assign", { method: "POST", body: JSON.stringify({ model: "stub/other" }) });
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe("lazycodex_not_detected");
+    expect(calls).toHaveLength(0);
+    expect(snapshot()).toEqual(before);
   });
 });
 
