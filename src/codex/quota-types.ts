@@ -118,6 +118,7 @@ export type WhamUsageResponse = {
     secondary_window?: WhamUsageWindow | null;
     tertiary_window?: WhamUsageWindow | null;
   };
+  credits?: unknown;
   rate_limit_reset_credits?: { available_count: number } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
 };

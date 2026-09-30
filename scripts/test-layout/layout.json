@@ -2,6 +2,9 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "codex-credits.test.ts": "codex-integration",
+    "codex-credits-settings.test.ts": "codex-integration",
+    "codex-credits-probes.test.ts": "codex-integration",
     "service-desktop-startup-health.test.ts": "service",
     "service-desktop-startup.test.ts": "service",
     "startup-health-packaged-probe.test.ts": "server",

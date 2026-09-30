@@ -277,6 +277,12 @@ Context relay dispatch rechecks the native experimental opt-in after body and cr
 A disabled gate prevents upstream dispatch even when the request entered while enabled. Final
 materialized headers pass the proxy-credential exclusion check before owner matching.
 
+## Display-only Codex credits
+
+The credits module beside `src/codex/quota-types.ts` retains validated WHAM credits only in process memory. Main publication uses the current credential and physical ChatGPT account identity; pool publication uses the captured writer's `quotaHistoryIdentity` and a live credential generation, including credits-only responses. Omitted credits retain the observation; null or unusable credits clear it. Identity mismatch or removal retires it, without a TTL or disk hydration.
+
+`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings; boolean flags and approximate local/cloud message ranges are allowlisted. Credits never enter persisted quota, routing, reset-credit recovery, or `/api/provider-quotas`, and are never logged. The [config surface](../config.md#config-surface) owns the display switch.
+
 ## Quota history publication identity
 
 `src/codex/account-store.ts` assigns each explicit pool credential publication a private random `quotaHistoryIdentity`. Same-account token refresh preserves it, including each alias record's own identity; replacement or deletion retires it. A refresh CAS with a changed upstream account identity rotates the tag and does not propagate that changed identity to old aliases. Credential-only projections omit this metadata.

@@ -527,6 +527,8 @@ export interface OcxConfig {
    * the guess is wrong.
    */
   oauthOpenBrowser?: boolean;
+  /** Display Codex credits on account cards; display only, default off. */
+  showCodexCredits?: boolean;
   /**
    * @deprecated Compatibility-only limit for bounded legacy usage readers.
    * `GET /api/usage` always aggregates the complete ledger.

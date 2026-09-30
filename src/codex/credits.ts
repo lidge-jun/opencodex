@@ -1,0 +1,69 @@
+import type { OcxConfig } from "../types";
+
+/** Display-only WHAM observation, never persisted or used for routing. */
+export interface CodexCredits {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  overageLimitReached?: boolean;
+  balance?: string;
+  approxLocalMessages?: [number, number];
+  approxCloudMessages?: [number, number];
+}
+
+const observations = new Map<string, { identity: string; credits: CodexCredits }>();
+
+function messageRange(raw: unknown): [number, number] | undefined {
+  return Array.isArray(raw) && raw.length === 2
+    && raw.every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)
+    ? [raw[0], raw[1]] : undefined;
+}
+
+/** Undefined keeps the prior observation; null or unusable input clears it. */
+export function parseCodexCredits(raw: unknown): CodexCredits | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const credits: CodexCredits = {};
+  if (typeof value.has_credits === "boolean") credits.hasCredits = value.has_credits;
+  if (typeof value.unlimited === "boolean") credits.unlimited = value.unlimited;
+  if (typeof value.overage_limit_reached === "boolean") credits.overageLimitReached = value.overage_limit_reached;
+  if (typeof value.balance === "string" && /^\d+(\.\d+)?$/.test(value.balance)) credits.balance = value.balance;
+  else if (typeof value.balance === "number" && Number.isFinite(value.balance) && value.balance >= 0) {
+    credits.balance = String(value.balance);
+  }
+  const local = messageRange(value.approx_local_messages);
+  const cloud = messageRange(value.approx_cloud_messages);
+  if (local) credits.approxLocalMessages = local;
+  if (cloud) credits.approxCloudMessages = cloud;
+  return Object.keys(credits).length > 0 ? credits : null;
+}
+
+export function rememberCodexCredits(accountId: string, identity: string, parsed: CodexCredits | null | undefined): void {
+  if (parsed === undefined) return;
+  if (parsed === null) observations.delete(accountId);
+  else observations.set(accountId, { identity, credits: structuredClone(parsed) });
+}
+
+export function codexCreditsFor(accountId: string, identity: string | null): CodexCredits | undefined {
+  const observation = observations.get(accountId);
+  if (!observation) return undefined;
+  if (identity !== observation.identity) {
+    observations.delete(accountId);
+    return undefined;
+  }
+  return structuredClone(observation.credits);
+}
+
+export function codexCreditsDtoField(config: Pick<OcxConfig, "showCodexCredits">, accountId: string, identity: string | null): { credits?: CodexCredits } {
+  const credits = codexCreditsFor(accountId, identity);
+  return config.showCodexCredits === true && credits ? { credits } : {};
+}
+
+export function pruneCodexCredits(liveAccountIds: Iterable<string>): void {
+  const live = new Set(liveAccountIds);
+  for (const id of observations.keys()) if (!live.has(id)) observations.delete(id);
+}
+
+export function resetCodexCreditsForTests(): void {
+  observations.clear();
+}
