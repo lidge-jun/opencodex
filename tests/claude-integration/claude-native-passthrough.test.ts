@@ -1055,6 +1055,28 @@ test("an unreachable upstream logs the fetch failure as the reason", async () =>
   }
 });
 
+test("a credential in a local failure message is redacted for the client as well as the log", async () => {
+  // The managed lane's fail() redacts both; a future runtime could put a URL or key in a fetch error.
+  const refusedOrigin = "http://127.0.0.1:1";
+  const leaked = "sk-ant-api03-" + "Q".repeat(40);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin === refusedOrigin) throw new TypeError(`proxy rejected key ${leaked}`);
+    return originalFetch(input, init);
+  }) as typeof globalThis.fetch;
+  try {
+    const { res, text, row } = await nativeFailureRow(refusedOrigin);
+    expect(res.status).toBe(502);
+    expect(text).not.toContain(leaked);
+    expect(row.upstreamError).toStartWith("anthropic passthrough failed: proxy rejected key ");
+    expect(row.upstreamError).not.toContain(leaked);
+    expect(JSON.parse(text).error.message).toBe(row.upstreamError);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("an upstream that never sends headers logs the header timeout as the reason", async () => {
   const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() { /* accept, never answer */ } } });
   try {
@@ -1080,7 +1102,7 @@ test("a non-stream body over the byte cap logs the cap as the reason", async () 
 });
 
 test("an oversized upstream error body is relayed verbatim but not parsed for the log reason", async () => {
-  // Same 64 KiB bound the managed native lane reads error bodies under.
+  // 64 Ki characters: the order of the managed native lane's 64 KiB error read bound.
   const errorBody = { type: "error", error: { type: "invalid_request_error", message: "x".repeat(70 * 1024) } };
   const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
   try {

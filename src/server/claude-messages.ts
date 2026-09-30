@@ -557,12 +557,13 @@ async function anthropicNativePassthrough(
   logCtx.requestedModel = model;
   const finalize = createFinalRequestLog(logIds, logCtx).finish;
   // Every local answer carries its reason into the row, as the managed native lane's
-  // finishLog does; without it a failed passthrough row has no upstreamError at all.
-  // The client still receives the unredacted message, as before.
+  // finishLog does; without it a failed passthrough row has no upstreamError at all. Like
+  // that lane's fail(), the client and the log both get the redacted message.
   const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string) => {
-    logCtx.upstreamError = redactSecretString(message).slice(0, 500);
+    const safeMessage = redactSecretString(message);
+    logCtx.upstreamError = safeMessage.slice(0, 500);
     finalize(status, { closeReason });
-    return anthropicErrorResponse(status, message, type);
+    return anthropicErrorResponse(status, safeMessage, type);
   };
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
@@ -630,9 +631,10 @@ async function anthropicNativePassthrough(
     } catch { /* count_tokens etc. */ }
   } else if (upstream.status >= 400) {
     // The body is relayed verbatim; the row gets a "Provider error" reason from the same
-    // redacting formatAnthropicErrorBody the managed lane falls back to. Only an error body
-    // within the managed lane's 64 KiB read bound is parsed for it: the body cap here is far
-    // larger, and parsing and redacting a huge body would block the event loop.
+    // redacting formatAnthropicErrorBody the managed lane falls back to. Only a body of at
+    // most 64 Ki characters (the order of that lane's 64 KiB error read bound) is parsed for
+    // it: the body cap here is far larger, and JSON.parse plus redaction over a huge body
+    // would block the event loop. Characters, not bytes, are what that cost scales with.
     const detail = text.length <= PASSTHROUGH_ERROR_DETAIL_MAX_CHARS
       ? formatAnthropicErrorBody(upstream.status, upstream.headers, text)
       : "";
