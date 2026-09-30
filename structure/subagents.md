@@ -379,7 +379,9 @@ without a provider. Sibling instances refuse the preview too: it sits under the 
 same sizing to the delegation default. The caller describes the work Codex usually hands off (nonblank, at
 most 1500 characters, the role excerpt limit); `proposeDelegationModel` in
 `src/server/management/codex-role-auto-assign.ts` sends it as one role named `delegated-work` with the same
-rubric and parser, and maps the answer with the same `buildRoleProposals`. Two things differ from roles,
+parser and the role rubric followed by a short addendum (`DELEGATED_WORK_SIZING_SYSTEM_PROMPT`) that has the
+sizer size the described one-shot work rather than a standing role; the role rubric's own text is unchanged.
+It maps the answer with the same `buildRoleProposals`. Two things differ from roles in the mapping,
 both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
 builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts, and
 `alwaysProposeEffort` proposes an effort even when none is set, because the delegation effort is a

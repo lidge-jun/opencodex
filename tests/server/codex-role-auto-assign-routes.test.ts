@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCatalogNativeSlugs, type CatalogModel } from "../../src/codex/catalog";
+import { ROLE_SIZING_SYSTEM_PROMPT } from "../../src/codex/role-sizing";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { RoleSizingCall } from "../../src/server/management/codex-role-auto-assign";
 import type { OcxConfig } from "../../src/types";
@@ -90,6 +91,7 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     expect(snapshot()).toEqual(before);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.model).toBe("stub/sizer");
+    expect(calls[0]!.system).toBe(ROLE_SIZING_SYSTEM_PROMPT);
     expect(calls[0]!.user).toContain("Read-only search.");
     expect(calls[0]!.user).not.toContain('"bare"');
     expect(result.body.sizingModel).toBe("stub/sizer");

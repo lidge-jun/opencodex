@@ -170,7 +170,7 @@ export async function proposeDelegationModel(options: {
   const sizingModel = resolveSizingModel(options.sizingModel, readConfiguredDefaultModel);
   const answer = await (options.completeRoleSizing ?? completeThroughProxy)({
     model: sizingModel,
-    system: sizing.ROLE_SIZING_SYSTEM_PROMPT,
+    system: sizing.DELEGATED_WORK_SIZING_SYSTEM_PROMPT,
     user: sizing.buildRoleSizingUserMessage([{ role: DELEGATED_WORK_ROLE, instructions: options.work }]),
   }, options.config);
   const outcomes = answer.error
