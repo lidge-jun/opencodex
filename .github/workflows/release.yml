@@ -413,6 +413,43 @@ jobs:
           echo "$description" | grep -q "flags=.*runtime"
           echo "$description" | grep -q "Timestamp="
 
+      # Tauri signs the app, its sidecar and the widget it is handed, but nothing under Resources.
+      # The packaged keyring addons (#6161) are Mach-O code, so Apple notarization rejects the whole
+      # app unless each carries the Developer ID signature, the hardened runtime and a secure
+      # timestamp (2.73.0-preview.20260930 was refused for exactly that). Sign them in place, after
+      # the certificate import and before the bundler copies them.
+      - name: Sign the packaged keyring addons
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          addons=(desktop/src-tauri/resources/keyring/*.darwin-*.node)
+          if [ "${#addons[@]}" -eq 0 ]; then
+            echo "::error::No macOS keyring addon was prepared for the bundle."
+            exit 1
+          fi
+          if [ "${DESKTOP_SIGNING_CONFIGURED}" != "true" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release must sign the packaged keyring addons."
+              exit 1
+            fi
+            echo "No signing material; the keyring addons stay as prepared for this non-release build."
+            exit 0
+          fi
+          for addon in "${addons[@]}"; do
+            codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_IDENTITY" "$addon"
+            codesign --verify --strict "$addon"
+            description="$(codesign -dvvv "$addon" 2>&1)"
+            echo "$description"
+            echo "$description" | grep -q "TeamIdentifier=$APPLE_TEAM_ID"
+            echo "$description" | grep -q "flags=.*runtime"
+            echo "$description" | grep -q "Timestamp="
+          done
+
       - name: Prepare Windows installer version
         if: runner.os == 'Windows'
         shell: bash

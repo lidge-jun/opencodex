@@ -537,6 +537,23 @@ describe("widget extension signing", () => {
       .toContain("APPLE_CERTIFICATE");
   });
 
+  test("the packaged keyring addons are Developer ID signed before the bundler copies them", () => {
+    // Notarization refused 2.73.0-preview.20260930: Resources/keyring/*.node were ad-hoc or
+    // unsigned and had no secure timestamp, and Tauri does not sign files under Resources.
+    const sign = steps.find(step => step.name === "Sign the packaged keyring addons");
+    expect(sign?.if).toBe("runner.os == 'macOS'");
+    expect(sign?.env?.MACOS_SIGN_IDENTITY).toContain("APPLE_SIGNING_IDENTITY");
+    expect(sign?.run).toContain("desktop/src-tauri/resources/keyring/*.darwin-*.node");
+    expect(sign?.run).toContain('codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_IDENTITY"');
+    expect(sign?.run).toContain('grep -q "TeamIdentifier=$APPLE_TEAM_ID"');
+    expect(sign?.run).toContain('grep -q "Timestamp="');
+    // A real release never falls back to unsigned addons; only a dry run may.
+    expect(sign?.run).toContain("A real release must sign the packaged keyring addons.");
+    expect(indexOfStepRunning("security create-keychain")).toBeLessThan(indexOfStep(sign!.name!));
+    expect(indexOfStep("Prepare macOS sidecars")).toBeLessThan(indexOfStep(sign!.name!));
+    expect(indexOfStep(sign!.name!)).toBeLessThan(indexOfStep("Build desktop bundles"));
+  });
+
   test("the certificate is importable before the widget is signed and is removed afterwards", () => {
     // codesign resolves an identity through the keychain search list, and Tauri does not build
     // its own keychain until the bundling step, which is after this one.
