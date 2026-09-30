@@ -31,6 +31,10 @@
  *   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import { ROLE_INSTRUCTIONS_EXCERPT_CHARS } from "./role-sizing-limits";
+
+export { ROLE_INSTRUCTIONS_EXCERPT_CHARS };
+
 /** Capability tiers, cheapest first. */
 export const SIZING_TIERS = ["fast", "standard", "frontier"] as const;
 export type SizingTier = typeof SIZING_TIERS[number];
@@ -38,8 +42,6 @@ export type SizingTier = typeof SIZING_TIERS[number];
 /** Reasoning effort intents, least deliberation first. Positions on a ladder, never level names. */
 export const SIZING_EFFORTS = ["glance", "measured", "thorough", "exhaustive"] as const;
 export type SizingEffort = typeof SIZING_EFFORTS[number];
-
-export const ROLE_INSTRUCTIONS_EXCERPT_CHARS = 1500;
 
 const MAX_FIELD_CHARS = 400;
 
