@@ -30,7 +30,7 @@ function json(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#integrations/omo" });
+  testWindow = new Window({ url: "http://localhost/#integrations/codex" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -41,7 +41,7 @@ beforeEach(() => {
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mountCount += 1;
-  apiBase = `http://ocx-omo-auto-${mountCount}.invalid`;
+  apiBase = `http://ocx-lazycodex-auto-${mountCount}.invalid`;
   requests = [];
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);

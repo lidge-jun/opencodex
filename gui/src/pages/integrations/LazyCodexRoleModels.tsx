@@ -3,7 +3,7 @@ import { useDataSurface } from "../../data-surface";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Select, type SelectOption } from "../../ui";
-import OmoRoleAutoAssign from "./OmoRoleAutoAssign";
+import LazyCodexRoleAutoAssign from "./LazyCodexRoleAutoAssign";
 
 interface RoleRow {
   role: string;
@@ -118,7 +118,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         <p className="page-sub">{t("integrations.lazycodexRoles.empty")}</p>
       ) : (
         <>
-        <OmoRoleAutoAssign apiBase={apiBase} busy={pending !== null} apply={save} />
+        <LazyCodexRoleAutoAssign apiBase={apiBase} busy={pending !== null} apply={save} />
         <div className="tbl-wrap">
           <table className="tbl">
             <thead>

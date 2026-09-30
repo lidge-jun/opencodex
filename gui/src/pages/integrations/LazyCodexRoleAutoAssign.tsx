@@ -28,19 +28,19 @@ interface Proposals {
 }
 
 const TIER_LABEL: Record<Tier, TKey> = {
-  fast: "integrations.omoRoles.auto.tierFast",
-  standard: "integrations.omoRoles.auto.tierStandard",
-  frontier: "integrations.omoRoles.auto.tierFrontier",
+  fast: "integrations.lazycodexRoles.auto.tierFast",
+  standard: "integrations.lazycodexRoles.auto.tierStandard",
+  frontier: "integrations.lazycodexRoles.auto.tierFrontier",
 };
 
 const EFFORT_LABEL: Record<EffortIntent, TKey> = {
-  glance: "integrations.omoRoles.auto.effortGlance",
-  measured: "integrations.omoRoles.auto.effortMeasured",
-  thorough: "integrations.omoRoles.auto.effortThorough",
-  exhaustive: "integrations.omoRoles.auto.effortExhaustive",
+  glance: "integrations.lazycodexRoles.auto.effortGlance",
+  measured: "integrations.lazycodexRoles.auto.effortMeasured",
+  thorough: "integrations.lazycodexRoles.auto.effortThorough",
+  exhaustive: "integrations.lazycodexRoles.auto.effortExhaustive",
 };
 
-export default function OmoRoleAutoAssign({
+export default function LazyCodexRoleAutoAssign({
   apiBase,
   busy,
   apply,
@@ -67,12 +67,12 @@ export default function OmoRoleAutoAssign({
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
-      const payload = await readJsonOrThrow<Proposals>(response, t("integrations.omoRoles.auto.failed"));
+      const payload = await readJsonOrThrow<Proposals>(response, t("integrations.lazycodexRoles.auto.failed"));
       setResult(payload ?? null);
       setApplied({});
     } catch (caught) {
       setResult(null);
-      setError(caught instanceof Error && caught.message ? caught.message : t("integrations.omoRoles.auto.failed"));
+      setError(caught instanceof Error && caught.message ? caught.message : t("integrations.lazycodexRoles.auto.failed"));
     } finally {
       setRunning(false);
     }
@@ -94,45 +94,45 @@ export default function OmoRoleAutoAssign({
     let count = 0;
     const total = applicable.length;
     for (const proposal of applicable) if (await applyOne(proposal)) count += 1;
-    setSummary(t("integrations.omoRoles.auto.appliedCount", { count: String(count), total: String(total) }));
+    setSummary(t("integrations.lazycodexRoles.auto.appliedCount", { count: String(count), total: String(total) }));
     setApplying(false);
   };
 
   const locked = running || applying || busy;
 
   return (
-    <div className="omo-auto-assign">
-      <div className="omo-auto-assign-bar">
-        <p className="page-sub">{t("integrations.omoRoles.auto.hint")}</p>
+    <div className="lazycodex-auto-assign">
+      <div className="lazycodex-auto-assign-bar">
+        <p className="page-sub">{t("integrations.lazycodexRoles.auto.hint")}</p>
         <button type="button" className="btn btn-sm" disabled={locked} onClick={() => void run()}>
-          {running ? t("integrations.omoRoles.auto.running") : t("integrations.omoRoles.auto.button")}
+          {running ? t("integrations.lazycodexRoles.auto.running") : t("integrations.lazycodexRoles.auto.button")}
         </button>
       </div>
       {error && <Notice tone="err">{error}</Notice>}
       {result && (
-        <section className="omo-auto-assign-panel" aria-labelledby="omo-auto-assign-title">
-          <div className="omo-auto-assign-bar">
-            <h5 id="omo-auto-assign-title">{t("integrations.omoRoles.auto.title")}</h5>
-            <span className="integration-meta">{t("integrations.omoRoles.auto.sizedWith", { model: result.sizingModel })}</span>
-            <div className="omo-auto-assign-actions">
+        <section className="lazycodex-auto-assign-panel" aria-labelledby="lazycodex-auto-assign-title">
+          <div className="lazycodex-auto-assign-bar">
+            <h5 id="lazycodex-auto-assign-title">{t("integrations.lazycodexRoles.auto.title")}</h5>
+            <span className="integration-meta">{t("integrations.lazycodexRoles.auto.sizedWith", { model: result.sizingModel })}</span>
+            <div className="lazycodex-auto-assign-actions">
               <button type="button" className="btn btn-primary btn-sm" disabled={locked || applicable.length === 0} onClick={() => void applyAll()}>
-                {t("integrations.omoRoles.auto.applyAll")}
+                {t("integrations.lazycodexRoles.auto.applyAll")}
               </button>
               <button type="button" className="btn btn-ghost btn-sm" disabled={applying} onClick={() => { setResult(null); setSummary(null); }}>
-                {t("integrations.omoRoles.auto.discard")}
+                {t("integrations.lazycodexRoles.auto.discard")}
               </button>
             </div>
           </div>
-          {result.sizingError && <Notice tone="warn">{t("integrations.omoRoles.auto.sizingFailed", { error: result.sizingError })}</Notice>}
+          {result.sizingError && <Notice tone="warn">{t("integrations.lazycodexRoles.auto.sizingFailed", { error: result.sizingError })}</Notice>}
           {summary && <Notice tone="ok">{summary}</Notice>}
-          <ul className="omo-auto-assign-list">
+          <ul className="lazycodex-auto-assign-list">
             {result.proposals.map(proposal => (
-              <li key={proposal.role} aria-label={t("integrations.omoRoles.auto.proposalFor", { role: proposal.role })}>
-                <div className="omo-auto-assign-head">
+              <li key={proposal.role} aria-label={t("integrations.lazycodexRoles.auto.proposalFor", { role: proposal.role })}>
+                <div className="lazycodex-auto-assign-head">
                   <code>{proposal.role}</code>
                   {proposal.tier && proposal.effortIntent && (
                     <span className="integration-meta">
-                      {t("integrations.omoRoles.auto.tierEffort", {
+                      {t("integrations.lazycodexRoles.auto.tierEffort", {
                         tier: t(TIER_LABEL[proposal.tier]),
                         effort: t(EFFORT_LABEL[proposal.effortIntent]),
                       })}
@@ -140,30 +140,30 @@ export default function OmoRoleAutoAssign({
                   )}
                 </div>
                 {proposal.status === "unsized" ? (
-                  <p className="integration-meta">{t("integrations.omoRoles.auto.unsized", { reason: proposal.reason ?? "" })}</p>
+                  <p className="integration-meta">{t("integrations.lazycodexRoles.auto.unsized", { reason: proposal.reason ?? "" })}</p>
                 ) : (
                   <>
-                    <div className="omo-auto-assign-change">
-                      <span>{proposal.model ? <code>{proposal.model}</code> : t("integrations.omoRoles.none")}</span>
+                    <div className="lazycodex-auto-assign-change">
+                      <span>{proposal.model ? <code>{proposal.model}</code> : t("integrations.lazycodexRoles.none")}</span>
                       <span aria-hidden="true">→</span>
                       {proposal.proposedModel
                         ? <code>{proposal.proposedModel}{proposal.proposedEffort ? ` · ${proposal.proposedEffort}` : ""}</code>
-                        : <span className="integration-meta">{t("integrations.omoRoles.auto.unassigned", { reason: proposal.reason ?? "" })}</span>}
+                        : <span className="integration-meta">{t("integrations.lazycodexRoles.auto.unassigned", { reason: proposal.reason ?? "" })}</span>}
                       {proposal.status === "proposed" && (applied[proposal.role] || alreadySet(proposal)
                         ? (
-                          <span className="omo-auto-assign-done">
-                            {applied[proposal.role] ? t("integrations.omoRoles.auto.applied") : t("integrations.omoRoles.auto.alreadySet")}
+                          <span className="lazycodex-auto-assign-done">
+                            {applied[proposal.role] ? t("integrations.lazycodexRoles.auto.applied") : t("integrations.lazycodexRoles.auto.alreadySet")}
                           </span>
                         )
                         : (
                           <button type="button" className="btn btn-sm" disabled={locked} onClick={() => void applyOne(proposal)}>
-                            {t("integrations.omoRoles.auto.apply")}
+                            {t("integrations.lazycodexRoles.auto.apply")}
                           </button>
                         ))}
                     </div>
                     {proposal.rationale && <p>{proposal.rationale}</p>}
-                    {proposal.moveUpIf && <p className="integration-meta">{t("integrations.omoRoles.auto.moveUp", { text: proposal.moveUpIf })}</p>}
-                    {proposal.moveDownIf && <p className="integration-meta">{t("integrations.omoRoles.auto.moveDown", { text: proposal.moveDownIf })}</p>}
+                    {proposal.moveUpIf && <p className="integration-meta">{t("integrations.lazycodexRoles.auto.moveUp", { text: proposal.moveUpIf })}</p>}
+                    {proposal.moveDownIf && <p className="integration-meta">{t("integrations.lazycodexRoles.auto.moveDown", { text: proposal.moveDownIf })}</p>}
                   </>
                 )}
               </li>
