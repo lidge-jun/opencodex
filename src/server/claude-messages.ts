@@ -555,6 +555,14 @@ async function anthropicNativePassthrough(
   logCtx.provider = "anthropic-native";
   logCtx.requestedModel = model;
   const finalize = createFinalRequestLog(logIds, logCtx).finish;
+  // Locally generated diagnostics are fixed text plus validated guard limits. Runtime
+  // fetch errors retain their existing client response but use a fixed stored reason.
+  const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string, storedReason = message) => {
+    const safeMessage = redactSecretString(message);
+    logCtx.upstreamError = storedReason.slice(0, 500);
+    finalize(status, { closeReason });
+    return anthropicErrorResponse(status, safeMessage, type);
+  };
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
   const search = new URL(req.url).search;
@@ -581,13 +589,11 @@ async function anthropicNativePassthrough(
     req.signal,
   );
   if (result.kind === "timeout") {
-    finalize(504, { closeReason: "non_stream" });
-    return anthropicErrorResponse(504, "anthropic passthrough timed out waiting for response headers", "timeout_error");
+    return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error");
   }
   if (result.kind === "error") {
     const err = result.error;
-    finalize(502, { closeReason: "non_stream" });
-    return anthropicErrorResponse(502, `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error");
+    return fail(502, "non_stream", `anthropic passthrough failed: ${err instanceof Error ? err.message : String(err)}`, "api_error", "anthropic passthrough failed: upstream connection error");
   }
   const upstream = result.upstream;
 
@@ -607,16 +613,13 @@ async function anthropicNativePassthrough(
   // idle/size bounds — headers are NOT yet sent here, so real statuses are available.
   const bodyResult = await readBoundedPassthroughBody(upstream, bodyGuard);
   if (bodyResult.kind === "client_cancel") {
-    finalize(499, { closeReason: "client_cancel" });
-    return anthropicErrorResponse(499, "client closed request during anthropic passthrough", "api_error");
+    return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error");
   }
   if (bodyResult.kind === "stall") {
-    finalize(504, { closeReason: "body_stall" });
-    return anthropicErrorResponse(504, `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error");
+    return fail(504, "body_stall", `anthropic passthrough body stalled: no upstream bytes for ${Math.round(bodyGuard.stallMs / 1000)}s`, "timeout_error");
   }
   if (bodyResult.kind === "overflow") {
-    finalize(502, { closeReason: "body_overflow" });
-    return anthropicErrorResponse(502, `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error");
+    return fail(502, "body_overflow", `anthropic passthrough body exceeded ${bodyGuard.maxBytes} bytes`, "api_error");
   }
   const text = bodyResult.text;
   if (upstream.ok) {
@@ -624,6 +627,21 @@ async function anthropicNativePassthrough(
       const parsed = JSON.parse(text) as { usage?: Rec };
       if (isRec(parsed?.usage)) logCtx.usage = anthropicUsageToOcx(parsed.usage);
     } catch { /* count_tokens etc. */ }
+  } else if (upstream.status >= 400) {
+    // Upstream text is untrusted: retain only a closed type vocabulary in history.
+    // Bound parsing work independently of the larger response-relay body limit.
+    const statusReason = `Provider error ${upstream.status}`;
+    logCtx.upstreamError = statusReason;
+    if (text.length <= PASSTHROUGH_ERROR_DETAIL_MAX_CHARS) {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (isRec(parsed) && parsed.type === "error" && isRec(parsed.error)) {
+          const upstreamType = parsed.error.type;
+          const knownType = PASSTHROUGH_ERROR_TYPES.find(type => type === upstreamType);
+          if (knownType) logCtx.upstreamError = `${statusReason}: ${knownType}`;
+        }
+      } catch { /* Malformed errors keep the fixed status-only diagnostic. */ }
+    }
   }
   finalize(upstream.status, { closeReason: "non_stream" });
   const retryAfter = upstream.headers.get("retry-after");
@@ -633,6 +651,11 @@ async function anthropicNativePassthrough(
   });
 }
 
+const PASSTHROUGH_ERROR_TYPES = [
+  "invalid_request_error", "authentication_error", "permission_error", "not_found_error",
+  "rate_limit_error", "api_error", "overloaded_error", "request_too_large",
+] as const;
+const PASSTHROUGH_ERROR_DETAIL_MAX_CHARS = 64 * 1024;
 const DEFAULT_BODY_STALL_SEC = 90;
 const DEFAULT_BODY_MAX_BYTES = 64 * 1024 * 1024;
 
