@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "dashboard-zoom",
-  "description": "Page zoom hotkeys for the main window, including the loopback dashboard",
+  "description": "Page zoom for the main window, set by the loopback dashboard's own zoom control and hotkeys",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:*"]
