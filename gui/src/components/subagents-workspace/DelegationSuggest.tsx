@@ -65,9 +65,11 @@ export default function DelegationSuggest({
 
   const p = result?.proposal;
   const alreadySet = !!p?.proposedModel && p.proposedModel === model && (p.proposedEffort ?? "") === effort;
+  const announcement = running ? t("sub.suggest.running") : result ? t("sub.suggest.title") : "";
 
   return (
     <div className="swi-suggest">
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</div>
       <label className="swi-suggest-label" htmlFor="swi-suggest-work">{t("sub.suggest.label")}</label>
       <div className="swi-suggest-input">
         <textarea

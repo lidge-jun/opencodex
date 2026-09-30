@@ -28,6 +28,7 @@ let container: HTMLElement;
 let root: Root | null = null;
 let writes: Array<{ path: string; method: string; body: unknown }>;
 let injection: { model: string | null; effort: string | null };
+let suggestHold: Promise<void> | null;
 
 beforeEach(() => {
   clearClientResourceStoresForTests();
@@ -44,13 +45,17 @@ beforeEach(() => {
   });
   writes = [];
   injection = { model: "gpt-5.5", effort: "high" };
+  suggestHold = null;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://localhost/").pathname;
       const method = init?.method ?? "GET";
       if (method !== "GET") writes.push({ path, method, body: JSON.parse(String(init?.body)) });
-      if (path === "/api/injection-model/suggest" && method === "POST") return Response.json(SUGGESTION);
+      if (path === "/api/injection-model/suggest" && method === "POST") {
+        if (suggestHold) await suggestHold;
+        return Response.json(SUGGESTION);
+      }
       if (path === "/api/injection-model" && method === "PUT") {
         injection = { ...injection, ...(JSON.parse(String(init?.body)) as typeof injection) };
         return Response.json({ ok: true, ...injection });
@@ -107,6 +112,40 @@ async function click(target: HTMLElement) {
   await act(async () => { target.click(); });
   await settle();
 }
+
+async function renderAndDescribe(work: string) {
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Subagents apiBase="" /></LanguageProvider>);
+  });
+  await settle();
+  await click(button(en["sub.suggest.button"]));
+  const textarea = container.querySelector<HTMLTextAreaElement>("#swi-suggest-work")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, work);
+    textarea.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+}
+
+test("a persistent polite live region announces the running state and then the result title", async () => {
+  let release!: () => void;
+  suggestHold = new Promise<void>(resolve => { release = resolve; });
+  await renderAndDescribe("read-only repo searches");
+  const live = container.querySelector<HTMLElement>(".swi-suggest [aria-live='polite']");
+  expect(live).not.toBeNull();
+  expect(live!.className).toContain("sr-only");
+  expect(live!.textContent).toBe("");
+
+  await click(button(en["sub.suggest.submit"]));
+  expect(container.querySelector(".swi-suggest [aria-live='polite']")).toBe(live);
+  expect(live!.textContent).toBe(en["sub.suggest.running"]);
+
+  release();
+  await settle();
+  expect(container.querySelector(".swi-suggest [aria-live='polite']")).toBe(live);
+  expect(live!.textContent).toBe(en["sub.suggest.title"]);
+});
 
 test("Suggest sizes the described work, shows the proposal without writing, and Use this saves through PUT /api/injection-model", async () => {
   const { createRoot } = await import("react-dom/client");
