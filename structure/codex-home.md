@@ -14,7 +14,10 @@ The read-only CLI update plan binds npm executable selection to the inspected la
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 and the `LD_*`/`DYLD_*` loader families; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
 Distinct npm config files, cache and logs stay under the owned temporary root with best-effort
-cleanup. This plan neither installs a runtime nor signals an existing Codex session.
+cleanup; a cleanup error does not replace the computed plan/refusal. The POSIX update
+scan includes all readable users by default, retaining an explicitly injected UID scope;
+the restart/kill path remains same-user. This plan neither installs a runtime nor signals
+an existing Codex session. Windows enumeration/installation limits remain unchanged.
 
 ## Orca source-owned account import
 

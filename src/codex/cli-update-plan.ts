@@ -401,7 +401,9 @@ export function resolveCodexCliUpdateTarget(
     }
     return Object.freeze({ kind: "resolved" as const, version, integrity });
   } finally {
-    rmSync(isolation.dir, { recursive: true, force: true });
+    // Cleanup is best-effort; a locked residue must not replace the plan result.
+    try { rmSync(isolation.dir, { recursive: true, force: true }); }
+    catch { /* the owned temporary root may remain, as documented */ }
   }
 }
 

@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
@@ -783,6 +784,42 @@ describe("Codex session process matching (#2811)", () => {
     expect(isCodexSessionCommandLine("codex-bridge serve")).toBe(false);
     expect(isCodexSessionCommandLine("hermes-codex-x86_64-unknown-linux-gnu")).toBe(false);
     expect(isCodexSessionCommandLine("")).toBe(false);
+  });
+
+  function withDarwinProcessFixture(check: (uid: number) => void) {
+    const uid = process.getuid!();
+    const ps = spyOn(childProcess, "execFileSync").mockImplementation((file, args) => {
+      expect(file).toBe("/bin/ps");
+      const argv = Array.isArray(args) ? args : [];
+      const scoped = argv.includes("-u");
+      if (scoped) expect(argv[1]).toBe(String(uid));
+      const executable = argv.includes("pid=,comm=");
+      if (executable) return (scoped
+        ? "321 /usr/local/bin/codex\n"
+        : "321 /usr/local/bin/codex\n322 /usr/local/bin/codex\n") as never;
+      return (scoped ? "321 /usr/local/bin/codex app-server\n"
+        : `321 ${uid} /usr/local/bin/codex app-server\n322 ${uid + 1} /usr/local/bin/codex exec fixture\n`) as never;
+    });
+    try { check(uid); } finally { ps.mockRestore(); }
+  }
+
+  test.skipIf(typeof process.getuid !== "function")("read-only session scan includes other readable users by default", () => {
+    withDarwinProcessFixture(() => {
+      for (const io of [{ platform: "darwin" as const }, { platform: "darwin" as const, getuid: undefined }]) {
+        const scan = scanCodexSessionProcesses(io);
+        expect(scan.kind).toBe("observed");
+        if (scan.kind === "observed") expect(scan.processes.map(item => item.pid)).toEqual([321, 322]);
+      }
+    });
+  });
+
+  test.skipIf(typeof process.getuid !== "function")("explicit uid scan and kill-path enumeration retain their user boundary", () => {
+    withDarwinProcessFixture(uid => {
+      const scan = scanCodexSessionProcesses({ platform: "darwin", getuid: () => uid });
+      expect(scan.kind).toBe("observed");
+      if (scan.kind === "observed") expect(scan.processes.map(item => item.pid)).toEqual([321]);
+      expect(listCodexAppServerProcesses({ platform: "darwin" }).map(item => item.pid)).toEqual([321]);
+    });
   });
 
   test("scanCodexSessionProcesses fails closed and dedupes", () => {

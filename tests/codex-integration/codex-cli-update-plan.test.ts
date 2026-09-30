@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -361,6 +362,32 @@ describe("registry configuration isolation", () => {
     "dist.integrity": "sha512-abc/DEF+123=\n",
     "dist.tarball": "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz\n",
   };
+
+  test.each(["resolved", "unresolved"] as const)("cleanup failure preserves the %s resolver outcome", kind => {
+    let ownedRoot = "";
+    let cleanupAttempts = 0;
+    const originalRemove = fs.rmSync;
+    const removal = spyOn(fs, "rmSync").mockImplementation((path, options) => {
+      if (ownedRoot && path === ownedRoot) {
+        cleanupAttempts += 1;
+        throw Object.assign(new Error("synthetic cleanup denial"), { code: "EACCES" });
+      }
+      return originalRemove(path, options);
+    });
+    try {
+      const capture = capturingSpawn(kind === "resolved" ? RESOLVE_OUTPUTS : { version: "invalid-version" });
+      const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+        ownedRoot = options.cwd as string;
+        return (capture.spawn as typeof spawnSync)(bin, args, options);
+      }) as never;
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe(kind);
+      expect(cleanupAttempts).toBe(1);
+      expect(existsSync(ownedRoot)).toBe(true);
+    } finally {
+      removal.mockRestore();
+      if (ownedRoot) rmSync(ownedRoot, { recursive: true, force: true });
+    }
+  });
 
   test("every query pins the official registry and substitutes a controlled npmrc", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);

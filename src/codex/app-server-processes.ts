@@ -664,7 +664,9 @@ export function scanCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
  * only err toward deferring.
  */
 export function scanCodexSessionProcesses(io: CodexAppServerProcessIo = {}): CodexAppServerProcessScan {
-  return scanProcessSnapshots(io, isCodexSessionCommandLine);
+  // Shared installs may be held open by another readable user's session. This
+  // read-only scan is broader than the unchanged same-user restart/kill path.
+  return scanProcessSnapshots({ ...io, getuid: io.getuid ?? (() => undefined) }, isCodexSessionCommandLine);
 }
 
 export function formatStaleCodexAppServerWarning(
