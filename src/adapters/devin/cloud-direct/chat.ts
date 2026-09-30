@@ -207,11 +207,7 @@ function encodeChatToolCall(tc: { id: string; name: string; arguments: string })
   return Buffer.concat([
     encodeString(1, tc.id),
     encodeString(2, tc.name),
-    // Replayed tool-call arguments are model-generated text that can carry a
-    // blocklisted phrase (e.g. a patch quoting the Codex prompt). The rewrite
-    // is a plain string substitution containing no JSON-breaking characters,
-    // so the arguments stay valid JSON.
-    encodeString(3, sanitizeTextForCognition(tc.arguments)),
+    encodeString(3, tc.arguments),
   ]);
 }
 
@@ -229,7 +225,7 @@ function encodeChatMessagePrompt(
 ): Buffer {
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
-  const joined = sanitizeTextForCognition(textParts.map((p) => p.text).join('\n'));
+  const joined = textParts.map((p) => p.text).join('\n');
   const parts: Buffer[] = [
     // #1 message_id. The verified turn-1 capture stamps one on every prompt.
     encodeString(1, crypto.randomUUID()),
@@ -258,7 +254,7 @@ function encodeChatMessagePrompt(
   // reasoning model restarted its chain on every turn of a tool loop. Two
   // independent clients of the same service write it here: #11 thinking,
   // #12 signature, #18 signature_type on the assistant prompt.
-  if (opts?.thinking) parts.push(encodeString(11, sanitizeTextForCognition(opts.thinking)));
+  if (opts?.thinking) parts.push(encodeString(11, opts.thinking));
   if (opts?.signature) parts.push(encodeString(12, opts.signature));
   if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
   return Buffer.concat(parts);
@@ -634,13 +630,15 @@ const MAX_TOOL_DESC_LEN = 6998;
  *
  * Scope note: the first entries only ever appeared in tool descriptions, but
  * this one lives in request #2 (the system prompt) and could equally appear
- * in conversation history — e.g. a tool result that returns a file quoting
- * the Codex prompt. The sanitizer therefore runs on every text the adapter
- * puts on the wire: tool descriptions, the #2 system prompt, each
- * ChatMessagePrompt's joined text, replayed thinking (#11), and tool-call
- * arguments (#6.3). Rewriting content the model quoted is
- * semantic-preserving, the same trade-off the tool-description rewrites
- * already accepted.
+ * Scope note: the sanitizer only ever touches *instruction surfaces* —
+ * tool descriptions and the #2 system prompt, where a meaning-preserving
+ * reword loses nothing. It deliberately does NOT touch data fields:
+ * message text (#3), replayed thinking (#11), and tool-call arguments
+ * (#6.3) carry literal content (patches, exact needles, quoted file bytes)
+ * where a rewrite would silently change what the model did or sees. If a
+ * blocklisted phrase reaches the cloud inside one of those, the request is
+ * refused and the caller sees the upstream `permission_denied` — which is
+ * the correct failure, better than corrupting the data.
  */
 const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [/\bTakes a task_id parameter identifying the task\b/g, "Accepts a task_id parameter identifying the task"],

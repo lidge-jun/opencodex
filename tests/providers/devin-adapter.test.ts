@@ -319,10 +319,12 @@ describe("devin adapter", () => {
     expect(sanitizeTextForCognitionForTests(trigger.toUpperCase()))
       .toContain("whether to allow the action");
 
-    // The phrase must be gone from every field of the encoded request, not
-    // just tool descriptions: it reaches the cloud in #2 (system prompt) when
-    // Codex injects it, and in a #3 prompt when a tool result or pasted file
-    // quotes it.
+    // The phrase is rewritten on instruction surfaces — #2 (system prompt)
+    // and tool descriptions — but data fields must stay byte-exact: a user
+    // message, replayed thinking, or tool-call arguments quoting the phrase
+    // are literal content (patches, exact needles) where a rewrite would
+    // silently change what the model did. If the cloud still refuses such a
+    // request, the caller sees the upstream permission_denied.
     const sys = `<permissions instructions>\n- Include a short question ${trigger}. e.g. "Do it?"\n</permissions>`;
     const req = buildGetChatMessageRequestForTests({
       apiKey: "k",
@@ -344,8 +346,28 @@ describe("devin adapter", () => {
       ],
       tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
     });
-    expect(req.includes(Buffer.from(trigger, "utf8"))).toBe(false);
+    // Instruction surfaces rewritten...
     expect(req.includes(Buffer.from("asking the user whether to allow the action", "utf8"))).toBe(true);
+    // ...but data fields preserve the literal bytes (user text, thinking,
+    // tool-call arguments all still carry the verbatim trigger).
+    expect(req.includes(Buffer.from(`here is a quote: ${trigger}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`the prompt says: ${trigger}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`{"patch":"${trigger}"}`, "utf8"))).toBe(true);
+
+    // A request where the ONLY trigger carrier is a tool description must
+    // come out clean — pins encodeToolDef specifically.
+    const toolOnly = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
+    });
+    expect(toolOnly.includes(Buffer.from(trigger, "utf8"))).toBe(false);
+    expect(toolOnly.includes(Buffer.from("whether to allow the action", "utf8"))).toBe(true);
   });
 
   test("the catalog parser reads the per-account context window", () => {
