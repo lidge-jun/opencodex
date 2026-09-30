@@ -91,6 +91,11 @@ export function isCodexClientProcess(command: string, args: string): boolean {
     && /^(?:\s|$)/.test(trimmedArgs.slice(command.length));
   const remainingArgs = hasExecutablePrefix ? trimmedArgs.slice(command.length).trim() : trimmedArgs;
   const rawTokens = remainingArgs.split(/\s+/, 2);
+  // Even with only a comm basename, this initial token pair is the split
+  // Codex.app framework path, not a CLI executable plus an argument. Only
+  // inspect the executable or immediate script, never a later argument.
+  if (rawTokens[0]?.endsWith("/Codex.app/Contents/Frameworks/Codex")
+    && rawTokens[1]?.startsWith("Framework.framework/")) return false;
   const quotedTokens = tokenizeCommandLine(remainingArgs);
   // ps/procfs also leave literal apostrophes unescaped. Preserve a matching
   // immediate raw entrypoint before interpreting shell-like quotes.

@@ -43,6 +43,23 @@ describe("Codex client executable identity", () => {
     expect(isCodexClientProcess("/usr/bin/vim", "codex notes.txt")).toBe(false);
   });
 
+  test("a helper basename cannot be overridden by a truncated direct argv0", () => {
+    expect(isCodexClientProcess("browser_crashpad_handler", crashpadArgs)).toBe(false);
+    expect(isCodexClientProcess("Codex Helper (Renderer)", `${framework}/Codex Helper (Renderer) --type=renderer`)).toBe(false);
+    expect(listCodexClientProcesses({
+      pid: -1,
+      listSnapshots: () => [{ pid: 51182, executable: "browser_crashpad_handler", commandLine: crashpadArgs }],
+    })).toEqual({ status: "enumerated", processes: [] });
+  });
+
+  test("preserves aliases and ignores framework paths in later arguments", () => {
+    expect(isCodexClientProcess("worker", "/usr/bin/codex /tmp/worker")).toBe(true);
+    expect(isCodexClientProcess("MainThread", "/usr/bin/codex chat")).toBe(true);
+    expect(isCodexClientProcess("worker", `/usr/bin/codex ${crashpad}`)).toBe(true);
+    expect(isCodexClientProcess("worker", `/usr/bin/codex --cd ${framework}`)).toBe(true);
+    expect(isCodexClientProcess("worker", '/usr/bin/node "/opt/Codex CLI/codex.js" chat')).toBe(true);
+  });
+
   test("retains direct clients and quoted immediate interpreter entrypoints", () => {
     expect(isCodexClientProcess("/Applications/CodexCLI.app/Contents/MacOS/codex", "/Applications/CodexCLI.app/Contents/MacOS/codex app-server --listen stdio://")).toBe(true);
     expect(isCodexClientProcess("/opt/CLI Tools/codex", "/opt/CLI Tools/codex chat")).toBe(true);
