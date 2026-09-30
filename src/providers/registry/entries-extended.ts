@@ -1186,6 +1186,29 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "OpenAI-compatible API gateway. Create a workspace API key at tokenlab.sh. Live discovery lists tool-capable chat models available to your key and delivery policy.",
   },
   {
+    // Contract checked 2026-09-30: https://cheaperinference.com/docs
+    // GET /v1/models needs the Bearer key (401 without one). Rows carry `type`; chat rows are "text".
+    id: "cheaperinference",
+    label: "Cheaper Inference",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cheaperinference.com/v1",
+    authKind: "key",
+    dashboardUrl: "https://cheaperinference.com/signup",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "gpt-5.4-mini",
+    models: ["gpt-5.4-mini"],
+    modelDiscovery: {
+      path: "models",
+      filter: {
+        allOf: [
+          { path: ["type"], equalsAny: ["text"] },
+        ],
+      },
+    },
+    note: "OpenAI-compatible LLM gateway. One API key reaches models from several labs with bare model ids (gpt-5.4-mini, claude-sonnet-5). Live discovery lists the text models available to your key; image and video rows are excluded.",
+  },
+  {
     id: "opencode-free",
     label: "OpenCode Free",
     adapter: "openai-chat",

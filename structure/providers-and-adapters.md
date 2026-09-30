@@ -295,6 +295,15 @@ Responses for Responses inbound only, and an endpoint-bound `claude-` prefix pin
 header is sent. `tests/providers/tokenlab-protocols.test.ts` asserts the resolved wire per inbound
 and the upstream URL through `handleResponses`.
 
+## Cheaper Inference chat provider
+
+The `cheaperinference` key preset uses the existing OpenAI Chat adapter at
+`https://api.cheaperinference.com/v1`. Registry-owned discovery sends the Bearer key to
+`GET /v1/models` and keeps only rows whose `type` is `text`, excluding image, video and
+untyped rows. Newly promoted preset collision protection preserves an older same-named custom
+destination. `tests/providers/cheaperinference-provider.test.ts` covers derived entry points,
+filtered discovery, destination preservation and model routing.
+
 ## TypeSafe JEV decision provider
 
 `src/providers/registry/entries-extended.ts` owns the canonical `jev` key preset at

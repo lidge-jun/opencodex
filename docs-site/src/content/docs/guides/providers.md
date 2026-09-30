@@ -467,7 +467,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 100 built-in presets: 83 key-based, 13 OAuth, three local, and one default
+opencodex ships 101 built-in presets: 84 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -560,6 +560,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
+| Cheaper Inference | `https://api.cheaperinference.com/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
@@ -595,6 +596,17 @@ prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstrea
 TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
 apply to requests sent to this service. The preset pins the row near the top of the Add provider
 picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
+**Cheaper Inference** is an OpenAI-compatible LLM gateway at [cheaperinference.com](https://cheaperinference.com).
+Create an [API key](https://cheaperinference.com/signup), then run
+`ocx provider add cheaperinference` or select **Cheaper Inference** in the dashboard's
+**Add provider** picker. The preset uses Chat Completions and discovers models at
+`GET /v1/models` with your key, keeping only rows whose `type` is `text`.
+Image and video models are excluded from this chat preset.
+Model ids are bare, with no lab prefix. `gpt-5.4-mini` is the seeded default; choose another
+discovered model such as `claude-sonnet-5` or `gemini-3.1-pro` if you need it. The provider and
+model prefixes remain separate: `cheaperinference/gpt-5.4-mini` sends `gpt-5.4-mini` upstream.
+The [model list](https://cheaperinference.com/#models) is on the website.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
