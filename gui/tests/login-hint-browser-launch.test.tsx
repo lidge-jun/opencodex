@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { LoginHint, type LoginHintData } from "../src/components/login-url-block";
 import { addProviderModalReducer, createInitialAddProviderState } from "../src/components/add-provider-modal-reducer";
+import { addCodexAccountUiReducer, initialAddCodexAccountUiState } from "../src/components/add-codex-account-reducer";
 import { DEVICE_LOGIN_POLL_BUDGET_MS, loginPollAttempts } from "../src/oauth-login-budget";
 import { parseBrowserLaunch } from "../src/oauth-browser-launch";
 
@@ -153,4 +154,13 @@ test("a device login polls for the grant's lifetime, a browser login keeps its o
   expect(loginPollAttempts(true, 2000, 150) * 2000).toBeGreaterThanOrEqual(DEVICE_LOGIN_POLL_BUDGET_MS);
   // Longer than the longest provider grant (Meta Muse, 30 minutes).
   expect(DEVICE_LOGIN_POLL_BUDGET_MS).toBeGreaterThan(30 * 60_000);
+});
+
+test("restarting a Codex login drops the previous login's launch warning", () => {
+  let state = initialAddCodexAccountUiState();
+  state = addCodexAccountUiReducer(state, { type: "set-login-hint", authUrl: URL_A, browserLaunch: "failed" });
+  expect(state.browserLaunch).toBe("failed");
+  // Switching to the device flow restarts the login before its own response arrives.
+  state = addCodexAccountUiReducer(state, { type: "reset-oauth-start" });
+  expect(state.browserLaunch).toBeUndefined();
 });

@@ -79,7 +79,9 @@ export function addCodexAccountUiReducer(state: AddCodexAccountUiState, action: 
     case "clear-manual-code":
       return { ...state, manualCode: "", manualCodeState: "idle", statusNotice: "", statusTone: "ok" };
     case "reset-oauth-start":
-      return { ...state, error: "", statusNotice: "", statusTone: "ok", flowId: null };
+      // The launch outcome belongs to the login being replaced: a restart (for instance into the
+      // device flow after a failed launch) must not keep warning about a browser it never tried.
+      return { ...state, error: "", statusNotice: "", statusTone: "ok", flowId: null, browserLaunch: undefined };
     case "oauth-code-submitted":
       return { ...state, error: "", manualCode: "", manualCodeState: "waiting", statusTone: "ok", statusNotice: "" };
     default:
