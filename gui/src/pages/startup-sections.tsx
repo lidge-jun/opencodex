@@ -88,7 +88,7 @@ export function StartupDetailsSection({
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
   const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
   const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
-  const actionsDisabled = installBusy !== null || failed || loading || data.desktop?.owned === true;
+  const actionsDisabled = installBusy !== null || failed || loading || data.desktop?.viable === true;
 
   return (
     <section className="panel startup-details">
