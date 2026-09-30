@@ -14,6 +14,7 @@
 import type { OcxConfig } from "../types";
 import { localAdmissionToken, localInferenceDestination } from "./local-destinations";
 import { signalWithTimeout, cancelBodyOnAbort } from "./abort";
+import { readBoundedResponseBytes } from "./bounded-body";
 import { redactSecretString } from "./redact";
 import { sidecarEnter } from "./sidecar-tracker";
 import { configuredPort } from "../server/auth-cors";
@@ -29,6 +30,11 @@ export interface LocalChatCompletionRequest {
   readonly logTag: string;
   readonly timeoutMs: number;
   readonly maxResponseBytes: number;
+  /**
+   * Count raw bytes while reading and cancel the body at the bound. Unset keeps the routed
+   * describer's bound: the whole body is read, then its UTF-16 length is compared.
+   */
+  readonly boundWhileStreaming?: boolean;
   readonly headers?: Record<string, string>;
   readonly abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
@@ -83,9 +89,16 @@ export async function postLocalChatCompletion(request: LocalChatCompletionReques
     });
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
-      const raw = await res.text();
-      if (raw.length > request.maxResponseBytes) {
-        return { text: "", error: `${label} response exceeded byte bound` };
+      let raw: string;
+      if (request.boundWhileStreaming) {
+        const read = await readBoundedResponseBytes(res, { maxBytes: request.maxResponseBytes, signal: linkedSignal.signal });
+        if (read.oversized) return { text: "", error: `${label} response exceeded byte bound` };
+        raw = new TextDecoder().decode(read.bytes);
+      } else {
+        raw = await res.text();
+        if (raw.length > request.maxResponseBytes) {
+          return { text: "", error: `${label} response exceeded byte bound` };
+        }
       }
       if (!res.ok) {
         return { text: "", error: `${label} HTTP ${res.status}: ${redactSecretString(raw.slice(0, 200))}` };

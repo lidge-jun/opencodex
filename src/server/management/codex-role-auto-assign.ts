@@ -29,6 +29,7 @@ async function completeThroughProxy(call: RoleSizingCall, config: OcxConfig) {
     logTag: "role-sizing",
     timeoutMs: SIZING_TIMEOUT_MS,
     maxResponseBytes: MAX_SIZING_RESPONSE_BYTES,
+    boundWhileStreaming: true,
     body: {
       model: call.model,
       messages: [{ role: "system", content: call.system }, { role: "user", content: call.user }],
