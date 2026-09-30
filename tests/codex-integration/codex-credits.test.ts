@@ -7,6 +7,12 @@ describe("Codex credits boundary parser", () => {
   test.each(["62500", "62498.725", "0", "000.050", 125.5, 0])("preserves decimal balance %s", balance => {
     expect(parseCodexCredits({ balance })).toEqual({ balance: String(balance) });
   });
+  test.each([[1e-7, "0.0000001"], [1e21, "1000000000000000000000"], [62498.725, "62498.725"]] as const)(
+    "normalizes numeric balance %p to a plain decimal string", (balance, expected) => {
+      const parsed = parseCodexCredits({ balance });
+      expect(parsed).toEqual({ balance: expected });
+      expect(parsed?.balance).toMatch(/^\d+(\.\d+)?$/);
+    });
   test.each([-1, Infinity, NaN, "-1", "1e3", " 25", "25 ", "", "garbage", true, null])("drops invalid balance %s", balance => {
     expect(parseCodexCredits({ balance })).toBeNull();
   });

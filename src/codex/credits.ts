@@ -34,7 +34,8 @@ export function parseCodexCredits(raw: unknown): CodexCredits | null | undefined
   if (typeof value.overage_limit_reached === "boolean") credits.overageLimitReached = value.overage_limit_reached;
   if (typeof value.balance === "string" && /^\d+(\.\d+)?$/.test(value.balance)) credits.balance = value.balance;
   else if (typeof value.balance === "number" && Number.isFinite(value.balance) && value.balance >= 0) {
-    credits.balance = String(value.balance);
+    // String(1e-7) is "1e-7"; the DTO promises a plain decimal string, which the GUI validates.
+    credits.balance = value.balance.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 20 });
   }
   const local = messageRange(value.approx_local_messages);
   const cloud = messageRange(value.approx_cloud_messages);
