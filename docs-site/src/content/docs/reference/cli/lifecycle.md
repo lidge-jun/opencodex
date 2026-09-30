@@ -497,6 +497,10 @@ CPU contention, making the tray report Offline even while the process is alive. 
 run `ocx service repair` to migrate that registered priority and restart the service. This migration
 may request UAC approval; a priority already set to normal or high does not itself trigger replacement.
 
+The Windows wrapper supports locale dates containing parentheses, including Korean and Japanese
+date formats. After upgrading, run `ocx service repair` to replace an older generated wrapper
+that exits before launching Bun on those locales.
+
 The Windows wrapper verifies its baked Bun runtime and CLI entry before every start attempt. If an
 interrupted package update removed either file, it logs one `installation is incomplete` message and
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
