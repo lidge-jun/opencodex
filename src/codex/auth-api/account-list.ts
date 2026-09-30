@@ -1,4 +1,4 @@
-import { codexCreditsDtoField, pruneCodexCredits } from "../credits";
+import { codexCreditsDtoField, hasCodexCreditsObservation, pruneCodexCredits } from "../credits";
 import type { CodexCredits } from "../credits";
 import { getMainChatgptAccountId } from "../auth-collision";
 import { codexAccountLogLabel } from "../account-label";
@@ -271,7 +271,12 @@ export async function listCodexAuthAccountsSnapshot(
       quotaResult = { quota: null, needsReauth: true };
     } else {
       try {
-        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh, account.plan, getValidCodexToken, options.validatePending === true);
+        // Credits are process-local while pool quota is hydrated from disk, so right after a
+        // restart the cache would hide credits for up to POOL_CACHE_TTL. Bypass it once per
+        // identity when the switch is on and nothing has been observed yet.
+        const creditsIdentity = runtimeConfig.showCodexCredits === true ? poolQuotaHistoryIdentity(account.id) ?? null : null;
+        const creditsUnobserved = creditsIdentity !== null && !hasCodexCreditsObservation(account.id, creditsIdentity);
+        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh || creditsUnobserved, account.plan, getValidCodexToken, options.validatePending === true);
       } catch (error) {
         if (!(error instanceof PoolQuotaProbeBusyError)) throw error;
         quotaResult = {

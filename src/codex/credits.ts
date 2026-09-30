@@ -10,7 +10,12 @@ export interface CodexCredits {
   approxCloudMessages?: [number, number];
 }
 
-const observations = new Map<string, { identity: string; credits: CodexCredits }>();
+/**
+ * An entry without `credits` means "this identity was observed and reported nothing to show".
+ * Keeping that apart from "never observed" lets the account listing bypass the persisted quota
+ * cache exactly once per identity after a restart, instead of on every dashboard poll.
+ */
+const observations = new Map<string, { identity: string; credits?: CodexCredits }>();
 
 function messageRange(raw: unknown): [number, number] | undefined {
   return Array.isArray(raw) && raw.length === 2
@@ -39,9 +44,14 @@ export function parseCodexCredits(raw: unknown): CodexCredits | null | undefined
 }
 
 export function rememberCodexCredits(accountId: string, identity: string, parsed: CodexCredits | null | undefined): void {
-  if (parsed === undefined) return;
-  if (parsed === null) observations.delete(accountId);
-  else observations.set(accountId, { identity, credits: structuredClone(parsed) });
+  const previous = observations.get(accountId);
+  if (parsed === undefined) {
+    // Omission keeps a same-identity observation; otherwise it still records that this identity
+    // answered, so the listing stops forcing fresh reads for it.
+    if (previous?.identity !== identity) observations.set(accountId, { identity });
+    return;
+  }
+  observations.set(accountId, parsed === null ? { identity } : { identity, credits: structuredClone(parsed) });
 }
 
 export function codexCreditsFor(accountId: string, identity: string | null): CodexCredits | undefined {
@@ -51,7 +61,13 @@ export function codexCreditsFor(accountId: string, identity: string | null): Cod
     observations.delete(accountId);
     return undefined;
   }
-  return structuredClone(observation.credits);
+  return observation.credits ? structuredClone(observation.credits) : undefined;
+}
+
+/** Whether this identity has answered at least one usage read since the process started. */
+export function hasCodexCreditsObservation(accountId: string, identity: string | null): boolean {
+  const observation = observations.get(accountId);
+  return observation !== undefined && identity !== null && observation.identity === identity;
 }
 
 export function codexCreditsDtoField(config: Pick<OcxConfig, "showCodexCredits">, accountId: string, identity: string | null): { credits?: CodexCredits } {

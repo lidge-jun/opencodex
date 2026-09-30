@@ -146,4 +146,31 @@ describe("pool credits publication", () => {
     await commitPoolQuotaResponse(Response.json({ credits: { balance: "99" } }), { ...ctx, poolWriter: undefined });
     expect(codexCreditsFor(account.id, ctx.poolWriter!.historyIdentity)).toEqual({ balance: "5" });
   });
+  test("with the switch on, the listing bypasses a fresh quota cache once per identity", async () => {
+    savePool();
+    writeMain();
+    const resetAt = Math.floor(Date.now() / 1000) + 3_600;
+    const usage = { rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18_000, reset_at: resetAt },
+      secondary_window: { used_percent: 20, limit_window_seconds: 604_800, reset_at: resetAt } } };
+    // A restart keeps the disk-hydrated quota but loses the process-local credits.
+    await commitPoolQuotaResponse(Response.json(usage), poolContext());
+    resetCodexCreditsForTests();
+    let poolReads = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (auth.includes("fixture-pool-bearer")) {
+        poolReads += 1;
+        return Response.json({ ...usage, credits: { balance: "62498.725" } });
+      }
+      return Response.json({});
+    }) as typeof fetch;
+    const cfg: OcxConfig = { ...config(), codexAccounts: [account] };
+    expect((await listCodexAuthAccounts(cfg)).find(row => row.id === account.id)?.credits).toBeUndefined();
+    expect(poolReads).toBe(0);
+    cfg.showCodexCredits = true;
+    expect((await listCodexAuthAccounts(cfg)).find(row => row.id === account.id)?.credits).toEqual({ balance: "62498.725" });
+    expect(poolReads).toBe(1);
+    await listCodexAuthAccounts(cfg);
+    expect(poolReads).toBe(1);
+  });
 });

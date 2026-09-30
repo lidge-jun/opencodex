@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { codexCreditsDtoField, codexCreditsFor, parseCodexCredits, pruneCodexCredits, rememberCodexCredits, resetCodexCreditsForTests } from "../../src/codex/credits";
+import { codexCreditsDtoField, codexCreditsFor, hasCodexCreditsObservation, parseCodexCredits, pruneCodexCredits, rememberCodexCredits, resetCodexCreditsForTests } from "../../src/codex/credits";
 
 beforeEach(resetCodexCreditsForTests);
 
@@ -28,6 +28,18 @@ describe("Codex credits boundary parser", () => {
 });
 
 describe("identity-bound process-local credits", () => {
+  test("an answer without credits is an observation, distinct from never observed", () => {
+    expect(hasCodexCreditsObservation("pool", "identity-a")).toBe(false);
+    rememberCodexCredits("pool", "identity-a", undefined);
+    expect(hasCodexCreditsObservation("pool", "identity-a")).toBe(true);
+    expect(codexCreditsFor("pool", "identity-a")).toBeUndefined();
+    expect(hasCodexCreditsObservation("pool", "identity-b")).toBe(false);
+    expect(hasCodexCreditsObservation("pool", null)).toBe(false);
+    rememberCodexCredits("pool", "identity-a", { balance: "2" });
+    rememberCodexCredits("pool", "identity-b", undefined);
+    expect(codexCreditsFor("pool", "identity-b")).toBeUndefined();
+    expect(hasCodexCreditsObservation("pool", "identity-b")).toBe(true);
+  });
   test("omission keeps, null clears, and replacement overwrites the observation", () => {
     rememberCodexCredits("pool", "identity-a", { balance: "4" });
     rememberCodexCredits("pool", "identity-a", undefined);
