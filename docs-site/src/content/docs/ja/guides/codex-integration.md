@@ -246,6 +246,8 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 
 `ocx account refresh openai` と `ocx account list openai --quota --refresh` は使用量のみを取得します。モデル検証はクォータを消費するため、人間のダッシュボードセッションが必要です。回復後に `ocx gui` を開き、**Refresh quotas** をクリックしてください。ヘッドレスホストでもブラウザーからそのダッシュボードにアクセスします。管理者トークンだけでは検証できません。一時停止中でも検証できますが、アカウントの再開や選択は行いません。モデル認証エラーは検証または再認証に成功するまで表示されます。
 
+**Codex Set → Multi-auth** で **Codex Auth** 見出しの **Codex クレジット** スイッチを有効にすると、メインとプールの各アカウントで最後に取得したクレジットが Week の直下に表示されます。既定では無効で、`showCodexCredits` として保存されます。残高はロケールに合わせた数値で、報告があれば無制限または超過利用上限の警告を表示します。総上限が提供されないため、バーは割合ではなく利用可能な状態を示します。この設定は表示のみを制御し、新しいログインにはそのアカウントの取得結果が必要です。
+
 バックグラウンド再検証は別機能で既定では無効です。Token Guardian、`openai` の `proactive` 更新ポリシー、`tokenGuardian.codexWarmupEnabled` が必要で、登録検証待ちのアカウントは除外します。
 
 ### アカウントがリクエストを処理しなくなった理由

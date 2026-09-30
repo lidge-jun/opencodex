@@ -44,6 +44,8 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-dispatch.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
+  "buffered-sse-json.ts",
+  "terminal-error-redaction.ts",
   "sidecar-execution.ts",
   "completion-policy.ts",
   "run-turn-execution.ts",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { delimiter, join } from "node:path";
+import { posix } from "node:path";
 import { buildPlist, buildUnit, buildWindowsServiceScript, repairService, stableLauncherEntry } from "../../src/service";
 import { buildWinswXml } from "../../src/lib/winsw";
 import { filterTransientServicePath, isTransientServiceLauncherPath, serviceLauncherPathDiagnostic } from "../../src/service/state";
@@ -17,20 +17,24 @@ describe("shell-scoped service paths", () => {
   });
 
   test("skips a recorded fnm launcher and removes its directory from systemd PATH", () => {
-    const temporaryBin = join("/tmp", "fnm_multishells", "shell-1", "bin");
+    // A systemd unit is POSIX on every host, so the fixture is too: on a Windows runner the
+    // host path module and delimiter would produce "\\opt\\..." paths and ";"-joined PATHs.
+    const temporaryBin = posix.join("/tmp", "fnm_multishells", "shell-1", "bin");
     const durableBin = "/opt/opencodex/bin";
-    const temporaryLauncher = join(temporaryBin, "ocx");
-    const durableLauncher = join(durableBin, "ocx");
+    const temporaryLauncher = posix.join(temporaryBin, "ocx");
+    const durableLauncher = posix.join(durableBin, "ocx");
     const launcher = stableLauncherEntry({
       state: { launcherPath: temporaryLauncher } as never,
-      env: { PATH: [temporaryBin, durableBin].join(delimiter) },
+      env: { PATH: [temporaryBin, durableBin].join(":") },
+      pathDelimiter: ":",
+      platform: "linux",
       isExecutableFile: candidate => candidate === temporaryLauncher || candidate === durableLauncher,
     });
     expect(launcher).toBe(durableLauncher);
 
     const oldPath = process.env.PATH;
     try {
-      process.env.PATH = [temporaryBin, durableBin].join(delimiter);
+      process.env.PATH = [temporaryBin, durableBin].join(":");
       const unit = buildUnit([], { launcher, runtime: { path: "/opt/opencodex/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" } });
       expect(unit).not.toContain("fnm_multishells");
       expect(unit).toContain(durableLauncher);

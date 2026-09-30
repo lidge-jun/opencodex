@@ -5,8 +5,9 @@ import type { ProviderRegistryEntry } from "../../../src/providers/registry/type
 
 // xAI documents Grok 4.7 Fast as "the same model served on faster infrastructure", listed for
 // Cursor and Grok Build and not available on the public xAI API
-// (docs.x.ai/developers/grok-4-7, fetched 2026-09-24). The discovered OAuth id inherits
-// grok-4.7's documented facts; its wire pin and service tier stay unclaimed until probed.
+// (docs.x.ai/developers/grok-4-7). The discovered OAuth id inherits grok-4.7's documented facts and,
+// since the 2026-09-30 probe (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md), its OAuth
+// Responses wire. Its service tier stays unclaimed: priority multiplied its cost for no measured gain.
 const BASE = "grok-4.7";
 const BUILD_FAST = "grok-4.7-build-fast";
 
@@ -44,15 +45,16 @@ describe("xai grok-4.7-build-fast metadata", () => {
     });
   }
 
-  test("claims no lineup slot, wire pin or service tier", () => {
+  test("claims no lineup slot or service tier, and shares grok-4.7's OAuth wire", () => {
     const entry = xai();
     // Live discovery owns the lineup, so the seed lists stay free of a Cursor/Grok-Build-only id.
     expect(XAI_MODELS).toContain(BASE);
     expect(XAI_MODELS).not.toContain(BUILD_FAST);
     expect(entry.models ?? []).not.toContain(BUILD_FAST);
-    // Non-vacuous negatives: both claims exist for grok-4.7, and only there.
+    // Probed: build-fast answers on OAuth Responses exactly like grok-4.7.
     expect(entry.modelWireDefaults?.[BASE]).toBeDefined();
-    expect(entry.modelWireDefaults?.[BUILD_FAST]).toBeUndefined();
+    expect(entry.modelWireDefaults?.[BUILD_FAST]).toEqual(entry.modelWireDefaults?.[BASE]);
+    // Non-vacuous negative: the tier claim exists for grok-4.7, and only there.
     expect(entry.modelSupportsServiceTier?.[BASE]).toBe(true);
     expect(entry.modelSupportsServiceTier?.[BUILD_FAST]).toBeUndefined();
   });

@@ -23,6 +23,7 @@ import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
 import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
+import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -30,6 +31,7 @@ export async function deliverAdapterResponse(
   requestState: Pick<
     PreparedResponsesRequest,
     | "parsed"
+    | "route"
     | "translatorBudget"
     | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
@@ -51,6 +53,7 @@ export async function deliverAdapterResponse(
   const { logCtx, options, config } = requestContext;
   const {
     parsed,
+    route,
     translatorBudget,
     toolBridgeMaps,
     rememberKiroDeliveredFinalAnswer,
@@ -71,6 +74,7 @@ export async function deliverAdapterResponse(
   } = responseEffects;
   const { routedCompaction } = sidecarState;
   const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
+  const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
 
 
   if (parsed.stream) {
@@ -199,15 +203,29 @@ export async function deliverAdapterResponse(
     });
   }
 
-  if (transportState.activeAdapter.parseResponse) {
+  if (transportState.activeAdapter.parseResponse
+    || (upstreamRequestsStream && transportState.activeAdapter.parseStream)) {
     let events: AdapterEvent[];
     try {
-      const initialEvents = await readResponseBodyWithInactivity(
-        upstreamResponse,
-        upstream.signal,
-        bodyInactivityMs,
-        response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
-      );
+      const initialEvents: AdapterEvent[] = [];
+      if (upstreamRequestsStream && transportState.activeAdapter.parseStream) {
+        // The canonical ChatGPT adapter coerces its actual upstream request to SSE even for a
+        // JSON client. Routed compaction still owns the non-streaming client response, so fold
+        // that SSE through the adapter instead of handing it to parseResponse as JSON.
+        for await (const event of readResponseStreamWithInactivity(
+          upstreamResponse,
+          upstream.signal,
+          bodyInactivityMs,
+          response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
+        )) initialEvents.push(event);
+      } else {
+        initialEvents.push(...await readResponseBodyWithInactivity(
+          upstreamResponse,
+          upstream.signal,
+          bodyInactivityMs,
+          response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
+        ));
+      }
       for (const event of initialEvents) options.onCompactionRecoveryAdapterEvent?.(event);
       let guardedEvents: AdapterEvent[];
       if (terminalGuardEnabled) {

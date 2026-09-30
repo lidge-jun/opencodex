@@ -164,14 +164,24 @@ describe("proactive Anthropic routing stays opt-in", () => {
     // fail -- every behavioural test seeds two accounts, which satisfies the quorum either way,
     // so they would keep passing while the feature was dead for the users who never opted in.
     //
-    // Pin the shape instead: the flag may still appear in the rotator, but only alongside the
-    // presence check, never as a gate of its own.
+    // Pin the activation gate in the recorder, which the rotator now calls before
+    // choosing a replacement. The rotator may use the flag separately to select its
+    // proactive strategy, but must not reject a pool-off request before recording.
     const source = await Bun.file("src/oauth/anthropic-routing.ts").text();
     const start = source.indexOf("export function rotateAnthropicAccountOn429");
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf("\n}", start));
-    const gate = body.split("\n").find(line => line.includes("isAnthropicAccountPoolEnabled"));
-    expect(gate, "the rotator no longer references the pool flag at all").toBeDefined();
+    const recordCall = body.indexOf("if (!recordAnthropicAccount429(");
+    expect(recordCall, "the rotator no longer uses the recorder's quorum gate").toBeGreaterThan(-1);
+    expect(body.slice(0, recordCall), "the rotator added a pool-only gate before recording")
+      .not.toContain("isAnthropicAccountPoolEnabled");
+
+    const recordStart = source.indexOf("export function recordAnthropicAccount429");
+    expect(recordStart).toBeGreaterThan(-1);
+    const recordBody = source.slice(recordStart, source.indexOf("\n}", recordStart));
+    const gate = recordBody.split("\n").find(line =>
+      line.trimStart().startsWith("if (") && line.includes("isAnthropicAccountPoolEnabled"));
+    expect(gate, "the recorder no longer checks the pool flag").toBeDefined();
     expect(gate, "the pool flag became a gate of its own again").toContain("hasAnthropicFailoverQuorum");
   });
 });

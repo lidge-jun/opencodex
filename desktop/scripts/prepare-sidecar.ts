@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { adHocSignSidecar, shouldAdHocSignSidecar } from "./sidecar-signing";
 
@@ -38,20 +38,20 @@ if (!triple || !targetByTriple[triple]) {
 const target = targetByTriple[triple];
 const source = join(repoRoot, "dist", "standalone", target);
 const executable = join(source, target.startsWith("bun-windows-") ? "ocx.exe" : "ocx");
-if (!existsSync(executable)) {
-  const result = Bun.spawnSync([
-    process.execPath,
-    "run",
-    "build:standalone",
-    "--target",
-    target,
-  ], { cwd: repoRoot, stdout: "inherit", stderr: "inherit" });
-  if (result.exitCode !== 0) process.exit(result.exitCode);
-}
+// Preparation must consume this checkout, never a stale executable/addon pair left in dist.
+const result = Bun.spawnSync([
+  process.execPath,
+  "run",
+  "build:standalone",
+  "--target",
+  target,
+], { cwd: repoRoot, stdout: "inherit", stderr: "inherit" });
+if (result.exitCode !== 0) process.exit(result.exitCode);
 
 const desktopRoot = resolve(import.meta.dir, "..");
 const binaries = join(desktopRoot, "src-tauri", "binaries");
 const resources = join(desktopRoot, "src-tauri", "resources", "gui", "dist");
+const keyringResources = join(desktopRoot, "src-tauri", "resources", "keyring");
 mkdirSync(binaries, { recursive: true });
 mkdirSync(resources, { recursive: true });
 const destination = join(binaries, `ocx-${triple}${target.startsWith("bun-windows-") ? ".exe" : ""}`);
@@ -60,5 +60,6 @@ if (shouldAdHocSignSidecar(process.platform, target)) {
   const signed = adHocSignSidecar(destination);
   if (signed !== 0) process.exit(signed);
 }
+cpSync(join(source, "keyring"), keyringResources, { recursive: true });
 cpSync(join(repoRoot, "gui", "dist"), resources, { recursive: true });
 console.log(`Prepared ${destination}`);

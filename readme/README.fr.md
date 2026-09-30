@@ -161,6 +161,10 @@ Voir [SPONSORS.md](../SPONSORS.md).
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>Merci à <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> pour son soutien à ce projet ! PackyCode est un fournisseur de relais API stable et performant, qui propose des services de relais pour Claude Code, Codex, Gemini et d'autres. Grâce au basculement automatique, au routage intelligent et à une concurrence illimitée, il fait de l'IA un véritable outil de productivité. <a href="https://www.packyapi.com/register?aff=k5KT">Inscrivez-vous via ce lien</a> et commencez ! Choisissez <code>PackyCode</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>Merci à <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> pour son soutien à ce projet ! TokenLab donne aux agents de code une seule clé API pour les principaux modèles, avec les formats OpenAI Responses et Chat Completions, Anthropic Messages et l'API native de Gemini, streaming et appel d'outils compris. Il fournit aussi un serveur MCP et des Skills pour agents afin de faciliter l'intégration. Choisissez votre mode de livraison et payez à l'usage. Choisissez <code>TokenLab</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add tokenlab</code>.<br><sub>TokenLab 为编程智能体提供统一的多模型 API，一枚 API Key 即可接入主流模型，支持 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及流式输出和工具调用。同时提供 MCP 服务器和 Agent Skills，方便接入现有工作流；交付模式可选，按量付费。</sub></td>
+</tr>
 </tbody>
 </table>
 

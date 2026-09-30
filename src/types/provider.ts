@@ -197,8 +197,10 @@ export interface FastWire {
    * `service_tier` request field; `cursor-variant` is a MODEL-VARIANT switch, because
    * Cursor has no tier field — its fast product is a different model id
    * (`claude-opus-5-thinking-high-fast`) or a `{id:"fast"}` request parameter for Grok.
+   * `model-variant` is internal only (config validation rejects it): the xAI OAuth Fast lane switch in
+   * src/providers/xai-fast-model.ts, whose only wire value is the serialized model id.
    */
-  kind: "service-tier" | "anthropic-speed" | "cursor-variant";
+  kind: "service-tier" | "anthropic-speed" | "cursor-variant" | "model-variant";
   /** Canonical tier name to upstream wire spelling. */
   canonicalToWire: Readonly<Record<string, string>>;
   /** Policy for non-canonical caller-provided tier values. */
@@ -340,6 +342,8 @@ export interface OcxProviderConfig {
    * version here instead of waiting for a code change. Absent uses the adapter's current default.
    */
   commandCodeVersion?: string;
+  /** Include bounded repository context in Command Code envelopes. Default omitted/off sends empty memory/taste/skills. */
+  projectContext?: "off" | "on";
   /**
    * Responses upstream that stores nothing server-side (DeepSeek documents "the API
    * is stateless"). Stateful request parameters are dropped, `store` is pinned false,

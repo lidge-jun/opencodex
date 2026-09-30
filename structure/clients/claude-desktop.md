@@ -237,7 +237,13 @@ only `egressProxyUrl`. The previous Desktop selection is stored in
 
 The local controls are `ocx claude desktop picker on|off|status|trust`. With a live server, `on`,
 `off`, and transition cleanup use the controller; `trust` performs the operator's local keychain
-step and then reports the result to the server. Without a server, `on` is refused and `off` removes
+step and then reports the result to the server. Before installing the root, the CLI independently
+requires the picker common name on a self-signed CA and the exact critical `claude.ai`-only DNS
+and all-IP exclusion constraints, plus the full minted extension profile — critical `CA:TRUE`
+basicConstraints, a `keyCertSign|cRLSign`-only keyUsage, a non-critical subjectKeyIdentifier, and
+nothing else — so a forged root carrying leaf privileges (SAN, serverAuth EKU, digitalSignature)
+is refused. Matching the live server's reported fingerprint is an additional check, not a
+replacement for certificate-scope validation. Without a server, `on` is refused and `off` removes
 owned artifacts locally. The management surface accepts `GET /api/claude-desktop/picker` and
 `PUT /api/claude-desktop/picker` with `{ enabled, persist, trustedLocally?, callerAddedTrust? }`;
 unknown keys are rejected, a successful enable/disable or reported refusal returns `200 { ok: true,
@@ -455,5 +461,9 @@ The [compaction routing override](../transports/responses-failover.md#compaction
 ## Native passthrough tool-call ids
 
 Native Anthropic passthrough in `src/server/claude-messages.ts` forwards the caller's body except for tool-call ids: `sanitizePassthroughToolCallIds` runs the request-scoped allocator from `src/adapters/tool-call-id.ts` over every `*tool_use` id and `*tool_result` `tool_use_id`. Conforming ids are reserved first and stay byte-identical, a non-conforming or overlength id is rewritten to a conforming id of at most 64 characters with call/result pairing kept, and an empty id throws `AnthropicRequestError`, so the request fails with a local 400 before the upstream fetch. `tests/claude-integration/claude-native-passthrough.test.ts` covers rewriting, pairing, the empty id, the overlength id and collision with an existing valid id.
+
+## Native passthrough stream terminals
+
+`tapAnthropicSseForLog` in `src/server/claude-messages.ts` relays the streamed body of both the native passthrough and the managed native Messages lane (`src/server/messages-native.ts`). The response headers are already sent, so a stall, a byte-cap overflow, or an upstream read failure ends the body with an Anthropic `event: error` frame after a blank-line boundary and a clean close: `timeout_error` for an idle stall, `api_error` for the byte cap, and `api_error` when an upstream read fails mid-stream (a socket reset). The mid-stream reset is logged like the Responses relay's read error: status 502, `terminalStatus: "failed"`, `closeReason: "terminal"`, `transportPhase: "mid_stream"`, a synthetic terminal source, the attempt marked `streamAborted`, the redacted reason in `upstreamError`, and the usage seen before the reset. The non-streaming fold in the managed lane closes its row with the tap's meta for a reset, a stall or the byte cap, so its row matches the streaming lane's. The request is not replayed. The logged status is not uniform across these frames: a stall and the byte cap keep status 200 with `closeReason` `body_stall` or `body_overflow`, which classify as `incomplete`, while a reset is a 502 that classifies as `failed`. Some read failures are not upstream failures. When the cancel signal is already aborted, the rejection is a `499` client cancel, because Bun can reject the read before it dispatches the abort listener. The managed lane passes its upstream controller's signal, so shutdown and turn release count as cancels too. When `message_stop` or an upstream `error` event has been seen, including one still in the buffer without its blank-line delimiter, the turn is complete: it logs 200 and closes with no error frame. A terminal found only in that unterminated tail gets its blank line restored, because an SSE parser drops an event that EOF cuts off. A translator budget overflow is a local cap, so it still errors the stream, and the non-streaming fold answers it with 413. `tests/claude-integration/claude-native-passthrough.test.ts` and `tests/claude-integration/messages-native.test.ts` cover both lanes against an upstream that resets after a partial or a complete body, plus both cancel paths.
 
 Linked-machine data uses the [connection-bound relay contract](../remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.

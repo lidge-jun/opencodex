@@ -233,10 +233,10 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `POST /api/oauth/login/cancel` | 取消公開進行中的 OAuth 流程 | 400 未知供應商 |
 | `GET /api/oauth/status` | 輪詢一個供應商的 OAuth 流程 | 400 未知供應商 |
 | `POST /api/oauth/logout` | 移除所選的供應商憑證 | 400 未知供應商；`oauth_mutation_busy` |
-| `GET /api/oauth/accounts` | 列出遮罩帳號；通用 OAuth 帳號列也會提供 `paused` 狀態。Kiro 列包含自動選取狀態 `autoSelectable`，排除時還包含封閉集合的 `skipReason`。唯一的有效帳號仍可傳送請求，配額查詢仍為選用。 | 400 無效供應商 |
+| `GET /api/oauth/accounts` | 列出遮罩帳號；Anthropic 與通用 OAuth 帳號列也會提供 `paused` 狀態。Kiro 列包含自動選取狀態 `autoSelectable`，排除時還包含封閉集合的 `skipReason`。唯一的有效帳號仍可傳送請求，配額查詢仍為選用。 | 400 無效供應商 |
 | `DELETE /api/oauth/accounts` | 移除一個帳號 | 400 無效供應商/id；404 帳號缺失；`oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | 選擇現用 OAuth 帳號 | 400 無效供應商／帳號；404 帳號缺失；409 帳號已暫停；`oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/pause` | 暫停或恢復一個通用 OAuth 帳號。Body `{ provider, accountId, paused }`；若暫停現用帳號，且有可用帳號，會切換至下一個 | 400 不支援的供應商或無效 body；404 帳號缺失；`oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | 暫停或恢復一個 Anthropic 或通用 OAuth 帳號。Body `{ provider, accountId, paused }`；若暫停現用帳號，且有可用帳號，會切換至下一個。暫停會持久儲存且不受帳號池開關影響，恢復保留健康狀態與憑證。 | 400 不支援的供應商或無效 body；404 帳號缺失；`oauth_mutation_busy` |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | 讀取或更新 Anthropic OAuth 池政策 | 400 非 Anthropic 供應商或無效政策 |
 | `POST /api/oauth/accounts/clear-cooldown` | 清除一個 OAuth 帳號的 runtime 冷卻 | 400 無效供應商／帳號 |
 | `PUT /api/oauth/accounts/alias` | 設定或清除 OAuth 帳號別名 | 400 無效供應商／帳號／別名 |
@@ -327,3 +327,13 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 ## 遠端工作階段與資料金鑰輪替
 
 `POST /api/keys/rotate {id}` 開始十分鐘重疊期，且只回傳一次新金鑰。`POST /api/keys/rotate/commit {id,rotationId}` 提交，`DELETE /api/keys/rotate {id,rotationId}` 中止。全部都需要管理驗證，資料金鑰不能呼叫。`POST /api/session/logout` 需要目前的 `gui-session`、相符的 Origin 與 CSRF。Admin token 會收到 403，永遠不能建立使用者同意工作階段。
+
+## Anthropic 帳戶用量門檻
+
+`PUT /api/oauth/accounts/auto-switch`
+
+僅 Anthropic OAuth。`{ provider: "anthropic", accountId, threshold }`：整數 0–100 或 null 繼承；缺少欄位無效。重啟後保留，隨帳戶刪除。
+
+DTO 包含 `autoSwitchThresholdOverride`（整數/null）、`autoSwitchThreshold`（集區預設值）、`effectiveAutoSwitchThreshold`。0 只停用依用量切換；暫停和 429 復原不變。
+
+HTTP: 400 invalid/unsupported; 404 missing account; `oauth_mutation_busy` on lock contention.

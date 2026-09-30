@@ -61,11 +61,13 @@ the Responses wire. Claude Code auto-mode always sends `stop_sequences`; forward
 classifier mark Grok temporarily unavailable. Regression coverage:
 `tests/providers/xai/xai-no-stop.test.ts`.
 
-`grok-4.7-build-fast` joins these lists, `preserveReasoningContentModels` and the grok-4.7
-context/effort/vision rows, because xAI documents Grok 4.7 Fast as the same model on faster
-infrastructure (Cursor and Grok Build only, not the public xAI API); it stays out of the lineup
-seed, `modelWireDefaults` and `modelSupportsServiceTier` until a live probe. Regression coverage:
-`tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
+`grok-4.7-build-fast` joins these lists, `preserveReasoningContentModels`, the grok-4.7
+context/effort/vision rows and grok-4.7's OAuth Responses wire default, because xAI documents Grok
+4.7 Fast as the same model on faster infrastructure (Cursor and Grok Build only, not the public xAI
+API) and the 2026-09-30 probe confirmed identical capabilities
+(`devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md`). It stays out of the lineup seed and
+`modelSupportsServiceTier`, and it is not published as a row of its own; see "Grok 4.7 Fast lane" below.
+Regression coverage: `tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
 
 ### Policy-refusal 403
 
@@ -237,6 +239,29 @@ is deliberately excluded ??the gateway answers `service_tier: "default"` when se
 Classification reaches saved configs through the fill-only enrich backfill
 (`src/providers/derive.ts`); an explicit config value always wins, and a config saved while
 the lane is live keeps it as an explicit value even if the registry default later changes.
+
+#### Grok 4.7 Fast lane (OAuth)
+
+The Grok OAuth gateway lists `grok-4.7` and `grok-4.7-build-fast` as two models. They are one model on
+two serving lanes: the 2026-09-30 probe measured build-fast 1.5-1.7x faster end to end, while
+`priority` on grok-4.7 bought no measurable speed and cost ~5.9x the ticks per output token
+(build-fast costs ~2x). So the catalog shows one row. `shouldExposeProviderModel`
+(`src/codex/catalog/model-visibility.ts`) hides build-fast from discovery, and a Fast grok-4.7
+request on the OAuth lane (`--fast` row, caller `priority`, or `fastMode`) is serialized as
+`grok-4.7-build-fast` with no tier (`src/providers/xai-fast-model.ts`, applied at the tail of
+`applyFinalRouteRequestNormalization`, so Responses, WebSocket, Chat, Claude, combo children and routed
+compaction all take it). The logical id stays grok-4.7 for routing, effort, sampling strips, operator
+overrides and the usage attempt. Only the serialized `model` changes (`raw.model` for the passthrough,
+`parsed._wireModelOverride` for openai-chat), and `logCtx.wireModel` records it. The attempt's tier
+outcome uses the internal `model-variant` Fast wire kind (applied, assumed). Its
+`responseTierAuthoritative:false` keeps a `service_tier` echo from confirming or denying it, and from
+unlocking priority pricing, so estimates stay at grok-4.7's standard rate. The passthrough relays the
+upstream `model` echo (`grok-4.7-build-fast`, as plain turns already relay `grok-4.7-build`), while
+translated deliveries answer with `grok-4.7`. Key auth never switches lanes, because build-fast is not
+on the public API, so it keeps priority processing. An explicit `xai/grok-4.7-build-fast` request, a
+`retainModels` entry or a combo target keeps working and stays visible where the user configured it.
+Regression coverage: `tests/providers/xai/grok-47-fast-model.test.ts`,
+`tests/providers/xai/grok-47-fast-model-wire.test.ts`.
 
 The upstream tier echo relays to the client on every Chat Completions delivery shape
 (`src/chat/outbound.ts` projections and `src/server/chat-native-sse.ts` chunks), matching

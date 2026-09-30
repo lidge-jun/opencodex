@@ -887,7 +887,7 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ injectAgents: true }),
     });
     expect(enable.status).toBe(200);
-    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-6-sol.md")).toBe(true);
+    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-6-1-sol.md")).toBe(true);
 
     const disable = await fetch(new URL("/api/claude-code", server.url), {
       method: "PUT",
@@ -903,7 +903,7 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ injectAgents: true }),
     });
     expect(reenable.status).toBe(200);
-    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-6-sol.md")).toBe(true);
+    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-6-1-sol.md")).toBe(true);
 
     const roster = await fetch(new URL("/api/subagent-models", server.url), {
       method: "PUT",

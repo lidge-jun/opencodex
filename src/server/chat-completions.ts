@@ -200,7 +200,8 @@ async function handleChatCompletionsWithBudget(
     logCtx.provider = route.providerName;
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;
-    routeMayChangeCredentialDomain = route.combo !== undefined || route.routeKind === "policy";
+    routeMayChangeCredentialDomain = route.combo !== undefined || route.routeKind === "policy"
+      || route.credentialDomainRewrite === true;
     callerAuthorizationRoute = !routeMayChangeCredentialDomain
       && providerConsumesCallerAuthorization(route.provider);
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {

@@ -28,10 +28,16 @@ export interface ProviderOutboundDependencies {
    * that forgets the seam fails closed, never open.
    */
   isCanonicalUrl?: (name: string, url: string) => boolean;
+  /** Recheck caller-owned credential authority after DNS and immediately before transport. */
+  beforeSend?: () => boolean;
 }
 
 export class ProviderOutboundPolicyError extends Error {
   override readonly name = "ProviderOutboundPolicyError";
+}
+
+export class ProviderOutboundSendCancelledError extends Error {
+  override readonly name = "ProviderOutboundSendCancelledError";
 }
 
 function pickPinnedAddress(addresses: Array<{ address: string; family: number }>): { address: string; family: number } {
@@ -157,6 +163,9 @@ async function providerOutboundRequest(
   // See PROVIDER_OUTBOUND_DEFAULT_USER_AGENT: this wrapper only carries proxy-originated
   // diagnostic traffic, so it identifies itself unless the caller already did.
   const init = withDefaultOutboundUserAgent(rawInit);
+  const assertSendAllowed = () => {
+    if (dependencies.beforeSend?.() === false) throw new ProviderOutboundSendCancelledError("provider credential changed before send");
+  };
   const postUrl = method === "POST" ? new URL(url) : undefined;
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
@@ -195,6 +204,7 @@ async function providerOutboundRequest(
       });
       if (destinationError) throw new ProviderOutboundPolicyError(destinationError);
     }
+    assertSendAllowed();
     return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
@@ -272,6 +282,7 @@ async function providerOutboundRequest(
     warnProxyDnsDegradationOnce();
     // An explicit provider proxy stays pinned through the degradation too; re-inferring the
     // route from the environment here would quietly move the request to a different exit.
+    assertSendAllowed();
     return configuredOutboundFetch(url, {
       ...init, method, redirect: "manual",
       ...(providerProxy ? { proxy: providerProxy } : {}),
@@ -286,6 +297,7 @@ async function providerOutboundRequest(
     // An explicit provider proxy is always pinned, for the same reason and unconditionally:
     // the operator named the exit for this provider, so the environment must not re-decide it.
     const proxy = providerProxy ?? ((allowMihomoIpv6FakeIp && bindingProxy) ? bindingProxy : undefined);
+    assertSendAllowed();
     return configuredOutboundFetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
   if (proxyApplies && resolved.privateNetwork) {
@@ -300,6 +312,7 @@ async function providerOutboundRequest(
     context: "provider response",
   };
   const pinned = pickPinnedAddress(resolved.addresses);
+  assertSendAllowed();
   if (method === "POST") {
     return pinnedPost(url, pinned, (init as ProviderPostInit).body, init.signal ?? undefined, requestOptions);
   }

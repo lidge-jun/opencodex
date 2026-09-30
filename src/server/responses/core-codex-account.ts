@@ -395,6 +395,8 @@ export interface CodexPoolAccountRetryArgs {
   connectMs: number;
   passthroughEstimate?: number;
   stream: boolean;
+  /** Keep a buffered canonical client on HTTP/SSE after moving to another Pool account. */
+  httpOnly?: boolean;
   onResponse?: (
     response: Response,
     authCtx: CodexAuthContext,
@@ -535,7 +537,7 @@ export async function retryCodexPoolOnAlternateAccount(
 ): Promise<CodexPoolAccountRetryResult> {
   const {
     callerAuthHeaders, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
-    outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+    outcomeStatus, upstream, connectMs, passthroughEstimate, stream, httpOnly,
   } = args;
   const inboundWire = options.inboundWire ?? "responses";
   const entitlementResolver = options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements;
@@ -877,6 +879,7 @@ export async function retryCodexPoolOnAlternateAccount(
           connectMs,
           stream,
           providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+            httpOnly,
             providerName: route.providerName,
             modelId: route.modelId,
             onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),

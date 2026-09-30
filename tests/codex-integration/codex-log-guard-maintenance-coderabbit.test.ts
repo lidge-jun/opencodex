@@ -57,7 +57,10 @@ function fixture(): { codexHome: string; databasePath: string } {
   createLogsSchema(db);
   db.exec("CREATE TABLE reclaim_fixture (id INTEGER PRIMARY KEY, body BLOB NOT NULL)");
   const fill = db.query("INSERT INTO reclaim_fixture (id, body) VALUES (?, zeroblob(8192))");
-  for (let i = 0; i < 220; i += 1) fill.run(i + 1);
+  // Seed once: 220 autocommits add durable I/O without changing the reclamation fixture.
+  db.transaction(() => {
+    for (let i = 0; i < 220; i += 1) fill.run(i + 1);
+  })();
   db.exec("DELETE FROM reclaim_fixture WHERE id <= 200");
   db.exec("PRAGMA wal_checkpoint(FULL)");
   db.close();

@@ -289,6 +289,12 @@ paste the redirect URL or authorization code back. During device approval that f
 enter the displayed code on the provider's verification page instead. If the provider switches
 to manual input, the dashboard replaces the old code and instructions on its next status poll.
 
+If the proxy tries to open a browser and cannot, the login says so above the URL and keeps
+going: open the sign-in page from the link or copy it. A device login never opens a browser by
+itself; **Copy code & open** copies the code and opens the verification page in one click, and
+the dashboard keeps waiting for as long as the provider's code stays valid. In the desktop app
+these links open in your default browser.
+
 To stop the proxy from opening a browser at all, tick **Don't open a browser on the proxy machine**
 beside the login button, or set it permanently:
 
@@ -406,6 +412,11 @@ the dashboard Codex account pool also performs. See
 
 ### Kiro request credits
 
+On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
+If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
+still runs, and only the resulting final answer is displayed. Progress accompanying a real
+tool call remains visible. A normal private final answer needs no completion retry.
+
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
 token counts may still be estimated, and the credit value does not replace USD cost estimates.
@@ -456,7 +467,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 99 built-in presets: 82 key-based, 13 OAuth, three local, and one default
+opencodex ships 100 built-in presets: 83 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -548,13 +559,58 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
+| TokenLab | `https://api.tokenlab.sh/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
+OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
+operated by TOKENLAB AI INC.
+Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
+`ocx provider add tokenlab` or select **TokenLab** in the dashboard's **Add provider** picker.
+The preset uses [Chat Completions](https://docs.tokenlab.sh/quickstart) and discovers models at
+`GET /v1/models?category=chat`, keeping only entries that declare `tool-use` capability.
+Image, video, audio, embedding and decision models are excluded from this chat preset.
+
+Each model then uses the request format TokenLab declares for it
+(`tokenlab.accepted_request_formats` on `GET /v1/models/{model}`):
+
+| Models | Codex (Responses clients) | Chat clients | Claude Code (Anthropic clients) |
+| --- | --- | --- | --- |
+| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `grok-4.7`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3` | [Responses](https://docs.tokenlab.sh/api-reference/responses/create-response) | Chat Completions | Chat Completions |
+| `claude-*` | [Messages](https://docs.tokenlab.sh/api-reference/messages/create-message) | Messages | Messages |
+| Every other model, including `gemini-3.8-flash` | Chat Completions | Chat Completions | Chat Completions |
+
+To keep a model on Chat Completions, add it to the provider's `modelAdapters`, for example
+`"modelAdapters": { "gpt-6.1-sol": "openai-chat" }`. The Claude routing applies only while the
+provider points at `https://api.tokenlab.sh/v1`. OpenCodex sends no delivery-policy header, so
+your API key's own delivery policy decides how TokenLab serves each request.
+
+The [model catalog](https://docs.tokenlab.sh/api-reference/models/list-models) is public without
+a key, but a supplied key is validated and scopes results to its model permissions and delivery
+policy. Use a valid key with a funded workspace for inference. `gpt-5.6-terra` is the seeded
+default; choose another discovered model if your key does not allow it. The provider and model
+prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstream.
+TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
+apply to requests sent to this service. The preset pins the row near the top of the Add provider
+picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
 window; these are display observations and do not change model routing.
+
+`MiniMax-M3.1-Flash-Preview` (1M context) is listed on both MiniMax presets. MiniMax serves it
+only to Token Plan subscription keys and MiniMax Code for now, so a pay-as-you-go API key gets an
+error for it. Thinking is always on: the effort picker offers `low` through `max` and defaults to
+`max`, and there is no way to turn thinking off. MiniMax has not published a per-token price
+for the preview; usage is drawn from your
+[Token Plan quota](https://platform.minimax.io/docs/guides/pricing-token-plan), so OpenCodex
+shows no estimated cost for it. MiniMax's `/models` endpoint does not list
+the preview yet, so OpenCodex keeps it in the catalog from the preset. An install whose saved
+MiniMax model list is still the previous default receives it on the next start; a list you edited
+is left as it is; register the preview by hand with
+`ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
 
 **OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's
@@ -696,6 +752,23 @@ markup echoed by the gateway as text is removed when it duplicates a real call. 
 complete declared-tool call with no native counterpart is restored only after a clean finish;
 interrupted or filtered turns leave the markup as text. Create Provider-API keys at
 [Command Code Studio](https://commandcode.ai/studio/).
+
+For a provider using the native `command-code` adapter, `projectContext: "on"` opts into
+sending local project files in the `/alpha/generate` `memory`, `taste`, and `skills` fields.
+With `projectContext` unset or `"off"`, no project files (`AGENTS.md`, taste, or skills)
+are read or sent; the existing `config` metadata payload is unchanged.
+The roots are resolved from the **opencodex proxy process working directory**, not from a
+caller's remote workspace. The loader reads `AGENTS.md`, `.commandcode/taste/taste.md`,
+and `SKILL.md` files in immediate child directories of `.commandcode/skills`,
+`.agents/skills`, and `.pi/skills` under that working directory. Enabling the option sends
+the collected contents upstream to the configured Command Code endpoint. It is rejected
+for other adapters. Asynchronous path checks keep reads inside the resolved working
+directory, including when that directory is a filesystem root; only regular-file
+content is read. Skill-directory symlinks resolving inside that directory are allowed;
+those resolving outside are rejected. Every visited entry counts toward the scan budget; at
+most 16 skills are selected. File bytes, total skill bytes, and loading time are bounded;
+unreadable or missing files produce empty fields. Stable results are cached for 30 seconds;
+timeouts and filesystem-admission refusals are not cached, so a later request can retry.
 
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for
 one-click browser authorization or `ocx login orcarouter` to paste an existing API key. The PKCE

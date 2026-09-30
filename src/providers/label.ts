@@ -1,4 +1,4 @@
-import { CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
+import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
 import type { OcxProviderConfig } from "../types";
 
 export function canonicalUsageProviderLabel(provider: string): string {
@@ -23,6 +23,25 @@ export function stampApiKeyAccountLabel(
   } else if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) {
     delete logCtx.accountLogLabel;
   }
+}
+
+/**
+ * The account-qualified provider label a pool dispatch stamped for this request, or undefined.
+ *
+ * An account pool rewrites the logged provider to name the account that served the turn
+ * (`anthropic-p2e22d0`, `openai-main`); the configured provider name never does, so a label that
+ * differs from the configured one AND ends in an account label identifies exactly one account.
+ *
+ * Deliberately NOT `accountLogLabel`: that is stamped for a lone configured API key too, so it
+ * cannot tell a pooled account apart from a provider that has no pool to rotate within.
+ */
+export function poolAccountProviderLabel(
+  loggedProvider: string | undefined,
+  configuredProvider: string,
+): string | undefined {
+  if (!loggedProvider?.startsWith(`${configuredProvider}-`)) return undefined;
+  return ACCOUNT_LOG_LABEL_RE.test(loggedProvider.slice(configuredProvider.length + 1))
+    ? loggedProvider : undefined;
 }
 
 export function baseProviderLabel(provider: string): string {

@@ -8,7 +8,7 @@ import type { OcxConfig } from "../types";
 import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
 import { getConfigDir } from "../config/paths";
 import { readFileSync, existsSync } from "node:fs";
-import { pickerCaCertPath, pickerCaFingerprints, ensurePickerCa, issuePickerLeaf, pickerLeafCertPath, publishedPickerCaSha256 } from "./intercept/picker-ca";
+import { acceptsPickerAuthority, pickerCaCertPath, pickerCaFingerprints, ensurePickerCa, issuePickerLeaf, pickerLeafCertPath, publishedPickerCaSha256 } from "./intercept/picker-ca";
 import { inspectPickerTrust, trustPickerCa, untrustPickerCa } from "./intercept/picker-trust";
 import type { PickerRuntime } from "./intercept/picker-runtime";
 import type { PickerTrustState, SecurityRunner } from "./intercept/picker-trust";
@@ -29,7 +29,7 @@ function profileReleased(profile: DesktopPickerProfileInspection): boolean {
 
 export type DesktopPickerReason = "active" | "restart_required" | "unsupported_platform" | "not_first_party"
   | "integration_off" | "disabled" | "proxy_unavailable" | "mode_not_committed" | "trust_pending"
-  | "trust_declined" | "profile_failed";
+  | "trust_declined" | "profile_failed" | "ca_unverified";
 
 export interface DesktopPickerStatus {
   desired: boolean;
@@ -229,6 +229,10 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     let caSha1: string;
     try {
       const ca = ensurePickerCa(deps.configDir);
+      // The CLI path gates trust on the same profile check; a published root whose bytes do not
+      // match the profile this process mints must not reach the keychain through the server
+      // path either, even when a live peer published it.
+      if (!acceptsPickerAuthority(ca.certPem)) return refuse("ca_unverified");
       issuePickerLeaf(ca, deps.configDir);
       caPath = pickerCaCertPath(deps.configDir);
       caSha1 = pickerCaFingerprints(ca.certPem).sha1;

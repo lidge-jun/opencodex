@@ -1,5 +1,5 @@
 /**
- * Opt-in periodic catalog refresh so newly released models appear without a
+ * Default-on periodic catalog refresh so newly released models appear without a
  * manual `ocx sync` (issue #3630).
  *
  * This is load-bearing, not a convenience. The served model set is otherwise
@@ -24,6 +24,7 @@
  */
 const DEFAULT_INTERVAL_MS = 60 * 60_000;
 const MIN_INTERVAL_MS = 15 * 60_000;
+const INITIAL_DELAY_MS = 3 * 60_000;
 /**
  * Commit-lock wait only. Gather already has per-provider timeouts, and automatic
  * callers fail fast and defer (ConvergeRequest.mode) rather than holding the
@@ -37,6 +38,7 @@ const MAX_JOURNAL_BYTES = 1024 * 1024;
 const MAX_CATALOG_BYTES = 64 * 1024 * 1024;
 
 let timer: ReturnType<typeof setInterval> | null = null;
+let initialTimer: ReturnType<typeof setTimeout> | null = null;
 let detachShutdownHook: (() => void) | null = null;
 /** The bounded cadence the live timer was created with, so a tick can notice config drift. */
 let liveIntervalMs: number | null = null;
@@ -114,7 +116,7 @@ export function selectDriftHealCatalogPath(
 
 /** Repair only the missing config roots; catalog convergence remains the later tick step. */
 async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number): Promise<"none" | "healed" | "not-healed"> {
-  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { DEFAULT_CATALOG_PATH, resolveCodexConfigPath }, { loadConfig }] =
+  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { DEFAULT_CATALOG_PATH, resolveCodexConfigPath }, { loadConfig }, { inspectNativeCodexOwnership }] =
     await Promise.all([
       import("./config-drift-heal"),
       import("./journal"),
@@ -122,6 +124,7 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
       import("./inject"),
       import("./paths"),
       import("../config"),
+      import("../integrations/native/ownership-preflight"),
     ]);
   const capturedSettings = JSON.stringify(config);
   const current = () => entryGeneration === generation && JSON.stringify(loadConfig()) === capturedSettings;
@@ -142,11 +145,17 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
   // Keep the missing routing roots visible to the next tick. Catalog-only convergence below
   // may recreate the file now, but it does not re-inject config.toml in this tick.
   if (catalogPath === null) return "not-healed";
+  // Ownership is probed directly, not through admission: admission can refuse on the
+  // config or generation authority before it ever inspects native ownership, and a
+  // veto that rides that result would let those refusals pass on a foreign home.
+  const serviceHomeOwned = () => inspectNativeCodexOwnership().ownership === "owned";
+  if (!serviceHomeOwned()) return "not-healed";
   await injectCodexConfig(runtime.port, config, {
     catalogPath,
     lockTimeoutMs: TICK_DEADLINE_MS,
     beforeClientWrite: () => {
       if (!current()) throw new Error("Catalog drift heal tick is stale");
+      if (!serviceHomeOwned()) throw new Error("Catalog drift heal lost service-home ownership");
     },
   }).catch(() => null);
   if (!current()) return "none";
@@ -163,8 +172,10 @@ function boundedInterval(value: number): number {
 /** Re-arm the timer when the operator changed the cadence since it was created. */
 function restartIfCadenceChanged(configured: number): void {
   if (timer === null || boundedInterval(configured) === liveIntervalMs) return;
-  stopCatalogAutoRefresh();
-  startCatalogAutoRefresh(configured);
+  clearInterval(timer);
+  liveIntervalMs = boundedInterval(configured);
+  timer = setInterval(() => void tick(), liveIntervalMs);
+  timer.unref?.();
 }
 
 async function tick(): Promise<void> {
@@ -192,6 +203,13 @@ async function tick(): Promise<void> {
     // and the unref'd timer is left running so flipping the minutes back on is
     // picked up without a process restart.
     if (configured === 0) return;
+    // The default-on case belongs to installs whose local Codex client this proxy manages. With
+    // the integration off (or on a hub or sibling), an absent section keeps the old opt-in
+    // meaning: no background converge may write the native Codex home unasked. An explicit
+    // `enabled: true` still refreshes, as it did before the default flipped.
+    const { shouldSyncCodexOnStart } = await import("./desired-state");
+    const codexManaged = shouldSyncCodexOnStart(config);
+    if (!codexManaged && config.catalogAutoRefresh?.enabled !== true) return;
     // A stop or restart landed while the config resolved: this tick no longer owns the timer,
     // so it must neither count as a refresh nor adopt a cadence for a generation that is gone.
     if (entryGeneration !== generation) return;
@@ -211,6 +229,12 @@ async function tick(): Promise<void> {
     } else if (heal === "not-healed") {
       console.info("[catalog-auto-refresh] injected Codex config keys were rewritten externally; not re-injected this tick");
     }
+    const { refreshCatalogAutoRefreshSources, catalogAutoRefreshReloadRequired } =
+      await import("./catalog-auto-refresh-sources");
+    if (entryGeneration !== generation) return;
+    // Codex sources read Codex credentials and probe its binary; only a managed client needs them.
+    if (codexManaged) await refreshCatalogAutoRefreshSources(config, () => entryGeneration === generation);
+    if (entryGeneration !== generation) return;
     const [{ createManagementConvergeCodex }, { createCatalogConvergeRequest }] = await Promise.all([
       import("./management-convergence"),
       import("./catalog-admission"),
@@ -224,11 +248,16 @@ async function tick(): Promise<void> {
     // createManagementConvergeCodex always projects catalog-only. Any other kind is a
     // funnel contract break, not something this scheduler should re-classify.
     if (outcome.kind !== "catalog-only") return;
-    const { recordCatalogAutoRefreshOutcome } = await import("./catalog-refresh-status");
-    recordCatalogAutoRefreshOutcome(outcome.catalogRefresh, outcome.changed);
+    const { recordCatalogAutoRefreshOutcome, lastCatalogAutoRefreshOutcome } = await import("./catalog-refresh-status");
+    const reloadRequired = (outcome.changed || lastCatalogAutoRefreshOutcome()?.reloadRequired === true)
+      ? await catalogAutoRefreshReloadRequired(outcome.changed) : false;
+    if (entryGeneration !== generation) return;
+    recordCatalogAutoRefreshOutcome(outcome.catalogRefresh, outcome.changed, reloadRequired);
     if (outcome.changed) {
       // Privacy scan: no provider names, model ids, paths, or account identifiers.
-      console.info("[catalog-auto-refresh] served model set changed");
+      console.info(reloadRequired
+        ? "[catalog-auto-refresh] served model set changed; running Codex sessions keep the old list until restarted (ocx sync --restart-codex)"
+        : "[catalog-auto-refresh] served model set changed");
     }
   } catch {
     // A failed refresh is not an error worth surfacing: the next tick tries again.
@@ -246,8 +275,16 @@ export function startCatalogAutoRefresh(intervalMs = DEFAULT_INTERVAL_MS): void 
   timer = setInterval(() => void tick(), bounded);
   // Never keep the process alive for a catalog refresh.
   timer.unref?.();
+  const startedGeneration = generation;
+  initialTimer = setTimeout(() => {
+    if (startedGeneration !== generation) return;
+    initialTimer = null;
+    return tick();
+  }, INITIAL_DELAY_MS);
+  initialTimer.unref?.();
   void import("../lib/optional-shutdown-hooks")
     .then(hooks => {
+      if (startedGeneration !== generation) return;
       detachShutdownHook = hooks.registerOptionalShutdownHook(
         "catalog-auto-refresh",
         stopCatalogAutoRefresh,
@@ -259,6 +296,10 @@ export function startCatalogAutoRefresh(intervalMs = DEFAULT_INTERVAL_MS): void 
 }
 
 export function stopCatalogAutoRefresh(): void {
+  if (initialTimer) {
+    clearTimeout(initialTimer);
+    initialTimer = null;
+  }
   if (timer) {
     clearInterval(timer);
     timer = null;
@@ -283,7 +324,9 @@ export function isCatalogAutoRefreshRunning(): boolean {
  * microtasks before this settles.
  */
 export async function syncCatalogAutoRefreshCadence(): Promise<void> {
+  const entryGeneration = generation;
   const { loadConfig, resolveCatalogAutoRefreshIntervalMs } = await import("../config");
+  if (entryGeneration !== generation) return;
   const configured = resolveCatalogAutoRefreshIntervalMs(loadConfig());
   // 0 is dormant: tick() already returns before converging, and the timer stays unref'd.
   if (configured === 0) return;

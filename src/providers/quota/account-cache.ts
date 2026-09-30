@@ -272,7 +272,8 @@ export function recordAnthropicAccountQuotaFromHeaders(
   // whole map. Landing before any reader has hydrated would persist this single row and erase
   // every other provider's saved row.
   hydrateAccountQuotaCache();
-  const previous = accountQuotaCache.get(key);
+  const candidate = accountQuotaCache.get(key);
+  const previous = candidate?.isCurrent?.() === false ? undefined : candidate;
   accountQuotaCache.set(key, {
     ...previous,
     // Headers do not prove that the last usage probe succeeded.

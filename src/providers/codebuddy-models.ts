@@ -28,6 +28,8 @@ export const CODEBUDDY_GLOBAL_MODELS = [
   // 260923 preemptive: GPT-6 Sol and Luna (OpenAI announced 2026-09-22) added ahead of this provider's own catalog; mirrors the GPT-5.6 Sol/Luna rows.
   "gpt-6-sol",
   "gpt-6-luna",
+  // 260930 preemptive: GPT-6.1 Sol (OpenAI announced 2026-09-29); mirrors the GPT-6 Sol row.
+  "gpt-6.1-sol",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.3-codex",
@@ -79,6 +81,7 @@ export const CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.6-luna": 1_000_000,
   "gpt-6-sol": 1_000_000,
   "gpt-6-luna": 1_000_000,
+  "gpt-6.1-sol": 1_000_000,
   "gpt-5.5": 1_000_000,
   "gpt-5.4": 272_000,
   "gpt-5.3-codex": 272_000,
@@ -101,6 +104,7 @@ export const CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = 
   "gpt-5.6-luna": 128_000,
   "gpt-6-sol": 128_000,
   "gpt-6-luna": 128_000,
+  "gpt-6.1-sol": 128_000,
   "gpt-5.5": 72_000,
   "gpt-5.4": 128_000,
   "gpt-5.3-codex": 128_000,
@@ -119,6 +123,7 @@ export const CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS: Record<string, string[]> 
   "gpt-5.6-luna": ["low", "medium", "high", "xhigh"],
   "gpt-6-sol": ["low", "medium", "high", "xhigh"],
   "gpt-6-luna": ["low", "medium", "high", "xhigh"],
+  "gpt-6.1-sol": ["low", "medium", "high", "xhigh"],
   "glm-5.3": ["low", "high", "max"],
   "glm-5.2": ["high", "xhigh"],
 };
@@ -129,6 +134,7 @@ export const CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, st
   "gpt-5.6-luna": "high",
   "gpt-6-sol": "high",
   "gpt-6-luna": "high",
+  "gpt-6.1-sol": "high",
   "glm-5.3": "high",
   "glm-5.2": "high",
 };

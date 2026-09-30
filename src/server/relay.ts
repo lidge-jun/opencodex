@@ -29,14 +29,18 @@ import {
   EMPTY_BYTES,
   joinSseFrameBytes,
   MAX_CLIENT_SSE_FRAME_BYTES,
+  SseFrameCountLimitError,
 } from "./sse-frame-buffer";
 import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
 import { createBoundedResponseLogBody } from "./response-log-body";
 import { clientWireLogOf } from "./inference/client-wire";
 import { recordClientWireRequestLog } from "./inference/client-wire-log";
+import { nativeResponseFingerprint } from "./responses/native-response-json";
+import { nativeResponseOutput } from "./responses/native-response-output";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
+const preinspectedJsonResponses = new WeakSet<Response>();
 
 export const MAX_INSPECTION_SSE_FRAME_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 export const MAX_COMPLETED_OUTPUT_ITEMS = 256;
@@ -124,12 +128,12 @@ export function relayWithAbort(
   });
 }
 
-export function buildFailedTailPayload(err: unknown): string {
+export function buildFailedTailPayload(err: unknown, maskCredential?: (text: string) => string): string {
   const translatorOverflow = isTranslatorBudgetExceededError(err);
-  const message = (translatorOverflow
+  const diagnostic = redactSecretString((translatorOverflow
     ? "upstream translation buffer exceeded the safe limit"
-    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
-    .slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
+    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`));
+  const message = (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
     code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
@@ -141,9 +145,9 @@ export function buildFailedTailPayload(err: unknown): string {
   });
 }
 
-function buildFailedTailPayloadOrFallback(err: unknown): string {
+function buildFailedTailPayloadOrFallback(err: unknown, maskCredential?: (text: string) => string): string {
   try {
-    return buildFailedTailPayload(err);
+    return buildFailedTailPayload(err, maskCredential);
   } catch {
     // Error.message and String(error) may execute hostile accessors. Preserve a
     // bounded protocol terminal even when diagnostic serialization is unsafe.
@@ -151,8 +155,8 @@ function buildFailedTailPayloadOrFallback(err: unknown): string {
   }
 }
 
-export function failedTailFrame(encoder: TextEncoder, err: unknown): Uint8Array {
-  const payload = buildFailedTailPayloadOrFallback(err);
+export function failedTailFrame(encoder: TextEncoder, err: unknown, maskCredential?: (text: string) => string): Uint8Array {
+  const payload = buildFailedTailPayloadOrFallback(err, maskCredential);
   return encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`);
 }
 
@@ -170,17 +174,19 @@ export function upstreamErrorTailFrame(
   encoder: TextEncoder,
   message: string,
   refusalCode?: string,
+  maskCredential?: (text: string) => string,
 ): Uint8Array {
   return encoder.encode(
-    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode)}\n\n`,
+    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode, maskCredential)}\n\n`,
   );
 }
 
-function upstreamErrorFailedPayload(message: string, refusalCode?: string): string {
+function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskCredential?: (text: string) => string): string {
+  const diagnostic = redactSecretString(message);
   const error = {
     type: refusalCode === undefined ? "upstream_error" : "invalid_request_error",
-    code: refusalCode ?? "upstream_server_error",
-    message: redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    code: refusalCode === undefined ? "upstream_server_error" : (maskCredential?.(refusalCode) ?? refusalCode),
+    message: (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({
     type: "response.failed",
@@ -206,8 +212,9 @@ export function refusalFailedTailFrame(
   encoder: TextEncoder,
   message: string,
   refusalCode: string,
+  maskCredential?: (text: string) => string,
 ): Uint8Array {
-  const payload = upstreamErrorFailedPayload(message, refusalCode);
+  const payload = upstreamErrorFailedPayload(message, refusalCode, maskCredential);
   return encoder.encode(
     `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
   );
@@ -238,6 +245,8 @@ function boundedBareUpstreamErrorMessage(payload: unknown): string | undefined {
 function boundedBareUpstreamError(payload: unknown): {
   message: string;
   refusalCode: string | undefined;
+  errorType: string | undefined;
+  errorCode: string | undefined;
 } | undefined {
   const root = asJsonRecord(payload);
   if (!root || root.type !== "error") return undefined;
@@ -247,21 +256,30 @@ function boundedBareUpstreamError(payload: unknown): {
   // that supplied the message also supplies the verdict. Taking the FIRST code
   // rather than searching for a refusal is what stops a refusal nested below a
   // transient one from overruling it.
-  const code = [
+  const candidates = [
     asJsonRecord(root.error),
     asJsonRecord(root.last_error),
     asJsonRecord(response?.error),
     asJsonRecord(response?.incomplete_details),
     root,
-  ]
-    .map(candidate => stringField(candidate, "code"))
-    .find(candidate => candidate !== undefined);
+  ];
+  const code = candidates.map(candidate => stringField(candidate, "code"))
+    .find(candidate => candidate !== undefined)?.slice(0, 128);
+  // Root `type` is the SSE event discriminator (`"error"`), not an error class. Only nested
+  // error records can authoritatively name classes such as rate_limit_error or server_error.
+  const errorType = candidates.slice(0, -1).map(candidate => stringField(candidate, "type"))
+    .find(candidate => candidate !== undefined)?.slice(0, 128);
   const refusalCode = code !== undefined
     ? (isTerminalRefusalCode(code) ? code : undefined)
     : message === undefined ? undefined : safetyRefusalCodeFromMessage(message);
-  if (message !== undefined) return { message, refusalCode };
+  if (message !== undefined) return { message, refusalCode, errorType, errorCode: code };
   if (refusalCode === undefined) return undefined;
-  return { message: terminalRefusalFallbackMessage(refusalCode), refusalCode };
+  return {
+    message: terminalRefusalFallbackMessage(refusalCode),
+    refusalCode,
+    errorType,
+    errorCode: code,
+  };
 }
 
 export type SseTerminalOutputBoundary = {
@@ -271,7 +289,28 @@ export type SseTerminalOutputBoundary = {
   doneSeen(): boolean;
   upstreamError(): string | undefined;
   upstreamRefusalCode(): string | undefined;
+  upstreamErrorType(): string | undefined;
+  upstreamErrorCode(): string | undefined;
   dispose(): void;
+};
+
+export class SseAggregateLimitError extends Error {
+  readonly maxBytes: number;
+
+  constructor(maxBytes: number) {
+    super(`upstream SSE transcript exceeded ${maxBytes} bytes`);
+    this.name = "SseAggregateLimitError";
+    this.maxBytes = maxBytes;
+  }
+}
+
+export type SseTerminalOutputBoundaryOptions = CodexSafetyBufferingFilterOptions & {
+  /** Optional raw bytes admitted before the first terminal; omitted keeps streaming behavior. */
+  maxInputBytes?: number;
+  /** Optional client-facing bytes emitted through the first terminal. */
+  maxOutputBytes?: number;
+  /** Optional aggregate frame count through the first terminal. */
+  maxFrames?: number;
 };
 
 /**
@@ -282,9 +321,21 @@ export type SseTerminalOutputBoundary = {
  * a terminal arrives so clean EOF can synthesize one terminal and one sentinel.
  */
 export function createSseTerminalOutputBoundary(
-  options?: CodexSafetyBufferingFilterOptions,
+  options?: SseTerminalOutputBoundaryOptions,
 ): SseTerminalOutputBoundary {
   const dropSafetyBuffering = options?.dropCodexSafetyBuffering === true;
+  const maxInputBytes = options?.maxInputBytes;
+  const maxOutputBytes = options?.maxOutputBytes;
+  const maxFrames = options?.maxFrames;
+  if (maxInputBytes !== undefined && (!Number.isSafeInteger(maxInputBytes) || maxInputBytes <= 0)) {
+    throw new RangeError("maxInputBytes must be a positive safe integer");
+  }
+  if (maxOutputBytes !== undefined && (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0)) {
+    throw new RangeError("maxOutputBytes must be a positive safe integer");
+  }
+  if (maxFrames !== undefined && (!Number.isSafeInteger(maxFrames) || maxFrames <= 0)) {
+    throw new RangeError("maxFrames must be a positive safe integer");
+  }
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const framer = new BoundedSseFrameBuffer(MAX_INSPECTION_SSE_FRAME_BYTES);
@@ -294,12 +345,30 @@ export function createSseTerminalOutputBoundary(
   let disposed = false;
   let upstreamError: string | undefined;
   let upstreamRefusalCode: string | undefined;
+  let upstreamErrorType: string | undefined;
+  let upstreamErrorCode: string | undefined;
+  let inputBytes = 0;
+  let outputBytes = 0;
+  let framesSeen = 0;
 
   const processFrames = (
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
   ): Uint8Array => {
     if (disposed || terminal || frames.length === 0) return EMPTY_BYTES;
+    if (maxFrames !== undefined && frames.length > maxFrames - framesSeen) {
+      throw new SseFrameCountLimitError(maxFrames);
+    }
+    framesSeen += frames.length;
     const output: Uint8Array[] = [];
+    const appendOutput = (...parts: Uint8Array[]): void => {
+      for (const part of parts) {
+        if (maxOutputBytes !== undefined && part.byteLength > maxOutputBytes - outputBytes) {
+          throw new SseAggregateLimitError(maxOutputBytes);
+        }
+        outputBytes += part.byteLength;
+        output.push(part);
+      }
+    };
     let responsesTerminal = false;
     for (const frame of frames) {
       const payload = sseDataPayload(decoder.decode(frame.block));
@@ -311,6 +380,8 @@ export function createSseTerminalOutputBoundary(
       if (bare !== undefined) {
         upstreamError = bare.message;
         upstreamRefusalCode = bare.refusalCode;
+        upstreamErrorType = bare.errorType;
+        upstreamErrorCode = bare.errorCode;
       }
       const safetyBuffering = dropSafetyBuffering && parsed !== undefined
         ? codexSafetyBufferingBlockAction(parsed) : "keep";
@@ -331,7 +402,7 @@ export function createSseTerminalOutputBoundary(
       if (isDone) {
         done = true;
         if (responsesTerminal) {
-          output.push(outboundBlock, frame.delimiter);
+          appendOutput(outboundBlock, frame.delimiter);
         } else if (!pendingDone) {
           // Do not expose a sentinel before a Responses terminal. If EOF
           // follows, the synthetic incomplete path owns the one sentinel;
@@ -342,11 +413,11 @@ export function createSseTerminalOutputBoundary(
       }
       // Preserve every frame through the first Responses terminal. Every
       // later non-DONE frame is dropped.
-      if (!responsesTerminal) output.push(outboundBlock, frame.delimiter);
+      if (!responsesTerminal) appendOutput(outboundBlock, frame.delimiter);
       if (!responsesTerminal && payload && terminalStatusFromParsed(parsed)) {
         responsesTerminal = true;
         if (pendingDone) {
-          output.push(pendingDone.block, pendingDone.delimiter);
+          appendOutput(pendingDone.block, pendingDone.delimiter);
           pendingDone = null;
         }
       }
@@ -361,7 +432,26 @@ export function createSseTerminalOutputBoundary(
   return {
     feed(chunk) {
       if (disposed || terminal) return EMPTY_BYTES;
-      return processFrames(framer.feed(chunk));
+      if (maxInputBytes === undefined) return processFrames(framer.feed(chunk));
+      // A fetch implementation may hand us one multi-megabyte chunk containing thousands of
+      // complete frames. Slice BEFORE framing so neither the frame array nor the final join can be
+      // allocated past the explicit transcript budget. Once a valid terminal appears, trailing
+      // bytes in the same network chunk retain the ordinary terminal-authoritative behavior.
+      const slices: Uint8Array[] = [];
+      for (let offset = 0; offset < chunk.byteLength && !terminal;) {
+        const remaining = maxInputBytes - inputBytes;
+        if (remaining <= 0) throw new SseAggregateLimitError(maxInputBytes);
+        const length = Math.min(64 * 1024, remaining, chunk.byteLength - offset);
+        const slice = chunk.subarray(offset, offset + length);
+        inputBytes += slice.byteLength;
+        offset += length;
+        const processed = processFrames(framer.feed(slice));
+        if (processed.byteLength > 0) slices.push(processed);
+        if (!terminal && offset < chunk.byteLength && inputBytes >= maxInputBytes) {
+          throw new SseAggregateLimitError(maxInputBytes);
+        }
+      }
+      return joinSseFrameBytes(slices);
     },
     finish() {
       if (disposed || terminal) return EMPTY_BYTES;
@@ -379,6 +469,8 @@ export function createSseTerminalOutputBoundary(
     doneSeen: () => done,
     upstreamError: () => upstreamError,
     upstreamRefusalCode: () => upstreamRefusalCode,
+    upstreamErrorType: () => upstreamErrorType,
+    upstreamErrorCode: () => upstreamErrorCode,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -400,7 +492,7 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
-  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions },
+  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
@@ -454,6 +546,7 @@ export function relaySseWithFailedTail(
                   encoder,
                   upstreamError,
                   terminalBoundary.upstreamRefusalCode(),
+                  opts?.maskCredential,
                 ));
               controller.enqueue(doneFrame(encoder));
             }
@@ -486,8 +579,8 @@ export function relaySseWithFailedTail(
             const refusalCode = terminalBoundary.upstreamRefusalCode();
             const refusalMessage = terminalBoundary.upstreamError();
             controller.enqueue(refusalCode !== undefined && refusalMessage !== undefined
-              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode)
-              : failedTailFrame(encoder, err));
+              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential)
+              : failedTailFrame(encoder, err, opts?.maskCredential));
           }
           controller.close();
         } catch { /* client already torn down */ }
@@ -828,9 +921,15 @@ export function responseWithDeferredRequestLog(
   }
   if (!response.body || !contentType.includes("text/event-stream")) {
     if (response.body && (contentType.includes("application/json") || response.status >= 400)) {
+      // Some delivery paths already parsed the bounded body while constructing the client JSON.
+      // Retain EOF/cancel logging there, but do not materialize and parse the same near-limit
+      // response a second time merely for metadata the first pass already published.
+      const preinspectedJson = contentType.includes("application/json")
+        && preinspectedJsonResponses.has(response);
       const body = createBoundedResponseLogBody(response.body, {
         json: contentType.includes("application/json"),
-        inspect: text => inspectResponseLogJson(logCtx, text),
+        ...(preinspectedJson ? { maxInspectionBytes: 0 } : {}),
+        inspect: preinspectedJson ? () => undefined : text => inspectResponseLogJson(logCtx, text),
         finalize: reason => {
           // Preserve wire status; request history follows the adjacent SSE
           // convention for a client cancellation or upstream read failure.
@@ -888,6 +987,16 @@ export function responseWithDeferredRequestLog(
 export function markNativePassthroughSseResponse(response: Response): Response {
   nativePassthroughSseResponses.add(response);
   return response;
+}
+
+/** Mark bounded JSON whose request-log metadata was already derived from its source events. */
+export function markPreinspectedJsonResponse(response: Response): Response {
+  preinspectedJsonResponses.add(response);
+  return response;
+}
+
+export function isPreinspectedJsonResponse(response: Response): boolean {
+  return preinspectedJsonResponses.has(response);
 }
 
 export function isNativePassthroughSseResponse(response: Response): boolean {
@@ -995,6 +1104,21 @@ export type SseInspectorHandlers = {
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
+  /** A reconstructed snapshot for any valid terminal kind; unlike persistence, includes failures. */
+  onTerminalResponse?: (
+    status: ResponsesTerminalStatus,
+    response: { id?: unknown; output?: unknown; status?: unknown },
+  ) => void;
+  /**
+   * Opt-in reconstruction policy for a caller that must materialize the whole terminal response.
+   * Persistence inspectors omit this and retain their smaller historical caps/merge semantics.
+   */
+  terminalReconstruction?: {
+    maxItems: number;
+    maxSourceBytes: number;
+    requireCompleteOutputIndices?: boolean;
+    mergeSparseTerminalOutput?: boolean;
+  };
   /**
    * Every parsed SSE payload, delivered BEFORE any onCompletedResponse derived from that same
    * payload. A caller that must decide on the whole turn -- not just its terminal snapshot --
@@ -1008,8 +1132,10 @@ export type SseInspectorHandlers = {
    * An inspector that only hears about parsed events cannot tell "nothing has been emitted"
    * from "something was emitted that I could not read", and a replay decision needs that
    * difference: an unreadable payload is a payload the caller may already have seen.
+   * The payload lets bounded collectors distinguish the valid `[DONE]` sentinel from malformed
+   * JSON without adding a second SSE parser; existing observers may ignore the argument.
    */
-  onOpaquePayload?: () => void;
+  onOpaquePayload?: (payload: string | null) => void;
   onFirstOutput?: () => void;
   /**
    * Provider-scoped compatibility: persist the completed snapshot under the
@@ -1020,6 +1146,13 @@ export type SseInspectorHandlers = {
 };
 
 type CompletedOutputItem = { item: unknown; sourceBytes: number };
+
+function outputBearingSseEvent(event: { type?: unknown; output_index?: unknown } | null): boolean {
+  if (!event || typeof event.type !== "string") return false;
+  if (Object.hasOwn(event, "output_index")) return true;
+  return /^response\.(?:output_item|content_part|output_text|refusal|reasoning_[^.]+|function_call_arguments|custom_tool_call_input|image_generation_call|code_interpreter_call|file_search_call|web_search_call|computer_call|tool_search_call)\./
+    .test(event.type);
+}
 
 function delimiterLengthAt(
   index: number,
@@ -1071,12 +1204,24 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let candidateBytes = 0;
   let discardingOversizedFrame = false;
   const reportFirstOutput = createFirstOutputReporter(handlers.onFirstOutput);
-  // Allocate reconstruction state only for persistence-capable inspectors.
-  const completedItemsByOutputIndex = handlers.onCompletedResponse
+  const reconstructionPolicy = handlers.terminalReconstruction;
+  if (reconstructionPolicy
+    && (!Number.isSafeInteger(reconstructionPolicy.maxItems) || reconstructionPolicy.maxItems <= 0
+      || !Number.isSafeInteger(reconstructionPolicy.maxSourceBytes) || reconstructionPolicy.maxSourceBytes <= 0)) {
+    throw new RangeError("terminal reconstruction limits must be positive safe integers");
+  }
+  const maxCompletedItems = reconstructionPolicy?.maxItems ?? MAX_COMPLETED_OUTPUT_ITEMS;
+  const maxCompletedItemSourceBytes = reconstructionPolicy?.maxSourceBytes
+    ?? MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES;
+  // Allocate reconstruction state only for snapshot-capable inspectors.
+  const completedItemsByOutputIndex = handlers.onCompletedResponse || handlers.onTerminalResponse
     ? new Map<number, CompletedOutputItem>()
     : null;
   let aggregateItemBytes = 0;
   let reconstructionTainted = false;
+  const observedOutputIndices = reconstructionPolicy?.requireCompleteOutputIndices
+    ? new Set<number>()
+    : null;
   let firstResponseId: string | undefined;
 
   const clearFrameState = (): void => {
@@ -1088,6 +1233,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
   const clearCompletedItems = (): void => {
     completedItemsByOutputIndex?.clear();
+    observedOutputIndices?.clear();
     aggregateItemBytes = 0;
     reconstructionTainted = false;
   };
@@ -1151,18 +1297,26 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   const retainCompletedItem = (index: number, item: unknown, sourceBytes: number): void => {
     const previous = completedItemsByOutputIndex!.get(index);
     if (previous) {
+      if (reconstructionPolicy?.mergeSparseTerminalOutput === true) {
+        // Repeated identical done frames are harmless, but a later frame must never rewrite an
+        // already-completed index. The strict buffered path treats that contradiction as taint.
+        if (nativeResponseFingerprint(previous.item) !== nativeResponseFingerprint(item)) {
+          reconstructionTainted = true;
+        }
+        return;
+      }
       aggregateItemBytes -= previous.sourceBytes;
       completedItemsByOutputIndex!.delete(index);
     }
-    if (sourceBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES) {
+    if (sourceBytes > maxCompletedItemSourceBytes) {
       reconstructionTainted = true;
       inspectionCounters.itemCapEvictions += 1;
       return;
     }
     completedItemsByOutputIndex!.set(index, { item, sourceBytes });
     aggregateItemBytes += sourceBytes;
-    while (completedItemsByOutputIndex!.size > MAX_COMPLETED_OUTPUT_ITEMS
-      || aggregateItemBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES) {
+    while (completedItemsByOutputIndex!.size > maxCompletedItems
+      || aggregateItemBytes > maxCompletedItemSourceBytes) {
       let highestIndex = -1;
       for (const retainedIndex of completedItemsByOutputIndex!.keys()) {
         if (retainedIndex > highestIndex) highestIndex = retainedIndex;
@@ -1201,38 +1355,30 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     // The other half of the same observation. A payload that did not parse still reached the
     // caller, so a consumer deciding whether anything has been emitted has to hear about it.
     if (handlers.onOpaquePayload && parsed === undefined) {
-      try { handlers.onOpaquePayload(); } catch { /* inspection must never throw into the pump */ }
+      try { handlers.onOpaquePayload(payload); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
     const status = terminalStatusFromParsed(parsed);
-    const policyTerminal = status === "failed"
-      && isPolicyRewriteType(parsed)
-      && cyberPolicyTerminalError(parsed) !== undefined;
-    if (status) sawTerminal = true;
-    if (!reported && handlers.onTerminal && status) {
-      try {
-        reported = true;
-        if (handlers.logCtx) {
-          handlers.logCtx.transportPhase = "terminal_sse";
-          handlers.logCtx.terminalSource = "upstream";
-        }
-        handlers.onTerminal(status, policyTerminal ? 400 : undefined);
-      } finally {
-        if (status === "failed" || status === "incomplete") clearCompletedItems();
+    type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
+    const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as ParsedSseEvent
+      : null;
+    if (observedOutputIndices && outputBearingSseEvent(parsedEvent)) {
+      const outputIndex = parsedEvent?.output_index;
+      if (Number.isInteger(outputIndex) && (outputIndex as number) >= 0
+        && (outputIndex as number) < maxCompletedItems) {
+        observedOutputIndices.add(outputIndex as number);
+      } else {
+        reconstructionTainted = true;
       }
-    } else if (status === "failed" || status === "incomplete") {
-      clearCompletedItems();
     }
-    if (handlers.onCompletedResponse) {
-      type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
-      const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? parsed as ParsedSseEvent
-        : null;
+    let reconstructedTerminalResponse: { id?: unknown; output?: unknown; status?: unknown } | null = null;
+    if (completedItemsByOutputIndex) {
       const responseRecord = parsedEvent
         && typeof parsedEvent.response === "object"
         && parsedEvent.response !== null
         && !Array.isArray(parsedEvent.response)
-        ? parsedEvent.response as { id?: unknown }
+        ? parsedEvent.response as { id?: unknown; output?: unknown; status?: unknown }
         : null;
       if (handlers.pinCompletedResponseIdToFirstSeen
         && responseRecord
@@ -1244,46 +1390,86 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         && doneItem !== undefined
         && Number.isInteger(parsedEvent.output_index)
         && (parsedEvent.output_index as number) >= 0
+        && (!observedOutputIndices || (parsedEvent.output_index as number) < maxCompletedItems)
         && typeof doneItem === "object"
         && doneItem !== null
         && !Array.isArray(doneItem)
         && typeof (doneItem as { type?: unknown }).type === "string") {
         retainCompletedItem(parsedEvent.output_index as number, doneItem, sourceBytes);
       }
-
-      let response = completedResponseFromParsedEvent(parsedEvent);
-      if (response) {
+      if (status && responseRecord) {
+        reconstructedTerminalResponse = responseRecord;
         if (handlers.pinCompletedResponseIdToFirstSeen
           && firstResponseId !== undefined
-          && response.id !== firstResponseId) {
-          response = { ...response, id: firstResponseId };
+          && reconstructedTerminalResponse.id !== firstResponseId) {
+          reconstructedTerminalResponse = { ...reconstructedTerminalResponse, id: firstResponseId };
         }
-        // Authoritative output is a NON-EMPTY ARRAY only. Anything else
-        // (missing, null, scalar, object) keeps the historical backfill
-        // behavior so a malformed terminal cannot reach rememberResponseState
-        // and destroy continuation state (review C1-2).
-        const hasAuthoritativeOutput = Array.isArray(response.output)
-          && response.output.length > 0;
-        if (!hasAuthoritativeOutput && reconstructionTainted) {
-          clearCompletedItems();
-          return;
+        const explicitTerminalOutput = reconstructedTerminalResponse.output;
+        const terminalOutput = Array.isArray(explicitTerminalOutput)
+          ? explicitTerminalOutput
+          : null;
+        if (explicitTerminalOutput !== undefined && explicitTerminalOutput !== null && !terminalOutput) {
+          reconstructionTainted = true;
         }
-        if (!hasAuthoritativeOutput && completedItemsByOutputIndex!.size > 0) {
-          response = {
-            ...response,
-            output: [...completedItemsByOutputIndex!.entries()]
+        if (terminalOutput && terminalOutput.length > maxCompletedItems) reconstructionTainted = true;
+        const hasAuthoritativeOutput = terminalOutput !== null && terminalOutput.length > 0;
+        if (reconstructionPolicy?.mergeSparseTerminalOutput === true) {
+          if (terminalOutput?.some(item => !item || typeof item !== "object" || Array.isArray(item)
+            || typeof (item as { type?: unknown }).type !== "string")) reconstructionTainted = true;
+          let output: Record<string, unknown>[] = [];
+          if (!reconstructionTainted) {
+            try {
+              output = nativeResponseOutput(
+                new Map([...completedItemsByOutputIndex.entries()].map(([index, retained]) => [
+                  index,
+                  retained.item as Record<string, unknown>,
+                ])),
+                terminalOutput,
+              );
+            } catch {
+              reconstructionTainted = true;
+            }
+          }
+          if (output.length > maxCompletedItems) reconstructionTainted = true;
+          for (const index of observedOutputIndices ?? []) {
+            if (index >= output.length) reconstructionTainted = true;
+          }
+          reconstructedTerminalResponse = reconstructionTainted
+            ? null
+            : { ...reconstructedTerminalResponse, output };
+        } else if (!hasAuthoritativeOutput && reconstructionTainted) {
+          reconstructedTerminalResponse = null;
+        } else if (!hasAuthoritativeOutput && completedItemsByOutputIndex.size > 0) {
+          reconstructedTerminalResponse = {
+            ...reconstructedTerminalResponse,
+            output: [...completedItemsByOutputIndex.entries()]
               .sort(([left], [right]) => left - right)
               .map(([, retained]) => retained.item),
           };
         }
-        try {
-          handlers.onCompletedResponse(response);
-        } finally {
-          clearCompletedItems();
-        }
-      } else if (parsedEvent?.type === "response.completed") {
-        clearCompletedItems();
       }
+    }
+    const policyTerminal = status === "failed"
+      && isPolicyRewriteType(parsed)
+      && cyberPolicyTerminalError(parsed) !== undefined;
+    if (status) sawTerminal = true;
+    try {
+      if (!reported && handlers.onTerminal && status) {
+        reported = true;
+        if (handlers.logCtx) {
+          handlers.logCtx.transportPhase = "terminal_sse";
+          handlers.logCtx.terminalSource = "upstream";
+        }
+        handlers.onTerminal(status, policyTerminal ? 400 : undefined);
+      }
+      if (status === "completed" && reconstructedTerminalResponse && handlers.onCompletedResponse) {
+        handlers.onCompletedResponse(reconstructedTerminalResponse);
+      }
+      if (status && reconstructedTerminalResponse && handlers.onTerminalResponse) {
+        handlers.onTerminalResponse(status, reconstructedTerminalResponse);
+      }
+    } finally {
+      if (status) clearCompletedItems();
     }
   };
 
@@ -1294,7 +1480,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     }
     const sourceBytes = candidateBytes;
     const frame = takeCandidate();
-    if (reported && !handlers.onCompletedResponse) return;
+    if (reported && !handlers.onCompletedResponse && !handlers.onTerminalResponse) return;
     const decoded = decoder!.decode(frame);
     scanPayload(sseDataPayload(decoded), sourceBytes);
   };

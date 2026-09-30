@@ -8,6 +8,7 @@ import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  peekConversationStateIssuer,
   resolveCodexAccountForThreadDetailed,
 } from "../../src/codex/routing";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
@@ -20,6 +21,7 @@ import {
 import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
+  expandPreviousResponseInput,
   responseContinuationRetainedStoreSnapshot,
   runPendingResponseStatePersistForTests,
 } from "../../src/responses/state";
@@ -339,6 +341,92 @@ afterEach(() => {
 });
 
 describe("ordinary pool 401 refresh and replay (#2887)", () => {
+  test.each([false, true])("failed terminal cannot echo the selected pool credential or retain it for replay (stream:%s)", async stream => {
+    const harness = installHarness({
+      responseForSend(authorization) {
+        return new Response(
+          `event: response.failed\ndata: ${JSON.stringify({
+            type: "response.failed",
+            response: {
+              id: "resp_failed_pool_echo", status: "failed",
+              error: { type: "server_error", code: "upstream_error", message: `rejected ${authorization}` },
+              last_error: { detail: "raw token rejected-access" },
+              metadata: { diagnostic: "raw token rejected-access" },
+              output: [{
+                type: "message", id: "msg_pool_echo", status: "completed", role: "assistant",
+                content: [{ type: "output_text", text: "rejected-access", annotations: [] }],
+              }],
+            },
+            detail: "raw token rejected-access",
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    const response = await handleResponses(
+      request("/v1/responses", { stream }), config(), { model: "", provider: "" } as RequestLogContext,
+    );
+    const body = await response.text();
+    expect(harness.sends).toEqual(["Bearer rejected-access"]);
+    expect(response.status).toBe(200);
+    if (stream) expect(body).toContain("event: response.failed");
+    else expect(JSON.parse(body)).toMatchObject({ id: "resp_failed_pool_echo", status: "failed" });
+    expect(body).not.toContain("rejected-access");
+    expect(body).toContain("[REDACTED]");
+    const next = { model: "gpt-5.5", previous_response_id: "resp_failed_pool_echo", input: "retry" };
+    expect(expandPreviousResponseInput(next)).toEqual(next);
+  });
+
+  test("bare upstream SSE error masks the selected pool credential in buffered JSON and diagnostics", async () => {
+    const harness = installHarness({
+      responseForSend(authorization) {
+        return new Response(`event: error\ndata: ${JSON.stringify({
+          type: "error",
+          error: { type: "server_error", code: "upstream_error", message: `rejected ${authorization.slice(7)}` },
+        })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    const logCtx = { model: "", provider: "" } as RequestLogContext;
+    const response = await handleResponses(request("/v1/responses"), config(), logCtx);
+    const body = await response.text();
+    expect(harness.sends).toEqual(["Bearer rejected-access"]);
+    expect(response.status).toBe(502);
+    expect(body).not.toContain("rejected-access");
+    expect(body).toContain("[REDACTED]");
+    expect(JSON.stringify(logCtx)).not.toContain("rejected-access");
+  });
+
+  test("disconnect during buffered replay does not record a pool conversation-state issuer", async () => {
+    const abort = new AbortController();
+    const headers = { "thread-id": "fixture-pool-disconnect", "x-codex-parent-thread-id": "fixture-pool-parent" };
+    const affinityKey = codexPoolAffinityKey(new Headers(headers));
+    expect(affinityKey).toBeDefined();
+    installHarness({
+      responseForSend() {
+        const delta = `event: response.output_text.delta\ndata: ${JSON.stringify({
+          type: "response.output_text.delta", output_index: 0, item_id: "msg_pool_disconnect", delta: "x",
+        })}\n\n`;
+        const item = {
+          type: "message", id: "msg_pool_disconnect", status: "completed", role: "assistant",
+          content: [{ type: "output_text", text: "done", annotations: [] }],
+        };
+        return new Response([
+          ...Array.from({ length: 14_000 }, () => delta),
+          `event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item })}\n\n`,
+          `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: {
+            id: "resp_pool_disconnect", status: "completed", model: "gpt-5.5", output: [item],
+          } })}\n\n`,
+        ].join(""), { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    const response = await handleResponses(
+      request("/v1/responses", { headers }), config(), { model: "", provider: "" } as RequestLogContext,
+      { abortSignal: abort.signal, onFirstOutput: () => setTimeout(() => abort.abort(), 0) },
+    );
+    expect(response.status).toBe(499);
+    expect(peekConversationStateIssuer(affinityKey!)).toBeUndefined();
+  });
+
   test("Responses refreshes a time-valid stored credential once and replays the same account", async () => {
     const harness = installHarness();
     const response = await handleResponses(

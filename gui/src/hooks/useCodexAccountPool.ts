@@ -31,6 +31,15 @@ export interface MainAccountHardLockStatus {
   resetAt?: number;
 }
 
+export interface CodexCredits {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  overageLimitReached?: boolean;
+  balance?: string;
+  approxLocalMessages?: [number, number];
+  approxCloudMessages?: [number, number];
+}
+
 export interface CodexAccountEntry {
   id: string;
   email: string;
@@ -48,6 +57,8 @@ export interface CodexAccountEntry {
   autoSwitchThresholdOverride: number | null;
   hasCredential: boolean;
   quota: AccountQuota | null;
+  /** Display-only observation; never used for account selection. */
+  credits?: CodexCredits;
   quotaAutoRefresh: {
     fiveHourAvailable: boolean;
     weeklyAvailable: boolean;

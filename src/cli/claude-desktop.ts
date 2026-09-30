@@ -32,7 +32,7 @@ import {
 } from "../claude/desktop-first-party";
 import { FIRST_PARTY_ACCOUNT_RISK } from "../claude/desktop-risk";
 import { claudeInterceptEnabled } from "../claude/intercept/runtime";
-import { ensurePickerCa, pickerCaCertPath, pickerCaFingerprints, pickerLeafCertPath } from "../claude/intercept/picker-ca";
+import { acceptsPickerAuthority, ensurePickerCa, pickerCaCertPath, pickerCaFingerprints, pickerLeafCertPath } from "../claude/intercept/picker-ca";
 import { inspectPickerTrust, trustPickerCa, untrustPickerCa, type SecurityRunner } from "../claude/intercept/picker-trust";
 import { offlinePickerStatus, removeDesktopPickerArtifacts, type DesktopPickerStatus } from "../claude/desktop-picker";
 import { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } from "../claude/desktop-policy";
@@ -156,6 +156,7 @@ async function trustPickerLocally(
   try {
     const configDir = getConfigDir();
     const paths = pickerTrustPaths(deps, configDir);
+    if (!acceptsPickerAuthority(paths.certPem)) return { ok: false, reason: "ca_unverified" };
     if (!deps.ensurePickerCaImpl) {
       // The bytes in ca.pem are only safe to trust when they match the authority the running
       // server actually owns — a replaced file must never land in the login keychain.

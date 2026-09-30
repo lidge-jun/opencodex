@@ -1,0 +1,29 @@
+/* Credits lives inside the existing compact slot, so no second slot padding. */
+.quota-row--codex-credits .quota-val {
+  white-space: nowrap;
+}
+/* Each .quota-row is its own grid, so max-content columns size per row and the Credits bar
+   would start where its own (empty) reset columns end, not where Week's bar starts. When the
+   slot carries a Credits row, hoist the row template onto the slot and let every row adopt it
+   through subgrid, so all bars share one start and one end. Scoped with :has() so slots
+   without Credits keep their existing per-row layout. */
+.quota-compact:has(> .quota-row--codex-credits) {
+  grid-template-columns: minmax(34px, max-content) max-content minmax(34px, max-content) minmax(38px, max-content) minmax(58px, 1fr) minmax(30px, max-content);
+  column-gap: 8px;
+}
+.quota-compact:has(> .quota-row--codex-credits) > * {
+  grid-column: 1 / -1;
+}
+.quota-compact:has(> .quota-row--codex-credits) > .quota-row:not(.quota-row--credits) {
+  grid-template-columns: subgrid;
+}
+.codex-auth-credits-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+.codex-auth-credits-toggle__label {
+  font-size: var(--text-label);
+  color: var(--muted);
+}

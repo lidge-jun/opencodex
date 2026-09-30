@@ -13,6 +13,7 @@ import {
   type RuntimeApiDeps,
 } from "./runtime-api";
 import { providerQuotaLine } from "./account-extended";
+import { pinSponsorRows } from "../providers/sponsor-order";
 import type { ProviderQuotaReportDto } from "./account-api";
 
 interface ProviderQuotasDto {
@@ -233,7 +234,15 @@ async function presets(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   rejectArgs(args, USAGE);
   const result = await runtimeRequest<{ providers?: unknown[] } | unknown[]>("/api/provider-presets", {}, deps);
   const rows = Array.isArray(result) ? result : result.providers ?? [];
-  printData(result, wantsJson, rows.map(row => {
+  const pinned = pinSponsorRows(
+    rows,
+    row => {
+      const tier = (row as Record<string, unknown>)?.sponsor;
+      return tier === "main" || tier === "standard" ? tier : undefined;
+    },
+    row => String((row as Record<string, unknown>)?.label ?? (row as Record<string, unknown>)?.id ?? ""),
+  );
+  printData(result, wantsJson, pinned.map(row => {
     const record = row as Record<string, unknown>;
     const sponsor = record.sponsor ? `  (sponsor: ${String(record.sponsor)})` : "";
     return `${String(record.id ?? record.name ?? "?")}  ${String(record.label ?? record.adapter ?? "")}${sponsor}`.trimEnd();

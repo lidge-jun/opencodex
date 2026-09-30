@@ -73,9 +73,9 @@ describe("package-tree fenced liveness (#5496)", () => {
     const body = { service: "opencodex", status: "ok", version: "2.59.0", uptime: 12, pid: PID, port: PORT };
     const listener = fencedListener(secret, body, 200);
     const live = { pid: PID, port: PORT, hostname: "127.0.0.1", source: "config" as const };
-    expect(await proveLiveProxyOwnedByHome(live, ownedIo(secret, listener.fetchFn))).toBe(true);
-    expect(await proveLiveProxyOwnedByHome(live, ownedIo(createLocalAttestationSecret(), listener.fetchFn))).toBe(false);
-    expect(await proveLiveProxyOwnedByHome(live, ownedIo(secret, listener.fetchFn, { readRuntimeFn: () => null }))).toBe(false);
+    expect(await proveLiveProxyOwnedByHome(live, ownedIo(secret, listener.fetchFn))).toBe("proven");
+    expect(await proveLiveProxyOwnedByHome(live, ownedIo(createLocalAttestationSecret(), listener.fetchFn))).toBe("refuted");
+    expect(await proveLiveProxyOwnedByHome(live, ownedIo(secret, listener.fetchFn, { readRuntimeFn: () => null }))).toBe("refuted");
     expect(listener.seen.challenged).toBe(2);
   });
 
@@ -154,5 +154,53 @@ describe("package-tree fenced liveness (#5496)", () => {
       expect(await proxyIdentityAt(PORT, {}, ownedIo(secret, listener.fetchFn))).toBeNull();
       expect(listener.seen.challenged).toBe(0);
     }
+  });
+});
+
+describe("fenced-identity transport retries (#6198)", () => {
+  test("a transient fetch failure retries the challenge instead of reporting no owner", async () => {
+    const secret = createLocalAttestationSecret();
+    const listener = fencedListener(secret, fencedBody(), 200);
+    let calls = 0;
+    const flakyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      if (calls < 3) throw new TypeError("fetch failed");
+      return listener.fetchFn(input, init);
+    }) as typeof fetch;
+    const io = ownedIo(secret, flakyFetch, { attempts: 3, sleepFn: () => Promise.resolve() });
+    const live = { pid: PID, port: PORT, hostname: "127.0.0.1", source: "runtime" as const };
+    expect(await proveLiveProxyOwnedByHome(live, io)).toBe("proven");
+    expect(calls).toBe(3);
+  });
+
+  test("a transport that never answers stays indeterminate after the bounded attempts run out", async () => {
+    const secret = createLocalAttestationSecret();
+    const deadFetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    const io = ownedIo(secret, deadFetch, { attempts: 3, sleepFn: () => Promise.resolve() });
+    const live = { pid: PID, port: PORT, hostname: "127.0.0.1", source: "runtime" as const };
+    expect(await proveLiveProxyOwnedByHome(live, io)).toBe("indeterminate");
+  });
+
+  test("a definitive proof failure is not retried", async () => {
+    const listener = fencedListener(createLocalAttestationSecret(), fencedBody(), 200);
+    const io = ownedIo(createLocalAttestationSecret(), listener.fetchFn, { attempts: 5, sleepFn: () => Promise.resolve() });
+    const live = { pid: PID, port: PORT, hostname: "127.0.0.1", source: "runtime" as const };
+    expect(await proveLiveProxyOwnedByHome(live, io)).toBe("refuted");
+    expect(listener.seen.challenged).toBe(1);
+  });
+
+  test("attempts are clamped to five even when more are requested", async () => {
+    const secret = createLocalAttestationSecret();
+    let calls = 0;
+    const deadFetch = (async () => {
+      calls += 1;
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    const io = ownedIo(secret, deadFetch, { attempts: 42, sleepFn: () => Promise.resolve() });
+    const live = { pid: PID, port: PORT, hostname: "127.0.0.1", source: "runtime" as const };
+    expect(await proveLiveProxyOwnedByHome(live, io)).toBe("indeterminate");
+    expect(calls).toBe(5);
   });
 });

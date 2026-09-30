@@ -70,9 +70,24 @@ more than one provider, so use explicit namespaces when a bare model could be am
 ### Blocked-model redirects
 
 `blockedModelRedirects` is an optional top-level `Record<string, string>` of exact resolved
-model-id replacements, unset by default. It runs **after** the resolution order above: a match
-keeps the provider and account route already selected, replaces only the upstream model id, and
-records the route reason `blocked-model-redirect`. Omitting the key leaves routing unchanged.
+model-id replacements, unset by default. Bare keys still match the native model **after** provider,
+account, and alias resolution. A target without an explicit, different configured provider keeps
+that selected provider and account and replaces only the upstream model id, once. This preserves
+existing bare and slash-valued mappings, including mappings on provider-qualified requests.
+
+A target explicitly naming a **different configured provider** (for example,
+`google-antigravity/gemini-3.8-flash-high`) instead routes through that provider. An exact
+`<source-provider>/<resolved-model>` key with such a target takes precedence over a bare key;
+other qualified keys have no effect. Cross-provider redirects can chain through resolved aliases,
+with one shared five-edge limit and cycle detection. A pinned account selector never leaves its
+account: a cross-provider target fails closed, whether its key is bare or account-qualified.
+The destination uses its own credentials and quota, and never inherits source account fields;
+a caller `Authorization` header addressed to the source route is stripped, as for combo and policy routes.
+A disabled destination, a forward destination, or a key/OAuth destination without usable stored
+credentials keeps the source route's legacy behavior. Under a routing policy, every redirect target
+must itself be a declared eligible candidate, even when it keeps the same provider.
+Malformed redirect maps are ignored with a warning on load and rejected on configuration writes.
+Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
 ```json
 {

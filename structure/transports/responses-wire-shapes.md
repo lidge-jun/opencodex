@@ -1,5 +1,14 @@
 # Responses Wire Shapes
 
+## Client rate-limit retry advice
+
+With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes
+`resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`.
+`src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest
+lower bound first; competing original hints are retained under an explicit provider-detail label.
+Other explicit verdicts, proxy replay budgets and event ordering are unchanged. This creates
+no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
+
 ## Compaction image input
 
 For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
@@ -61,8 +70,8 @@ existing wire and tier policy. The OAuth lane is service-tier classified per mod
 `devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
-routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either
-wire (`chatServiceTier: true`). grok-4.20-multi-agent-0309 stays unclassified with its
+routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either wire (`chatServiceTier: true`) — except OAuth grok-4.7, whose Fast serializes `grok-4.7-build-fast` with no tier ([xAI Grok](../providers/xai-grok.md#oauth-fast-tier-priority-processing)).
+grok-4.20-multi-agent-0309 stays unclassified with its
 caller-tier pin: the gateway accepts the field but answers `service_tier: "default"`, a live
 downgrade rather than a fast tier.
 
@@ -387,26 +396,15 @@ Native passthrough SSE has TWO shapes, selected per request in
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
   including the #44 late-terminal semantics.
 
-Both client readers also retain a bounded, redacted message from a bare upstream
-`error` event. If EOF arrives without a real Responses terminal, they synthesize
-one `response.failed` with that message instead of replacing it with `adapter_eof`.
-That synthesized terminal also carries the upstream's own verdict. Codex classifies
-a `response.failed` by `error.code` alone and retries every code outside its fatal
-set, so a refusal stamped `upstream_server_error` reached the client as a retryable
-disconnect and drove a reconnect loop (#5176). The readers now read a refusal code
-and the message from the same candidate precedence, taking the first code present so
-a refusal nested below a transient one cannot overrule it, and fall back to
-recognized refusal copy only when the event carried no code at all. A refusal code
-with no message still produces a terminal, and a read that fails after a refusal was
-captured reports the refusal rather than a generic reset. Request-log accounting is
-unchanged: a row that ends on a refusal still records the transport-level status.
-The delivering reader owns this evidence; an asynchronous tee inspection branch
-cannot reliably supply it before EOF. Inspection independently applies the same
-bare-error rule when EOF arrives, so account health records failure instead of
-clearing avoidance as if the turn had succeeded. Existing real terminals and
-caller cancellation retain precedence on both branches. Native recovery preflight
-also preserves a rejected body reader and its bounded prefix for the normal
-mid-stream failure path; it does not turn that rejection into a decrypt retry.
+Both client readers retain a bounded, redacted message and the first structured refusal code from a bare upstream `error`.
+At EOF without a real terminal they synthesize `response.failed` rather than `adapter_eof`; a code without a message still
+produces a terminal. Codex retries codes outside its fatal set, so code and message follow the same candidate precedence;
+recognized refusal copy is used only when the event has no code. A read failure after refusal reports that refusal (#5176).
+The shared outbound rewrite masks diagnostics on real failed and incomplete terminals before SSE or buffered JSON delivery,
+while preserving status and output; failed turns are not retained as continuation state. Buffered JSON masks selected credentials in synthetic bare-error fields before log inspection or client formatting; request logs keep transport status.
+The delivering reader owns refusal evidence before EOF; asynchronous tee inspection cannot reliably supply it.
+Inspection still applies the bare-error rule at EOF for account health. Real terminals and caller cancellation take precedence.
+Native recovery preflight keeps the rejected body reader and bounded prefix for normal mid-stream failure, without decrypt retry.
 
 Native Responses may rebuild once when encrypted function/custom-tool output or
 agent-message content receives the exact known decrypt rejection before output
@@ -430,6 +428,17 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 `core.ts` gate is source-invariant-tested by `tests/responses/passthrough-abort.test.ts`,
 and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
+
+A non-streaming canonical ChatGPT client still uses the destination's SSE-only upstream path.
+The [Responses HTTP/SSE owner](responses.md#responses-httpsse) validates the first terminal
+and strictly covered output indices before publishing JSON or serving state; see [ADR-6162](../decisions/ADR-6162-responses-http-sse.md).
+Deferred inspection checks cancellation after each yield and commits serving-route state only
+after the final abort check; a disconnect returns 499 without publishing that state or a terminal.
+This buffered path makes no tee/eager choice. Failed and incomplete terminals mask selected outbound
+credentials across the full event, including nested output and metadata, before JSON or SSE delivery;
+synthetic stream failures use the same credential mask in both streaming relays.
+
+> Decision record: [ADR-6162](../decisions/ADR-6162-responses-http-sse.md)
 
 Canonical ChatGPT forward streaming has one transport-specific exception. A
 stable Bun runtime at or above 1.4.0 may use Codex's upstream
@@ -560,7 +569,7 @@ An injected combo default supplies `summary: "auto"` only when no summary was sp
 summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 Final-route normalization preserves visible raw reasoning when the parsed request has a validated
-active effort and omits summary; explicit `summary: "none"` still hides it.
+active effort and omits summary; explicit `summary: "none"` still hides it (passthrough strips that internal marker before the upstream send).
 The provider policy `hideRawReasoning` suppresses the raw `reasoning_raw_delta` channel only —
 openai-chat `reasoning_content`, kiro tags, and Gemini thought parts on routes that do not return
 thought summaries (direct and Vertex Gemini; a `cloud-code-assist` Gemini route emits its thought
