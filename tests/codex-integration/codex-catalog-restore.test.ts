@@ -44,11 +44,11 @@ describe("Codex catalog restore", () => {
     process.env.CODEX_HOME = codexHome;
     process.env.OPENCODEX_HOME = opencodexHome;
     // Cold Windows namespace discovery has two bounded 30s PowerShell lookups.
-    // Keep that one-time setup within the same hook budget used by CI.
+    // Leave 5s for filesystem work beyond the two lookup envelopes.
     catalogDatabasePath = resolveCodexCatalogSerializationDatabasePath(
       resolveEffectiveUserIdentity(), realpathSync.native(codexHome),
     );
-  }, 60_000);
+  }, 65_000);
 
   afterEach(async () => {
     try {
