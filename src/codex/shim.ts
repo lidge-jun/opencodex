@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { migrateLegacyUnixShim } from "./shim-migration";
+import { installUnixOverlay, autoRestoreUnixOverlay, overlayDiagnostic, overlayPaths, usableNativeLauncher, uninstallUnixOverlay } from "./shim-overlay";
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   readFileSync,
@@ -8,7 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, delimiter, dirname, extname, join, posix } from "node:path";
+import { delimiter, extname, join, posix, resolve } from "node:path";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
@@ -24,12 +24,10 @@ import {
 } from "./shim-templates";
 import {
   hasUsableBackingPath,
-  isCurrentUnixShimProbe,
   isHealthyShimProbe,
   isVersionManagerOwnedCodexPath,
   restoreWithoutReplacing,
   sameFingerprint,
-  sameFingerprintAfterRename,
   sameStableShimPathProbe,
   shimPathFingerprint,
   stableShimPathProbe,
@@ -47,7 +45,6 @@ import {
   type ShimState,
 } from "./shim-state-file";
 import {
-  CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS,
   MAX_DIAGNOSTIC_VALUE_BYTES,
   probeUnixShimFiles,
   type UnixShimProbeResult,
@@ -96,11 +93,7 @@ function commandNames(name: string): string[] {
 }
 
 function isShim(path: string): boolean {
-  try {
-    return readFileSync(path, "utf8").includes(SHIM_MARKER);
-  } catch {
-    return false;
-  }
+  return stableShimPathProbe(path)?.prefix.includes(SHIM_MARKER) ?? false;
 }
 
 function isHealthyShim(path: string, platform: NodeJS.Platform): boolean {
@@ -175,7 +168,9 @@ export function findCodexOnPath(deps: CodexPathScanDeps = {}): string | null {
     const names = isWindowsInteropDir(dir, automountRoot) ? interopNames : commandNames("codex");
     for (const name of names) {
       const path = joinPath(dir, name);
+      if (!deps.exists && process.platform !== "win32" && resolve(path) === resolve(overlayPaths().wrapper)) continue;
       if (!exists(path) || shimFile(path)) continue;
+      if (!deps.exists && process.platform !== "win32" && !usableNativeLauncher(path)) continue;
       if (!isDir(path)) return path;
     }
   }
@@ -252,110 +247,12 @@ function destroyedShimMessage(file: ShimFileState): string {
 }
 
 let codexShimGuardedWriteHookForTests: (() => void) | null = null;
-let codexShimFreshWriteHookForTests: (() => void) | null = null;
-let codexShimRollbackRestoreHookForTests: ((target: ShimFileState) => void) | null = null;
 
 /** Narrow deterministic seam for guarded partial-write rollback tests. */
 export function setCodexShimGuardedWriteHookForTests(hook: (() => void) | null): void {
   codexShimGuardedWriteHookForTests = hook;
 }
 
-/** Narrow deterministic seam for fresh-install partial-write rollback tests. */
-export function setCodexShimFreshWriteHookForTests(hook: (() => void) | null): void {
-  codexShimFreshWriteHookForTests = hook;
-}
-
-/**
- * @internal Test-only seam for the rollback restore race.
- *
- * The window this closes opens after `sourceOccupied` is sampled and closes when
- * the backup is republished, so no earlier hook can reach it: publishing from
- * the fresh-write hook makes `sourceOccupied` true and skips the restore
- * entirely.
- */
-export function setCodexShimRollbackRestoreHookForTests(
-  hook: ((target: ShimFileState) => void) | null,
-): void {
-  codexShimRollbackRestoreHookForTests = hook;
-}
-
-interface FreshShimInstallJournalEntry {
-  target: ShimFileState;
-  movedOriginalFingerprint?: ShimPathFingerprint;
-  originalMovedToBackup: boolean;
-  writtenWrapperFingerprint?: ShimPathFingerprint;
-  wrapperWriteStarted: boolean;
-  /** dev/ino of the file our `writeShim()` created, recorded before anything can fail. */
-  writtenWrapperInode?: { dev: number; ino: number };
-}
-
-function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry[]): void {
-  const errors: Error[] = [];
-  for (const entry of [...journal].reverse()) {
-    const target = entry.target;
-    let sourceOccupied = false;
-    let ownsWrapperNow = false;
-    try {
-      const wrapper = stableShimPathProbe(target.wrapperPath);
-      // Ownership is the inode our own write created. There is no marker-text
-      // fallback: the markers are public, so a concurrent updater's wrapper carries
-      // them too, and treating that as proof is how we would delete a file we never
-      // wrote. An in-place truncation of our file keeps the inode and is still ours
-      // to clean up; a replacement renamed over it has a different inode and is not.
-      const ownsWrapper = !target.preserveOnly
-        && entry.wrapperWriteStarted
-        && wrapper !== null
-        && wrapperInodeIsOurs(wrapper, entry.writtenWrapperInode, entry.writtenWrapperFingerprint);
-      ownsWrapperNow = ownsWrapper;
-      if (ownsWrapper) unlinkSync(target.wrapperPath);
-      else {
-        try {
-          lstatSync(target.originalPath);
-          sourceOccupied = true;
-        } catch (error) {
-          if (fileErrorCode(error) !== "ENOENT") sourceOccupied = true;
-        }
-      }
-    } catch (error) {
-      errors.push(error instanceof Error ? error : new Error(String(error)));
-    }
-    try {
-      if (entry.originalMovedToBackup && existsSync(target.backupPath)) {
-        const movedOriginal = shimPathFingerprint(target.backupPath);
-        if (!movedOriginal || !entry.movedOriginalFingerprint
-          || !sameFingerprint(movedOriginal, entry.movedOriginalFingerprint)) {
-          throw new Error("Codex shim fresh-install backup changed during rollback");
-        }
-        if (sourceOccupied) {
-          // Something else occupies the source path. Dropping the backup is correct
-          // only when that something is a file we own; when a concurrent updater
-          // owns it, this backup is the user's real launcher and deleting it would
-          // lose the command entirely. Keep it in that case — a stray
-          // `codex.opencodex-real` is recoverable, a deleted launcher is not.
-          if (ownsWrapperNow) unlinkSync(target.backupPath);
-        } else {
-          // No-replace: sourceOccupied was sampled earlier, so a concurrent
-          // installer may have published a launcher at the original path since.
-          codexShimRollbackRestoreHookForTests?.(target);
-          restoreWithoutReplacing(target.backupPath, target.originalPath);
-        }
-      }
-    } catch (error) {
-      errors.push(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-  if (errors.length > 0) throw new AggregateError(errors, "Codex shim install validation rollback failed");
-}
-
-/**
- * Write the wrapper and return the identity of the inode this call created, or
- * `undefined` where the platform still writes the destination in place.
- *
- * Callers must derive ownership from the returned identity rather than from a
- * later `stat` of `wrapperPath`: the shim markers are public, so a concurrent
- * updater's wrapper can carry them, and a replacement landing between the write
- * and the observation is otherwise indistinguishable from our own file.
- */
 function writeShim(wrapperPath: string, realCodexPath: string): { dev: number; ino: number } | undefined {
   const { bun, bunRuntimeSource, cli } = cliEntry();
   if (process.platform === "win32") {
@@ -375,41 +272,9 @@ function writeShim(wrapperPath: string, realCodexPath: string): { dev: number; i
       );
     }
     return undefined;
-  } else {
-    // Stage the wrapper as its own inode and rename it into place, so ownership
-    // comes from the write itself rather than from observing the path afterwards.
-    // Writing the destination directly leaves a window in which a concurrent
-    // updater can replace the file between our write and our fingerprint; we would
-    // then adopt that replacement as ours and unlink it during rollback, deleting
-    // an executable we never wrote.
-    // Hidden and non-executable while staged, so a crash between the write and the
-    // rename cannot leave an executable `codex*` artifact that a glob or a shell
-    // completion would surface.
-    const staged = join(dirname(wrapperPath), `.${basename(wrapperPath)}.opencodex-staging.${process.pid}.${randomUUID()}`);
-    let renamed = false;
-    try {
-      // "wx" fails if the staging path somehow exists, so we never inherit a file.
-      writeFileSync(staged, buildUnixCodexShim(realCodexPath, bun, cli, bunRuntimeSource), { encoding: "utf8", flag: "wx", mode: 0o600 });
-      const stagedStat = lstatSync(staged);
-      chmodSync(staged, 0o755);
-      renameSync(staged, wrapperPath);
-      renamed = true;
-      // rename() preserves dev/ino and updates ctime, so identity is the inode
-      // pair, captured from the file we created rather than from the destination.
-      return { dev: stagedStat.dev, ino: stagedStat.ino };
-    } finally {
-      if (!renamed) {
-        try { unlinkSync(staged); } catch { /* best-effort: nothing to clean up */ }
-      }
-    }
   }
 }
 
-/**
- * The fingerprint to record as "we wrote this", or `undefined` when the file at
- * `wrapperPath` is not the inode `writeShim()` created. Returning `undefined`
- * makes every rollback path treat the file as someone else's and leave it alone.
- */
 function ownedWrapperFingerprint(
   wrapperPath: string,
   written: { dev: number; ino: number } | undefined,
@@ -432,25 +297,6 @@ function ownedWrapperFingerprint(
  * updater we must not delete. Where no inode was recorded (Windows writes the
  * destination directly), fall back to the exact fingerprint recorded at the time.
  */
-function wrapperInodeIsOurs(
-  wrapper: StableShimPathProbe,
-  written: { dev: number; ino: number } | undefined,
-  recorded: ShimPathFingerprint | undefined,
-): boolean {
-  // A different inode is conclusive: someone renamed their own file over ours.
-  if (written && (wrapper.fingerprint.dev !== written.dev || wrapper.fingerprint.ino !== written.ino)) {
-    return false;
-  }
-  // Same inode is not sufficient on its own — an in-place truncation (shell `>`,
-  // writeFileSync) keeps it while replacing the contents. When we recorded a full
-  // fingerprint, require it to still match; that covers our own partial write,
-  // whose fingerprint we record before anything can fail.
-  if (recorded !== undefined) return sameFingerprint(wrapper.fingerprint, recorded);
-  // No recorded fingerprint: only the inode identity we captured at write time can
-  // speak for us, and there is nothing else to distinguish this file.
-  return written !== undefined;
-}
-
 function primaryState(files: ShimFileState[]): ShimState {
   const first = files[0]!;
   return { platform: process.platform, ...first, wrappers: files };
@@ -717,186 +563,10 @@ function applyGuardedRefreshTransaction(
   return true;
 }
 
-interface ObsoleteUnixShimJournalEntry {
-  file: ShimFileState;
-  stagedWrapperPath: string;
-  priorWrapperFingerprint: ShimPathFingerprint;
-  backingFingerprint: ShimPathFingerprint;
-  writtenWrapperFingerprint?: ShimPathFingerprint;
-  wrapperWriteStarted: boolean;
-}
-
-function rollbackObsoleteUnixShimRefresh(journal: readonly ObsoleteUnixShimJournalEntry[]): Error[] {
-  const errors: Error[] = [];
-  const attempt = (operation: () => void): void => {
-    try {
-      operation();
-    } catch (error) {
-      errors.push(error instanceof Error ? error : new Error(String(error)));
-    }
-  };
-  for (const entry of [...journal].reverse()) {
-    attempt(() => {
-      const wrapper = stableShimPathProbe(entry.file.wrapperPath);
-      const ownsWrapper = entry.wrapperWriteStarted
-        && wrapper !== null
-        && (entry.writtenWrapperFingerprint
-          ? sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint)
-          : wrapper.prefix.includes(UNIX_SHIM_REVISION_MARKER));
-      if (ownsWrapper) unlinkSync(entry.file.wrapperPath);
-    });
-    attempt(() => {
-      if (!existsSync(entry.stagedWrapperPath)) return;
-      if (existsSync(entry.file.wrapperPath)) unlinkSync(entry.stagedWrapperPath);
-      else renameSync(entry.stagedWrapperPath, entry.file.wrapperPath);
-    });
-  }
-  return errors;
-}
-
-type ObsoleteUnixShimRefreshResult =
-  | { installed: true; message: string }
-  | { installed: false; deferred: boolean; message: string };
-
-function refreshObsoleteUnixShims(files: readonly ShimFileState[]): ObsoleteUnixShimRefreshResult {
-  if (process.platform === "win32") {
-    return { installed: false, deferred: false, message: "Codex autostart shim is already current." };
-  }
-  const candidates = files.filter(file => {
-    if (file.preserveOnly || file.wrapperPath !== file.originalPath || !existsSync(file.wrapperPath)) return false;
-    const probe = stableShimPathProbe(file.wrapperPath);
-    return probe !== null && probe.prefix.includes(SHIM_MARKER) && !isCurrentUnixShimProbe(probe);
-  });
-  if (candidates.length === 0) {
-    return { installed: false, deferred: true, message: "Codex autostart shim upgrade deferred because tracked launchers changed." };
-  }
-
-  const journal: ObsoleteUnixShimJournalEntry[] = [];
-  const transactionId = `${process.pid}-${randomUUID()}`;
-  let applyError: Error | null = null;
-  for (const [index, file] of candidates.entries()) {
-    const wrapper = stableShimPathProbe(file.wrapperPath);
-    const backing = stableShimPathProbe(file.backupPath);
-    if (!wrapper || !wrapper.prefix.includes(SHIM_MARKER) || isCurrentUnixShimProbe(wrapper) || !backing) {
-      applyError = new Error("Codex autostart shim upgrade inputs changed before regeneration");
-      break;
-    }
-    const entry: ObsoleteUnixShimJournalEntry = {
-      file,
-      stagedWrapperPath: `${file.wrapperPath}.upgrade-${transactionId}-${index}`,
-      priorWrapperFingerprint: wrapper.fingerprint,
-      backingFingerprint: backing.fingerprint,
-      wrapperWriteStarted: false,
-    };
-    journal.push(entry);
-    try {
-      renameSync(file.wrapperPath, entry.stagedWrapperPath);
-      const stagedWrapper = stableShimPathProbe(entry.stagedWrapperPath);
-      if (!stagedWrapper
-        || !sameFingerprintAfterRename(stagedWrapper.fingerprint, entry.priorWrapperFingerprint)) {
-        throw new Error("Codex autostart shim upgrade could not fingerprint the staged wrapper");
-      }
-      entry.wrapperWriteStarted = true;
-      const writtenInode = writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
-      const writtenWrapper = stableShimPathProbe(file.wrapperPath);
-      if (!writtenWrapper || !isCurrentUnixShimProbe(writtenWrapper)) {
-        throw new Error("Codex autostart shim upgrade could not fingerprint the regenerated wrapper");
-      }
-      // Identity is the inode we created; a replacement that landed since the
-      // rename leaves this unset so rollback treats the file as someone else's.
-      entry.writtenWrapperFingerprint = ownedWrapperFingerprint(file.wrapperPath, writtenInode);
-    } catch (error) {
-      applyError = error instanceof Error ? error : new Error(String(error));
-      break;
-    }
-  }
-
-  let unsafe: UnixShimProbeResult = null;
-  let probeError: Error | null = null;
-  if (!applyError) {
-    try {
-      unsafe = probeUnixShimFiles(candidates);
-    } catch (error) {
-      probeError = error instanceof Error ? error : new Error(String(error));
-    }
-  }
-  const changedDuringProbe = !applyError && !probeError && journal.some(entry => {
-    const wrapper = stableShimPathProbe(entry.file.wrapperPath);
-    const backing = stableShimPathProbe(entry.file.backupPath);
-    return !wrapper || !entry.writtenWrapperFingerprint
-      || !sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint)
-      || !backing || !sameFingerprint(backing.fingerprint, entry.backingFingerprint);
-  });
-
-  if (applyError || probeError || changedDuringProbe) {
-    const rollbackErrors = rollbackObsoleteUnixShimRefresh(journal);
-    if (applyError || probeError || rollbackErrors.length > 0) {
-      throw new AggregateError(
-        [...(applyError ? [applyError] : []), ...(probeError ? [probeError] : []), ...rollbackErrors],
-        "Codex autostart shim upgrade failed",
-      );
-    }
-    return { installed: false, deferred: true, message: "Codex autostart shim upgrade deferred because tracked launchers changed." };
-  }
-
-  if (unsafe) {
-    const cleanupErrors: Error[] = [];
-    for (const entry of [...journal].reverse()) {
-      try {
-        const wrapper = stableShimPathProbe(entry.file.wrapperPath);
-        if (!wrapper || !entry.writtenWrapperFingerprint
-          || !sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint)) {
-          throw new Error("Codex autostart shim upgrade lost wrapper ownership before removal");
-        }
-        const backing = stableShimPathProbe(entry.file.backupPath);
-        if (!backing || !sameFingerprint(backing.fingerprint, entry.backingFingerprint)) {
-          throw new Error("Codex autostart shim upgrade backing launcher changed before restoration");
-        }
-        unlinkSync(entry.file.wrapperPath);
-        renameSync(entry.file.backupPath, entry.file.originalPath);
-        if (existsSync(entry.stagedWrapperPath)) unlinkSync(entry.stagedWrapperPath);
-      } catch (error) {
-        cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
-      }
-    }
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, "Codex autostart shim upgrade safety removal failed");
-    }
-    if (existsSync(statePath())) unlinkSync(statePath());
-    return {
-      installed: false,
-      deferred: false,
-      message: "Removed an obsolete Codex autostart shim because its saved launcher failed current validation. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.",
-    };
-  }
-
-  const cleanupErrors: Error[] = [];
-  for (const entry of journal) {
-    try {
-      if (existsSync(entry.stagedWrapperPath)) unlinkSync(entry.stagedWrapperPath);
-    } catch (error) {
-      cleanupErrors.push(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-  if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, "Codex autostart shim upgrade cleanup failed");
-  return {
-    installed: true,
-    message: `Upgraded Codex autostart shim at ${candidates.map(file => file.wrapperPath).join(", ")} and validated the saved launcher.`,
-  };
-}
-
 function installCodexShimInternal(options: InstallCodexShimInternalOptions): { installed: boolean; message: string } {
   const existing = readState();
   if (existing) {
     const files = stateFiles(existing);
-    if (!options.expectedReplacements && process.platform !== "win32") {
-      const hasObsoleteShim = files.some(file => {
-        if (file.preserveOnly) return false;
-        const probe = stableShimPathProbe(file.wrapperPath);
-        return probe !== null && probe.prefix.includes(SHIM_MARKER) && !isCurrentUnixShimProbe(probe);
-      });
-      if (hasObsoleteShim) return refreshObsoleteUnixShims(files);
-    }
     if (options.expectedReplacements) {
       const operations = planGuardedRefreshTransaction(files, options.expectedReplacements);
       if (!operations || operations.length === 0) {
@@ -952,118 +622,16 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     return { installed: false, message: "Codex shim auto-restore requires a valid prior installation." };
   }
 
-  const targets: ShimFileState[] | null = process.platform === "win32"
-    ? findWindowsCodexTargets()
-    : (() => {
-      const originalPath = findCodexOnPath();
-      return originalPath ? [{ wrapperPath: originalPath, originalPath, backupPath: backupPathFor(originalPath) }] : null;
-    })();
+  const targets = findWindowsCodexTargets();
   if (!targets) return { installed: false, message: lastShimDiscoveryError ?? "Could not find a codex executable on PATH." };
 
   for (const target of targets) {
     if (existsSync(target.backupPath)) return { installed: false, message: `Refusing to overwrite existing backup: ${target.backupPath}` };
   }
-  const freshJournal: FreshShimInstallJournalEntry[] = [];
-  let freshApplyError: Error | null = null;
+  // Unix installation uses shim-overlay.ts; only Windows script launchers reach here.
   for (const target of targets) {
-    const entry: FreshShimInstallJournalEntry = {
-      target,
-      originalMovedToBackup: false,
-      wrapperWriteStarted: false,
-    };
-    freshJournal.push(entry);
-    try {
-      if (existsSync(target.originalPath)) {
-        renameSync(target.originalPath, target.backupPath);
-        entry.originalMovedToBackup = true;
-        // Metadata-only, and before the content probe: an empty or otherwise
-        // unprobeable launcher must still be restorable during rollback.
-        //
-        // Only Unix reaches the rollback path (Windows rethrows freshApplyError
-        // without rolling back), so only Unix may treat a missing fingerprint as
-        // fatal. Throwing here on Windows would abort AFTER the original moved,
-        // stranding the launcher at its backup path with nothing to restore it.
-        const movedOriginalFingerprint = shimPathFingerprint(target.backupPath);
-        if (movedOriginalFingerprint) entry.movedOriginalFingerprint = movedOriginalFingerprint;
-        if (process.platform !== "win32") {
-          if (!movedOriginalFingerprint) {
-            throw new Error("Codex shim fresh install could not fingerprint the staged launcher");
-          }
-          const movedOriginal = stableShimPathProbe(target.backupPath);
-          // A content probe still runs where it can, purely as a consistency
-          // check: disagreement means the file moved under us mid-install.
-          if (movedOriginal && !sameFingerprint(movedOriginal.fingerprint, movedOriginalFingerprint)) {
-            throw new Error("Codex shim fresh install staged launcher changed while being fingerprinted");
-          }
-        }
-      }
-      if (!target.preserveOnly) {
-        entry.wrapperWriteStarted = true;
-        const writtenInode = writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
-        entry.writtenWrapperInode = writtenInode;
-        codexShimFreshWriteHookForTests?.();
-        if (process.platform !== "win32") {
-          if (!writtenInode) throw new Error("Codex shim fresh install could not fingerprint the generated wrapper");
-          entry.writtenWrapperFingerprint = ownedWrapperFingerprint(target.wrapperPath, writtenInode);
-        }
-      }
-    } catch (error) {
-      freshApplyError = error instanceof Error ? error : new Error(String(error));
-      break;
-    }
-  }
-  if (process.platform !== "win32") {
-    if (freshApplyError) {
-      try {
-        rollbackFreshShimInstall(freshJournal);
-      } catch (rollbackError) {
-        throw new AggregateError([freshApplyError, rollbackError], "Codex shim installation and rollback failed");
-      }
-      throw freshApplyError;
-    }
-    let unsafe: UnixShimProbeResult = null;
-    let probeError: Error | null = null;
-    try {
-      unsafe = probeUnixShimFiles(targets);
-    } catch (error) {
-      probeError = error instanceof Error ? error : new Error(String(error));
-    }
-    if (probeError) {
-      try {
-        rollbackFreshShimInstall(freshJournal);
-      } catch (rollbackError) {
-        throw new AggregateError([probeError, rollbackError], "Codex shim probe and install rollback failed");
-      }
-      throw probeError;
-    }
-    const wrapperChangedDuringProbe = freshJournal.some(entry => {
-      if (entry.target.preserveOnly) return false;
-      const wrapper = stableShimPathProbe(entry.target.wrapperPath);
-      return !wrapper || !entry.writtenWrapperFingerprint
-        || !sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint);
-    });
-    if (unsafe || wrapperChangedDuringProbe) {
-      rollbackFreshShimInstall(freshJournal);
-      const reason = wrapperChangedDuringProbe
-        ? "the generated wrapper changed during its validation probe"
-        : unsafe === "recursive"
-        ? "the saved launcher resolved back to the generated shim"
-        : unsafe === "timeout"
-          ? `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`
-          : unsafe === "descendants"
-            ? "the saved launcher left background descendants running after --version"
-            : unsafe !== null && typeof unsafe === "object"
-              ? `the saved launcher's probe process group could not be terminated cleanly [phase=${unsafe.phase}; code=${unsafe.code}; status=${unsafe.status ?? "none"}; signal=${unsafe.signal}]`
-              : "the saved launcher failed its --version probe";
-      return {
-        installed: false,
-        message: wrapperChangedDuringProbe
-          ? `Refusing Codex autostart shim because ${reason}. The concurrent launcher was preserved, and your previous launcher was kept alongside it as \`<codex>.opencodex-real\`; retry after the Codex update finishes, and remove that backup once you are satisfied the launcher on PATH is the one you want.`
-          : `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
-      };
-    }
-  } else if (freshApplyError) {
-    throw freshApplyError;
+    if (existsSync(target.originalPath)) renameSync(target.originalPath, target.backupPath);
+    if (!target.preserveOnly) writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
   }
   writeState(primaryState(targets));
   return {
@@ -1073,6 +641,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
 }
 
 export function installCodexShim(): { installed: boolean; message: string } {
+  if (process.platform !== "win32") return installUnixOverlay(findCodexOnPath);
   return installCodexShimInternal({ allowFreshInstall: true });
 }
 
@@ -1086,6 +655,7 @@ export function autoRestoreCodexShim(options: {
   /** Narrow deterministic race seam for the guarded transaction tests. */
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void;
 }): CodexShimAutoRestoreResult {
+  if (process.platform !== "win32") return autoRestoreUnixOverlay(options.enabled);
   const stateRead = readStateResult();
   const state = stateRead.state;
   if (!state) {
@@ -1096,7 +666,6 @@ export function autoRestoreCodexShim(options: {
 
   const files = stateFiles(state);
   const replacementProbes = new Map<string, StableShimPathProbe>();
-  const obsoleteShimProbes = new Map<string, StableShimPathProbe>();
   const seen = new Set<string>();
   let healthyCount = 0;
   for (const file of files) {
@@ -1117,10 +686,6 @@ export function autoRestoreCodexShim(options: {
       if (!isHealthyShimProbe(probe, state.platform)) {
         return { status: "ineligible", message: destroyedShimMessage(file) };
       }
-      if (state.platform !== "win32" && !isCurrentUnixShimProbe(probe)) {
-        obsoleteShimProbes.set(file.wrapperPath, probe);
-        continue;
-      }
       healthyCount += 1;
       continue;
     }
@@ -1133,9 +698,9 @@ export function autoRestoreCodexShim(options: {
     replacementProbes.set(file.wrapperPath, probe);
   }
 
-  if (replacementProbes.size === 0 && obsoleteShimProbes.size === 0) return { status: "healthy" };
+  if (replacementProbes.size === 0) return { status: "healthy" };
   if (!options.enabled()) return { status: "disabled" };
-  if (files.length > 1 && (healthyCount > 0 || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
+  if (files.length > 1 && healthyCount > 0) {
     return {
       status: "deferred",
       message: "Codex shim auto-restore deferred because tracked launcher siblings are in a mixed shim/replacement state.",
@@ -1147,19 +712,6 @@ export function autoRestoreCodexShim(options: {
   try {
     options.afterRestoreLockAcquired?.();
     (options.stabilitySleep ?? Bun.sleepSync)(CODEX_SHIM_REPLACEMENT_STABLE_MS);
-    if (obsoleteShimProbes.size > 0) {
-      for (const [path, firstProbe] of obsoleteShimProbes) {
-        const secondProbe = stableShimPathProbe(path);
-        if (!secondProbe || isCurrentUnixShimProbe(secondProbe)
-          || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
-      }
-      const result = refreshObsoleteUnixShims(files);
-      return result.installed
-        ? { status: "restored", message: result.message }
-        : result.deferred
-          ? { status: "deferred", message: result.message }
-          : { status: "ineligible", message: result.message };
-    }
     const expectedReplacements = new Map<string, ShimPathFingerprint>();
     for (const [path, firstProbe] of replacementProbes) {
       const secondProbe = stableShimPathProbe(path);
@@ -1183,6 +735,17 @@ export function autoRestoreCodexShim(options: {
 export function uninstallCodexShim(): { removed: boolean; message: string } {
   const state = readState();
   if (!state) return { removed: false, message: "Codex autostart shim is not installed." };
+  if (state.mode === "path-overlay") return uninstallUnixOverlay(state);
+  if (process.platform !== "win32") {
+    const lock = tryAcquireShimRestoreLock();
+    if (!lock) return { removed: false, message: "Codex shim operation is in progress." };
+    try {
+      const migrated = migrateLegacyUnixShim(state);
+      if (!migrated.launcher) return { removed: false, message: migrated.message };
+      unlinkSync(statePath());
+      return { removed: true, message: migrated.message };
+    } finally { lock.release(); }
+  }
   const files = stateFiles(state);
   for (const file of files) {
     if (file.preserveOnly) continue;
@@ -1203,6 +766,8 @@ export function isCodexShimInstalled(): boolean {
 export interface CodexShimDiagnostic {
   installed: boolean;
   healthy: boolean;
+  runnable?: boolean;
+  active?: boolean;
   summary: string;
 }
 
@@ -1223,6 +788,7 @@ export function diagnoseCodexShim(): CodexShimDiagnostic {
       summary: "Codex autostart shim is not installed.",
     };
   }
+  if (state.mode === "path-overlay") return overlayDiagnostic(state);
   const files = stateFiles(state);
   const healthy = files.length > 0 && files.every(file => file.preserveOnly
     ? existsSync(file.backupPath) && !existsSync(file.originalPath)

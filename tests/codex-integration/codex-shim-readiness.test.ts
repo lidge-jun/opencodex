@@ -50,7 +50,7 @@ describe("Codex shim install readiness", () => {
       if (!result.stdout) throw new Error(result.stderr);
       expect(result.status).toBe(1);
       expect(result.stdout).toContain(process.platform === "win32"
-        ? "Refusing to rename a real .exe" : "Could not find a codex executable");
+        ? "Refusing to rename a real .exe" : "Native Codex launcher is missing");
     } finally { removeTreeWithRetry(root); }
   }, SHIM_INSTALL_CASE_MS);
 
@@ -167,7 +167,7 @@ describe("Codex shim install readiness", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
+      expect(result.stdout).toStartWith("⚠️  Codex PATH shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
       expect(result.stderr).toContain("config.proxy");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain(proxyUrl);
@@ -212,7 +212,7 @@ describe("Codex shim install readiness", () => {
         throw new Error(`Shim install fixture did not complete: error=${result.error?.name ?? "none"} signal=${result.signal ?? "none"}`);
       }
       expect(result.status).toBe(0);
-      expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
+      expect(result.stdout).toStartWith("⚠️  Codex PATH shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
       // A healthy no-op reports installed:false internally but must still exit successfully.
       const repeat = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
@@ -226,7 +226,7 @@ describe("Codex shim install readiness", () => {
       expect(repeat.stdout).toContain("already installed");
       expect(repeat.stderr).toContain("Codex routing could not be verified");
       // Keep the marker and backing file, but break the launch-time ensure contract.
-      writeFileSync(codex, readFileSync(codex, "utf8").replaceAll("ensure", "broken"));
+      writeFileSync(join(opencodexHome, "bin", "codex"), "#!/bin/sh\necho foreign\n");
       const damaged = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
         cwd: repoRoot,
         env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,

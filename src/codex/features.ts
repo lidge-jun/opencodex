@@ -1233,6 +1233,9 @@ function codexNativeBinaryCandidates(command: string): string[] {
 function selectedShimBackingPaths(commandPath: string): string[] {
   try {
     const state = JSON.parse(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8")) as {
+      schemaVersion?: unknown;
+      mode?: unknown;
+      launcherPath?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
@@ -1243,7 +1246,7 @@ function selectedShimBackingPaths(commandPath: string): string[] {
     const selected = resolve(commandPath);
     for (const entry of entries) {
       if (typeof entry.wrapperPath !== "string" || resolve(entry.wrapperPath) !== selected) continue;
-      return [entry.backupPath, entry.realPath, entry.originalPath]
+      return [state.schemaVersion === 2 && state.mode === "path-overlay" ? state.launcherPath : undefined, entry.backupPath, entry.realPath, entry.originalPath]
         .filter((value): value is string => typeof value === "string" && value.length > 0 && resolve(value) !== selected);
     }
   } catch {

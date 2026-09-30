@@ -226,26 +226,11 @@ ocx service uninstall
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-在 PATH 上以輕量自動啟動腳本包裝基於腳本的 `codex` 啟動器。真實的 `codex.exe` 目標保持不動，以避免破壞精確的可執行檔呼叫。
+macOS/Linux 的 shim 安裝於 OpenCodex 設定目錄的 `bin/codex`，轉送到套件管理器維護的原生入口，不再覆寫該入口。安裝後執行輸出的 PATH 啟用命令，並放在 shell 啟動檔的其他 PATH 設定之後；OpenCodex 不會自動編輯 shell 設定。狀態檢查區分腳本可執行與 PATH 已啟用，絕對路徑和 GUI 啟動不受保護。
 
-若已完成的外部 Codex 更新覆寫了已安裝的 shim，下一個普通 `ocx` 指令會備份穩定的新啟動器並在分派前還原 shim。零副作用的檢查指令 `ocx system codex-cli-update check` 與保留的 `ocx system codex-cli-update` 命名空間中的無效呼叫都不會執行此修復。仍在變動中的啟動器保持不動並稍後重試。修復失敗會發出警告但不會使請求的指令失敗；手動後備：`ocx codex-shim install`。將 `codexShimAutoRestore` 設為 `false`，或設定 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` 以進行行程層級的退出。
+`ocx codex-shim install` 會遷移舊的 Unix 安裝。如果儲存的目標已遺失，請使用套件管理器修復 Codex 後重試。自動修復只更新 Unix 私有 wrapper；Windows 腳本啟動器的行為不變。`uninstall` 移除私有 wrapper，不修改原生 Codex。解除安裝後請刪除 shell 啟動檔中的環境檔載入行。
 
-| 子指令 | 動作 |
-| --- | --- |
-| `install` | 安裝 shim（若過時則修復）。 |
-| `uninstall` | 移除 shim 並還原原始 Codex 二進位檔。 |
-| `remove` | `uninstall` 的別名。 |
-| `status` | 回報 shim 狀態（已安裝、過時或缺失）。 |
-
-```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
-```
-
-:::tip[服務 vs Shim]
-使用 `ocx service` 作為常駐背景代理（推薦）。使用 `ocx codex-shim` 作為輕量、按需啟動而無 daemon——代理僅在 `codex` 啟動時才啟動。
-:::
+[完整的安裝、遷移與驗證流程](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 

@@ -89,7 +89,7 @@ exit 7
     expect(result.status, `${result.signal ?? ""}: ${result.stderr}`).toBe(0);
     const installed = JSON.parse(result.stdout);
     expect(installed.installed, installed.message).toBe(true);
-    return { wrapper, env, ensureFile, probeEnvFile };
+    return { wrapper: join(home, "bin", "codex"), env, ensureFile, probeEnvFile };
   }
 
   test("installs through the compiled probe and confines BUN_BE_BUN to its supervisor", () => {

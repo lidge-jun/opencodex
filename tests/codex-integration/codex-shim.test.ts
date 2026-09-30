@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../../src/codex/shim";
 import { prependPath, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
@@ -313,8 +313,8 @@ exit 64
       const installed = installCodexShim();
 
       expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("saved launcher resolved back to the generated shim");
-      expect(installed.message).toContain("original launcher was restored");
+      expect(installed.message).toContain("recursive");
+      expect(installed.message).toContain("Native launcher was not replaced");
       expect(readFileSync(codexPath, "utf8")).toBe(original);
       expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
@@ -350,7 +350,8 @@ codex "$@"
 
       expect(installCodexShim().installed).toBe(true);
 
-      const result = spawnSync(codexPath, ["--help"], {
+      process.env.PATH = prependPath(join(home, "bin"), process.env.PATH);
+      const result = spawnSync(join(home, "bin", "codex"), ["--help"], {
         encoding: "utf8",
         env: { ...process.env, OCX_SHIM_BYPASS: "1" },
         timeout: 3_000,
@@ -389,7 +390,7 @@ exit 126
       const installed = installCodexShim();
 
       expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("saved launcher resolved back to the generated shim");
+      expect(installed.message).toContain("recursive");
       expect(readFileSync(codexPath, "utf8")).toBe(original);
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
@@ -419,8 +420,8 @@ exit 126
         const installed = installCodexShim();
 
         expect(installed.installed).toBe(true);
-        expect(readFileSync(codexPath, "utf8")).toContain(SHIM_MARKER);
-        expect(readFileSync(`${codexPath}.opencodex-real`, "utf8")).toBe(successfulLauncher("dash-valid-launcher"));
+        expect(readFileSync(join(home, "bin", "codex"), "utf8")).toContain(SHIM_MARKER);
+        expect(readFileSync(codexPath, "utf8")).toBe(successfulLauncher("dash-valid-launcher"));
         expect(existsSync(join(home, "codex-shim.json"))).toBe(true);
       } finally {
         setCodexShimProbeShellForTests(null);
@@ -490,7 +491,7 @@ exit 126
 
       const installed = installCodexShim();
       expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("probe process group could not be terminated cleanly");
+      expect(installed.message).toContain("cleanup failed");
       expect(installed.message).toContain("[phase=reentry; code=none;");
       expect(installed.message).not.toContain(rejectedDetail);
       expect(installed.message).not.toContain(shellPath);
@@ -526,8 +527,8 @@ exit 126
         const installed = installCodexShim();
 
         expect(installed.installed).toBe(true);
-        expect(readFileSync(codexPath, "utf8")).toContain(SHIM_MARKER);
-        expect(lstatSync(`${codexPath}.opencodex-real`).isFile()).toBe(true);
+        expect(readFileSync(join(home, "bin", "codex"), "utf8")).toContain(SHIM_MARKER);
+        expect(lstatSync(codexPath).isFile()).toBe(true);
       } finally {
         if (oldPath === undefined) delete process.env.PATH;
         else process.env.PATH = oldPath;
@@ -555,8 +556,8 @@ exit 126
         const installed = installCodexShim();
 
         expect(installed.installed).toBe(true);
-        expect(readFileSync(codexPath, "utf8")).toContain(SHIM_MARKER);
-        expect(lstatSync(`${codexPath}.opencodex-real`).isSymbolicLink()).toBe(true);
+        expect(readFileSync(join(home, "bin", "codex"), "utf8")).toContain(SHIM_MARKER);
+        expect(lstatSync(codexPath).isSymbolicLink()).toBe(true);
       } finally {
         if (oldPath === undefined) delete process.env.PATH;
         else process.env.PATH = oldPath;
@@ -594,7 +595,7 @@ exit 0
       const installed = installCodexShim();
 
       expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("left background descendants running after --version");
+      expect(installed.message).toContain("descendants");
       expect(readFileSync(codexPath, "utf8")).toBe(original);
       expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
@@ -648,7 +649,7 @@ os._exit(0)
         const installed = installCodexShim();
 
         expect(installed.installed).toBe(false);
-        expect(installed.message).toContain("saved launcher resolved back to the generated shim");
+        expect(installed.message).toContain("recursive");
         expect(readFileSync(codexPath, "utf8")).toBe(original);
         expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
         expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
@@ -760,17 +761,17 @@ wait "$child"
 
         expect(installed.installed).toBe(false);
         if (mode === "native" || mode === "disappears") {
-          expect(installed.message).toContain("did not finish --version within 5000ms");
+          expect(installed.message).toContain("timeout");
         } else {
           expect(installed.message).toContain("[phase=termination; code=EPERM; status=124; signal=none]");
-          expect(installed.message).not.toContain("did not finish --version within 5000ms");
+          expect(installed.message).not.toContain("timeout");
           expect(terminationElapsedMs).toBeGreaterThanOrEqual(1_000);
         }
         if (mode !== "native") {
           expect(killCalls).toBe(1);
           expect(passiveProbes).toBeGreaterThanOrEqual(2);
         }
-        expect(installed.message).toContain("original launcher was restored");
+        expect(installed.message).toContain("Native launcher was not replaced");
         expect(readFileSync(codexPath, "utf8")).toBe(original);
         expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
         expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
@@ -811,41 +812,6 @@ wait "$child"
     }, 10_000);
   }
 
-  test("Unix install preserves an existing backup without probing or mutation", () => {
-    if (process.platform === "win32") return;
-
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-backup-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-backup-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const backupPath = `${codexPath}.opencodex-real`;
-    const original = "#!/bin/sh\nprintf '%s\\n' original\n";
-    const backup = "#!/bin/sh\nprintf '%s\\n' preserved-backup\n";
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, original, "utf8");
-      writeFileSync(backupPath, backup, "utf8");
-      chmodSync(codexPath, 0o755);
-      chmodSync(backupPath, 0o755);
-
-      const installed = installCodexShim();
-
-      expect(installed).toEqual({ installed: false, message: `Refusing to overwrite existing backup: ${backupPath}` });
-      expect(readFileSync(codexPath, "utf8")).toBe(original);
-      expect(readFileSync(backupPath, "utf8")).toBe(backup);
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-    } finally {
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  });
-
   test("Unix install rolls back when the saved launcher fails its version probe", () => {
     if (process.platform === "win32") return;
 
@@ -864,7 +830,7 @@ wait "$child"
       const installed = installCodexShim();
 
       expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("saved launcher failed its --version probe");
+      expect(installed.message).toContain("failed");
       expect(readFileSync(codexPath, "utf8")).toBe(original);
       expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
@@ -901,235 +867,6 @@ wait "$child"
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
     } finally {
       setCodexShimProbeHookForTests(null);
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("Unix fresh install removes its marker-bearing partial wrapper before rollback", () => {
-    if (process.platform === "win32") return;
-
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-partial-write-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-partial-write-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const original = successfulLauncher("partial-write-original");
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, original, "utf8");
-      chmodSync(codexPath, 0o755);
-      setCodexShimFreshWriteHookForTests(() => {
-        writeFileSync(codexPath, `#!/bin/sh\n# ${SHIM_MARKER}\n`, "utf8");
-        throw new Error("synthetic fresh partial write failure");
-      });
-
-      expect(() => installCodexShim()).toThrow("synthetic fresh partial write failure");
-
-      expect(readFileSync(codexPath, "utf8")).toBe(original);
-      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-    } finally {
-      setCodexShimFreshWriteHookForTests(null);
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("Unix fresh install rolls an unprobeable original back into place", () => {
-    if (process.platform === "win32") return;
-
-    // #1625. An empty launcher is a legitimate thing for a user to own, and
-    // stableShimPathProbe deliberately returns null at zero bytes because it
-    // answers "does this look like a healthy shim". Recording the backup with
-    // that probe therefore left movedOriginalFingerprint unset, and rollback —
-    // which requires a matching fingerprint before it will restore — refused,
-    // stranding the launcher at codex.opencodex-real. Identity is metadata, not
-    // content, so the fingerprint must not depend on the file having bytes.
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-unprobeable-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-unprobeable-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const backupPath = `${codexPath}.opencodex-real`;
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, "", "utf8");
-      chmodSync(codexPath, 0o755);
-      setCodexShimFreshWriteHookForTests(() => {
-        throw new Error("synthetic unprobeable-original rollback");
-      });
-
-      expect(() => installCodexShim()).toThrow("synthetic unprobeable-original rollback");
-
-      // The launcher is back where the user had it, still empty and executable,
-      // and no backup residue is left behind.
-      expect(existsSync(codexPath)).toBe(true);
-      expect(readFileSync(codexPath, "utf8")).toBe("");
-      expect(lstatSync(codexPath).mode & 0o777).toBe(0o755);
-      expect(existsSync(backupPath)).toBe(false);
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-    } finally {
-      setCodexShimFreshWriteHookForTests(null);
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("Unix rollback restore refuses to replace a launcher published in the restore window", () => {
-    if (process.platform === "win32") return;
-
-    // #1625 follow-up. sourceOccupied is sampled before the backup fingerprint
-    // check, so a concurrent installer can still publish a launcher at the
-    // original path afterwards. renameSync would silently delete it; the restore
-    // uses link()+unlink(), which fails EEXIST instead. Only a hook inside that
-    // window can reach this: publishing any earlier makes sourceOccupied true and
-    // skips the restore branch entirely.
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-restore-window-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-restore-window-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const backupPath = `${codexPath}.opencodex-real`;
-    const original = successfulLauncher("restore-window-original");
-    const intruder = successfulLauncher("restore-window-concurrent-installer");
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, original, "utf8");
-      chmodSync(codexPath, 0o755);
-      setCodexShimFreshWriteHookForTests(() => {
-        throw new Error("synthetic restore-window failure");
-      });
-      setCodexShimRollbackRestoreHookForTests(() => {
-        writeFileSync(codexPath, intruder, "utf8");
-        chmodSync(codexPath, 0o755);
-      });
-
-      expect(() => installCodexShim()).toThrow();
-
-      // The competing launcher is untouched and the user's original is still
-      // recoverable from the backup instead of having been overwritten.
-      expect(readFileSync(codexPath, "utf8")).toBe(intruder);
-      expect(existsSync(backupPath)).toBe(true);
-      expect(readFileSync(backupPath, "utf8")).toBe(original);
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-    } finally {
-      setCodexShimFreshWriteHookForTests(null);
-      setCodexShimRollbackRestoreHookForTests(null);
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("Unix fresh install preserves a concurrent wrapper replacement after a successful probe", () => {
-    if (process.platform === "win32") return;
-
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-concurrent-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-concurrent-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const concurrent = successfulLauncher("fresh concurrent updater replacement");
-    const original = `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '%s\\n' '#!/bin/sh' '# fresh concurrent updater replacement' 'exit 0' > "${codexPath}"
-  chmod 755 "${codexPath}"
-fi
-exit 0
-`;
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, original, "utf8");
-      chmodSync(codexPath, 0o755);
-
-      const installed = installCodexShim();
-
-      expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("generated wrapper changed during its validation probe");
-      expect(readFileSync(codexPath, "utf8")).toBe(concurrent);
-      // The backup is kept, not deleted: the source path is occupied by a file we
-      // do not own, so this backup is the only copy of the user's real launcher.
-      // A stray `codex.opencodex-real` is recoverable; a deleted launcher is not.
-      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(true);
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-    } finally {
-      if (oldPath === undefined) delete process.env.PATH;
-      else process.env.PATH = oldPath;
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      removeTreeWithRetry(binDir);
-      removeTreeWithRetry(home);
-    }
-  });
-
-  test("Unix fresh install refuses to adopt a wrapper replaced between the write and the fingerprint", () => {
-    if (process.platform === "win32") return;
-
-    // Ownership must come from the inode we staged, not from stat-ing the path
-    // afterwards. A replacement that lands in that window carries the OpenCodex
-    // markers by coincidence or by design; adopting it means our rollback later
-    // unlinks an executable we never wrote.
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-adopt-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-adopt-home-"));
-    const oldPath = process.env.PATH;
-    const oldHome = process.env.OPENCODEX_HOME;
-    const codexPath = join(binDir, "codex");
-    const original = "#!/bin/sh\nexit 0\n";
-    // Marker-bearing, so a marker/prefix check alone would happily adopt it.
-    const intruder = `#!/bin/sh\n# ${SHIM_MARKER}\n# concurrent updater, not ours\nexit 0\n`;
-    try {
-      process.env.PATH = prependPath(binDir, oldPath);
-      process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, original, "utf8");
-      chmodSync(codexPath, 0o755);
-
-      setCodexShimFreshWriteHookForTests(() => {
-        // Replace the destination the way a real updater does: write a new file
-        // and rename it over ours, so the path now points at a different inode.
-        // (A plain writeFileSync would truncate our inode in place, which is a
-        // different situation — content tampering, not replacement.)
-        const replacement = `${codexPath}.updater-tmp`;
-        writeFileSync(replacement, intruder, "utf8");
-        chmodSync(replacement, 0o755);
-        renameSync(replacement, codexPath);
-      });
-      const installed = installCodexShim();
-
-      expect(installed.installed).toBe(false);
-      expect(installed.message).toContain("changed during its validation probe");
-      // The replacement survives: it is not ours, so rollback must not unlink it.
-      expect(readFileSync(codexPath, "utf8")).toBe(intruder);
-      // The user's real launcher is preserved rather than deleted, because the
-      // path is occupied by a file we do not own. A stray backup is recoverable;
-      // a deleted launcher is not.
-      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(true);
-      expect(readFileSync(`${codexPath}.opencodex-real`, "utf8")).toBe(original);
-      // No install state is published for a refused install.
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
-      // No staging artifact leaked into the user's PATH directory.
-      expect(readdirSync(binDir).filter(name => name.includes("opencodex-staging"))).toEqual([]);
-    } finally {
-      setCodexShimFreshWriteHookForTests(null);
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -1511,109 +1248,7 @@ printf '%s\\n' child-codex
     });
   });
 
-  test("auto-restore upgrades an obsolete Unix shim and validates its saved launcher", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const current = readFileSync(wrappers[0], "utf8");
-      const obsolete = obsoleteUnixShim(current);
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      expect(obsolete).not.toBe(current);
-      writeFileSync(wrappers[0], obsolete, "utf8");
-
-      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-
-      expect(result.status).toBe("restored");
-      expect(result.message).toContain("Upgraded Codex autostart shim");
-      expect(readFileSync(wrappers[0], "utf8")).toContain(UNIX_SHIM_REVISION_MARKER);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-      expect(diagnoseCodexShim()).toMatchObject({ installed: true, healthy: true });
-    });
-  });
-
-  test("manual install removes an obsolete Unix shim when its saved launcher recurses", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
-      const current = readFileSync(wrappers[0], "utf8");
-      const obsolete = obsoleteUnixShim(current);
-      const dynamicLauncher = join(binDir, "obsolete-dynamic-launcher");
-      const recursiveLauncher = `#!/bin/sh\nexec "${dynamicLauncher}" "$@"\n`;
-      writeFileSync(dynamicLauncher, "#!/bin/sh\nexec codex \"$@\"\n", "utf8");
-      writeFileSync(backups[0], recursiveLauncher, "utf8");
-      writeFileSync(wrappers[0], obsolete, "utf8");
-      chmodSync(dynamicLauncher, 0o755);
-      chmodSync(backups[0], 0o755);
-
-      const result = installCodexShim();
-
-      expect(result.installed).toBe(false);
-      expect(result.message).toContain("Removed an obsolete Codex autostart shim");
-      expect(result.message).toContain("original launcher was restored");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(recursiveLauncher);
-      expect(existsSync(backups[0])).toBe(false);
-      expect(existsSync(statePath)).toBe(false);
-      expect(diagnoseCodexShim()).toMatchObject({ installed: false, healthy: false });
-    });
-  });
-
-  test("obsolete Unix shim upgrade rolls back when probe infrastructure throws", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const current = readFileSync(wrappers[0], "utf8");
-      const obsolete = obsoleteUnixShim(current);
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], obsolete, "utf8");
-      setCodexShimProbeHookForTests(() => { throw new Error("synthetic obsolete upgrade probe failure"); });
-
-      let failure: unknown;
-      try {
-        installCodexShim();
-      } catch (error) {
-        failure = error;
-      } finally {
-        setCodexShimProbeHookForTests(null);
-      }
-
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect(readFileSync(wrappers[0], "utf8")).toBe(obsolete);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("obsolete Unix shim upgrade preserves a concurrent wrapper replacement", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
-      const current = readFileSync(wrappers[0], "utf8");
-      const obsolete = obsoleteUnixShim(current);
-      const concurrent = successfulLauncher("obsolete upgrade concurrent replacement");
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], obsolete, "utf8");
-      setCodexShimProbeHookForTests(() => {
-        writeFileSync(wrappers[0], concurrent, "utf8");
-        chmodSync(wrappers[0], 0o755);
-      });
-
-      let result!: ReturnType<typeof autoRestoreCodexShim>;
-      try {
-        result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-      } finally {
-        setCodexShimProbeHookForTests(null);
-      }
-
-      expect(result.status).toBe("deferred");
-      expect("message" in result && result.message).toContain("upgrade deferred because tracked launchers changed");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(concurrent);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-      expect(readdirSync(binDir).some(name => name.includes(".upgrade-"))).toBe(false);
-    });
-  });
-
-  test("stable shim replacement restores through the shared install transaction", () => {
+  test.skipIf(process.platform !== "win32")("stable shim replacement restores through the shared install transaction", () => {
     withInstalledShim(({ wrappers, backups }) => {
       const replacements = wrappers.map((wrapper, index) => successfulLauncher(`replacement-${index}`));
       wrappers.forEach((wrapper, index) => writeFileSync(wrapper, replacements[index], "utf8"));
@@ -1626,238 +1261,7 @@ printf '%s\\n' child-codex
     });
   });
 
-  test("guarded auto-restore rejects a recursive replacement and restores both launcher generations", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
-      const dynamicLauncher = join(binDir, "dynamic-codex-launcher");
-      const replacement = `#!/bin/sh\nexec "${dynamicLauncher}" "$@"\n`;
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(dynamicLauncher, "#!/bin/sh\nexec codex \"$@\"\n", "utf8");
-      writeFileSync(wrappers[0], replacement, "utf8");
-      chmodSync(dynamicLauncher, 0o755);
-      chmodSync(wrappers[0], 0o755);
-
-      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-
-      expect(result.status).toBe("deferred");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("guarded auto-restore rejects a replacement that fails its version probe", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const replacement = "#!/bin/sh\nexit 127\n";
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-
-      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-
-      expect(result.status).toBe("deferred");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("guarded auto-restore rolls back when probe infrastructure throws", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const replacement = successfulLauncher("guarded-probe-error-replacement");
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-      setCodexShimProbeHookForTests(() => { throw new Error("synthetic guarded probe failure"); });
-
-      let failure: unknown;
-      try {
-        autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-      } catch (error) {
-        failure = error;
-      } finally {
-        setCodexShimProbeHookForTests(null);
-      }
-
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect((failure as AggregateError).errors.map(error => String(error))).toContain("Error: synthetic guarded probe failure");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("guarded auto-restore removes its unfingerprinted partial wrapper before rollback", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const replacement = successfulLauncher("guarded-partial-write-replacement");
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-      setCodexShimGuardedWriteHookForTests(() => { throw new Error("synthetic failure after wrapper write"); });
-
-      let failure: unknown;
-      try {
-        autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-      } catch (error) {
-        failure = error;
-      } finally {
-        setCodexShimGuardedWriteHookForTests(null);
-      }
-
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect((failure as AggregateError).errors.map(error => String(error))).toContain("Error: synthetic failure after wrapper write");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("guarded auto-restore preserves a concurrent wrapper replacement after a successful probe", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
-      const concurrent = successfulLauncher("concurrent updater replacement");
-      const replacement = `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '%s\\n' '#!/bin/sh' '# concurrent updater replacement' 'exit 0' > "${wrappers[0]}"
-  chmod 755 "${wrappers[0]}"
-fi
-exit 0
-`;
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-
-      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
-
-      expect(result.status).toBe("deferred");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(concurrent);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-      expect(readdirSync(binDir).filter(name => name.includes(".autorestore-"))).toEqual([]);
-    });
-  });
-
-  test("missing-wrapper repair preserves a concurrent replacement after a successful probe", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const concurrent = successfulLauncher("missing-wrapper concurrent replacement");
-      const mutatingBackup = `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '%s\\n' '#!/bin/sh' '# missing-wrapper concurrent replacement' 'exit 0' > "${wrappers[0]}"
-  chmod 755 "${wrappers[0]}"
-fi
-exit 0
-`;
-      const oldState = readFileSync(statePath);
-      writeFileSync(backups[0], mutatingBackup, "utf8");
-      chmodSync(backups[0], 0o755);
-      rmSync(wrappers[0], { force: true });
-
-      const result = installCodexShim();
-
-      expect(result.installed).toBe(false);
-      expect(readFileSync(wrappers[0], "utf8")).toBe(concurrent);
-      expect(readFileSync(backups[0], "utf8")).toBe(mutatingBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("direct refresh rejects a recursive replacement without replacing the owned backup", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
-      const dynamicLauncher = join(binDir, "dynamic-codex-launcher");
-      const replacement = `#!/bin/sh\nexec "${dynamicLauncher}" "$@"\n`;
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(dynamicLauncher, "#!/bin/sh\nexec codex \"$@\"\n", "utf8");
-      writeFileSync(wrappers[0], replacement, "utf8");
-      chmodSync(dynamicLauncher, 0o755);
-      chmodSync(wrappers[0], 0o755);
-
-      const result = installCodexShim();
-
-      expect(result.installed).toBe(false);
-      expect(result.message).toContain("Refusing to overwrite existing backup");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("direct refresh rejects a replacement that fails its version probe", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const replacement = "#!/bin/sh\nexit 127\n";
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-
-      const result = installCodexShim();
-
-      expect(result.installed).toBe(false);
-      expect(result.message).toContain("Refusing to overwrite existing backup");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("direct refresh rolls back when probe infrastructure throws", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ wrappers, backups, statePath }) => {
-      const replacement = successfulLauncher("direct-probe-error-replacement");
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-      setCodexShimProbeHookForTests(() => { throw new Error("synthetic direct probe failure"); });
-
-      let failure: unknown;
-      try {
-        installCodexShim();
-      } catch (error) {
-        failure = error;
-      } finally {
-        setCodexShimProbeHookForTests(null);
-      }
-
-      expect(failure).toBeInstanceOf(AggregateError);
-      expect((failure as AggregateError).errors.map(error => String(error))).toContain("Error: synthetic direct probe failure");
-      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-    });
-  });
-
-  test("direct refresh preserves a concurrent wrapper replacement after an unsafe probe", () => {
-    if (process.platform === "win32") return;
-    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
-      const concurrent = successfulLauncher("concurrent unsafe updater replacement");
-      const replacement = `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '%s\\n' '#!/bin/sh' '# concurrent unsafe updater replacement' 'exit 0' > "${wrappers[0]}"
-  chmod 755 "${wrappers[0]}"
-fi
-exit 127
-`;
-      const oldBackup = readFileSync(backups[0]);
-      const oldState = readFileSync(statePath);
-      writeFileSync(wrappers[0], replacement, "utf8");
-
-      const result = installCodexShim();
-
-      expect(result.installed).toBe(false);
-      expect(readFileSync(wrappers[0], "utf8")).toBe(concurrent);
-      expect(readFileSync(backups[0])).toEqual(oldBackup);
-      expect(readFileSync(statePath)).toEqual(oldState);
-      expect(readdirSync(binDir).filter(name => name.includes(".autorestore-"))).toEqual([]);
-    });
-  });
-
-  test("an aged lock held by a live restore owner is never reclaimed", async () => {
+  test.skipIf(process.platform !== "win32")("an aged lock held by a live restore owner is never reclaimed", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-concurrent-bin-"));
     const home = mkdtempSync(join(tmpdir(), "ocx-shim-concurrent-home-"));
     const readyPath = join(home, "first-lock-ready");
@@ -1945,7 +1349,7 @@ exit 127
     }
   });
 
-  test("stale-lock compare-and-delete never unlinks a successor lock", () => {
+  test.skipIf(process.platform !== "win32")("stale-lock compare-and-delete never unlinks a successor lock", () => {
     withInstalledShim(({ home, wrappers, backups }) => {
       const lockPath = join(home, "codex-shim.autorestore.lock");
       const stalePath = join(lockPath, "stale-owner.json");
@@ -1976,7 +1380,7 @@ exit 127
     });
   });
 
-  test("an unchanged stale lock from a dead owner is reclaimed", () => {
+  test.skipIf(process.platform !== "win32")("an unchanged stale lock from a dead owner is reclaimed", () => {
     withInstalledShim(({ home, wrappers, backups }) => {
       const lockPath = join(home, "codex-shim.autorestore.lock");
       const ownerPath = join(lockPath, "dead-owner.json");
@@ -2000,7 +1404,7 @@ exit 127
     });
   });
 
-  test("stalled partial write changing during the observation interval is never promoted", () => {
+  test.skipIf(process.platform !== "win32")("stalled partial write changing during the observation interval is never promoted", () => {
     withInstalledShim(({ wrappers, backups }) => {
       const oldBackups = backups.map(path => readFileSync(path));
       wrappers.forEach((wrapper, index) => writeFileSync(wrapper, `partial-${index}\n`, "utf8"));
@@ -2016,7 +1420,7 @@ exit 127
     });
   });
 
-  test("mixed launcher siblings defer the whole restore without piecemeal mutation", () => {
+  test.skipIf(process.platform !== "win32")("mixed launcher siblings defer the whole restore without piecemeal mutation", () => {
     withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
       if (wrappers.length === 1) {
         const sibling = join(binDir, "codex.ps1");
@@ -2046,7 +1450,7 @@ exit 127
     });
   });
 
-  test("opt-out set -> no restore and explicit install remains available", () => {
+  test.skipIf(process.platform !== "win32")("opt-out set -> no restore and explicit install remains available", () => {
     withInstalledShim(({ wrappers }) => {
       const replacements = wrappers.map((_, index) => successfulLauncher(`disabled-${index}`));
       wrappers.forEach((wrapper, index) => writeFileSync(wrapper, replacements[index], "utf8"));
@@ -2058,7 +1462,7 @@ exit 127
     });
   });
 
-  test("fingerprint mismatch before guarded rename defers without owned-path mutation", () => {
+  test.skipIf(process.platform !== "win32")("fingerprint mismatch before guarded rename defers without owned-path mutation", () => {
     withInstalledShim(({ wrappers, backups, statePath }) => {
       wrappers.forEach((wrapper, index) => writeFileSync(wrapper, `candidate-${index}\n`, "utf8"));
       const oldBackups = backups.map(path => readFileSync(path));
@@ -2079,7 +1483,7 @@ exit 127
     });
   });
 
-  test("multi-wrapper restore rolls back when a later sibling fingerprint changes", () => {
+  test.skipIf(process.platform !== "win32")("multi-wrapper restore rolls back when a later sibling fingerprint changes", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-shim-transaction-home-"));
     const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-transaction-bin-"));
     const oldHome = process.env.OPENCODEX_HOME;
@@ -2131,7 +1535,7 @@ exit 127
     }
   });
 
-  test("missing backup, missing wrapper, corrupt state, and platform mismatch never fresh-install", () => {
+  test.skipIf(process.platform !== "win32")("missing backup, missing wrapper, corrupt state, and platform mismatch never fresh-install", () => {
     withInstalledShim(({ wrappers, backups, statePath }) => {
       rmSync(backups[0]);
       expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("ineligible");
@@ -2241,7 +1645,7 @@ describe("version-manager shim destruction (#2412)", () => {
       // The silent bail is the whole defect: cli/codex-shim-autorestore.ts warns
       // only when a message exists.
       expect(result.message).toBeTruthy();
-      expect(result.message).toContain("backup");
+      expect(result.message).toContain(process.platform === "win32" ? "backup" : "launcher");
     });
   });
 });
@@ -2281,17 +1685,16 @@ describe("Codex shim read-only backing inspection", () => {
         status: "matched",
         selectedRole: "wrapper",
         backingPath: backups[0]!,
-        backingKind: "backup",
+        backingKind: "real",
       });
       expect(inspectCodexShimBackingForCommand(backups[0]!)).toMatchObject({
         status: "matched",
         selectedRole: "backing",
         backingPath: backups[0]!,
-        backingKind: "backup",
+        backingKind: "real",
       });
 
-      const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<Record<string, unknown>> };
-      state.wrappers[0]!.preserveOnly = true;
+      const state = { platform: process.platform, wrappers: [{ wrapperPath: wrappers[0], originalPath: backups[0], backupPath: backups[0], preserveOnly: true }] };
       writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
       expect(inspectCodexShimBackingForCommand(wrappers[0]!)).toEqual({
         status: "unknown",

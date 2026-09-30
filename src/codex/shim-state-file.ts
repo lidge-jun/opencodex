@@ -6,16 +6,31 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  renameSync,
+  unlinkSync,
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 
 export const CODEX_SHIM_STATE_MAX_BYTES = 1024 * 1024;
 
+interface OverlayState {
+  schemaVersion: 2;
+  mode: "path-overlay";
+  platform: NodeJS.Platform;
+  wrapperPath: string;
+  launcherPath: string;
+}
+
+// Normalized compatibility view for backing inspection and legacy Windows code.
 interface ShimState {
+  schemaVersion?: 2;
+  mode?: "path-overlay";
+  launcherPath?: string;
   platform: NodeJS.Platform;
   wrapperPath: string;
   originalPath: string;
@@ -106,6 +121,17 @@ function readStateResult(path = statePath()): ShimStateReadResult {
     if (!value || typeof value !== "object") return { state: null, present: true };
     const state = value as Record<string, unknown>;
     if (typeof state.platform !== "string") return { state: null, present: true };
+    if (state.mode !== undefined || state.schemaVersion !== undefined) {
+      if (state.schemaVersion !== 2 || state.mode !== "path-overlay" || state.platform === "win32"
+        || typeof state.wrapperPath !== "string" || typeof state.launcherPath !== "string"
+        || !isAbsolute(state.launcherPath) || !isAbsolute(state.wrapperPath)
+        || resolve(state.wrapperPath) !== resolve(dirname(path), "bin", "codex")
+        || resolve(state.wrapperPath) === resolve(state.launcherPath)) return { state: null, present: true };
+      const overlay = state as unknown as OverlayState;
+      return { present: true, state: { ...overlay, originalPath: overlay.launcherPath,
+        backupPath: overlay.launcherPath, wrappers: [{ wrapperPath: overlay.wrapperPath,
+          originalPath: overlay.launcherPath, backupPath: overlay.launcherPath, realPath: overlay.launcherPath }] } };
+    }
     const validFile = (item: unknown): item is ShimFileState => {
       if (!item || typeof item !== "object") return false;
       const file = item as Record<string, unknown>;
@@ -134,11 +160,17 @@ function statePath(): string {
   return join(getConfigDir(), "codex-shim.json");
 }
 
-function writeState(state: ShimState): void {
+function writeState(state: ShimState | OverlayState): void {
   const path = statePath();
   recordOwnedConfigPath(getConfigDir(), path);
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2) + "\n", "utf8");
+  const staged = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(staged, JSON.stringify(state, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    renameSync(staged, path);
+  } finally {
+    try { unlinkSync(staged); } catch { /* already published */ }
+  }
 }
 
 function stateFiles(state: ShimState): ShimFileState[] {
@@ -147,5 +179,5 @@ function stateFiles(state: ShimState): ShimFileState[] {
     : [{ wrapperPath: state.wrapperPath, originalPath: state.originalPath, backupPath: state.backupPath }];
 }
 
-export type { ShimState, ShimFileState };
+export type { ShimState, ShimFileState, OverlayState };
 export { fileErrorCode, readStateResult, readState, statePath, writeState, stateFiles };

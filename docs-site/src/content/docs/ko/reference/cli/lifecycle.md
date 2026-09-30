@@ -353,62 +353,11 @@ Windows에서 Task Scheduler 항목을 만들려면 권한 상승이 필요합�
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-PATH 위의 스크립트 기반 `codex` 런처를 가벼운 자동 시작 스크립트로 감쌉니다. 정확한 실행 파일
-호출을 깨지 않도록 실제 `codex.exe` 대상은 손대지 않습니다.
-설치가 거부되거나 설치 후 shim이 비정상이면 명령은 실패 종료 코드를 반환하고 대시보드는 실패 사유를 표시합니다.
-이미 설치된 정상 shim은 성공으로 처리합니다. Windows에서 `codex.exe`만 제공되는 설치는 자동 시작에 `ocx service install`을 사용하세요.
+macOS/Linux에서는 shim을 OpenCodex 설정 디렉터리의 `bin/codex`에 설치하고 패키지 관리자의 실행 파일을 변경하지 않고 호출합니다. 설치 후 표시되는 PATH 활성화 명령을 실행하고 셸 시작 파일의 다른 PATH 설정 뒤에 추가하세요. 셸 설정은 자동으로 수정하지 않습니다. 절대 경로와 GUI 실행에는 적용되지 않습니다.
 
-설치나 복구를 확정하기 전에 OpenCodex는 서비스 시작을 우회한 상태에서 저장된 런처를
-`--version`으로 실행합니다. 런처가 `codex`를 shim으로 다시 해석해 재귀하거나, 0이 아닌 코드로
-종료하거나, 5초를 초과하거나, 실행 중인 자식 프로세스를 남기거나, 안전하게 검증·정리할 수 없으면
-변경을 거부하고 롤백합니다. 따라서 `codex-shim install`은 무조건 성공하는 명령이 아닙니다. 거부되면
-PATH 항목이 구체적인 실행 파일 또는 런처를 가리키도록 Codex를 다시 설치한 뒤 재시도하세요. 동적
-명령 관리자의 런처가 이 검증을 충족할 수 없다면 대신 `ocx service install`을 사용하세요.
-업그레이드할 때 현재 검증 가드가 없는 기존 Unix shim은 다시 생성하고 검증합니다. 저장된 런처가
-안전하지 않으면 OpenCodex는 위험한 wrapper를 그대로 두지 않고 구버전 shim을 제거한 뒤 원래
-런처를 복원합니다.
+`ocx codex-shim install`은 기존 Unix 설치를 마이그레이션합니다. 저장된 실행 대상이 없으면 패키지 관리자로 Codex를 복구한 뒤 다시 시도하세요. 자동 복구는 Unix 전용 wrapper만 갱신하며 Windows 스크립트 실행 방식은 유지됩니다. `uninstall`은 네이티브 Codex를 변경하지 않고 wrapper를 제거합니다. 셸 시작 파일의 환경 파일 로드 구문도 삭제하세요.
 
-완료된 외부 Codex 업데이트가 설치된 shim을 덮어쓰면, 다음 일반 `ocx` 명령이 안정적인 새 런처를
-백업하고 명령을 처리하기 전에 shim을 복원합니다. 부작용 없는 검사 명령 `ocx system codex-cli-update check`와 예약된 `ocx system codex-cli-update` namespace의 잘못된 호출은 이 복구를 수행하지 않습니다. 아직 변경 중인 런처는 건드리지 않고 나중에 다시 시도합니다.
-복구 실패는 요청한 명령을 실패시키지 않고 경고만 표시합니다. 수동 대체 수단은 `ocx codex-shim install`
-입니다. `codexShimAutoRestore`를 `false`로 설정하거나, 프로세스 수준에서 제외하려면
-`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정합니다.
-
-| 하위 명령 | 동작 |
-| --- | --- |
-| `install` | shim을 설치합니다(오래된 경우 복구도 수행합니다). |
-| `uninstall` | shim을 제거하고 원래 Codex 바이너리를 복원합니다. |
-| `remove` | `uninstall`의 별칭입니다. |
-| `status` | shim 상태(설치됨, 오래됨, 누락)를 보고합니다. |
-
-```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
-```
-
-:::note[Windows 토큰 환경]
-새로 생성된 Windows CMD 및 PowerShell shim은 실행 후 호출자의 `OPENCODEX_API_AUTH_TOKEN`을 원래 상태로 복원합니다. Codex와 자식 프로세스는 여전히 토큰을 상속할 수 있습니다.
-
-OpenCodex를 업데이트한 뒤 기존 Windows shim에 이 동작을 적용하려면 `ocx codex-shim uninstall`을 실행한 다음 `ocx codex-shim install`로 다시 설치하세요. 일반 업데이트는 정상인 Windows shim을 다시 작성하지 않습니다.
-:::
-
-:::tip[서비스와 shim]
-항상 켜져 있는 백그라운드 프록시에는 `ocx service`를 사용합니다(권장). 데몬 없이 가볍게 필요할
-때만 시작하려면 `ocx codex-shim`을 사용합니다. 이 경우 프록시는 `codex`를 실행할 때만 시작됩니다.
-:::
-
-#### Codex에 토큰 주입
-
-루프백이 아닌 주소에 바인딩하면 주입된 공급자에 `env_key = "OPENCODEX_API_AUTH_TOKEN"`이 포함됩니다. 이 줄은 Codex가 읽을 변수를 지정할 뿐, 변수를 생성하지는 않습니다. 변수가 없으면 Codex는 요청 시작을 거부하며(`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`), 요청은 프록시에 도달하지 않습니다. 값은 `$OPENCODEX_HOME/service-api-token`에 저장되며, 실행을 시작하는 프로세스가 Codex의 환경에 이 값을 제공해야 합니다.
-
-`ocx codex-shim install`로 설치되는 shim을 사용하세요. 실행 환경에서 이 shim이 선택되면 OpenCodex가 생성한 토큰 파일을 읽고 Codex에 변수를 제공합니다. 데스크톱, cron, 서비스에서 실행할 때는 shim을 선택하는 PATH 또는 실행기 경로를 사용해야 합니다. 설치 과정에서 이러한 환경이 자동으로 구성되지는 않습니다. Codex 자체의 자식 프로세스도 토큰을 상속할 수 있습니다.
-
-이 Bearer 토큰을 셸 시작 파일에서 내보내거나 `config.toml`에 복사하지 마세요. `service-api-token` 파일에는 `NAME=value` 형식의 대입문이 아닌 토큰 원문이 들어 있으므로 systemd의 `EnvironmentFile=`로 직접 사용할 수 없습니다.
-
-`opencodex-proxy.service`의 `EnvironmentFile=` 또는 `OCX_API_TOKEN_FILE`은 프록시 프로세스만 구성하며, 별도로 실행된 `codex exec`에 전달되지 않습니다.
-
-실행기를 교체하는 Codex 업그레이드는 shim을 제거합니다. 다음 일반 `ocx` 명령이 shim을 복원하지만(위 내용 참조), 그보다 먼저 실행되는 `codex exec`는 실패합니다. `ocx doctor`는 이 상태(env_key 구성됨, 변수 미설정, shim 누락 또는 비정상, 토큰 파일 존재)를 "Codex env_key launch readiness" 항목에서 복구 명령과 함께 보고하며, 토큰은 출력하지 않습니다. 토큰 파일 읽기는 주입된 `env_key`의 계약에 포함되지 않습니다. 실행을 시작하는 프로세스가 해당 변수를 제공해야 합니다.
+[설치, 마이그레이션 및 검증 전체 절차](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 

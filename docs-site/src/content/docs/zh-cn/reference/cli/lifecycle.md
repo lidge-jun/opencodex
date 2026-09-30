@@ -217,50 +217,11 @@ ocx service uninstall
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-在 PATH 上把基于脚本的 `codex` 启动器包装为一个轻量自启动脚本。真实的 `codex.exe` 目标会保持不变，以避免破坏精确的可执行文件调用。
+macOS/Linux 的 shim 现在安装在 OpenCodex 配置目录的 `bin/codex`，转发到包管理器维护的原生入口，不再覆盖该入口。安装后执行输出的 PATH 启用命令，并将它放在 shell 启动文件的其他 PATH 设置之后；OpenCodex 不会自动编辑 shell 配置。状态检查区分脚本可运行与 PATH 已启用，绝对路径和 GUI 启动不受保护。
 
-提交安装或修复前，OpenCodex 会在跳过服务启动的情况下，用 `--version` 运行已保存的启动器。如果启动器把 `codex` 再次解析到 shim、以非零状态退出、运行超过五秒、留下仍在运行的子进程，或无法被安全验证和清理，OpenCodex 会拒绝并回滚更改。因此 `codex-shim install` 并不是无条件安装。若被拒绝，请重新安装 Codex，使 PATH 条目指向具体的可执行文件或启动器，然后重试；如果动态命令管理器的启动器无法满足这些检查，请改用 `ocx service install`。
+`ocx codex-shim install` 会迁移旧的 Unix 安装。如果保存的目标已丢失，请用包管理器修复 Codex 后重试。自动修复仅更新 Unix 私有 wrapper；Windows 的脚本启动器行为保持不变。`uninstall` 移除私有 wrapper，不修改原生 Codex。卸载后请删除 shell 启动文件中的环境文件加载行。
 
-升级时，缺少当前验证保护的已安装 Unix shim 会被重新生成并接受探测。如果保存的启动器不安全，OpenCodex 会移除旧 shim 并恢复原始启动器，而不是保留不安全的 wrapper。
-
-仅安装启动器并不能证明 Codex 请求会经过 OpenCodex。完成健康安装后，命令会检查当前 Codex 路由；当路由由外部配置、用户自有网关管理或无法验证时，会显示警告而不是绿色成功。若出站代理变量只存在于当前进程，而 `config.proxy` 未设置或无法解析，也会给出警告，因为 Codex 启动器和后台服务未必继承该环境。这些检查只读且绝不会打印代理值；在依赖自动启动前，请先处理提示的交接配置并运行 `ocx doctor`。
-
-如果已完成的外部 Codex 更新覆盖了已安装的 shim，下一次普通的 `ocx` 命令会先备份稳定的新启动器，再在分发前恢复 shim。零副作用的检查命令 `ocx system codex-cli-update check` 和保留的 `ocx system codex-cli-update` 命名空间中的无效调用都不会执行这项修复。仍在变动中的启动器会保持不动，并在稍后重试。修复失败只会警告，不会让所请求的命令失败；手动回退：`ocx codex-shim install`。将 `codexShimAutoRestore` 设为 `false`，或设置 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`，即可在进程级别关闭自动恢复。
-
-| 子命令 | 操作 |
-| --- | --- |
-| `install` | 安装 shim（或在过期时修复）。 |
-| `uninstall` | 移除 shim 并恢复原始 Codex 二进制。 |
-| `remove` | `uninstall` 的别名。 |
-| `status` | 报告 shim 状态（已安装、过期或缺失）。 |
-
-```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
-```
-
-:::note[Windows 令牌环境]
-新生成的 Windows CMD 和 PowerShell shim 会在执行后恢复调用方原有的 `OPENCODEX_API_AUTH_TOKEN` 状态。Codex 及其子进程仍可能继承令牌。
-
-更新 OpenCodex 后，如需让现有 Windows shim 采用此行为，请先运行 `ocx codex-shim uninstall`，再运行 `ocx codex-shim install` 重新安装。常规更新不会重写正常的 Windows shim。
-:::
-
-:::tip[Service vs Shim]
-将 `ocx service` 用于始终在线的后台代理（推荐）。将 `ocx codex-shim` 用于无需守护进程的轻量按需启动——代理只会在启动 `codex` 时运行。
-:::
-
-#### 向 Codex 注入令牌
-
-绑定到非回环地址时，注入的提供程序包含 `env_key = "OPENCODEX_API_AUTH_TOKEN"`。这一行告诉 Codex 应读取哪个变量，但不会创建该变量。如果变量不存在，Codex 会拒绝发起请求（`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`），请求也不会到达代理。变量值保存在 `$OPENCODEX_HOME/service-api-token` 中；启动进程必须将其传入 Codex 的环境。
-
-请使用通过 `ocx codex-shim install` 安装且受维护的 shim。如果启动上下文选择此 shim，它会读取 OpenCodex 创建的令牌文件，并将变量传给 Codex。从桌面、cron 或服务启动时，必须使用能够选中该 shim 的 PATH 或启动器路径；安装过程不会自动配置这些环境。Codex 自身的子进程也可能继承令牌。
-
-不要在 shell 启动文件中导出此 Bearer 令牌，也不要将其复制到 `config.toml`。`service-api-token` 文件包含的是原始令牌，而不是 `NAME=value` 形式的赋值，因此不能直接用作 systemd 的 `EnvironmentFile=`。
-
-`opencodex-proxy.service` 中的 `EnvironmentFile=` 或 `OCX_API_TOKEN_FILE` 仅配置代理进程，绝不会传入独立启动的 `codex exec`。
-
-替换启动器的 Codex 升级会移除 shim；下一次执行普通的 `ocx` 命令时会将其恢复（见上文），但在此之前运行的 `codex exec` 会失败。`ocx doctor` 会在 "Codex env_key launch readiness" 项下报告这一确切状态（env_key 已配置、变量未设置、shim 缺失或不正常、令牌文件存在），并给出修复命令，且绝不会输出令牌。读取令牌文件不属于注入的 `env_key` 的约定；启动进程必须提供该变量。
+[完整的安装、迁移和验证流程](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
