@@ -819,7 +819,7 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
   if (authoritativeUsage) yield authoritativeUsage;
   let signatureType: string | undefined;
   for (const f of iterFields(proto)) {
-    if (f.num === 21 && f.wire === 2 && Buffer.isBuffer(f.value)) signatureType = (f.value as Buffer).toString('utf8') || undefined;
+    if (f.num === 21 && f.wire === 2 && Buffer.isBuffer(f.value) && f.value.length <= 4_096) signatureType = f.value.toString('utf8') || undefined;
   }
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {
