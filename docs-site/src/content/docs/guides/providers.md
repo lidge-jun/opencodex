@@ -406,6 +406,11 @@ the dashboard Codex account pool also performs. See
 
 ### Kiro request credits
 
+On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
+If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
+still runs, and only the resulting final answer is displayed. Progress accompanying a real
+tool call remains visible. A normal private final answer needs no completion retry.
+
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
 token counts may still be estimated, and the credit value does not replace USD cost estimates.

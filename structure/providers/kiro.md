@@ -122,6 +122,18 @@ raw body.
 
 ## Bounded fallback HTTP errors
 
+Tool-enabled turns in `src/adapters/kiro/stream.ts` hold ordinary text through the one
+bounded completion retry. A valid private final answer or accepted retry text supersedes
+first-attempt prose, so the client receives one final answer. A real tool call releases
+held progress as commentary before the tool; failed validation also releases progress
+and preserves the non-retryable boundary. Held events stay charged to the translator
+budget until emitted, discarded, or cancelled; replay collectors are released after
+retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
+progress from an answer and therefore still require validation. Normal private completion
+and real tool calls need no completion retry.
+Coverage: `tests/providers/kiro/kiro-single-final.test.ts` and
+`tests/server/server-kiro-completion-e2e.test.ts`.
+
 `src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
 
 When a first Kiro stream needs a completion fallback, the fallback response's non-success

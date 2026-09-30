@@ -972,6 +972,7 @@
   "kiro-review-regressions.test.ts": "providers/kiro",
   "kiro-metering-events.test.ts": "providers/kiro",
   "kiro-metering-usage.test.ts": "providers/kiro",
+  "kiro-single-final.test.ts": "providers/kiro",
   "kiro-stream.test.ts": "providers/kiro",
   "kiro-transport-parity.test.ts": "providers/kiro",
   "kiro-usage-quota.test.ts": "providers/kiro",
