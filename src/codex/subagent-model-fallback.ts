@@ -1001,9 +1001,10 @@ export function locateTomlModelKey(content: string): TomlModelKeyLocation | null
  * role file keeps its instructions in a multiline string, and that string contains the very words
  * this scan looks for. A line matcher would read a key out of prose.
  *
- * Table context is not tracked, matching the `model_fallback` parse. A `model` key under a later
- * table header would be read as the root pin; Codex role files are flat in practice, and for a
- * warning the conservative direction is to stay quiet.
+ * The scan reports whether the key sits in the root table, and this read ignores that flag on
+ * purpose: a `model` key under a later table header still counts as a pin, because for a warning
+ * the conservative direction is to stay quiet. The role listing and the writer in
+ * `src/codex/agent-role-models.ts` do gate on it, since they show and edit only the root value.
  */
 function parseTomlModelPin(content: string): string | null {
   return locateTomlModelKey(content)?.value ?? null;
