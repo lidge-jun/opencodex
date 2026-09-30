@@ -238,8 +238,9 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 interface CodexAgentRolesStatus {
-  roles?: Array<{ role: string; model: string | null; omoModel: string | null }>;
-  omo?: { state?: string };
+  lazycodex?: { detected?: boolean };
+  omoJsonc?: { state?: string } | null;
+  roles?: Array<{ role: string; model: string | null; omoJsoncModel: string | null }>;
 }
 
 async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -249,10 +250,15 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (action === "status") {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest<CodexAgentRolesStatus>("/api/codex-agent-roles", {}, deps);
+    if (result.lazycodex?.detected !== true) {
+      printData(result, wantsJson, ["omo (Codex / LazyCodex) is not installed in this CODEX_HOME; role models are managed only with it."]);
+      return;
+    }
     const rows = result.roles ?? [];
     printData(result, wantsJson, [
+      "omo (Codex / LazyCodex): detected",
       ...(rows.length === 0 ? ["No Codex agent roles found."] : rows.map(row => `${row.role}: ${row.model ?? "(no model pin)"}`)),
-      `omo.jsonc: ${result.omo?.state ?? "unknown"}`,
+      `omo.jsonc: ${result.omoJsonc?.state ?? "unknown"}`,
     ]);
     return;
   }
@@ -261,12 +267,12 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const model = args.shift();
   if (!role || !model) throw new CliUsageError("a role and a model are required", USAGE);
   rejectArgs(args, USAGE);
-  const result = await runtimeRequest<{ toml?: { status?: string }; omo?: { status?: string } }>(
+  const result = await runtimeRequest<{ toml?: { status?: string }; omoJsonc?: { status?: string } }>(
     `/api/codex-agent-roles/${encodeURIComponent(role)}`,
     { method: "PUT", body: JSON.stringify({ model }) },
     deps,
   );
-  const omo = result.omo?.status;
+  const omo = result.omoJsonc?.status;
   printData(result, wantsJson, [
     `${role}: ${model} (role TOML ${result.toml?.status ?? "unknown"})`,
     omo === "skipped_comments"

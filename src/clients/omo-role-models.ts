@@ -1,7 +1,8 @@
 /**
- * omo's per-role model setting for Codex, `codex.agents.<role>.model` in `~/.omo/omo.jsonc`.
+ * omo (Codex / LazyCodex)'s per-role model setting, `codex.agents.<role>.model` in `~/.omo/omo.jsonc`.
  *
- * LazyCodex 5.1.1 and later reads it. The file is omo's, so this writes only on an explicit
+ * LazyCodex 5.1.1 and later reads it, and callers reach this only after `detectLazyCodex`
+ * says LazyCodex is installed. The file is omo's, so this writes only on an explicit
  * dashboard or CLI pick, never creates the file, and refuses a file with comments: the write
  * re-serializes JSON, and a comment the user wrote would be lost without a word.
  */

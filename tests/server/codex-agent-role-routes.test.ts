@@ -22,6 +22,7 @@ beforeEach(() => {
   mkdirSync(join(root, "codex", "agents"), { recursive: true });
   mkdirSync(join(root, "home", ".omo"), { recursive: true });
   writeFileSync(join(root, "codex", "agents", "explorer.toml"), ROLE);
+  installLazyCodex();
   process.env.CODEX_HOME = join(root, "codex");
   process.env.HOME = join(root, "home");
   process.env.USERPROFILE = join(root, "home");
@@ -35,6 +36,14 @@ afterEach(() => {
 });
 
 const config = { port: 10100, providers: {}, defaultProvider: "openai" } as unknown as OcxConfig;
+const DETECTED = { detected: true, pluginEnabled: true, pluginInstalled: true };
+
+function installLazyCodex(): void {
+  const plugin = join(root, "codex", "plugins", "cache", "sisyphuslabs", "omo", "5.1.1");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(join(plugin, "lazycodex-install.json"), "{}");
+  writeFileSync(join(root, "codex", "config.toml"), '[plugins."omo@sisyphuslabs"]\nenabled = true\n');
+}
 
 async function call(path: string, init?: RequestInit): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await handleManagementAPI(new Request(`http://localhost${path}`, init), new URL(`http://localhost${path}`), config);
@@ -50,24 +59,52 @@ describe("/api/codex-agent-roles", () => {
   test("round-trips a role model through the TOML and omo.jsonc", async () => {
     writeFileSync(join(root, "home", ".omo", "omo.jsonc"), '{ "codex": {} }\n');
     expect((await call("/api/codex-agent-roles")).body).toEqual({
-      roles: [{ role: "explorer", model: "gpt-5.5", omoModel: null }],
-      omo: { state: "present" },
+      lazycodex: DETECTED,
+      omoJsonc: { state: "present" },
+      roles: [{ role: "explorer", model: "gpt-5.5", omoJsoncModel: null }],
     });
     const saved = await put("explorer", "xai/grok-4.5");
     expect(saved.status).toBe(200);
-    expect(saved.body).toEqual({ ok: true, role: "explorer", model: "xai/grok-4.5", toml: { status: "written" }, omo: { status: "written" } });
+    expect(saved.body).toEqual({ ok: true, role: "explorer", model: "xai/grok-4.5", toml: { status: "written" }, omoJsonc: { status: "written" } });
     expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE.replace('model = "gpt-5.5"', 'model = "xai/grok-4.5"'));
-    expect((await call("/api/codex-agent-roles")).body.roles).toEqual([{ role: "explorer", model: "xai/grok-4.5", omoModel: "xai/grok-4.5" }]);
+    expect((await call("/api/codex-agent-roles")).body.roles).toEqual([{ role: "explorer", model: "xai/grok-4.5", omoJsoncModel: "xai/grok-4.5" }]);
+  });
+
+  test("without LazyCodex it lists nothing, writes nothing, and never opens omo.jsonc", async () => {
+    writeFileSync(join(root, "codex", "config.toml"), "");
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(omoPath, '{ "codex": {} }\n');
+    const nativeRead = fs.readFileSync;
+    const reads: string[] = [];
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) => {
+      reads.push(String(path));
+      return nativeRead(path, options as BufferEncoding);
+    }) as never);
+    try {
+      expect((await call("/api/codex-agent-roles")).body).toEqual({
+        lazycodex: { detected: false, pluginEnabled: false, pluginInstalled: true },
+        omoJsonc: null,
+        roles: [],
+      });
+      const refused = await put("explorer", "m");
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("lazycodex_not_detected");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(reads).not.toContain(omoPath);
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE);
+    expect(readFileSync(omoPath, "utf8")).toBe('{ "codex": {} }\n');
   });
 
   test("reports an absent or commented omo.jsonc without writing it", async () => {
-    expect((await put("explorer", "m1")).body.omo).toEqual({ status: "absent" });
+    expect((await put("explorer", "m1")).body.omoJsonc).toEqual({ status: "absent" });
     const commented = '{ // mine\n  "codex": {} }\n';
     writeFileSync(join(root, "home", ".omo", "omo.jsonc"), commented);
-    expect((await call("/api/codex-agent-roles")).body.omo).toEqual({ state: "comments" });
+    expect((await call("/api/codex-agent-roles")).body.omoJsonc).toEqual({ state: "comments" });
     const result = await put("explorer", "m2");
     expect(result.body.toml).toEqual({ status: "written" });
-    expect(result.body.omo).toEqual({ status: "skipped_comments" });
+    expect(result.body.omoJsonc).toEqual({ status: "skipped_comments" });
     expect(readFileSync(join(root, "home", ".omo", "omo.jsonc"), "utf8")).toBe(commented);
   });
 
@@ -92,12 +129,13 @@ describe("/api/codex-agent-roles", () => {
       const listed = await call("/api/codex-agent-roles");
       expect(listed.status).toBe(200);
       expect(listed.body).toEqual({
-        roles: [{ role: "explorer", model: "gpt-5.5", omoModel: null }],
-        omo: { state: "unreadable" },
+        lazycodex: DETECTED,
+        omoJsonc: { state: "unreadable" },
+        roles: [{ role: "explorer", model: "gpt-5.5", omoJsoncModel: null }],
       });
       const saved = await put("explorer", "m3");
       expect(saved.body.toml).toEqual({ status: "written" });
-      expect(saved.body.omo).toEqual({ status: "write_failed" });
+      expect(saved.body.omoJsonc).toEqual({ status: "write_failed" });
     } finally {
       spy.mockRestore();
     }

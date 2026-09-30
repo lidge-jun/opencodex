@@ -1186,7 +1186,7 @@ JSON mode: `payload`.
 
 ### `ocx agent roles`
 
-Show each Codex agent role's model pin, or set one role's model in its TOML and in omo.jsonc.
+omo (Codex / LazyCodex): show each Codex agent role's model pin, or set one role's model in its TOML and in omo.jsonc.
 
 | Method | Route |
 |---|---|
@@ -1200,6 +1200,7 @@ Show each Codex agent role's model pin, or set one role's model in its TOML and 
 JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
+- Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles and set is refused.
 - set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.
 
 ### `ocx api policy`

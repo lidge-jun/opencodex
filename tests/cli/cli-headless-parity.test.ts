@@ -947,7 +947,7 @@ describe("headless GUI parity CLI", () => {
   });
 
   test("agent roles reads and sets through the role-model routes, --json in any position", async () => {
-    const runtime = fakeRuntime(req => req.method === "GET" ? { roles: [], omo: { state: "absent" } } : undefined);
+    const runtime = fakeRuntime(req => req.method === "GET" ? { lazycodex: { detected: true }, omoJsonc: { state: "absent" }, roles: [] } : undefined);
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     try {
       expect(await handleAgentCommand(["roles", "--json"], runtime.deps)).toBe(0);

@@ -1,5 +1,7 @@
 /**
- * Per-role model for Codex agent roles: `$CODEX_HOME/agents/<role>.toml` plus omo's mirror.
+ * Per-role model for omo (Codex / LazyCodex): `$CODEX_HOME/agents/<role>.toml` plus LazyCodex's
+ * `codex.agents.<role>.model` mirror in omo.jsonc. Both halves exist only when LazyCodex is
+ * detected; Pi-based and OpenCode-based omo are never read here.
  *
  * Loaded on demand from `src/server/management-api.ts`, like the quota-reset handler, so a
  * dashboard request that never opens the omo tab loads neither writer.
@@ -12,25 +14,37 @@ const ROLE_PATH_PREFIX = "/api/codex-agent-roles/";
 
 export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config } = ctx;
-  const [{ getCodexHome }, roles, omo] = await Promise.all([
+  const [{ getCodexHome }, roles, omo, { detectLazyCodex }] = await Promise.all([
     import("../../codex/paths"),
     import("../../codex/agent-role-models"),
     import("../../clients/omo-role-models"),
+    import("../../clients/lazycodex"),
   ]);
 
   if (url.pathname === "/api/codex-agent-roles" && req.method === "GET") {
+    const codexHome = getCodexHome();
+    const lazycodex = detectLazyCodex(codexHome);
+    if (!lazycodex.detected) return jsonResponse({ lazycodex, omoJsonc: null, roles: [] }, 200, req, config);
     const omoState = omo.readOmoRoleModels(omo.omoJsoncPath());
     const omoModels = omoState.state === "present" ? omoState.models : {};
     return jsonResponse({
-      roles: roles.listCodexAgentRoleModels(getCodexHome()).map(entry => ({
+      lazycodex,
+      omoJsonc: { state: omoState.state },
+      roles: roles.listCodexAgentRoleModels(codexHome).map(entry => ({
         ...entry,
-        omoModel: omoModels[entry.role] ?? null,
+        omoJsoncModel: omoModels[entry.role] ?? null,
       })),
-      omo: { state: omoState.state },
     }, 200, req, config);
   }
 
   if (!url.pathname.startsWith(ROLE_PATH_PREFIX) || req.method !== "PUT") return null;
+  const codexHome = getCodexHome();
+  if (!detectLazyCodex(codexHome).detected) {
+    return jsonResponse({
+      error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME",
+      code: "lazycodex_not_detected",
+    }, 409, req, config);
+  }
   let role: string;
   try {
     role = decodeURIComponent(url.pathname.slice(ROLE_PATH_PREFIX.length));
@@ -49,7 +63,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   let toml: { status: "written" | "unchanged" };
   try {
     model = roles.validateAgentRoleModel(body?.model);
-    toml = roles.writeCodexAgentRoleModel(role, model, getCodexHome());
+    toml = roles.writeCodexAgentRoleModel(role, model, codexHome);
   } catch (error) {
     if (error instanceof roles.AgentRoleModelError) {
       const status = error.code === "unknown_role" ? 404 : error.code === "invalid_model" ? 400 : 409;
@@ -65,5 +79,5 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   } catch {
     omoStatus = "write_failed";
   }
-  return jsonResponse({ ok: true, role, model, toml, omo: { status: omoStatus } }, 200, req, config);
+  return jsonResponse({ ok: true, role, model, toml, omoJsonc: { status: omoStatus } }, 200, req, config);
 }
