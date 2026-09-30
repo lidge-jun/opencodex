@@ -14,6 +14,7 @@ let apiBase = "";
 let puts: Array<{ url: string; body: unknown }> = [];
 let omoWriteStatus = "written";
 let putFailure: { status: number; body: unknown } | null = null;
+let rolesFailure: { status: number; body: unknown } | null = null;
 let rolesBody: unknown;
 let fetched: string[] = [];
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   fetched = [];
   omoWriteStatus = "written";
   putFailure = null;
+  rolesFailure = null;
   rolesBody = {
     lazycodex: { detected: true, pluginEnabled: true, pluginInstalled: true },
     omoJsonc: { state: "present" },
@@ -60,6 +62,7 @@ beforeEach(() => {
       return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
+    if (rolesFailure) return json(rolesFailure.body, rolesFailure.status);
     return json(rolesBody);
   }) as typeof fetch;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
@@ -128,6 +131,21 @@ test("renders nothing and loads no model list when LazyCodex is not detected", a
   await mount();
   expect(container.innerHTML).toBe("");
   expect(fetched).toEqual([`${apiBase}/api/codex-agent-roles`]);
+});
+
+test("a failed role load shows the localized error with a retry that recovers the table", async () => {
+  rolesFailure = { status: 500, body: { error: "EACCES: permission denied, open '/secret/path'" } };
+  await mount();
+  expect(container.textContent).toContain("Could not load Codex agent roles.");
+  expect(container.textContent).not.toContain("EACCES");
+  expect(container.querySelector("table")).toBeNull();
+  const retry = [...container.querySelectorAll("button")].find(button => button.textContent === "Retry") as HTMLButtonElement;
+  expect(retry).toBeDefined();
+  rolesFailure = null;
+  await act(async () => { retry.click(); });
+  await settle();
+  expect(container.textContent).not.toContain("Could not load Codex agent roles.");
+  expect(container.textContent).toContain("explorer");
 });
 
 test("says when omo.jsonc was skipped because of its comments", async () => {

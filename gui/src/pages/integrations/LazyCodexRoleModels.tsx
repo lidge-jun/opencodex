@@ -93,6 +93,16 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     ];
   };
 
+  if (resource.state.kind === "failed-cold") {
+    return (
+      <Notice tone="err">
+        {t("integrations.lazycodexRoles.loadFailed")}{" "}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void resource.refresh()}>
+          {t("common.retry")}
+        </button>
+      </Notice>
+    );
+  }
   if (!data?.detected) return null;
 
   return (
