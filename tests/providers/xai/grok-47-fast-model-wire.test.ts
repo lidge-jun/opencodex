@@ -21,6 +21,7 @@ import { removeTreeWithRetry } from "../../helpers/remove-tree";
 const LOGICAL_MODEL = "grok-4.7";
 const FAST_MODEL = "grok-4.7-build-fast";
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
+const BACKUP_BASE_URL = "https://grok47-backup.test/v1";
 type Body = Record<string, unknown>;
 type Server = ReturnType<typeof startServer>;
 interface CapturedSend { url: string; body: Body; authorization: string | null }
@@ -118,7 +119,7 @@ function upstreamReply(body: Body, chat: boolean, sequence: number): Response {
   });
 }
 
-async function launch(config = xaiConfig(), statuses: number[] = []) {
+async function launch(config = xaiConfig(), statuses: number[] = [], failingEndpoint?: string) {
   if (config.providers.xai?.authMode === "oauth") {
     await saveCredential("xai", {
       access: "fake-xai-old-access", refresh: "fake-xai-refresh", expires: Date.now() + 3_600_000,
@@ -141,11 +142,13 @@ async function launch(config = xaiConfig(), statuses: number[] = []) {
     const endpoints = [
       `${XAI_GROK_CLI_BASE_URL}/responses`, `${XAI_GROK_CLI_BASE_URL}/chat/completions`,
       "https://api.x.ai/v1/responses", "https://api.x.ai/v1/chat/completions",
+      `${BACKUP_BASE_URL}/responses`,
     ];
     if (!endpoints.includes(url)) throw new Error(`Unexpected outbound request: ${url}`);
     const body = await request.json() as Body;
     sends.push({ url, body, authorization: request.headers.get("authorization") });
-    if (statuses.shift() === 401) return Response.json({ error: { message: "fixture rejected access" } }, { status: 401 });
+    const status = url === failingEndpoint ? 500 : statuses.shift() ?? 200;
+    if (status !== 200) return Response.json({ error: { message: "fixture rejected request" } }, { status });
     return upstreamReply(body, url.endsWith("/chat/completions"), sends.length);
   }) as typeof fetch;
   server = startServer(0);
@@ -172,11 +175,11 @@ function assertFastSend(send: CapturedSend): void {
   expect(Object.hasOwn(send.body, "service_tier")).toBe(false);
 }
 
-function assertFastReceipts(): void {
+function assertFastReceipts(receiptModel = LOGICAL_MODEL): void {
   const log = getRequestLogEntries().at(-1);
   const usage = readUsageEntries().at(-1);
   for (const receipt of [log, usage]) {
-    expect(receipt?.model).toBe(LOGICAL_MODEL);
+    expect(receipt?.model).toBe(receiptModel);
     expect(receipt?.wireModel).toBe(FAST_MODEL);
     expect(receipt?.attempts).toHaveLength(1);
     expect(receipt?.attempts?.[0]?.model).toBe(LOGICAL_MODEL);
@@ -259,6 +262,117 @@ describe("Grok 4.7 Fast serialized upstream model", () => {
     expect(fixture.counts.refresh).toBe(1);
     assertFastReceipts();
     expect(readUsageEntries().at(-1)?.attempts?.[0]?.sendCount).toBe(2);
+  });
+
+  test("WebSocket response.create sends build-fast without a tier and preserves logical receipts", async () => {
+    const fixture = await launch(xaiConfig("oauth", { websockets: true }));
+    const url = new URL("/v1/responses", fixture.server.url);
+    url.protocol = "ws:";
+    const socket = new WebSocket(url);
+    let unsubscribe = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const completed = await new Promise<Body>((resolve, reject) => {
+        let terminal: Body | undefined;
+        let finalized: RequestLogEntry | undefined;
+        const settle = () => { if (terminal && finalized) resolve(terminal); };
+        unsubscribe = observeRequestLogsForTests(entry => {
+          if (entry.provider !== "xai" || entry.model !== LOGICAL_MODEL) return;
+          finalized = entry;
+          settle();
+        });
+        timer = setTimeout(() => reject(new Error("Grok Fast WebSocket turn or receipt timed out")), 4_000);
+        socket.addEventListener("open", () => {
+          socket.send(JSON.stringify({ type: "response.create", ...responsesBody({ stream: true }) }));
+        }, { once: true });
+        socket.addEventListener("message", event => {
+          try {
+            const payload = JSON.parse(String(event.data)) as Body;
+            if (payload.type === "error" || payload.type === "response.failed") {
+              reject(new Error(`Grok Fast WebSocket failed: ${JSON.stringify(payload)}`));
+            } else if (payload.type === "response.completed") {
+              terminal = payload.response as Body;
+              settle();
+            }
+          } catch (error) { reject(error); }
+        });
+        socket.addEventListener("error", () => reject(new Error("Grok Fast WebSocket connection failed")), { once: true });
+        socket.addEventListener("close", () => {
+          if (!terminal) reject(new Error("Grok Fast WebSocket closed before completion"));
+        }, { once: true });
+      });
+      expect(completed.status).toBe("completed");
+      expect(fixture.sends).toHaveLength(1);
+      expect(fixture.sends[0]!.url).toBe(`${XAI_GROK_CLI_BASE_URL}/responses`);
+      assertFastSend(fixture.sends[0]!);
+      assertFastReceipts();
+      expect(getRequestLogEntries().at(-1)).toMatchObject({ status: 200, terminalStatus: "completed" });
+    } finally {
+      clearTimeout(timer);
+      unsubscribe();
+      socket.close();
+    }
+  });
+
+  test.each([
+    { label: "global fastMode", fastMode: true, tier: {} },
+    { label: "caller priority", fastMode: undefined, tier: { service_tier: "priority" } },
+  ])("combo OAuth child with $label sends build-fast without a tier", async ({ label, fastMode, tier }) => {
+    const comboId = label === "caller priority" ? "fast-child-caller" : "fast-child-global";
+    const config = xaiConfig("oauth", {
+      fastMode,
+      combos: { [comboId]: { strategy: "failover", targets: [{ provider: "xai", model: LOGICAL_MODEL }] } },
+    });
+    const fixture = await launch(config);
+    await post(fixture.server, responsesBody({ model: `combo/${comboId}`, ...tier }));
+    expect(fixture.sends).toHaveLength(1);
+    expect(fixture.sends[0]!.url).toBe(`${XAI_GROK_CLI_BASE_URL}/responses`);
+    assertFastSend(fixture.sends[0]!);
+    assertFastReceipts(`combo/${comboId}`);
+  });
+
+  test("combo OAuth 500 fallback keeps the backup model and its priority tier without a build-fast leak", async () => {
+    // Combo targets select provider entries, not auth modes; one xai entry cannot mix OAuth and key auth.
+    const backupModel = "backup-model";
+    const config = xaiConfig("oauth", {
+      combos: { "fast-failover": { strategy: "failover", targets: [
+        { provider: "xai", model: LOGICAL_MODEL }, { provider: "backup", model: backupModel },
+      ] } },
+    });
+    config.providers.backup = {
+      adapter: "openai-responses", baseUrl: BACKUP_BASE_URL, authMode: "key",
+      apiKey: "fake-backup-wire-key", models: [backupModel], supportsServiceTier: true,
+    };
+    const fixture = await launch(config, [], `${XAI_GROK_CLI_BASE_URL}/responses`);
+    const json = await post(fixture.server, responsesBody({
+      model: "combo/fast-failover", service_tier: "priority",
+    }));
+    const xaiSends = fixture.sends.slice(0, -1);
+    expect(xaiSends.length).toBeGreaterThan(0);
+    for (const send of xaiSends) {
+      expect(send.url).toBe(`${XAI_GROK_CLI_BASE_URL}/responses`);
+      assertFastSend(send);
+    }
+    expect(fixture.sends.at(-1)).toMatchObject({
+      url: `${BACKUP_BASE_URL}/responses`, authorization: "Bearer fake-backup-wire-key",
+      body: { model: backupModel, service_tier: "priority" },
+    });
+    expect(JSON.stringify(fixture.sends.at(-1)!.body)).not.toContain(FAST_MODEL);
+    expect(json.model).toBe(backupModel);
+    for (const receipt of [getRequestLogEntries().at(-1), readUsageEntries().at(-1)]) {
+      expect(receipt).toMatchObject({
+        model: "combo/fast-failover", resolvedModel: backupModel,
+        attempts: [
+          { provider: "xai", model: LOGICAL_MODEL, status: 500 },
+          { provider: "backup", model: backupModel, status: 200 },
+        ],
+      });
+      expect(receipt?.wireModel).not.toBe(FAST_MODEL);
+      expect(receipt?.attempts?.[0]?.sendCount).toBe(xaiSends.length);
+      expect(receipt?.attempts?.[1]?.sendCount).toBe(1);
+      expect(receipt?.attempts?.[0]?.tierOutcome).toMatchObject({ wireKind: "model-variant", wireValue: FAST_MODEL });
+      expect(receipt?.attempts?.[1]?.tierOutcome).toMatchObject({ wireKind: "service-tier", wireValue: "priority" });
+    }
   });
 
   test.each(["low", "high", "xhigh"])("Fast sends the same reasoning as the plain request (%s)", async effort => {
