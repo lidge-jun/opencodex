@@ -262,6 +262,7 @@ export const vi: Record<TKey, string> = {
   "startup.disabled": "Đã tắt",
   "startup.protection.desktop": "Ứng dụng máy tính",
   "startup.desktopHint": "Khởi chạy khi đăng nhập và giám sát proxy tích hợp. Xác minh quyền quản lý và các tiến trình đang chạy.",
+  "startup.desktopRecovery": "OpenCodex quản lý proxy này. Mở lại ứng dụng máy tính và kiểm tra khởi động khi đăng nhập. Không thể thay đổi dịch vụ hay trình khởi chạy khi ứng dụng đang quản lý proxy.",
   "startup.protection.service": "Service nền",
   "startup.protection.shim": "Trình bao bọc khởi chạy",
   "startup.protection.none": "Chưa cài đặt",

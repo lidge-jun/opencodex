@@ -267,6 +267,7 @@ export const ja: Record<TKey, string> = {
   "startup.disabled": "無効",
   "startup.protection.desktop": "デスクトップアプリ",
   "startup.desktopHint": "ログイン時に起動し、内蔵プロキシを監視します。所有権の記録と実行中のプロセスを確認します。",
+  "startup.desktopRecovery": "OpenCodex がこのプロキシを管理しています。デスクトップアプリを開き直し、ログイン時の起動を確認してください。アプリが管理している間はサービスとランチャーを変更できません。",
   "startup.protection.service": "バックグラウンドサービス",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未インストール",

@@ -1,4 +1,7 @@
 {
+    "service-desktop-startup-health.test.ts": "service",
+    "service-desktop-startup.test.ts": "service",
+    "startup-health-packaged-probe.test.ts": "server",
   "cursor-local-installer.test.ts": "providers/cursor",
     "codex-quota-query-backoff.test.ts": "codex-integration",
   "link-relay-bound-transport.test.ts": "clients",

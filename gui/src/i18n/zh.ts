@@ -262,6 +262,7 @@ export const zh: Record<TKey, string> = {
   "startup.disabled": "已禁用",
   "startup.protection.desktop": "桌面应用",
   "startup.desktopHint": "登录时启动，由桌面应用守护内置代理；已核对接管记录和实际进程。",
+  "startup.desktopRecovery": "OpenCodex 桌面应用正在接管此代理。请重新打开应用并检查“登录时启动”。桌面应用仍持有接管记录时，服务和启动脚本的更改保持禁用。",
   "startup.protection.service": "后台服务",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未安装",

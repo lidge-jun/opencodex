@@ -154,6 +154,7 @@ export const zhTW: Record<TKey, string> = {
   "startup.disabled": "已停用",
   "startup.protection.desktop": "桌面應用程式",
   "startup.desktopHint": "登入時啟動，由桌面應用程式守護內建代理；已核對接管記錄和實際程序。",
+  "startup.desktopRecovery": "OpenCodex 桌面應用程式正在接管此代理。請重新開啟應用程式並檢查「登入時啟動」。桌面應用程式仍持有接管記錄時，服務和啟動指令碼的變更保持停用。",
   "startup.protection.service": "背景服務",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "未安裝",

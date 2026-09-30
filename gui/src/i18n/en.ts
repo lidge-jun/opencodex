@@ -269,6 +269,7 @@ export const en = {
   "startup.disabled": "Disabled",
   "startup.protection.desktop": "Desktop app",
   "startup.desktopHint": "Starts at login; the desktop app supervises its bundled proxy. Ownership and live processes are verified.",
+  "startup.desktopRecovery": "OpenCodex owns this proxy. Reopen the desktop app and check Start at Login. Service and launcher changes stay disabled while the desktop app owns it.",
   "startup.protection.service": "Background service",
   "startup.protection.shim": "Launcher shim",
   "startup.protection.none": "Not installed",

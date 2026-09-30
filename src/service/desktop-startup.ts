@@ -3,9 +3,10 @@ import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readPid } from "../config/process-state";
-import { resolveServiceOwnership } from "./state";
+import { resolveServiceOwnership, sameServiceOwnershipSubject, type ServiceOwnershipResolution } from "./state";
 
 export interface DesktopStartupDiagnostic {
+  /** Durable desktop claim; failed supervision does not release ownership. */
   owned: boolean;
   loginEnabled: boolean;
   running: boolean;
@@ -21,24 +22,43 @@ function run(command: string, args: string[]): string {
   return execFileSync(command, args, { encoding: "utf8", timeout: 750, maxBuffer: 128 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function processIdentity(pid: number): { parent: number; executable: string } | null {
-  const row = /^(\d+)\s+(.+)$/.exec(run("/bin/ps", ["-p", String(pid), "-o", "ppid=,comm="]));
+interface DesktopStartupDeps {
+  platform?: NodeJS.Platform;
+  home?: string;
+  uid?: number;
+  ownership?: () => ServiceOwnershipResolution;
+  readPid?: () => number | null;
+  run?: typeof run;
+}
+
+/** Cheap ownership-only snapshot: no launchd/process probes on the server request path. */
+export function desktopStartupOwnership(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
+  if ((deps.platform ?? process.platform) !== "darwin") return undefined;
+  const owner = (deps.ownership ?? resolveServiceOwnership)();
+  return owner.kind === "owned" && owner.ownership.owner === "desktop"
+    ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : undefined;
+}
+
+function processIdentity(pid: number, execute: typeof run): { parent: number; executable: string } | null {
+  const row = /^(\d+)\s+(.+)$/.exec(execute("/bin/ps", ["-p", String(pid), "-o", "ppid=,comm="]));
   return row ? { parent: Number(row[1]), executable: realpathSync(row[2]!) } : null;
 }
 
 /** Read-only macOS desktop ownership, login registration and live parent/child checks. */
-export function diagnoseMacDesktopStartup(): DesktopStartupDiagnostic | undefined {
-  if (process.platform !== "darwin") return undefined;
-  const owner = resolveServiceOwnership();
+export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
+  if ((deps.platform ?? process.platform) !== "darwin") return undefined;
+  const ownership = deps.ownership ?? resolveServiceOwnership;
+  const owner = ownership();
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
-  const facts = { owned: false, loginEnabled: false, running: false };
+  const facts = { owned: true, loginEnabled: false, running: false };
+  const execute = deps.run ?? run;
+  const pidReader = deps.readPid ?? readPid;
   try {
-    const home = homedir();
+    const home = deps.home ?? homedir();
     const id = readFileSync(join(home, "Library", "Application Support", "com.opencodex.desktop", "install-id"), "utf8").trim();
-    facts.owned = id === owner.ownership.installId;
-    if (!facts.owned) return deriveDesktopStartup(facts);
+    if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
     const path = join(home, "Library", "LaunchAgents", "OpenCodex.plist");
-    const plist = JSON.parse(run("/usr/bin/plutil", ["-convert", "json", "-o", "-", path]));
+    const plist = JSON.parse(execute("/usr/bin/plutil", ["-convert", "json", "-o", "-", path]));
     const args = plist.ProgramArguments;
     if (plist.Label !== "OpenCodex" || plist.RunAtLoad !== true || !Array.isArray(args)
       || args.length !== 2 || args[1] !== "--autostart" || typeof args[0] !== "string"
@@ -48,23 +68,26 @@ export function diagnoseMacDesktopStartup(): DesktopStartupDiagnostic | undefine
     const proxy = realpathSync(join(dirname(app), "ocx"));
     accessSync(app, constants.X_OK);
     accessSync(proxy, constants.X_OK);
-    const domain = `gui/${process.getuid!()}`;
-    const disabled = run("/bin/launchctl", ["print-disabled", domain]);
-    const loaded = run("/bin/launchctl", ["print", `${domain}/OpenCodex`]);
+    const domain = `gui/${deps.uid ?? process.getuid!()}`;
+    const disabled = execute("/bin/launchctl", ["print-disabled", domain]);
+    const loaded = execute("/bin/launchctl", ["print", `${domain}/OpenCodex`]);
     const program = /^\s*program = (.+)$/m.exec(loaded)?.[1];
     const loadedPath = /^\s*path = (.+)$/m.exec(loaded)?.[1];
-    facts.loginEnabled = !/"OpenCodex"\s*=>\s*disabled/.test(disabled)
+    facts.loginEnabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
+      && !/"OpenCodex"\s*=>\s*(?:disabled|true)/.test(disabled)
       && program !== undefined && realpathSync(program) === app
       && loadedPath !== undefined && realpathSync(loadedPath) === realpathSync(path);
-    const pid = readPid();
+    const pid = pidReader();
     if (pid !== null) {
-      const child = processIdentity(pid);
-      const parent = child && child.parent > 1 ? processIdentity(child.parent) : null;
-      facts.running = child?.executable === proxy && parent?.executable === app && readPid() === pid;
+      const child = processIdentity(pid, execute);
+      const parent = child && child.parent > 1 ? processIdentity(child.parent, execute) : null;
+      facts.running = child?.executable === proxy && parent?.executable === app && pidReader() === pid;
     }
+    const currentOwner = ownership();
+    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) facts.running = false;
     return deriveDesktopStartup(facts);
   } catch {
-    // Unreadable launchd/process evidence never grants protection.
+    // Unreadable launchd/process evidence never grants protection or releases the claim.
     return deriveDesktopStartup({ ...facts, running: false });
   }
 }

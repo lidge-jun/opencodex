@@ -268,6 +268,7 @@ export const tr: Record<TKey, string> = {
   "startup.disabled": "Devre dışı",
   "startup.protection.desktop": "Masaüstü uygulaması",
   "startup.desktopHint": "Oturum açıldığında başlar ve yerleşik proxy’yi izler. Sahiplik ve çalışan işlemler doğrulanır.",
+  "startup.desktopRecovery": "Bu proxy OpenCodex tarafından yönetiliyor. Masaüstü uygulamasını yeniden açın ve oturum açılışında başlatma ayarını kontrol edin. Uygulama proxy’yi yönettiği sürece servis ve başlatıcı değişiklikleri devre dışıdır.",
   "startup.protection.service": "Arka plan servisi",
   "startup.protection.shim": "Başlatıcı shim",
   "startup.protection.none": "Yüklü değil",

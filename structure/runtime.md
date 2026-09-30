@@ -543,7 +543,7 @@ Codex compaction uses a request-local model override for the configured triggers
 state, beside the install provenance. The claim carries an `owner` (`cli` or `desktop`), an
 opaque `installId` naming the owning installation rather than the user or the machine, and a
 `consentGeneration`. An absent claim means the CLI install that registered the service owns
-the runtime, which is what every record written before the field existed says.
+the runtime, which is what every record written before the field existed says. `src/service/desktop-startup.ts` separates the durable macOS desktop claim from startup viability. The bounded probe verifies matching install identity, loaded and enabled login registration, and exact app-to-bundled-proxy process paths; PID or ownership changes fail closed. `src/server/startup-health-cache.ts` launches source and compiled probes with `selfLaunchArgv`, revokes stale protection, and preserves desktop recovery guidance.
 
 Every write goes through `swapServiceInstallState`. With a custom home, the default-home
 record is the authority every writer can derive and the active-home record is a compatibility

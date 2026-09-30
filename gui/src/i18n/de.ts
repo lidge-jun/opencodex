@@ -260,6 +260,7 @@ export const de: Record<TKey, string> = {
   "startup.disabled": "Deaktiviert",
   "startup.protection.desktop": "Desktop-App",
   "startup.desktopHint": "Startet bei der Anmeldung und überwacht den integrierten Proxy. Zuständigkeit und laufende Prozesse werden geprüft.",
+  "startup.desktopRecovery": "OpenCodex verwaltet diesen Proxy. Öffne die Desktop-App erneut und prüfe „Beim Anmelden starten“. Dienst- und Launcher-Änderungen bleiben währenddessen gesperrt.",
   "startup.protection.service": "Hintergrunddienst",
   "startup.protection.shim": "Launcher-Shim",
   "startup.protection.none": "Nicht installiert",

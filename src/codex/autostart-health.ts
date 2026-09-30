@@ -80,7 +80,9 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
   // We can only credit an opencodex service/shim for routing that opencodex owns.
   // An arbitrary localhost gateway has an independent lifecycle that OCX cannot repair.
   const ownsLocalRouting = inputs.routingKind === "opencodex-local";
-  const desktopEffective = inputs.platform === "darwin" && inputs.desktop?.viable === true;
+  const desktopEffective = inputs.platform === "darwin" && !inputs.diagnosticStale
+    && inputs.desktop?.owned === true && inputs.desktop.loginEnabled
+    && inputs.desktop.running && inputs.desktop.viable;
   const protection: StartupProtection = ownsLocalRouting && inputs.serviceViable
     ? "service"
     : ownsLocalRouting && desktopEffective ? "desktop"
@@ -93,7 +95,7 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
     : rebootSafe
       ? "protected"
       : "at-risk";
-  const recommendedCommand = status !== "at-risk"
+  const recommendedCommand = status !== "at-risk" || (ownsLocalRouting && inputs.desktop?.owned)
     ? null
     : inputs.routingKind === "custom-local" || inputs.routingKind === "unknown"
       ? COMMANDS.restoreNative
@@ -199,6 +201,7 @@ function classifyStartupHealthSummary(health: StartupHealth): string {
   const command = health.recommendedCommand ?? health.commands.restoreNative;
   if (health.routingKind === "unknown") return `AT RISK after restart (Codex routing could not be verified; run '${command}')`;
   if (health.routingKind === "custom-local") return `AT RISK after restart (custom local gateway lifecycle is not managed by opencodex; run '${command}')`;
+  if (health.desktop?.owned) return "AT RISK after restart (desktop startup could not be verified; reopen OpenCodex and check Start at Login)";
   if (health.shimCoverage === "cli-only") return `AT RISK for Codex Desktop after restart (launcher shim covers CLI scripts only; run '${command}')`;
   if (health.serviceConflict) return `AT RISK after restart (background service managers conflict; run '${command}')`;
   if (health.serviceStale) return `AT RISK after restart (background service files are stale; run '${command}')`;
