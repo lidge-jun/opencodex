@@ -66,6 +66,11 @@ export function useCodexCreditsVisibility(
     if (visible === undefined || busy || mutationRef.current || !scope || scope.signal.aborted) return;
     const mutation = new AbortController();
     mutationRef.current = mutation;
+    // Bounded like the read: a relay that accepts the PUT and never answers must not leave the
+    // switch disabled with an unreconciled optimistic value.
+    const write = createBoundedFetch(15_000);
+    const abortWrite = () => write.controller.abort();
+    mutation.signal.addEventListener("abort", abortWrite, { once: true });
     const current = () => scopeRef.current === scope && !scope.signal.aborted;
     const requested = !visible;
     mutationRevisionRef.current += 1;
@@ -74,7 +79,7 @@ export function useCodexCreditsVisibility(
       let confirmed: boolean;
       try {
         const response = await fetch(`${apiBase}/api/settings`, {
-          method: "PUT", headers: { "content-type": "application/json" }, signal: mutation.signal,
+          method: "PUT", headers: { "content-type": "application/json" }, signal: write.signal,
           body: JSON.stringify({ showCodexCredits: requested }),
         });
         if (!response.ok) throw new Error("save");
@@ -98,6 +103,8 @@ export function useCodexCreditsVisibility(
         if (current()) showActionFeedback(t("codexAuth.quotaRefreshFailed"), "err");
       }
     } finally {
+      write.clear();
+      mutation.signal.removeEventListener("abort", abortWrite);
       if (current()) {
         mutationRef.current = null;
         setState(previous => ({ ...previous, busy: false }));
