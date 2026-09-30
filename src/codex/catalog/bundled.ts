@@ -197,6 +197,9 @@ export function codexCommandCandidates(): string[] {
 export function codexShimCommandCandidates(): string[] {
   try {
     const state = JSON.parse(readFileSync(join(getConfigDir(), "codex-shim.json"), "utf8")) as {
+      schemaVersion?: unknown;
+      mode?: unknown;
+      launcherPath?: unknown;
       wrapperPath?: unknown;
       originalPath?: unknown;
       backupPath?: unknown;
@@ -205,7 +208,7 @@ export function codexShimCommandCandidates(): string[] {
     const files = Array.isArray(state.wrappers) && state.wrappers.length > 0 ? state.wrappers : [state];
     const out: string[] = [];
     for (const file of files) {
-      for (const value of [file.backupPath, file.originalPath, file.wrapperPath]) {
+      for (const value of [state.schemaVersion === 2 && state.mode === "path-overlay" ? state.launcherPath : undefined, file.backupPath, file.originalPath, file.wrapperPath]) {
         if (typeof value !== "string" || value.length === 0) continue;
         if (!isSpawnableCodexCandidate(value)) continue;
         out.push(value);

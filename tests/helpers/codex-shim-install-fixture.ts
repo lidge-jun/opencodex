@@ -43,12 +43,12 @@ export function withInstalledShim(run: (paths: {
     const installed = installCodexShim();
     expect(installed.installed, installed.message).toBe(true);
     const statePath = join(home, "codex-shim.json");
-    const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<{ wrapperPath: string; backupPath: string }> };
+    const state = JSON.parse(readFileSync(statePath, "utf8")) as { mode?: string; wrapperPath: string; launcherPath: string; wrappers: Array<{ wrapperPath: string; backupPath: string }> };
     run({
       binDir,
       home,
-      wrappers: state.wrappers.map(file => file.wrapperPath),
-      backups: state.wrappers.map(file => file.backupPath),
+      wrappers: state.mode === "path-overlay" ? [state.wrapperPath] : state.wrappers.map(file => file.wrapperPath),
+      backups: state.mode === "path-overlay" ? [state.launcherPath] : state.wrappers.map(file => file.backupPath),
       statePath,
     });
   } finally {

@@ -432,60 +432,11 @@ olarak başarısız olmaya devam eder.
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-PATH üzerindeki betik tabanlı bir `codex` başlatıcısını hafif bir otomatik
-başlatma betiği ile sarın. Tam yürütülebilir çağrıları bozmaktan kaçınmak için
-gerçek `codex.exe` hedefleri dokunulmadan bırakılır.
+macOS/Linux üzerinde shim, OpenCodex yapılandırma dizinindeki `bin/codex` konumuna kurulur ve paket yöneticisinin başlatıcısını değiştirmeden çağırır. Kurulumdan sonra gösterilen PATH etkinleştirme komutunu çalıştırın ve kabuk başlangıç dosyasındaki diğer PATH ayarlarından sonra ekleyin. Kabuk dosyaları otomatik değiştirilmez. Mutlak yollar ve GUI başlatmaları shim üzerinden geçmez.
 
-Bir kurulum veya onarım uygulanmadan önce OpenCodex servis başlangıcı atlanırken
-kaydedilen başlatıcıyı `--version` ile çalıştırır. Başlatıcı `codex`'i tekrar
-dolguya çözdüğünde, sıfır olmayan bir çıkış yaptığında, beş saniyeyi aştığında,
-alt süreçleri çalışır durumda bıraktığında veya güvenli bir şekilde doğrulanıp
-temizlenemediğinde değişikliği reddeder ve geri alır. Bu nedenle `codex-shim
-install` koşulsuz değildir. Reddedilirse PATH girdisinin somut bir yürütülebilir
-dosya veya başlatıcı olması için Codex'i yeniden yükleyin ve yeniden deneyin;
-dinamik bir komut yöneticisi başlatıcısı bu denetimleri karşılayamadığında bunun
-yerine `ocx service install` kullanın. Yükseltmeler sırasında geçerli doğrulama
-korumasından yoksun kurulu bir Unix dolgusu yeniden oluşturulur ve araştırılır.
-Kaydedilen başlatıcısı güvenli değilse OpenCodex güvensiz sarmalayıcıyı kurulu
-bırakmak yerine eski dolguyu kaldırır ve orijinal başlatıcıyı geri yükler.
+`ocx codex-shim install`, eski Unix kurulumlarını taşır. Kaydedilen hedef yoksa Codex’i paket yöneticisiyle onarın ve yeniden deneyin. Otomatik onarım yalnızca Unix’e özel wrapper dosyasını günceller; Windows betik başlatıcılarının davranışı değişmez. `uninstall`, yerel Codex’i değiştirmeden wrapper dosyasını kaldırır. Kabuk başlangıç dosyasındaki ortam dosyasını yükleyen satırı da silin.
 
-Yalnızca başlatıcı kurulumu Codex isteklerinin OpenCodex kullanacağını
-kanıtlamaz. Sağlıklı bir kurulumdan sonra komut geçerli Codex yönlendirmesini
-kontrol eder ve yönlendirme harici, kullanıcıya ait veya doğrulanamaz olduğunda
-yeşil bir sonuç yerine bir uyarı bildirir. Ayrıca giden proxy değişkenleri
-yalnızca geçerli süreçte mevcutken `config.proxy` ayarlanmadığında veya
-çözümlenmediğinde uyarır, çünkü Codex başlatıcıları ve arka plan servisleri bu
-ortamı devralmayabilir. Bu denetimler salt okunurdur ve asla proxy değerlerini
-yazdırmaz; otomatik başlatmaya güvenmeden önce bildirilen devri çözün ve `ocx
-doctor` çalıştırın.
-
-Tamamlanan harici bir Codex güncellemesi kurulu bir dolgunun üzerine yazarsa
-sonraki sıradan `ocx` komutu kararlı yeni başlatıcıyı yedekler ve dağıtımdan
-önce dolguyu geri yükler. Sıfır etkili `ocx system codex-cli-update check` denetim
-komutu ile ayrılmış `ocx system codex-cli-update` ad alanındaki hatalı çağrılar bu onarımı asla yapmaz. Hala değişmekte olan bir başlatıcı dokunulmadan
-bırakılır ve daha sonra yeniden denenir. Onarım arızaları talep edilen komutu
-başarısız kılmadan uyarır; manuel geri dönüş: `ocx codex-shim install`. Süreç
-düzeyinde bir vazgeçme için `codexShimAutoRestore`'u `false` olarak ayarlayın
-veya `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` ayarlayın.
-
-| Alt komut | Eylem |
-| --- | --- |
-| `install` | Dolguyu kurun (veya eskiyse onarın). |
-| `uninstall` | Dolguyu kaldırın ve orijinal Codex ikili dosyasını geri yükleyin. |
-| `remove` | `uninstall`'ın takma adıdır. |
-| `status` | Dolgu durumunu bildirin (kurulu, eski veya eksik). |
-
-```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
-```
-
-:::tip[Servis mi Dolgu mu?]
-Her zaman açık bir arka plan proxy'si için `ocx service` kullanın (önerilir).
-Bir arka plan programı olmadan hafif, isteğe bağlı başlatma için `ocx
-codex-shim` kullanın — proxy yalnızca `codex` başlatıldığında başlar.
-:::
+[Kurulum, geçiş ve doğrulama adımlarının tamamı](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 

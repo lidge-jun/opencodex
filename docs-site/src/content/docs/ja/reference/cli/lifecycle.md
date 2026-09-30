@@ -232,48 +232,11 @@ Windows では、タスク スケジューラ エントリを作成するには�
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-軽量の自動起動スクリプトを使用して、スクリプトベースの `codex` ランチャーを PATH 上にラップします。実際の `codex.exe` ターゲットは、正確な実行可能呼び出しの破損を避けるため、変更されないまま残されます。
+macOS/Linux では、shim は OpenCodex 設定ディレクトリの `bin/codex` にインストールされ、パッケージマネージャーの起動ファイルを変更せずに呼び出します。インストール後に表示される PATH 有効化コマンドを実行し、シェル設定の他の PATH 設定より後に追加してください。シェル設定は自動編集されません。絶対パスや GUI からの起動には適用されません。
 
-インストールまたは修復を確定する前に、OpenCodex はサービス起動をバイパスした状態で、保存済みランチャーを `--version` 付きで実行します。ランチャーが `codex` を再び shim に解決する、0 以外で終了する、5 秒を超える、子プロセスを残す、または安全に検証・クリーンアップできない場合、変更を拒否してロールバックします。したがって `codex-shim install` は無条件のインストールではありません。拒否された場合は、PATH エントリが具体的な実行ファイルまたはランチャーを指すよう Codex を再インストールしてから再試行してください。動的コマンドマネージャーのランチャーがこれらの検証を満たせない場合は、代わりに `ocx service install` を使用してください。
+`ocx codex-shim install` は旧 Unix インストールを移行します。保存された実行ファイルがない場合は、パッケージマネージャーで Codex を修復して再試行してください。自動修復は Unix の専用 wrapper のみを更新し、Windows のスクリプトランチャーの動作は変わりません。`uninstall` はネイティブ Codex を変更せずに wrapper を削除します。シェル設定の環境ファイル読み込み行も削除してください。
 
-アップグレード時には、現在の検証ガードを持たない既存の Unix shim を再生成して検証します。保存済みランチャーが安全でない場合、OpenCodex は危険な wrapper を残さず、古い shim を削除して元のランチャーを復元します。
-
-完了した外部 Codex アップデートがインストールされている shim を上書きした場合、次の通常の `ocx` コマンドは安定した新しいランチャーをバックアップし、ディスパッチ前に shim を復元します。副作用のない検査コマンド `ocx system codex-cli-update check` と、予約された `ocx system codex-cli-update` 名前空間の不正な呼び出しは、この修復を行いません。まだ変更中のランチャーは変更されず、後で再試行されます。修復の失敗は、要求されたコマンドを失敗させることなく警告します。手動フォールバック: `ocx codex-shim install`。 `codexShimAutoRestore` を `false` に設定するか、プロセス レベルのオプトアウトの場合は `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
-
-|サブコマンド |アクション |
-| --- | --- |
-| `install` |シムを取り付けます（または古い場合は修理します）。 |
-| `uninstall` |シムを削除し、元の Codex バイナリを復元します。 |
-| `remove` | `uninstall`の別名。 |
-| `status` |シムの状態 (インストール済み、古い、または欠落) を報告します。 |
-
-```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
-```
-
-:::note[Windows のトークン環境]
-新しく生成される Windows CMD と PowerShell のシムは、実行後に呼び出し元の `OPENCODEX_API_AUTH_TOKEN` を元の状態に戻します。Codex とその子プロセスには、引き続きトークンが継承される可能性があります。
-
-OpenCodex の更新後、既存の Windows シムにこの動作を適用するには、`ocx codex-shim uninstall`、続いて `ocx codex-shim install` を実行して再作成してください。通常の更新では、正常な Windows シムは書き換えられません。
-:::
-
-:::tip[サービス vs シム]
-常時オンのバックグラウンド プロキシには `ocx service` を使用します (推奨)。デーモンを使用しない軽量のオンデマンド起動には、`ocx codex-shim` を使用します。プロキシは、`codex` が起動された場合にのみ起動します。
-:::
-
-#### Codex へのトークン注入
-
-非ループバックアドレスにバインドする場合、注入されるプロバイダーには `env_key = "OPENCODEX_API_AUTH_TOKEN"` が含まれます。この行は、読み取る変数を Codex に指定するだけで、変数を作成するものではありません。変数が存在しない場合、Codex はリクエストの開始を拒否し（`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`）、プロキシには到達しません。値は `$OPENCODEX_HOME/service-api-token` に保存されており、起動元のプロセスが Codex の環境にその値を渡す必要があります。
-
-`ocx codex-shim install` でインストールされる、保守対象のシムを使用してください。起動コンテキストでこのシムが選択されると、シムは OpenCodex が作成したトークンファイルを読み取り、変数を Codex に渡します。デスクトップ、cron、サービスから起動する場合は、このシムが選択される PATH またはランチャーパスを使用する必要があります。インストールによって、それらの環境が自動的に設定されるわけではありません。Codex 自身の子プロセスにも、トークンが継承される可能性があります。
-
-この Bearer トークンをシェルの起動ファイルからエクスポートしたり、`config.toml` にコピーしたりしないでください。`service-api-token` ファイルに含まれるのは `NAME=value` 形式の代入ではなくトークンそのものなので、systemd の `EnvironmentFile=` として直接使用することはできません。
-
-`opencodex-proxy.service` の `EnvironmentFile=` または `OCX_API_TOKEN_FILE` は、プロキシプロセスだけを設定するものであり、独立して起動された `codex exec` に渡されることはありません。
-
-ランチャーを置き換える Codex のアップグレードによって、シムは削除されます。次に通常の `ocx` コマンドを実行すると復元されますが（上記参照）、その前に実行された `codex exec` は失敗します。`ocx doctor` は、この状態（env_key が設定済み、変数が未設定、シムが存在しないか正常でない、トークンファイルは存在する）を修復コマンドとともに "Codex env_key launch readiness" の項目で報告し、トークンを表示することはありません。トークンファイルの読み取りは、注入された `env_key` の契約には含まれません。起動元のプロセスがその変数を渡す必要があります。
+[インストール・移行・検証の詳細手順](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 

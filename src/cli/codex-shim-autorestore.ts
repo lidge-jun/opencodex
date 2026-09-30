@@ -16,6 +16,7 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
 };
 
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
+  if (command === "status" || command === "doctor") return true;
   if (command === "uninstall" || command === "remove") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.
   if (command === "lab") return true;
@@ -29,7 +30,7 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // or future actions. A later `apply` implementation must own its preflight.
   if (command === "system" && args[1] === "codex-cli-update") return true;
   if (command === "__update-badge") return true;
-  return command === "codex-shim" && ["install", "uninstall", "remove"].includes(args[1] ?? "");
+  return command === "codex-shim" && ["install", "uninstall", "remove", "status"].includes(args[1] ?? "");
 }
 
 export function maybeAutoRestoreCodexShim(

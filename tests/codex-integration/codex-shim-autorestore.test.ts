@@ -36,13 +36,13 @@ function cliDeps(
 }
 
 describe("Codex shim CLI auto-restore policy", () => {
-  test("skips destructive and explicit repair commands but keeps status and ordinary commands eligible", () => {
+  test("keeps inspection read-only and skips destructive and explicit repair commands", () => {
     expect(skipsCodexShimAutoRestore("uninstall", ["uninstall"])).toBe(true);
     expect(skipsCodexShimAutoRestore("remove", ["remove"])).toBe(true);
     for (const subcommand of ["install", "uninstall", "remove"]) {
       expect(skipsCodexShimAutoRestore("codex-shim", ["codex-shim", subcommand])).toBe(true);
     }
-    expect(skipsCodexShimAutoRestore("codex-shim", ["codex-shim", "status"])).toBe(false);
+    expect(skipsCodexShimAutoRestore("codex-shim", ["codex-shim", "status"])).toBe(true);
     for (const action of ["check", "future-action", "bad", undefined]) {
       const args = ["system", "codex-cli-update", ...(action ? [action] : [])];
       expect(skipsCodexShimAutoRestore("system", args)).toBe(true);
@@ -52,7 +52,7 @@ describe("Codex shim CLI auto-restore policy", () => {
     // consent surface must not trigger a shim repair side effect first.
     expect(skipsCodexShimAutoRestore("resolve", ["resolve"])).toBe(true);
     expect(skipsCodexShimAutoRestore("resolve", ["resolve", "--json"])).toBe(true);
-    expect(skipsCodexShimAutoRestore("status", ["status"])).toBe(false);
+    expect(skipsCodexShimAutoRestore("status", ["status"])).toBe(true);
   });
 
   test("restore failure -> warning only, command succeeds", () => {
@@ -60,7 +60,7 @@ describe("Codex shim CLI auto-restore policy", () => {
       restore: () => { throw new Error("permission denied"); },
     });
 
-    expect(maybeAutoRestoreCodexShim("status", ["status"], deps)).toBeUndefined();
+    expect(maybeAutoRestoreCodexShim("start", ["start"], deps)).toBeUndefined();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("continuing without it");
     expect(warnings[0]).toContain("ocx codex-shim install");
@@ -68,7 +68,7 @@ describe("Codex shim CLI auto-restore policy", () => {
 
   test("successful automatic repair warns exactly once", () => {
     const { deps, warnings } = cliDeps({ status: "restored", message: "restored shim" });
-    maybeAutoRestoreCodexShim("status", ["status"], deps);
+    maybeAutoRestoreCodexShim("start", ["start"], deps);
     expect(warnings).toEqual([expect.stringContaining("automatic repair after Codex update")]);
   });
 
@@ -77,14 +77,14 @@ describe("Codex shim CLI auto-restore policy", () => {
       status: "deferred",
       message: "tracked launcher siblings are in a mixed shim/replacement state",
     });
-    maybeAutoRestoreCodexShim("status", ["status"], deps);
+    maybeAutoRestoreCodexShim("start", ["start"], deps);
     expect(warnings).toEqual([expect.stringContaining("mixed shim/replacement state")]);
   });
 
   test("healthy, not-installed, disabled, and deferred outcomes stay silent and lazy", () => {
     for (const status of ["healthy", "not-installed", "disabled", "deferred"] as const) {
       const { deps, warnings, readConfigCalls } = cliDeps({ status });
-      maybeAutoRestoreCodexShim("status", ["status"], deps);
+      maybeAutoRestoreCodexShim("start", ["start"], deps);
       expect(warnings).toEqual([]);
       expect(readConfigCalls()).toBe(0);
     }
@@ -105,7 +105,7 @@ describe("Codex shim CLI auto-restore policy", () => {
           error: null,
         }),
       });
-      maybeAutoRestoreCodexShim("status", ["status"], deps);
+      maybeAutoRestoreCodexShim("start", ["start"], deps);
       expect(enabledValue).toBe(false);
       expect(warnings).toEqual([]);
     }
@@ -123,7 +123,7 @@ describe("Codex shim CLI auto-restore policy", () => {
         restore: autoRestoreCodexShim,
       });
 
-      maybeAutoRestoreCodexShim("status", ["status"], deps);
+      maybeAutoRestoreCodexShim("start", ["start"], deps);
 
       expect(warnings).toEqual([expect.stringContaining("exceeds the 1 MiB startup limit")]);
       expect(readConfigCalls()).toBe(0);
@@ -140,7 +140,7 @@ describe("Codex shim CLI auto-restore policy", () => {
     const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-update-inspection-bin-"));
     const home = mkdtempSync(join(tmpdir(), "ocx-shim-update-inspection-home-"));
     const wrapper = join(binDir, "codex");
-    const backup = join(binDir, "codex.opencodex-real");
+    const backup = join(home, "bin", "codex");
     const statePath = join(home, "codex-shim.json");
     const replacement = "#!/bin/sh\necho externally updated codex\n";
     const oldPath = process.env.PATH;
@@ -182,12 +182,12 @@ describe("Codex shim CLI auto-restore policy", () => {
     }
   }, 20_000);
 
-  test("shim replaced -> next ocx command auto-restores and warns", async () => {
+  test("native launcher updated -> next ocx command leaves it untouched", async () => {
     if (process.platform === "win32") return;
     const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-activation-bin-"));
     const home = mkdtempSync(join(tmpdir(), "ocx-shim-activation-home-"));
     const wrapper = join(binDir, "codex");
-    const backup = join(binDir, "codex.opencodex-real");
+    const backup = join(home, "bin", "codex");
     const replacement = "#!/bin/sh\necho externally updated codex\n";
     const oldPath = process.env.PATH;
     const oldHome = process.env.OPENCODEX_HOME;
@@ -207,10 +207,10 @@ describe("Codex shim CLI auto-restore policy", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(result.stderr).toContain("automatic repair after Codex update");
-      expect(result.stdout).toContain("wrapper shim present");
-      expect(readFileSync(wrapper, "utf8")).toContain(SHIM_MARKER);
-      expect(readFileSync(backup, "utf8")).toBe(replacement);
+      expect(result.stderr).not.toContain("automatic repair after Codex update");
+      expect(result.stdout).toContain("Codex PATH shim:");
+      expect(readFileSync(wrapper, "utf8")).toBe(replacement);
+      expect(readFileSync(backup, "utf8")).toContain(SHIM_MARKER);
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;

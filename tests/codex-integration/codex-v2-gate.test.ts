@@ -733,7 +733,7 @@ describe("multi_agent_mode_hint_text native capability probe", () => {
     }
   });
 
-  test("probe follows only the selected OCX shim's recorded backing runtime", () => {
+  test.each(["legacy", "overlay"])("probe follows only the selected OCX shim backing runtime (%s)", format => {
     const prefix = mkdtempSync(join(tmpdir(), "ocx-mode-hint-shim-"));
     const ocxHome = join(prefix, "ocx-home");
     const shim = join(prefix, "bin", "codex");
@@ -749,7 +749,7 @@ describe("multi_agent_mode_hint_text native capability probe", () => {
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "test" }));
     writeFileSync(binary, native(true));
     writeFileSync(join(ocxHome, "codex-shim.json"), JSON.stringify({
-      wrappers: [{ wrapperPath: shim, originalPath: shim, backupPath: backing }],
+      ...(format === "legacy" ? { wrappers: [{ wrapperPath: shim, originalPath: shim, backupPath: backing }] } : { schemaVersion: 2, mode: "path-overlay", wrapperPath: shim, launcherPath: backing }),
     }));
     const oldHome = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = ocxHome;

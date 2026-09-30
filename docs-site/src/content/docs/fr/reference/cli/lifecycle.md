@@ -298,32 +298,11 @@ Ainsi, l’annulation ou le refus de l’UAC, comme l’impossibilité de revend
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
-Entoure un lanceur `codex` basé sur un script et présent dans PATH avec un script léger de démarrage automatique. Les cibles réelles `codex.exe` restent intactes afin de ne pas casser les appels qui visent précisément cet exécutable.
+Sur macOS/Linux, le shim est installé dans `bin/codex` du répertoire de configuration OpenCodex et appelle le lanceur natif sans le remplacer. Exécutez la commande PATH affichée après installation, puis ajoutez-la après les autres réglages PATH de votre shell. Les fichiers de démarrage du shell ne sont pas modifiés automatiquement. Les chemins absolus et les applications GUI contournent ce shim.
 
-Avant de valider une installation ou une réparation, OpenCodex exécute le lanceur enregistré avec `--version` en désactivant le démarrage du service. La modification est refusée et annulée si le lanceur résout `codex` vers le shim lui-même, renvoie un code non nul, dépasse cinq secondes, laisse des processus descendants actifs, ou ne peut pas être validé et nettoyé en toute sécurité. `codex-shim install` n’est donc pas inconditionnel. En cas de refus, réinstallez Codex afin que l’entrée PATH désigne un exécutable ou un lanceur concret, puis recommencez. Utilisez plutôt `ocx service install` lorsqu’un lanceur dynamique fourni par un gestionnaire de commandes ne peut pas satisfaire ces contrôles.
+`ocx codex-shim install` migre les anciennes installations Unix. Si la cible sauvegardée est absente, réparez Codex avec son gestionnaire de paquets et réessayez. La réparation automatique ne modifie que le wrapper privé Unix ; le comportement des lanceurs Windows reste inchangé. `uninstall` supprime le wrapper privé sans modifier Codex natif. Supprimez aussi la ligne de chargement du fichier d’environnement dans la configuration de votre shell.
 
-Pendant une mise à niveau, un shim Unix installé qui ne contient pas la garde de validation actuelle est régénéré et testé. Si son lanceur enregistré n’est pas sûr, OpenCodex supprime le shim obsolète et rétablit le lanceur d’origine au lieu de conserver l’enveloppe dangereuse.
-
-L’installation du lanceur ne prouve pas à elle seule que les requêtes Codex passeront par OpenCodex. Après une installation saine, la commande examine le routage Codex actuel et affiche un avertissement plutôt qu’un résultat positif lorsque le routage est externe, appartient à l’utilisateur ou ne peut pas être vérifié. Elle avertit aussi lorsque des variables de proxy sortant n’existent que dans le processus actuel alors que `config.proxy` est absent ou non résolu, car les lanceurs Codex et les services d’arrière-plan peuvent ne pas hériter de cet environnement. Ces contrôles sont en lecture seule et n’affichent jamais la valeur du proxy. Corrigez le transfert signalé et exécutez `ocx doctor` avant de compter sur le démarrage automatique.
-
-Si une mise à jour externe achevée de Codex remplace un shim installé, la prochaine commande `ocx` ordinaire sauvegarde le nouveau lanceur stable et rétablit le shim avant de répartir la commande. La commande d’inspection sans effet `ocx system codex-cli-update check` et les invocations mal formées de son espace de noms réservé `ocx system codex-cli-update` n’effectuent jamais cette réparation. Un lanceur encore en cours de modification reste intact et sera réexaminé plus tard. Un échec de réparation produit un avertissement sans faire échouer la commande demandée. Repli manuel : `ocx codex-shim install`. Définissez `codexShimAutoRestore` sur `false`, ou `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` pour désactiver ce comportement au niveau du processus.
-
-| Sous-commande | Action |
-| --- | --- |
-| `install` | Installe le shim, ou le répare s’il est obsolète. |
-| `uninstall` | Supprime le shim et rétablit le binaire Codex d’origine. |
-| `remove` | Alias de `uninstall`. |
-| `status` | Indique si le shim est installé, obsolète ou absent. |
-
-```bash
-ocx codex-shim install
-ocx codex-shim status
-ocx codex-shim uninstall
-```
-
-:::tip[Service ou shim]
-Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif, ce qui est recommandé. Utilisez `ocx codex-shim` pour un démarrage léger à la demande, sans démon : le proxy ne démarre que lorsque `codex` est lancé.
-:::
+[Procédure complète d’installation, de migration et de validation](/reference/cli/lifecycle/#ocx-codex-shim-installstatusuninstallremove).
 
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
