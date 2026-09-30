@@ -172,7 +172,7 @@ export async function proposeDelegationModel(options: {
   work: string;
   offered: readonly string[];
   sizingModel?: string;
-  fetchAllModels: (config: OcxConfig) => Promise<CatalogModel[]>;
+  models: readonly CatalogModel[];
   completeRoleSizing?: CompleteRoleSizing;
 }) {
   const [sizing, assign, { readConfiguredDefaultModel }, { isCodexReasoningEffort }] = await Promise.all([
@@ -190,7 +190,7 @@ export async function proposeDelegationModel(options: {
   const outcomes = answer.error
     ? new Map([[DELEGATED_WORK_ROLE, { unsized: `the sizing call failed: ${answer.error}` }]])
     : sizing.parseRoleSizingResponse(answer.text, [DELEGATED_WORK_ROLE]);
-  const candidates = (await modelCandidates(options.offered, await options.fetchAllModels(options.config)))
+  const candidates = (await modelCandidates(options.offered, options.models))
     .map(candidate => ({ ...candidate, efforts: candidate.efforts.filter(isCodexReasoningEffort) }));
   const classified = assign.classifyRoleModelCandidates(candidates, options.config.codexRoleTiers);
   const [proposal] = assign.buildRoleProposals([{
