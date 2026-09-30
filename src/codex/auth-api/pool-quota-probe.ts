@@ -373,7 +373,8 @@ export async function commitPoolQuotaResponse(
   }
   const validPolicyObservation = isValidWhamHistoryObservation(data);
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, validPolicyObservation ? quota : null,
-    ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined);
+    ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
+    true);
   return {
     quota: getAccountQuota(accountId),
     needsReauth: false,

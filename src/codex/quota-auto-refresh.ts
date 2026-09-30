@@ -226,7 +226,7 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
     try {
       await warmCodexAccount({ ...token, onCompleted: headers => {
         if (isCodexAccountGenerationLive(accountId, token.generation)) {
-          applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, undefined, { poolWriter });
+          applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, undefined, { poolWriter, poolResponse: true });
         }
       } });
     } catch (error) {

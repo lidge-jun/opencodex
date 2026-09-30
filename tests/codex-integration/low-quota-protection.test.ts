@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,8 +9,13 @@ import { createLowQuotaEventLedger } from "../../src/codex/low-quota-events";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../../src/codex/low-quota-protection";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
-import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { capturePoolQuotaWriter, removeCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { commitPoolQuotaResponse } from "../../src/codex/auth-api/pool-quota-probe";
+import * as authContextModule from "../../src/codex/auth-context";
+import { handleResponsesCompact } from "../../src/server/responses";
+import { baseCompactionBody, compactionRequest, completedPayload, drainCompactionResponseState } from "../helpers/compaction-routing-fixtures";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { codexWsQuotaObserver } from "../../src/server/responses/core-codex-account";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, setAccountQuotaFromParsed, updateAccountQuota } from "../../src/codex/quota";
 import type { CodexAccount } from "../../src/types/accounts";
@@ -275,16 +280,19 @@ describe("low quota protection", () => {
   test("invalid raw WHAM usage stays display-only while valid usage pauses", async () => {
     const config = configWith(protection({ actions: { pause: true, notify: false } }));
     const registration = register(config, { persist: () => {} });
-    const generation = saveCodexAccountCredential(ACCOUNT_A, {
+    const credential = {
       accessToken: "fixture-access", refreshToken: "fixture-refresh",
       expiresAt: Date.now() + 60_000, chatgptAccountId: "fixture-chatgpt-account",
-    });
+    };
+    const generation = saveCodexAccountCredential(ACCOUNT_A, credential);
+    const poolWriter = capturePoolQuotaWriter(ACCOUNT_A, { ...credential, generation });
+    expect(poolWriter).toBeDefined();
     const publish = (usedPercent: number) => commitPoolQuotaResponse(
       new Response(JSON.stringify({ rate_limit: { primary_window: {
         used_percent: usedPercent, limit_window_seconds: 604_800,
       } } }), { status: 200 }),
       { accountId: ACCOUNT_A, existing: null, configuredPlan: "plus", generation,
-        writerGeneration: captureConfigGeneration() },
+        writerGeneration: captureConfigGeneration(), poolWriter },
     );
     await publish(150);
     expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(100);
@@ -307,6 +315,163 @@ describe("low quota protection", () => {
     applyAccountQuotaFromUpstreamHeaders(ACCOUNT_A, headers(90));
     expect(config.pausedCodexAccountIds).toContain(ACCOUNT_A);
     await registration.flush();
+  });
+
+  test("a stale pool credential response cannot pause its replacement", () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const first = { accessToken: "first-access", refreshToken: "first-refresh",
+      expiresAt: Date.now() + 60_000, chatgptAccountId: "first-chatgpt" };
+    const generation = saveCodexAccountCredential(ACCOUNT_A, first);
+    const writer = capturePoolQuotaWriter(ACCOUNT_A, { ...first, generation });
+    expect(writer).toBeDefined();
+    removeCodexAccountCredential(ACCOUNT_A);
+    saveCodexAccountCredential(ACCOUNT_A, { ...first, accessToken: "replacement-access" });
+
+    applyAccountQuotaFromUpstreamHeaders(ACCOUNT_A, new Headers({
+      "x-codex-primary-used-percent": "90", "x-codex-primary-window-minutes": "10080",
+    }), captureConfigGeneration(), undefined, { poolWriter: writer });
+
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(90);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    expect(registration.hasPendingSave()).toBe(false);
+  });
+
+  test("a pool response whose writer capture failed cannot pause its replacement", () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const first = { accessToken: "first-access", refreshToken: "first-refresh",
+      expiresAt: Date.now() + 60_000, chatgptAccountId: "first-chatgpt" };
+    saveCodexAccountCredential(ACCOUNT_A, first);
+    // The credential is replaced before the delayed response lands, exactly when a
+    // dispatch-time capture could no longer produce a writer for the retired credential.
+    removeCodexAccountCredential(ACCOUNT_A);
+    saveCodexAccountCredential(ACCOUNT_A, { ...first, accessToken: "replacement-access" });
+
+    applyAccountQuotaFromUpstreamHeaders(ACCOUNT_A, new Headers({
+      "x-codex-primary-used-percent": "90", "x-codex-primary-window-minutes": "10080",
+    }), captureConfigGeneration(), undefined, { poolResponse: true });
+
+    // The display snapshot still commits; only the policy observation fails closed.
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(90);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    expect(registration.hasPendingSave()).toBe(false);
+  });
+
+  test("valid WHAM usage without a captured pool writer remains display-only", async () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const generation = saveCodexAccountCredential(ACCOUNT_A, {
+      accessToken: "fixture-access", refreshToken: "fixture-refresh",
+      expiresAt: Date.now() + 60_000, chatgptAccountId: "fixture-chatgpt-account",
+    });
+    await commitPoolQuotaResponse(new Response(JSON.stringify({ rate_limit: { primary_window: {
+      used_percent: 90, limit_window_seconds: 604_800,
+    } } }), { status: 200 }), {
+      accountId: ACCOUNT_A, existing: null, configuredPlan: "plus", generation,
+      writerGeneration: captureConfigGeneration(),
+    });
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(90);
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    expect(registration.hasPendingSave()).toBe(false);
+  });
+
+  test.each([false, true])("WS pool metadata requires a captured live writer (captured=%s)", captured => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const credential = { accessToken: "fixture-access", refreshToken: "fixture-refresh",
+      expiresAt: Date.now() + 60_000, chatgptAccountId: "fixture-chatgpt-account" };
+    const generation = saveCodexAccountCredential(ACCOUNT_A, credential);
+    const writer = capturePoolQuotaWriter(ACCOUNT_A, { ...credential, generation });
+    expect(writer).toBeDefined();
+    const observer = codexWsQuotaObserver({
+      kind: "pool", accountId: ACCOUNT_A, generation, ...credential,
+      writerGeneration: captureConfigGeneration(), poolQuotaWriter: captured ? writer : undefined,
+    }, { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" });
+    expect(observer).toBeDefined();
+    observer!(new Headers({ "x-codex-primary-used-percent": "90", "x-codex-primary-window-minutes": "10080" }));
+    expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(90);
+    expect(config.pausedCodexAccountIds).toEqual(captured ? [ACCOUNT_A] : undefined);
+    expect(registration.hasPendingSave()).toBe(captured);
+  });
+
+  test("WS metadata from a retired generation cannot refresh or pause its replacement", () => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    const registration = register(config, { persist: () => {} });
+    const credential = { accessToken: "fixture-access", refreshToken: "fixture-refresh",
+      expiresAt: Date.now() + 60_000, chatgptAccountId: "fixture-chatgpt-account" };
+    const generation = saveCodexAccountCredential(ACCOUNT_A, credential);
+    const writer = capturePoolQuotaWriter(ACCOUNT_A, { ...credential, generation });
+    expect(writer).toBeDefined();
+    const observer = codexWsQuotaObserver({
+      kind: "pool", accountId: ACCOUNT_A, generation, ...credential,
+      writerGeneration: captureConfigGeneration(), poolQuotaWriter: writer,
+    }, { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" });
+    expect(observer).toBeDefined();
+    removeCodexAccountCredential(ACCOUNT_A);
+    saveCodexAccountCredential(ACCOUNT_A, { ...credential, accessToken: "replacement-access" });
+    observer!(new Headers({ "x-codex-primary-used-percent": "90", "x-codex-primary-window-minutes": "10080" }));
+    expect(getAccountQuota(ACCOUNT_A)).toBeNull();
+    expect(config.pausedCodexAccountIds).toBeUndefined();
+    expect(registration.hasPendingSave()).toBe(false);
+  });
+
+  test.each([false, true])("compact pool headers require a captured live writer (captured=%s)", async captured => {
+    const config = configWith(protection({ actions: { pause: true, notify: false } }));
+    config.defaultProvider = "openai";
+    config.activeCodexAccountId = ACCOUNT_A;
+    config.providers = { openai: { adapter: "openai-responses", authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "pool" } };
+    saveCodexAccountCredential(ACCOUNT_A, { accessToken: "fixture-access", refreshToken: "fixture-refresh",
+      expiresAt: Date.now() + 600_000, chatgptAccountId: "fixture-chatgpt-account" });
+    updateAccountQuota(ACCOUNT_A, 10);
+    const registration = register(config, { persist: () => {} });
+    const originalResolve = authContextModule.resolveCodexAuthContext;
+    let poolContexts = 0;
+    // The resolver still chooses a real fixture credential. Omit only its optional writer
+    // to exercise dispatch-time capture failure through the actual compact handler.
+    const resolve = spyOn(authContextModule, "resolveCodexAuthContext").mockImplementation(async (...args) => {
+      const ctx = await originalResolve(...args);
+      if (ctx.kind !== "pool") return ctx;
+      expect(ctx.poolQuotaWriter).toBeDefined();
+      poolContexts++;
+      return captured ? ctx : { ...ctx, poolQuotaWriter: undefined };
+    });
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    const releaseSpendHome = acquireOwnedSpendHome();
+    const originalFetch = globalThis.fetch;
+    let compactSends = 0;
+    globalThis.fetch = (async (input, init) => {
+      const request = new Request(input, init);
+      const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname.endsWith("/models")) {
+        return Response.json({ models: [{ slug: "gpt-5.6-sol", supported_in_api: true, visibility: "list" }] });
+      }
+      expect(url.pathname.endsWith("/responses/compact")).toBe(true);
+      compactSends++;
+      return Response.json(completedPayload("fixture compact result"), { headers: {
+        "x-codex-primary-used-percent": "90", "x-codex-primary-window-minutes": "10080",
+      } });
+    }) as typeof fetch;
+    try {
+      const response = await handleResponsesCompact(compactionRequest(baseCompactionBody({ model: "gpt-5.6-sol" })),
+        config, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(compactSends).toBe(1);
+      expect(poolContexts).toBeGreaterThan(0);
+      expect(getAccountQuota(ACCOUNT_A)?.weeklyPercent).toBe(90);
+      expect(config.pausedCodexAccountIds).toEqual(captured ? [ACCOUNT_A] : undefined);
+      expect(registration.hasPendingSave()).toBe(captured);
+    } finally {
+      resolve.mockRestore();
+      globalThis.fetch = originalFetch;
+      try { await drainCompactionResponseState(); } finally {
+        releaseSpendHome();
+        if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previousCodexHome;
+      }
+    }
   });
 
   test("invalid raw legacy weekly usage stays display-only while valid usage pauses", async () => {

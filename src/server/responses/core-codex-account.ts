@@ -127,7 +127,8 @@ export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxPro
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;
   return headers => {
     if (credentialGeneration !== undefined && !isCodexAccountGenerationLive(accountId, credentialGeneration)) return;
-    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined });
+    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined,
+      poolResponse: authCtx.kind === "pool" });
   };
 }
 
@@ -717,7 +718,8 @@ export async function retryCodexPoolOnAlternateAccount(
       firstResponse.headers,
       firstAuthCtx.writerGeneration,
       firstAuthCtx.kind === "main-pool" ? firstAuthCtx.mainQuotaWriter : undefined,
-      { modelId: route.modelId, poolWriter: firstAuthCtx.kind === "pool" ? firstAuthCtx.poolQuotaWriter : undefined },
+      { modelId: route.modelId, poolWriter: firstAuthCtx.kind === "pool" ? firstAuthCtx.poolQuotaWriter : undefined,
+        poolResponse: firstAuthCtx.kind === "pool" },
     );
   }
   const deferFirstOutcome = shouldDeferCodexResetDerivedCooldown(

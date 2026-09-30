@@ -940,6 +940,8 @@ threshold. The Desktop/main account keeps its separate 98% hard lock.
 Set `codexPool.lowQuotaProtection` in configuration to pause accounts, record a log-and-API
 alert, or both; see [routing configuration](/reference/configuration/routing/#codex-pool-low-quota-protection).
 A pause takes effect for the next selection immediately, while saving it to disk is deferred.
+Pool quota responses can authorize a pause only with valid usage and a captured credential
+that is still current. A response without that proof may refresh displayed usage without pausing an account.
 Check this server’s authenticated `GET /api/codex-auth/low-quota-events` history for `logged`
 alerts or save failures. Manual resume remains in force for the current quota episode. The
 default alert reaches only the log and API; it does not produce a desktop or OS notification.
