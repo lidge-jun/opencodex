@@ -35,11 +35,13 @@ run. The then-current socket inventory was 9 tests. The
 devlog-probes workflow added by this PR installs aiohttp deterministically (the
 step fails the job if install fails) and discovers every devlog/**/probes
 directory. The retained record for head `787ef30698` reports 61 hosted tests.
-The later close-code regressions raised the count to 63: exact-head CI run
-`36492693336`, job `109164783438`, executed all 63 successfully at `f43e66b3`.
-The current local execution above independently ran all three suites. New-head
-hosted evidence must be checked separately; old hosted runs do not attest to a
-new integration commit.
+The later close-code regressions raised the count to 63. PR CI run `36492693336`,
+job `109164783438`, is associated with head `f43e66b3`, but its checkout log records
+the PR merge ref at `7b2ec3931dcd92f777a642c464d80990e7f38008`; that checked-out
+merge ref passed all 63 tests. Run metadata's head SHA is not the checkout SHA.
+The current local execution above independently ran all three suites. Each new
+PR head needs its own associated hosted results; old runs do not attest to a new
+integration commit. The workflow retains its normal merge-ref checkout behavior.
 
 ```sh
 python -m unittest -v test_native_policy test_probe
@@ -58,18 +60,19 @@ availability limitation no longer describes this environment. Typecheck,
 structure, privacy and file-size checks are recorded with the current PR
 checkpoint. The full Bun suite was not rerun for this research-only integration:
 the complete 63-case probe set is the focused behavioral scope, and wider
-repository coverage remains for exact-head CI. No test budget was relaxed.
+repository coverage remains for CI associated with the current PR head, using
+the normal PR merge ref. No test budget was relaxed.
 
 ## Not executed / not established
 
 - Native Rust implementation, compilation, config/schema generation, or native tests.
 - Actual ChatGPT mobile pairing, full pagination, resume, token renewal, or reconnect.
-- The full local OpenCodex Bun suite, and new exact-head hosted checks until that
+- The full local OpenCodex Bun suite, and new current-head-associated hosted checks until that
   run completes. The earlier 52-test local run and 61-test hosted record remain
   historical evidence only.
 - Production multi-segment relay support or management/security review.
 
 The PR adds this research unit plus one workflow that runs it: devlog-probes.yml
-is a new CI lane, so the executable contract now executes on exact head rather
+is a new CI lane, so the executable contract now executes on the PR merge ref rather
 than only locally. No executable configuration, release artifact, or native
 storage is changed. Independent review remains outstanding even with green CI.
