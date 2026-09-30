@@ -123,17 +123,30 @@ export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
 };
 // 260710 MiniMax models and context windows: Tier-2 evidence in
 // devlog/_plan/260710_provider_hardening/002_research_cn.md.
+// 260930 MiniMax-M3.1-Flash-Preview: Token Plan / MiniMax Code only, 1M context, thinking
+// always on (effort none or thinking disabled answers 400 code 2013), omitted effort = max.
+// It returns thinking as reasoning_content and ignores reasoning_split. The live /v1/models
+// roster does not list it yet. Evidence: devlog/_plan/260930_minimax_m31_flash_preview/.
+export const MINIMAX_M31_FLASH_PREVIEW = "MiniMax-M3.1-Flash-Preview";
 export const MINIMAX_MODELS = [
+  MINIMAX_M31_FLASH_PREVIEW,
   "MiniMax-M3",
   "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
   "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
   "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
   "MiniMax-M2",
 ];
+/** The eight-id roster every MiniMax preset seeded from 2026-07-10 until the preview landed. */
+export const MINIMAX_MODELS_BEFORE_M31 = MINIMAX_MODELS.filter(id => id !== MINIMAX_M31_FLASH_PREVIEW);
+/** Models that honour reasoning_split and answer with structured reasoning_details. */
+export const MINIMAX_REASONING_SPLIT_MODELS = MINIMAX_MODELS_BEFORE_M31;
 export const MINIMAX_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  MINIMAX_MODELS.map(id => [id, id === "MiniMax-M3" ? 1_000_000 : 204_800]),
+  MINIMAX_MODELS.map(id => [id, id === "MiniMax-M3" || id === MINIMAX_M31_FLASH_PREVIEW ? 1_000_000 : 204_800]),
 );
 export const MINIMAX_M3_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/** Identity efforts on the wire; no map, so none omits the field instead of disabling thinking. */
+export const MINIMAX_M31_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+export const MINIMAX_M31_DEFAULT_REASONING_EFFORT = "max";
 export const MINIMAX_M3_REASONING_EFFORT_MAP: Record<string, string> = {
   none: "disabled",
   minimal: "disabled",

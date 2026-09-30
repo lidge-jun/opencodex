@@ -411,6 +411,11 @@ axis that outranks every source here, so it is where a deliberate text-only over
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
 
+Roster additions share the blind spot when the vendor's `/models` omits the new id (MiniMax-M3.1-Flash-Preview):
+`src/providers/stale-model-roster-migration.ts` replaces a saved roster only while it is byte-for-byte the previous
+seed, filling the added id's window and default effort only inside records the row already has, in the same startup
+pass; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) keeps it in the live catalog.
+
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
 disables live discovery: a local Codex `models.json` example does not establish an
