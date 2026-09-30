@@ -373,6 +373,20 @@ The sizing call is injectable (`completeCodexRoleSizing` on the management deps)
 without a provider. Sibling instances refuse the preview too: it sits under the refused
 `/api/codex-agent-roles` prefix, and its proposals could not be applied there anyway.
 
+### Delegation model suggest
+
+`POST /api/injection-model/suggest` (Subagents page **Suggest**, `ocx agent injection suggest`) applies the
+same sizing to the delegation default. The caller describes the work Codex usually hands off (nonblank, at
+most 1500 characters, the role excerpt limit); `proposeDelegationModel` in
+`src/server/management/codex-role-auto-assign.ts` sends it as one role named `delegated-work` with the same
+rubric and parser, and maps the answer with the same `buildRoleProposals`. Two things differ from roles,
+both at the call site: candidates are the `available` list `GET /api/injection-model` offers (one helper
+builds both), with effort ladders cut to the Codex levels `PUT /api/injection-model` accepts, and
+`alwaysProposeEffort` proposes an effort even when none is set, because the delegation effort is a
+picker of its own. The route writes nothing; the page shows tier, effort, rationale and move triggers,
+and **Use this** goes through the page's ordinary `PUT /api/injection-model` save. It is not
+sibling-refused, like the `PUT` it feeds, since both touch only this instance's config.
+
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
 `multiAgentGuidanceEnabled` controls only OpenCodex-authored delegation guidance.
 `syncCodexSubagentDefaults` is a separate, default-off opt-in that applies the selected values to
