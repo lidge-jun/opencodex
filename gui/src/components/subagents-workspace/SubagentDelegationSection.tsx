@@ -130,7 +130,7 @@ export default function SubagentDelegationSection({
           </button>
         </div>
       )}
-      <div className="swi-delegation-row">
+      <div className="swi-delegation-row swi-delegation-model-row">
         <div className="setting-copy">
           <div className="font-semibold">{t("sub.delegation.model")}</div>
           <div className="muted setting-hint">{t("sub.delegation.modelHint")}</div>
