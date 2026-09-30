@@ -17,11 +17,12 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-`ocx agent roles` lists each Codex agent role in `$CODEX_HOME/agents` with its model pin and
-whether `~/.omo/omo.jsonc` can be updated. `ocx agent roles set <role> <model>` rewrites only
+`ocx agent roles` is for omo (Codex / LazyCodex). It lists each Codex agent role in
+`$CODEX_HOME/agents` with its model pin and whether `~/.omo/omo.jsonc` can be updated, or says
+LazyCodex is not installed, in which case `set` is refused. `ocx agent roles set <role> <model>` rewrites only
 that role's root `model` line and mirrors the value into omo.jsonc at
 `codex.agents.<role>.model`. A missing omo.jsonc, or one containing comments, is left unchanged
-and the command says so. See [Codex agent role models](/guides/integrations/#codex-agent-role-models-on-the-omo-tab).
+and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integrations/#omo-codex--lazycodex-role-models).
 
 ```bash
 ocx agent roles set explorer xai/grok-4.5

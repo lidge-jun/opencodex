@@ -318,8 +318,9 @@ the requested model id only; effort remains owned by the caps described under
 Codex overrides a child's spawn-time model with the root `model` key of
 `$CODEX_HOME/agents/<role>.toml`, so that pin decides which model a role runs on.
 `src/codex/agent-role-models.ts` is opencodex's only writer into those files, and it writes only
-that one key, only when a user picks a role's model on the dashboard's omo tab
-(`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`. No sync, startup, or
+that one key, only when a user picks a role's model in the dashboard's omo (Codex / LazyCodex)
+section on the Codex tab (`PUT /api/codex-agent-roles/{role}`) or with `ocx agent roles set`,
+and only while LazyCodex is detected. No sync, startup, or
 catalog path calls it, and opencodex never creates, repairs, or removes a role file.
 
 - The key is located by the same TOML-aware scan the pin reader uses
@@ -333,8 +334,8 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
-- The same pick is mirrored into omo's `codex.agents.<role>.model`; that half belongs to
-  [client integrations](clients/integrations.md#omo-role-models). The role file is written first
+- The same pick is mirrored into LazyCodex's `codex.agents.<role>.model`; that half belongs to
+  [client integrations](clients/integrations.md#omo-codex-lazycodex-role-models). The role file is written first
   and stands even when the mirror is skipped.
 
 Sibling instances refuse the write, because it reaches the shared `CODEX_HOME`.
