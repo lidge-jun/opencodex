@@ -202,8 +202,11 @@ function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget 
  * check void - each one reaches the evidence-producing process unless removed.
  * NODE_V8_COVERAGE and NODE_REDIRECT_WARNINGS are dropped for the same reason in
  * reverse: they are output paths, so ambient values would write Node artifacts to
- * arbitrary external directories on exit. The surviving allowlist is only the
- * proxy variables plus NODE_EXTRA_CA_CERTS, the supported TLS extension.
+ * arbitrary external directories on exit. ELF/Darwin loader controls (LD_* and
+ * DYLD_*) are also removed: they can load code or redirect loader output before
+ * npm runs. This is a denylist for process-startup/output channels, not a claim
+ * that every ambient variable is allowlisted. Ordinary OS environment, proxy
+ * settings and the supported NODE_EXTRA_CA_CERTS extension remain available.
  */
 const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
   "node_options",
@@ -221,7 +224,8 @@ function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of Object.keys(env)) {
     const lower = key.toLowerCase();
-    if (lower.startsWith("npm_config_") || NPM_ENV_DROP_KEYS.has(lower)) delete env[key];
+    if (lower.startsWith("npm_config_") || lower.startsWith("ld_")
+      || lower.startsWith("dyld_") || NPM_ENV_DROP_KEYS.has(lower)) delete env[key];
   }
   return env;
 }

@@ -456,6 +456,28 @@ describe("registry configuration isolation", () => {
     }
   });
 
+  test.each([
+    "LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "LD_DEBUG_OUTPUT",
+    "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+    "ld_preload", "dyld_insert_libraries",
+  ])("ambient loader control %s cannot reach the spawned npm", key => {
+    const previous = process.env[key];
+    process.env[key] = "/synthetic/nonexistent-loader-fixture";
+    try {
+      // Capture only: no loader, native child process or network is invoked.
+      const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(calls.length).toBe(3);
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        expect(Object.keys(env).some(name => name.toLowerCase() === key.toLowerCase())).toBe(false);
+      }
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
   test("hostile Node startup channels cannot reach the spawned npm", () => {
     const priorOptions = process.env.NODE_OPTIONS;
     const priorPath = process.env.NODE_PATH;
