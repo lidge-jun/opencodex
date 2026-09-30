@@ -37,6 +37,8 @@ remplissage automatique. Par défaut, le tableau de bord ne conserve le jeton qu
 **Mémoriser sur cet appareil** autorise le stockage du jeton complet en clair dans `localStorage`. Tout
 script de même origine et toute personne ayant accès à l'appareil peuvent le lire : ne l'activez pas sur un
 appareil partagé. **Oublier le jeton administrateur enregistré**, à côté de Déconnexion, supprime cette valeur.
+La valeur enregistrée est stockée par serveur, selon son origin et son transport, et n'est
+renvoyée qu'au serveur pour lequel elle a été enregistrée.
 
 ## Barre de résumé des quotas
 

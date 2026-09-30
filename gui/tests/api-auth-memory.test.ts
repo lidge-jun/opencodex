@@ -312,6 +312,90 @@ test("relay transport keeps machine and hub remembered tokens confined to their 
   expect(seen.some(request => request.token === "hub-relay-token")).toBe(true);
 });
 
+/*
+ * #4649 review, P1 — the A→B reconnect interleaving, GUI half.
+ *
+ * Every relay verification shares one local /api/machine/hub-relay URL, so the request
+ * itself must name the hub connection the credential was resolved against. Here the
+ * client reconnects to hub B (and rediscovery swaps the configured targets) between the
+ * scoped lookup of hub A's remembered token and the verification forward. The verify
+ * request must still carry A's identity headers, so the rebound listener refuses with 409
+ * instead of forwarding A's credential to B — and a 409 is not a rejection, so the stored
+ * A token survives for the rediscovered session to use later.
+ */
+test("a mid-resolution hub reconnect never forwards the previous hub's remembered token", async () => {
+  declareManagementAuthRequired();
+  const hubAOrigin = "https://hub.example.test";
+  const hubBOrigin = "https://hub-b.example.test";
+  const generationA = "client-key-a|2026-09-28T00:00:00.000Z";
+  const generationB = "client-key-b|2026-09-28T01:00:00.000Z";
+  const statusA: MachineStatusV1 = {
+    mode: "client", connected: true, machineBase: "http://localhost",
+    sharedBase: "http://localhost/api/machine/hub-relay", sharedServerOrigin: hubAOrigin,
+    managementTransport: "relay", apiKeyId: "client-key-a", protocolVersion: 1,
+    connectedAt: "2026-09-28T00:00:00.000Z",
+  };
+  const statusB: MachineStatusV1 = {
+    ...statusA,
+    sharedServerOrigin: hubBOrigin, apiKeyId: "client-key-b", connectedAt: "2026-09-28T01:00:00.000Z",
+  };
+  // The simulated machine listener: which hub connection the local relay port is bound to.
+  let currentOrigin = hubAOrigin;
+  let currentGeneration = generationA;
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return null; };
+
+  const relaySeen: Array<{
+    path: string;
+    apiKey: string | null;
+    expectedOrigin: string | null;
+    expectedConnection: string | null;
+  }> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    if (!url.pathname.startsWith("/api/machine/hub-relay/")) return new Response("{}", { status: 404 });
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    const expectedOrigin = headers.get("X-OpenCodex-Relay-Expected-Origin");
+    const expectedConnection = headers.get("X-OpenCodex-Relay-Expected-Connection");
+    relaySeen.push({ path: url.pathname, apiKey: headers.get("X-OpenCodex-API-Key"), expectedOrigin, expectedConnection });
+    if (url.pathname === "/api/machine/hub-relay/api/combos") {
+      // The reconnect lands here: between the scoped lookup and the forward, the client
+      // rebinds to hub B and discovery reconfigures the targets (and the machine session).
+      currentOrigin = hubBOrigin;
+      currentGeneration = generationB;
+      configureApiTargets(targetsFromMachineStatus("", statusB));
+      installApiSessionFromHtml("machine", sessionDocumentHtml("ocx_session_machine_b", "machine-b-csrf", "http://localhost"));
+    }
+    if (expectedOrigin !== currentOrigin || expectedConnection !== currentGeneration) {
+      return new Response(JSON.stringify({ error: "hub relay connection changed" }), { status: 409 });
+    }
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+  configureApiTargets(targetsFromMachineStatus("", statusA));
+  installApiSessionFromHtml("machine", sessionDocumentHtml("ocx_session_machine_a", "machine-a-csrf", "http://localhost"));
+  localStorage.setItem("opencodex.remembered-admin-token:https://hub.example.test|relay", "hub-a-token");
+
+  const res = await fetch("/api/machine/hub-relay/api/config");
+  expect(res.status).toBe(401); // resolution failed closed; the original 401 stands in
+
+  const verify = relaySeen.filter(request => request.path === "/api/machine/hub-relay/api/combos");
+  expect(verify).toHaveLength(1);
+  expect(verify[0]!.apiKey).toBe("hub-a-token");
+  expect(verify[0]!.expectedOrigin).toBe(hubAOrigin);
+  expect(verify[0]!.expectedConnection).toBe(generationA);
+  // The A credential never traveled under B's (or no) connection identity.
+  for (const request of relaySeen) {
+    if (request.apiKey === "hub-a-token") {
+      expect(request.expectedOrigin).toBe(hubAOrigin);
+      expect(request.expectedConnection).toBe(generationA);
+    }
+  }
+  // A 409 is a changed connection, not a rejection: the stored A token must survive.
+  expect(localStorage.getItem("opencodex.remembered-admin-token:https://hub.example.test|relay")).toBe("hub-a-token");
+  expect(promptCalls).toBe(1);
+});
+
 test("validates prompted tokens with a safe read before retrying the failed request", async () => {
   declareManagementAuthRequired();
   const validationResults: string[] = [];

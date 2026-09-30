@@ -38,6 +38,8 @@ standart bir şifre formu sunar. Varsayılan olarak kontrol paneli belirteci yal
 **Bu cihazda hatırla** seçeneği, tam belirteci düz metin olarak `localStorage` içinde saklamayı kabul eder.
 Aynı origin'deki herhangi bir betik ve cihaza erişebilen herkes bunu okuyabilir; ortak cihazlarda etkinleştirmeyin.
 Çıkışın yanındaki **Kaydedilen yönetici belirtecini unut** bu değeri kaldırır.
+Hatırlanan değer sunucu başına, sunucu origin'i ve taşıma türüne göre ayrı saklanır ve
+yalnızca kaydedildiği sunucuya yeniden gönderilir.
 
 ## Kota özeti çubuğu
 
