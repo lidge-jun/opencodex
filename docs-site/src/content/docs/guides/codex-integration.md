@@ -922,6 +922,17 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+### Codex autostart shim
+
+Run `ocx codex-shim install` to install the optional launcher wrapper. It runs
+`ocx ensure` before ordinary Codex launches and then forwards the original arguments
+and exit status. The command also works with the standalone `ocx` shipped in desktop
+packages: both the installation probe and the installed wrapper use that executable,
+without requiring a separate Bun installation or a source checkout.
+
+Use `ocx codex-shim status` to inspect it and `ocx codex-shim uninstall` to restore
+the saved Codex launcher.
+
 ## Routed models during Codex reserve mode
 
 Codex Pool can optionally protect stored pool accounts at a selected 5-hour or weekly usage
