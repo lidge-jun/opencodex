@@ -55,3 +55,15 @@ Same steps as the CI `desktop` job: placeholder sidecar and resource files (giti
 `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test` for
 `desktop/src-tauri`. Exact-head PR CI is the merge gate. A packaged-app click test is not
 available locally; the behavior claim rests on the pinned wry/opener sources cited above.
+
+## Outcome
+
+Implemented as planned plus the audit fold in `popup.rs`. Local proof on macOS arm64:
+`cargo fmt --check`, `cargo clippy --all-targets -D warnings` and `cargo test` (190 passed,
+including `only_web_addresses_are_handed_to_the_default_browser`) exit 0; the desktop,
+release-contract and repo-hygiene Bun suites (24 files, 334 pass, 2 platform skips),
+`privacy:scan` and `structure:check` pass. Windows and Linux behavior is source-reviewed
+against wry 0.55.1 and covered by the hosted desktop CI job, not by a packaged click test.
+
+What this does not change: server-side `openUrl` still discards its launch result, and
+device-code logins still do not auto-open a browser; both remain separate follow-ups.
