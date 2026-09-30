@@ -445,9 +445,11 @@ jobs:
             codesign --verify --strict "$addon"
             description="$(codesign -dvvv "$addon" 2>&1)"
             echo "$description"
-            echo "$description" | grep -q "TeamIdentifier=$APPLE_TEAM_ID"
-            echo "$description" | grep -q "flags=.*runtime"
-            echo "$description" | grep -q "Timestamp="
+            # Here-strings, not pipes: under pipefail a matcher that exits on its first hit can
+            # SIGPIPE the writer and fail the assertion it was meant to pass.
+            grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<<"$description"
+            grep -q "flags=.*runtime" <<<"$description"
+            grep -q "Timestamp=" <<<"$description"
           done
 
       - name: Prepare Windows installer version

@@ -545,8 +545,8 @@ describe("widget extension signing", () => {
     expect(sign?.env?.MACOS_SIGN_IDENTITY).toContain("APPLE_SIGNING_IDENTITY");
     expect(sign?.run).toContain("desktop/src-tauri/resources/keyring/*.darwin-*.node");
     expect(sign?.run).toContain('codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_IDENTITY"');
-    expect(sign?.run).toContain('grep -q "TeamIdentifier=$APPLE_TEAM_ID"');
-    expect(sign?.run).toContain('grep -q "Timestamp="');
+    expect(sign?.run).toContain('grep -q "TeamIdentifier=$APPLE_TEAM_ID" <<<"$description"');
+    expect(sign?.run).toContain('grep -q "Timestamp=" <<<"$description"');
     // A real release never falls back to unsigned addons; only a dry run may.
     expect(sign?.run).toContain("A real release must sign the packaged keyring addons.");
     expect(indexOfStepRunning("security create-keychain")).toBeLessThan(indexOfStep(sign!.name!));
