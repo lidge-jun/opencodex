@@ -4,14 +4,14 @@ export type SizingTier = "fast" | "standard" | "frontier";
 export type SizingEffortIntent = "glance" | "measured" | "thorough" | "exhaustive";
 
 export const TIER_LABEL: Record<SizingTier, TKey> = {
-  fast: "integrations.omoRoles.auto.tierFast",
-  standard: "integrations.omoRoles.auto.tierStandard",
-  frontier: "integrations.omoRoles.auto.tierFrontier",
+  fast: "integrations.lazycodexRoles.auto.tierFast",
+  standard: "integrations.lazycodexRoles.auto.tierStandard",
+  frontier: "integrations.lazycodexRoles.auto.tierFrontier",
 };
 
 export const EFFORT_LABEL: Record<SizingEffortIntent, TKey> = {
-  glance: "integrations.omoRoles.auto.effortGlance",
-  measured: "integrations.omoRoles.auto.effortMeasured",
-  thorough: "integrations.omoRoles.auto.effortThorough",
-  exhaustive: "integrations.omoRoles.auto.effortExhaustive",
+  glance: "integrations.lazycodexRoles.auto.effortGlance",
+  measured: "integrations.lazycodexRoles.auto.effortMeasured",
+  thorough: "integrations.lazycodexRoles.auto.effortThorough",
+  exhaustive: "integrations.lazycodexRoles.auto.effortExhaustive",
 };

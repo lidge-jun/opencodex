@@ -177,6 +177,6 @@ test("Suggest sizes the described work, shows the proposal without writing, and 
   expect(writes.slice(1)).toEqual([
     { path: "/api/injection-model", method: "PUT", body: { model: "anthropic/claude-haiku-4-5", effort: "low" } },
   ]);
-  expect(container.querySelector(".swi-suggest-done")?.textContent).toBe(en["integrations.omoRoles.auto.alreadySet"]);
+  expect(container.querySelector(".swi-suggest-done")?.textContent).toBe(en["integrations.lazycodexRoles.auto.alreadySet"]);
   expect(() => button(en["sub.suggest.accept"])).toThrow();
 });
