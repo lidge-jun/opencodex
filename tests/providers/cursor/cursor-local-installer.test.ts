@@ -59,6 +59,91 @@ describe("buildCursorLocalInstallerHint", () => {
     expect(hint).toEqual({ available: false, url: null, version: null, reason: "unusable-response" });
   });
 
+  test("oversized manifest fields are rejected before they can be cached", async () => {
+    for (const manifest of [
+      { version: "v".repeat(257), url: REPORTED_INSTALLER },
+      { version: "3.21.18", url: `https://downloads.cursor.com/local-mode/${"x".repeat(4096)}` },
+    ]) {
+      resetCursorLocalInstallerCacheForTests();
+      const hint = await buildCursorLocalInstallerHint(
+        { regularInstalled: true, privateInferenceInstalled: false },
+        depsWith(manifest),
+      );
+      expect(hint).toEqual({ available: false, url: null, version: null, reason: "unusable-response" });
+    }
+  });
+
+  test("real deps stop reading a decoded response above the manifest byte limit", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({
+      version: "v".repeat(70 * 1024),
+      url: REPORTED_INSTALLER,
+    })))) as typeof fetch;
+    try {
+      const hint = await buildCursorLocalInstallerHint(
+        { regularInstalled: true, privateInferenceInstalled: false },
+        { ...realCursorLocalHintDeps(), platform: "win32", arch: "x64" },
+      );
+      expect(hint).toEqual({ available: false, url: null, version: null, reason: "unreachable" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("oversize rejection does not await a never-settling stream cancellation", async () => {
+    const originalFetch = globalThis.fetch;
+    let cancelled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(32 * 1024));
+        controller.enqueue(new Uint8Array(32 * 1024 + 1));
+      },
+      cancel() {
+        cancelled += 1;
+        return new Promise<void>(() => {});
+      },
+    });
+    globalThis.fetch = (() => Promise.resolve(new Response(body))) as typeof fetch;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        realCursorLocalHintDeps().fetchJson(MANIFEST_URL, 4_000).then(
+          () => ({ kind: "resolved" }),
+          error => ({ kind: "rejected", message: String(error.message) }),
+        ),
+        new Promise(resolve => { timer = setTimeout(() => resolve({ kind: "timeout" }), 1_000); }),
+      ]);
+      expect(outcome).toEqual({ kind: "rejected", message: "Update manifest exceeds byte limit" });
+      expect(cancelled).toBe(1);
+    } finally {
+      clearTimeout(timer);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.each([1_024, 64 * 1024])("valid multichunk manifest at %i bytes is decoded", async size => {
+    const originalFetch = globalThis.fetch;
+    const manifest = { version: "3.21.18", url: REPORTED_INSTALLER, padding: "" };
+    const encoder = new TextEncoder();
+    manifest.padding = "x".repeat(size - encoder.encode(JSON.stringify(manifest)).byteLength);
+    const encoded = encoder.encode(JSON.stringify(manifest));
+    expect(encoded.byteLength).toBe(size);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let offset = 0; offset < encoded.byteLength; offset += 512) {
+          controller.enqueue(encoded.slice(offset, offset + 512));
+        }
+        controller.close();
+      },
+    });
+    globalThis.fetch = (() => Promise.resolve(new Response(body))) as typeof fetch;
+    try {
+      expect(await realCursorLocalHintDeps().fetchJson(MANIFEST_URL, 4_000)).toEqual(manifest);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("no regular install resolves nothing without any network call", async () => {
     const hint = await buildCursorLocalInstallerHint(
       { regularInstalled: false, privateInferenceInstalled: false },
