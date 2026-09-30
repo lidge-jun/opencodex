@@ -85,6 +85,9 @@ Routing and catalog visibility are separate controls:
 - Fresh installs set `modelDiscovery.newModelPolicy` to `"off"`. After the first successful live
   fetch establishes a baseline, later arrivals are appended to `disabledModels` and carry a **NEW**
   dashboard badge until enabled or acknowledged. Existing installs remain `"on"` until opted in.
+  The policy applies before publishing newly discovered models through `/v1/models`, the dashboard,
+  client configuration exports, or a Codex catalog sync (including service startup).
+  Enabling an arrival manually keeps it enabled on later refreshes and exports.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
   with a non-empty `selectedModels` (including preset mode) are already curated, so this policy is
