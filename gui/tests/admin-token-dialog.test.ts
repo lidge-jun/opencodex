@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { promptForAdminToken } from "../src/admin-token-dialog";
+import { clearAllRememberedAdminTokens, hasAnyRememberedAdminToken, promptForAdminToken } from "../src/admin-token-dialog";
 import { setActiveLocale } from "../src/i18n/shared";
 
 const SCOPE = "https://dashboard.example|same-origin";
@@ -144,6 +144,34 @@ test("unchecked remember box clears any stale remembered token", async () => {
 
   expect(await pending).toBe("fresh-token");
   expect(localStorage.getItem(SCOPED_KEY)).toBeNull();
+});
+
+/*
+ * #4649 review, P3: "Forget remembered admin token" used a plain prefix match, so a
+ * decoy key like "opencodex.remembered-admin-token.decoy" — which no code path of this
+ * dashboard ever writes — was both counted as a stored credential and deleted by the
+ * Forget control. Only the exact legacy key and real scoped keys belong to it.
+ */
+test("Forget removes remembered-token keys exactly and leaves prefix decoys alone", () => {
+  localStorage.setItem(SCOPED_KEY, "scoped-token");
+  localStorage.setItem("opencodex.remembered-admin-token", "legacy-token");
+  localStorage.setItem("opencodex.remembered-admin-token.decoy", "decoy-value");
+  localStorage.setItem("opencodex.remembered-admin-tokenish", "unrelated");
+
+  expect(hasAnyRememberedAdminToken()).toBe(true);
+
+  clearAllRememberedAdminTokens();
+
+  expect(localStorage.getItem(SCOPED_KEY)).toBeNull();
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+  expect(localStorage.getItem("opencodex.remembered-admin-token.decoy")).toBe("decoy-value");
+  expect(localStorage.getItem("opencodex.remembered-admin-tokenish")).toBe("unrelated");
+});
+
+test("a store holding only decoy keys does not count as a remembered admin token", () => {
+  localStorage.setItem("opencodex.remembered-admin-token.decoy", "decoy-value");
+  localStorage.setItem("opencodex.remembered-admin-tokenish", "unrelated");
+  expect(hasAnyRememberedAdminToken()).toBe(false);
 });
 
 test("remember checkbox has a form control name for consistency", async () => {

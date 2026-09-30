@@ -25,6 +25,8 @@ const RESOLUTION_WATCHDOG_MS = 15_000;
 const MACHINE_SESSION_HEADER = "X-OpenCodex-Machine-Session";
 const MACHINE_GUI_ORIGIN_HEADER = "X-OpenCodex-Machine-GUI-Origin";
 const MACHINE_CSRF_HEADER = "X-OpenCodex-Machine-CSRF-Token";
+const RELAY_EXPECTED_ORIGIN_HEADER = "X-OpenCodex-Relay-Expected-Origin";
+const RELAY_EXPECTED_CONNECTION_HEADER = "X-OpenCodex-Relay-Expected-Connection";
 
 interface ApiSessionState {
   token: string | null;
@@ -223,7 +225,13 @@ function classify(input: RequestInfo | URL): { plane: ApiPlane; bootstrap: boole
   return null;
 }
 
-function sessionHeaders(plane: ApiPlane, input: RequestInfo | URL, init?: RequestInit, overrideToken?: string | null): Headers {
+function sessionHeaders(
+  plane: ApiPlane,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  overrideToken?: string | null,
+  relayTarget?: ApiTarget,
+): Headers {
   const state = runtime(plane);
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   const token = overrideToken === undefined ? state.session.token : overrideToken;
@@ -233,11 +241,20 @@ function sessionHeaders(plane: ApiPlane, input: RequestInfo | URL, init?: Reques
     headers.set("X-OpenCodex-GUI-Origin", state.session.browserOrigin);
     if (method !== "GET" && method !== "HEAD") headers.set("X-OpenCodex-CSRF-Token", state.session.csrfToken);
   }
-  if (plane === "shared" && state.target.transport === "relay") {
+  if (plane === "shared") {
+    // Stamp the connection the credential was resolved against, not whatever is current:
+    // a relay target captured mid-resolution keeps naming its own hub connection, so a
+    // listener rebound to a different hub refuses (409) before the credential is forwarded.
+    const relay = relayTarget ?? state.target;
+    if (relay.transport !== "relay") return headers;
     const machine = runtime("machine").session;
     if (machine.token) headers.set(MACHINE_SESSION_HEADER, machine.token);
     if (machine.browserOrigin) headers.set(MACHINE_GUI_ORIGIN_HEADER, machine.browserOrigin);
     if (method !== "GET" && method !== "HEAD" && machine.csrfToken) headers.set(MACHINE_CSRF_HEADER, machine.csrfToken);
+    if (relay.relayGeneration) {
+      headers.set(RELAY_EXPECTED_ORIGIN_HEADER, relay.serverOrigin);
+      headers.set(RELAY_EXPECTED_CONNECTION_HEADER, relay.relayGeneration);
+    }
   }
   return headers;
 }
@@ -247,18 +264,18 @@ function withAuth(
   input: RequestInfo | URL,
   init?: RequestInit,
   overrideToken?: string | null,
+  relayTarget?: ApiTarget,
 ): [RequestInfo | URL, RequestInit | undefined] {
-  const headers = sessionHeaders(plane, input, init, overrideToken);
+  const headers = sessionHeaders(plane, input, init, overrideToken, relayTarget);
   if (input instanceof Request) return [new Request(input, { headers }), init ? { ...init, headers } : undefined];
   return [input, { ...init, headers }];
 }
 
-async function reBootstrapSessionToken(plane: ApiPlane): Promise<RebootstrapResult> {
+async function reBootstrapSessionToken(plane: ApiPlane, target: ApiTarget): Promise<RebootstrapResult> {
   if (!rawFetch) return { kind: "failed" };
-  const state = runtime(plane);
   const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
-    const [input, init] = withAuth(plane, state.target.bootstrapPath, { cache: "no-store", signal: bounded.signal }, null);
+    const [input, init] = withAuth(plane, target.bootstrapPath, { cache: "no-store", signal: bounded.signal }, null, target);
     const response = await rawFetch(input, init);
     if (!response.ok) return response.status >= 400 && response.status < 500 ? { kind: "unavailable" } : { kind: "failed" };
     const html = await response.text();
@@ -277,6 +294,7 @@ async function verifyAdminToken(plane: ApiPlane, target: ApiTarget, token: strin
       `${target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`,
       { cache: "no-store", signal: bounded.signal },
       token,
+      target,
     );
     const response = await rawFetch(input, init);
     if (response.status === 401) return "rejected";
@@ -299,7 +317,7 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       const scope = rememberedAdminTokenScope(target);
       let watchdog: ReturnType<typeof setTimeout> | undefined;
       const renewed = await Promise.race([
-        reBootstrapSessionToken(plane),
+        reBootstrapSessionToken(plane, target),
         new Promise<RebootstrapResult>(resolve => { watchdog = setTimeout(() => resolve({ kind: "failed" }), resolutionWatchdogMs); }),
       ]).finally(() => clearTimeout(watchdog));
       if (renewed.kind === "minted") return renewed.token;
@@ -320,7 +338,7 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
         } else {
           const verdict = await verifyAdminToken(plane, target, remembered);
           if (verdict === "accepted") {
-            state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
+            updateSession(state, { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: target.serverOrigin });
             return remembered;
           }
           if (verdict === "rejected") clearRememberedAdminToken(scope);
@@ -330,7 +348,7 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, target, token), scope);
       if (prompted) {
-        updateSession(state, { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin });
+        updateSession(state, { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: target.serverOrigin });
         return prompted;
       }
       state.promptCancelled = true;

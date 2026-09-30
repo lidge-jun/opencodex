@@ -409,6 +409,9 @@ test("a hung remembered-token verification is bounded and falls back to the prom
   // settled wedged resolutionInFlight (and every /api waiter) for the page lifetime —
   // the whole-resolution watchdog only races reBootstrapSessionToken. The bounded fetch
   // must turn the hang into "unavailable": stored token preserved, prompt reached.
+  // The seeded key is the exact scoped key for the default standalone targets
+  // (http://localhost, same-origin transport): the legacy unscoped key is never read, so
+  // seeding it left the verification untried and the abort bound below unexercised.
   declareRuntimeRole("hub");
   setRebootstrapTimeoutForTests(40);
   // Bun (Windows) can starve native AbortSignal.timeout timers while the JS timer
@@ -416,17 +419,25 @@ test("a hung remembered-token verification is bounded and falls back to the prom
   // remembered-token verification runs. Keep one timer armed so the bound under
   // test actually fires instead of hanging the runner.
   const keepalive = setTimeout(() => {}, 1_000);
-  localStorage.setItem("opencodex.remembered-admin-token", "remembered-token");
+  localStorage.setItem("opencodex.remembered-admin-token:http://localhost|same-origin", "remembered-token");
+  let verifyCalls = 0;
+  const verifySignals: Array<AbortSignal | null | undefined> = [];
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (pathnameOf(input) === "/api/combos") return hangUntilAborted(init?.signal);
+    if (pathnameOf(input) === "/api/combos") {
+      verifyCalls += 1;
+      verifySignals.push(init?.signal);
+      return hangUntilAborted(init?.signal);
+    }
     return new Response("unauthorized", { status: 401 });
   }) as typeof fetch;
   await installMockAuthFetch(mockFetch);
 
   try {
     expect((await fetch("/api/config")).status).toBe(401);
+    expect(verifyCalls).toBe(1);
+    expect(verifySignals[0]?.aborted).toBe(true);
     expect(promptCalls).toBe(1);
-    expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("remembered-token");
+    expect(localStorage.getItem("opencodex.remembered-admin-token:http://localhost|same-origin")).toBe("remembered-token");
   } finally {
     clearTimeout(keepalive);
   }

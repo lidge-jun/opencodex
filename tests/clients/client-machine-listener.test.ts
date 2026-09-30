@@ -10,6 +10,7 @@ import { RemoteWorkspaceSessionService } from "../../src/remote-control/workspac
 import type { RemoteWorkspaceHub } from "../../src/remote-control/workspace-hub";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { createManagementSessionControl, type ManagementAuthState } from "../../src/server/management-auth";
+import { MACHINE_RELAY_EXPECTED_CONNECTION_HEADER, MACHINE_RELAY_EXPECTED_ORIGIN_HEADER } from "../../src/client/machine-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -83,6 +84,19 @@ async function guiHeaders(server: Server<unknown>, mutation = false): Promise<He
   return headers;
 }
 
+// Windows can release a stopped listener's loopback port slightly after the
+// stop promise resolves, so an immediate same-port rebind races EADDRINUSE.
+async function rebindLoopbackPort<T>(bind: () => T): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return bind();
+    } catch (error) {
+      if (attempt >= 40 || !/EADDRINUSE|in use/i.test(String(error))) throw error;
+      await Bun.sleep(50);
+    }
+  }
+}
+
 describe("client machine listener", () => {
   test("relayed workspace prompt acknowledges acceptance before the model turn completes", async () => {
     const oldEnabled = process.env.OCX_REMOTE_WORKSPACE_ENABLED;
@@ -126,8 +140,9 @@ describe("client machine listener", () => {
         pairingGrants: new Map(),
       };
       const hubSessionControl = createManagementSessionControl(hubAuth);
+      const relayState = connection("relay");
       const server = startMachineListener(0, {
-        state: connection("relay"), managementAuthState: authState(),
+        state: relayState, managementAuthState: authState(),
         fetchImpl: (async (input, init) => {
           const request = new Request(String(input), init);
           request.headers.set("Host", new URL(request.url).host);
@@ -154,6 +169,8 @@ describe("client machine listener", () => {
         "X-OpenCodex-API-Key": "ocx_session_hub",
         "X-OpenCodex-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
         "X-OpenCodex-CSRF-Token": "fixture-hub-csrf",
+        [MACHINE_RELAY_EXPECTED_ORIGIN_HEADER]: new URL(relayState.managementUrl).origin,
+        [MACHINE_RELAY_EXPECTED_CONNECTION_HEADER]: `${relayState.apiKeyId}|${relayState.connectedAt}`,
       });
       const prefix = "/api/machine/hub-relay/api/remote-workspace/sessions";
       const acknowledged = await Promise.race([
@@ -180,6 +197,89 @@ describe("client machine listener", () => {
       else process.env.OCX_REMOTE_WORKSPACE_ENABLED = oldEnabled;
     }
   }, 15_000);
+
+  test("a relay request naming a superseded hub connection is refused before the forward", async () => {
+    // #4649 review, P1 — the A→B reconnect interleaving, listener half. The remembered
+    // hub-A credential is resolved against A's discovered status, then the client rebinds
+    // the same loopback port to hub B before the verification is forwarded. The listener
+    // captured connection B at bind, so it must refuse on connection identity before any
+    // upstream byte: forwarding would hand B the A credential, and B's 401 would then
+    // delete the still-valid A token.
+    const hubARequests: Request[] = [];
+    const hubBRequests: Request[] = [];
+    const connectionB: OcxClientConnectionConfig = {
+      ...connection("relay"),
+      serverUrl: "https://hub-b.example.test",
+      managementUrl: "https://hub-b.example.test",
+      apiKeyId: "client-key-b",
+      connectedAt: "2026-08-28T12:00:00.000Z",
+    };
+    const serverA = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: authState(),
+      fetchImpl: (async (input, init) => {
+        hubARequests.push(new Request(String(input), init));
+        return Response.json({ relayed: "hub-a" });
+      }) as typeof fetch,
+    });
+    try {
+      const statusHeaders = await guiHeaders(serverA);
+      const status = await fetch(new URL("/api/machine/status", serverA.url), { headers: statusHeaders });
+      expect(status.status).toBe(200);
+      // Exactly the fields the GUI builds its relay target and credential scope from.
+      const discovered = await status.json() as {
+        sharedServerOrigin: string; apiKeyId: string; connectedAt: string; managementTransport: string;
+      };
+      expect(discovered).toMatchObject({
+        managementTransport: "relay",
+        sharedServerOrigin: "https://hub.example.test",
+        apiKeyId: "client-key-a",
+      });
+      const remembered = "hub-a-remembered-token";
+
+      const port = serverA.port;
+      await serverA.stop(true);
+      const serverB = await rebindLoopbackPort(() => startMachineListener(port, {
+        state: connectionB, managementAuthState: authState(),
+        fetchImpl: (async (input, init) => {
+          hubBRequests.push(new Request(String(input), init));
+          return Response.json({ relayed: "hub-b" });
+        }) as typeof fetch,
+      }));
+      servers.push(serverB);
+      // The reconnect also re-bootstraps the machine session — against B's listener.
+      const localB = await guiHeaders(serverB, true);
+      // The machine session travels in X-OpenCodex-Machine-Session; the plain
+      // API-Key header is the hub credential being relayed, not the local auth.
+      const relayHeaders = (hubCredential: string, expectedOrigin: string, expectedConnection: string): Headers => {
+        const headers = new Headers(localB);
+        headers.set("X-OpenCodex-Machine-Session", localB.get("X-OpenCodex-API-Key")!);
+        headers.set("X-OpenCodex-Machine-GUI-Origin", localB.get("X-OpenCodex-GUI-Origin")!);
+        headers.set("X-OpenCodex-Machine-CSRF-Token", localB.get("X-OpenCodex-CSRF-Token")!);
+        headers.set("X-OpenCodex-API-Key", hubCredential);
+        headers.set(MACHINE_RELAY_EXPECTED_ORIGIN_HEADER, expectedOrigin);
+        headers.set(MACHINE_RELAY_EXPECTED_CONNECTION_HEADER, expectedConnection);
+        return headers;
+      };
+
+      const stale = relayHeaders(remembered, discovered.sharedServerOrigin, `${discovered.apiKeyId}|${discovered.connectedAt}`);
+      const refused = await fetch(new URL("/api/machine/hub-relay/api/combos", serverB.url), { headers: stale });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({ error: "hub relay connection changed" });
+      expect(hubBRequests).toHaveLength(0);
+
+      // Positive control: the same machine session naming B's live connection forwards
+      // exactly once, carrying the hub credential but never the identity headers.
+      const current = relayHeaders("hub-b-remembered-token", "https://hub-b.example.test", `${connectionB.apiKeyId}|${connectionB.connectedAt}`);
+      const forwarded = await fetch(new URL("/api/machine/hub-relay/api/combos", serverB.url), { headers: current });
+      expect(forwarded.status).toBe(200);
+      expect(hubBRequests).toHaveLength(1);
+      expect(hubBRequests[0]!.headers.get("x-opencodex-api-key")).toBe("hub-b-remembered-token");
+      expect(hubBRequests[0]!.headers.get(MACHINE_RELAY_EXPECTED_ORIGIN_HEADER)).toBeNull();
+      expect(hubBRequests[0]!.headers.get(MACHINE_RELAY_EXPECTED_CONNECTION_HEADER)).toBeNull();
+    } finally {
+      await serverA.stop(true).catch(() => { /* already stopped when the reconnect ran */ });
+    }
+  });
 
   test("binds IPv4 loopback and default-denies shared/data-plane routes", async () => {
     const server = startMachineListener(0, { state: connection(), managementAuthState: authState() });

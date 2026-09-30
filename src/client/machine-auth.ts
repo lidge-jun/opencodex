@@ -8,11 +8,15 @@ import {
 export const MACHINE_SESSION_HEADER = "x-opencodex-machine-session";
 export const MACHINE_GUI_ORIGIN_HEADER = "x-opencodex-machine-gui-origin";
 export const MACHINE_CSRF_HEADER = "x-opencodex-machine-csrf-token";
+export const MACHINE_RELAY_EXPECTED_ORIGIN_HEADER = "x-opencodex-relay-expected-origin";
+export const MACHINE_RELAY_EXPECTED_CONNECTION_HEADER = "x-opencodex-relay-expected-connection";
 
 const MACHINE_AUTH_HEADERS = [
   MACHINE_SESSION_HEADER,
   MACHINE_GUI_ORIGIN_HEADER,
   MACHINE_CSRF_HEADER,
+  MACHINE_RELAY_EXPECTED_ORIGIN_HEADER,
+  MACHINE_RELAY_EXPECTED_CONNECTION_HEADER,
 ] as const;
 
 function machinePrincipalRequest(req: Request): Request {

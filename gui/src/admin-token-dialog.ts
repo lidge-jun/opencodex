@@ -34,6 +34,13 @@ export function rememberedAdminTokenKey(scope: string): string {
   return `${REMEMBERED_ADMIN_TOKEN_KEY_PREFIX}:${scope}`;
 }
 
+// Only the exact legacy unscoped key and real scoped keys belong to this feature: a plain
+// prefix match would also count and delete decoys like
+// "opencodex.remembered-admin-token.decoy" that no code path here ever wrote (#4649 review).
+function isRememberedAdminTokenKey(key: string): boolean {
+  return key === REMEMBERED_ADMIN_TOKEN_KEY_PREFIX || key.startsWith(`${REMEMBERED_ADMIN_TOKEN_KEY_PREFIX}:`);
+}
+
 // The legacy unscoped key (exactly REMEMBERED_ADMIN_TOKEN_KEY_PREFIX) is never read
 // or migrated: an upgrade must not silently re-target a credential the user saved
 // before targets were distinguished. "Forget remembered admin token" removes it.
@@ -49,7 +56,8 @@ export function clearRememberedAdminToken(scope: string): void {
 export function hasAnyRememberedAdminToken(): boolean {
   try {
     for (let i = 0; i < localStorage.length; i += 1) {
-      if (localStorage.key(i)?.startsWith(REMEMBERED_ADMIN_TOKEN_KEY_PREFIX)) return true;
+      const key = localStorage.key(i);
+      if (key !== null && isRememberedAdminTokenKey(key)) return true;
     }
   } catch { /* storage may be disabled */ }
   return false;
@@ -60,7 +68,7 @@ export function clearAllRememberedAdminTokens(): void {
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
-      if (key?.startsWith(REMEMBERED_ADMIN_TOKEN_KEY_PREFIX)) keys.push(key);
+      if (key !== null && isRememberedAdminTokenKey(key)) keys.push(key);
     }
     for (const key of keys) localStorage.removeItem(key);
   } catch { /* storage may be disabled */ }
