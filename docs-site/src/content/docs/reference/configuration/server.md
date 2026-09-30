@@ -424,6 +424,37 @@ never lost; the next append tries again. Trimming also refreshes what the dashbo
 There is no dashboard control for this yet; set it in `config.json` or with
 `ocx config set usageLedgerMaxBytes <bytes>`.
 
+## Catalog auto-refresh (`catalogAutoRefresh`)
+
+Enabled by default, even when the section or `enabled` is absent. The proxy refreshes its
+model catalog every 60 minutes, with one initial refresh about three minutes after startup.
+
+```json
+{
+  "catalogAutoRefresh": { "enabled": true, "intervalMinutes": 60 }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Set to `false` to disable automatic refresh. |
+| `intervalMinutes` | `60` | Refresh cadence; positive values below 15 are clamped to 15. `0` disables refresh. |
+
+Each refresh observes the selected Codex runtime's bundled catalog, then warms authenticated
+Codex model rosters before converging the served list. Source failures use existing evidence
+and retry on a later tick. Cadence and enablement edits take effect on a subsequent tick.
+
+A native OpenAI model that your ChatGPT account's Codex roster lists, but that this OpenCodex
+release does not know yet, is added with the metadata upstream publishes for it (name,
+reasoning levels, context window). OpenCodex remembers such models in
+`discovered-native-models.json` in its home directory and forgets one that has not been seen
+for 14 days. A later release that ships the model takes over its row.
+
+Running Codex sessions retain an in-memory model list. When the served set changes while
+Codex app-servers are running, the proxy logs a restart hint and records `reloadRequired`
+in its auto-refresh status. Run `ocx sync --restart-codex` when ready to restart those sessions.
+Automatic refresh never restarts them.
+
 ## Quota-reset notifications (`quotaResetNotify`)
 
 Off by default. When the section is absent, no detection runs, no timer starts, and no state

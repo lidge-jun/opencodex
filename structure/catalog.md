@@ -102,7 +102,7 @@ explicit observed-state merge policy and restore native priorities from the once
 backup rather than from a catalog whose priorities may already have been rewritten. A configured
 custom catalog remains the native metadata/template authority even when a bundled-catalog memo is
 warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
-evidence to remove unsupported reasoning efforts; convergence never probes Codex itself.
+evidence to remove unsupported reasoning efforts; convergence never probes Codex itself. The default-on scheduler in `src/codex/catalog-auto-refresh.ts` settles bundled runtime and authenticated Codex roster observations before admission, using dynamic imports, a 15-second source wait and the loader's bounded synchronous probes. Source failure uses existing evidence, while a stopped generation cannot start the next source or converge. A changed set records `reloadRequired` through `src/codex/catalog-refresh-status.ts` for observed running app-servers and logs one content-free restart hint; a no-op keeps it while processes remain stale or the restart observation is unknown and clears it when they are fresh or gone. Automatic refresh never restarts processes. `tests/codex-integration/catalog-auto-refresh-scheduler.test.ts` covers these boundaries.
 
 Custom Astra and Daybreak rows acquire native identity -- Responses Lite, multi-agent, context
 windows, display names -- only through the canonical `openai` forward destination and explicit
@@ -143,19 +143,15 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
-Configured natives are the operator's way to widen that bare list without a release. A bare
-`gpt-*` id under `providers.openai.models` on the canonical Codex forward provider joins
-`NATIVE_OPENAI_MODELS` / `SUPPORTED_NATIVE_OPENAI_SLUGS` in place (`src/codex/catalog/native-models.ts`),
-and `metadata.ts` keeps its pinned-capability, upstream-entry and context tables in step through
-a subscription. Each borrows the pinned `gpt-6.1-sol` row under a name generated from its slug, takes
-the GPT-6 272,000 / 872,000 context pair (`NATIVE_GPT6_CONTEXT`, also used by the built-in GPT-6
-rows), and is never account-gated. Built-in, retired and reserve ids never register. The filter
-lives in `src/config/derived-registries.ts`, whose `refreshConfigDerivedRegistries` runs on every
-load, persist and reconcile path, so every process that loads config sees the same set; removing
-the id unregisters it and the next canonical write drops the row. Configured natives are not in
-`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS` or `NATIVE_MAIN_DRAIN_SENTINEL_MODELS` (they behave
-like `gpt-5.5` there), and a combo `nativeAlias` cannot target one because schema validation runs
-before registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+Configured natives widen the bare list without a release: eligible bare `gpt-*` ids under `providers.openai.models` on the canonical Codex forward provider join the shared registry in place (`src/codex/catalog/native-models.ts`). Each borrows the pinned `gpt-6.1-sol` row under its generated name, takes `NATIVE_GPT6_CONTEXT` (272,000 / 872,000), and is ungated. Built-in, retired and reserve ids never register. `src/config/derived-registries.ts` filters the config and refreshes registration on load, persist and reconcile; removing a configured id unregisters it unless it is also discovered. Configured natives have no entitlement routing preference or main-drain sentinel and cannot be combo `nativeAlias` targets because schema validation precedes registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+
+Authenticated discovery also widens the set: after a successful nonempty roster fetch, `src/codex/model-entitlements.ts` passes full eligible rows to `src/codex/catalog/discovered-natives.ts`. Rows require a visible, API-supported bare `gpt-*` slug, display name and sane reasoning-level array; built-in, retired, reserve, malformed and oversized rows are rejected. Existing discoveries and configured natives remain eligible for refresh, so an already-supported slug does not freeze its metadata or keep borrowing a template.
+
+The store keeps version-1 `discovered-native-models.json` under the resolved OpenCodex home using the private atomic writer (0600 on POSIX). It merges by slug with first/last observation times and client version, expires entries unseen for 14 days, and bounds rows to 32, each to 256 KiB (a live row carries its instructions twice; GPT-6.1 Sol's was 87 KB), plus a file-size bound. Missing/corrupt files read as empty; persistence failures never fail entitlement. Config activation loads the file through derived registries; observations register immediately. A process-local monotonic generation changes for metadata or membership changes, independently of timestamp refreshes.
+
+The entitlement roster asks under the installed client version, and upstream's rollout gate can hide a new model from it regardless of the row's `minimal_client_version` (GPT-6.1 Sol reported 0.153.0 but was served only from 0.159.0 while the installed Codex was 0.158). So each scheduler tick also runs `discoverCodexNativeRoster` in `src/codex/model-entitlements.ts`, which asks as `CODEX_ROSTER_DISCOVERY_CLIENT_VERSION` with `If-None-Match`, feeds only the discovery store, and never writes or satisfies the entitlement cache.
+
+The import-free registry unions configured and discovered membership in place; removing either retains the other. Discoveries join the self-described set, use their own label and exact reasoning ladder, and derive context from their row with `NATIVE_GPT6_CONTEXT` for omitted values. Real metadata outranks a configured template; later built-in registration makes old discoveries inert. They are ungated under the flagship owner policy, without granting account entitlement or routing preference. Shared capability projection omits access programs and availability prompts, which remain scoped entitlement evidence. The next catalog merge replaces a discovered row with its latest metadata. Covered by `tests/codex-integration/discovered-native-models.test.ts`.
 
 Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied model ids still follow generic routing. User-selected config and historical usage remain stored.
 

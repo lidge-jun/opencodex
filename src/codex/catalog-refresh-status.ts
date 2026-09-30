@@ -108,6 +108,7 @@ export interface CatalogAutoRefreshOutcome {
   readonly at: number;
   readonly disposition: CatalogDisposition;
   readonly changed: boolean;
+  readonly reloadRequired: boolean;
   /**
    * A refresh that has failed repeatedly is the signal an operator needs, and the
    * boolean disposition alone cannot express it: skipped and failed look the same
@@ -158,6 +159,7 @@ function freezeCatalogAutoRefreshOutcome(
     at: outcome.at,
     disposition: freezeCatalogDisposition(outcome.disposition),
     changed: outcome.changed,
+    reloadRequired: outcome.reloadRequired,
     consecutiveFailures: outcome.consecutiveFailures,
   });
 }
@@ -171,6 +173,7 @@ function freezeCatalogAutoRefreshOutcome(
 export function recordCatalogAutoRefreshOutcome(
   disposition: CatalogDisposition,
   changed: boolean,
+  reloadRequired = false,
 ): CatalogAutoRefreshOutcome | null {
   const normalized = normalizeCatalogDisposition(disposition);
   if (normalized === null) return null;
@@ -181,6 +184,7 @@ export function recordCatalogAutoRefreshOutcome(
     at: Date.now(),
     disposition: normalized,
     changed: changed === true,
+    reloadRequired: reloadRequired === true,
     consecutiveFailures,
   });
   lastAutoRefreshOutcome = outcome;

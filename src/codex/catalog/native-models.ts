@@ -129,13 +129,15 @@ const NATIVE_OPENAI_CAPABILITY_SOURCES: Readonly<Record<string, string>> = Objec
  * keeps rows this runtime does not expose, which is exactly why presence in the pin cannot be
  * the predicate: `gpt-5.4` is still pinned (hidden, with an upgrade to Terra) after its retirement.
  */
-export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
+const selfDescribedNativeModels = new Set<string>([
   NATIVE_GPT6_ASTRA_MODEL,
   // Rows come from roster-pinned-models.json via pinnedNativeModelRows(), not the codex-rs pin.
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
 ]);
+
+export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = selfDescribedNativeModels;
 
 /**
  * Native ids whose capability metadata is inherited from another pinned native row.
@@ -155,7 +157,7 @@ export const NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS = Object.freeze(
 );
 
 export function isNativeOpenAiCapabilityAliasModel(slug: string): boolean {
-  return Object.hasOwn(NATIVE_OPENAI_CAPABILITY_SOURCES, slug) || configuredNativeSlugs.has(slug);
+  return Object.hasOwn(NATIVE_OPENAI_CAPABILITY_SOURCES, slug) || (configuredNativeSlugs.has(slug) && !discoveredNativeRows.has(slug));
 }
 
 /**
@@ -175,7 +177,7 @@ export function hasNativeOpenAiCapabilityMetadata(slug: string): boolean {
 
 export function nativeOpenAiCapabilitySourceSlug(slug: string): string {
   return NATIVE_OPENAI_CAPABILITY_SOURCES[slug]
-    ?? (configuredNativeSlugs.has(slug) ? CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL : slug);
+    ?? (configuredNativeSlugs.has(slug) && !discoveredNativeRows.has(slug) ? CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL : slug);
 }
 
 /**
@@ -196,7 +198,7 @@ export const NATIVE_OPENAI_ALIAS_PRESENTATION: Readonly<Record<string, { display
 
 export function nativeOpenAiAliasPresentation(slug: string): { displayName: string; description: string } | undefined {
   return NATIVE_OPENAI_ALIAS_PRESENTATION[slug]
-    ?? (configuredNativeSlugs.has(slug) ? configuredNativePresentation(slug) : undefined);
+    ?? (configuredNativeSlugs.has(slug) && !discoveredNativeRows.has(slug) ? configuredNativePresentation(slug) : undefined);
 }
 
 /** `gpt-6-nova` -> `GPT-6-Nova`, the same casing upstream uses for its own GPT-6 rows. */
@@ -240,8 +242,8 @@ const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * The built-in list plus every configured native, appended in config order. The array and the Set
- * below are shared by reference across the catalog, `/v1/models` and the dashboard, so
+ * The built-in list plus configured and discovered natives in registration order. The array and
+ * Set below are shared by reference across the catalog, `/v1/models` and the dashboard, so
  * registration edits them in place rather than replacing them.
  */
 export const NATIVE_OPENAI_MODELS: string[] = [...BUILT_IN_NATIVE_OPENAI_MODELS];
@@ -260,6 +262,7 @@ export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
  * persist/reconcile path, so any process that loads config — `ocx ensure` included — sees it.
  */
 const configuredNativeSlugs = new Set<string>();
+const discoveredNativeRows = new Map<string, Record<string, unknown>>();
 type ConfiguredNativeListener = (current: readonly string[], removed: readonly string[]) => void;
 const configuredNativeListeners: ConfiguredNativeListener[] = [];
 
@@ -286,25 +289,49 @@ export function setConfiguredNativeOpenAiModels(ids: readonly string[]): void {
   const next = [...new Set(ids.filter(isEligibleConfiguredNativeOpenAiModel))];
   const previous = [...configuredNativeSlugs];
   if (next.length === previous.length && next.every((id, index) => id === previous[index])) return;
-  const removed = previous.filter(id => !next.includes(id));
-  for (const id of previous) {
-    configuredNativeSlugs.delete(id);
-    SUPPORTED_NATIVE_OPENAI_SLUGS.delete(id);
-    const index = NATIVE_OPENAI_MODELS.indexOf(id);
-    if (index >= 0) NATIVE_OPENAI_MODELS.splice(index, 1);
+  configuredNativeSlugs.clear();
+  for (const id of next) configuredNativeSlugs.add(id);
+  refreshDynamicNativeOpenAiModels();
+}
+
+export function discoveredNativeOpenAiModels(): readonly string[] {
+  return [...discoveredNativeRows.keys()];
+}
+
+export function discoveredNativeOpenAiRow(slug: string): Record<string, unknown> | undefined {
+  const row = discoveredNativeRows.get(slug);
+  return row ? structuredClone(row) : undefined;
+}
+
+/** Validated roster rows stay self-described; a later built-in registration wins automatically. */
+export function setDiscoveredNativeOpenAiModels(rows: readonly Record<string, unknown>[]): void {
+  for (const slug of discoveredNativeRows.keys()) selfDescribedNativeModels.delete(slug);
+  discoveredNativeRows.clear();
+  for (const row of rows) {
+    if (typeof row.slug !== "string" || !isEligibleConfiguredNativeOpenAiModel(row.slug)) continue;
+    discoveredNativeRows.set(row.slug, structuredClone(row));
+    selfDescribedNativeModels.add(row.slug);
   }
-  for (const id of next) {
-    configuredNativeSlugs.add(id);
-    SUPPORTED_NATIVE_OPENAI_SLUGS.add(id);
-    NATIVE_OPENAI_MODELS.push(id);
-  }
+  refreshDynamicNativeOpenAiModels();
+}
+
+function dynamicNativeOpenAiModels(): string[] {
+  return [...new Set([...configuredNativeSlugs, ...discoveredNativeRows.keys()])];
+}
+
+function refreshDynamicNativeOpenAiModels(): void {
+  const next = dynamicNativeOpenAiModels();
+  const removed = NATIVE_OPENAI_MODELS.filter(id => !BUILT_IN_NATIVE_OPENAI_MODELS.includes(id) && !next.includes(id));
+  NATIVE_OPENAI_MODELS.splice(0, NATIVE_OPENAI_MODELS.length, ...BUILT_IN_NATIVE_OPENAI_MODELS, ...next);
+  SUPPORTED_NATIVE_OPENAI_SLUGS.clear();
+  for (const id of NATIVE_OPENAI_MODELS) SUPPORTED_NATIVE_OPENAI_SLUGS.add(id);
   for (const listener of configuredNativeListeners) listener(next, removed);
 }
 
-/** Keep derived tables in step; the listener runs immediately with the current set. */
+/** Keep derived tables in step with the configured/discovered union, including metadata updates. */
 export function subscribeConfiguredNativeOpenAiModels(listener: ConfiguredNativeListener): void {
   configuredNativeListeners.push(listener);
-  listener(configuredNativeOpenAiModels(), []);
+  listener(dynamicNativeOpenAiModels(), []);
 }
 
 export function resetConfiguredNativeOpenAiModelsForTests(): void {
