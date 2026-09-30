@@ -3,7 +3,7 @@ import { createKiroAdapter } from "../../../src/adapters/kiro";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../../src/adapters/kiro-constants";
 import { resetKiroThrottleStateForTests } from "../../../src/adapters/kiro-retry";
 import { encodeMessage } from "../../../src/lib/eventstream-decoder";
-import { createTranslatorBudget } from "../../../src/lib/translator-budget";
+import { createTranslatorBudget, releaseTranslatedEvent } from "../../../src/lib/translator-budget";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const provider: OcxProviderConfig = {
@@ -57,7 +57,8 @@ async function run(first: Uint8Array[], retry: Uint8Array[], buffered = false) {
     });
     if (buffered) events.push(...await adapter.parseResponse!(upstream, budget));
     else for await (const event of adapter.parseStream(upstream, budget)) events.push(event);
-    if (!buffered) expect(budget.snapshot().currentBytes).toBe(0);
+    if (buffered) for (const event of events) releaseTranslatedEvent(event, budget);
+    expect(budget.snapshot().currentBytes).toBe(0);
     return { events, sends, physicalRequests, visibleAtRetry };
   } finally {
     budget.dispose();
