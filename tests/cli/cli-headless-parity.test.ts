@@ -986,6 +986,33 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
+  test("agent roles suggest --apply skips proposals that already match the role's pin and says so", async () => {
+    const proposals = {
+      sizingModel: "gpt-5.5",
+      proposals: [
+        { role: "explorer", model: "a/small", effort: "low", status: "proposed", tier: "fast", effortIntent: "glance", proposedModel: "a/small", proposedEffort: "low" },
+        { role: "reviewer", model: "a/mid", effort: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null },
+        { role: "planner", model: "a/mid", effort: "low", status: "proposed", tier: "standard", effortIntent: "thorough", proposedModel: "a/mid", proposedEffort: "high" },
+        { role: "worker", model: null, effort: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null },
+      ],
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let output = "";
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).toBe(0);
+      output = logSpy.mock.calls.flat().join("\n");
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} },
+      { path: "/api/codex-agent-roles/planner", method: "PUT", body: { model: "a/mid", effort: "high" } },
+      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid" } },
+    ]);
+    expect(output).toContain("Applied 2 of 4 roles. Skipped 2 already set: explorer, reviewer.");
+  });
+
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
       ? { id: "key-1", name: "deploy", key: "ocx_secret" }

@@ -246,6 +246,7 @@ interface CodexAgentRolesStatus {
 interface CodexRoleProposal {
   role: string;
   model: string | null;
+  effort?: string | null;
   status: "proposed" | "unassigned" | "unsized";
   tier?: string;
   effortIntent?: string;
@@ -253,6 +254,11 @@ interface CodexRoleProposal {
   proposedModel?: string | null;
   proposedEffort?: string | null;
   reason?: string | null;
+}
+
+function proposalAlreadySet(proposal: CodexRoleProposal): boolean {
+  return proposal.proposedModel === proposal.model
+    && (proposal.proposedEffort == null || proposal.proposedEffort === proposal.effort);
 }
 
 async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
@@ -266,22 +272,29 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
   );
   const proposals = result.proposals ?? [];
   const applied: Array<{ role: string; model: string; effort?: string }> = [];
+  const skipped: string[] = [];
   if (apply) {
     for (const proposal of proposals) {
       if (proposal.status !== "proposed" || !proposal.proposedModel) continue;
+      if (proposalAlreadySet(proposal)) {
+        skipped.push(proposal.role);
+        continue;
+      }
       const body = { model: proposal.proposedModel, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) };
       await runtimeRequest(`/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`, { method: "PUT", body: JSON.stringify(body) }, deps);
       applied.push({ role: proposal.role, ...body });
     }
   }
-  printData(apply ? { ...result, applied } : result, wantsJson, [
+  printData(apply ? { ...result, applied, skipped } : result, wantsJson, [
     `Sized with ${result.sizingModel ?? "unknown"}.`,
     ...proposals.map(p => p.status === "unsized"
       ? `${p.role}: not sized (${p.reason ?? "unknown"})`
       : p.status === "unassigned"
         ? `${p.role}: ${p.tier}/${p.effortIntent}, no model (${p.reason ?? "unknown"})`
         : `${p.role}: ${p.model ?? "(no pin)"} -> ${p.proposedModel}${p.proposedEffort ? ` (${p.proposedEffort})` : ""} [${p.tier}/${p.effortIntent}] ${p.rationale ?? ""}`),
-    apply ? `Applied ${applied.length} of ${proposals.length} roles.` : "Nothing was written; rerun with --apply to write every proposal.",
+    apply
+      ? `Applied ${applied.length} of ${proposals.length} roles.${skipped.length > 0 ? ` Skipped ${skipped.length} already set: ${skipped.join(", ")}.` : ""}`
+      : "Nothing was written; rerun with --apply to write every proposal that differs from the role's current pin.",
   ]);
 }
 
