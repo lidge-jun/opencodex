@@ -325,6 +325,8 @@ fallback 行为，参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
 
 `ocx account refresh openai` 和 `ocx account list openai --quota --refresh` 仅查询用量。模型验证会消耗配额，因此需要用户的仪表板会话：配额恢复后，打开 `ocx gui` 并点击 **Refresh quotas**。无界面主机也需要通过浏览器访问其仪表板；仅凭管理员令牌无法授权验证。暂停的账号可以完成验证，但不会因此恢复或被选中。模型授权错误会一直显示，直到验证或重新登录成功。
 
+在 **Codex Set → Multi-auth** 中，打开 **Codex Auth** 标题栏中的 **Codex 额度** 开关，即可在 Week 下方显示主账号和各池账号最近查询到的积分。默认关闭，并保存为 `showCodexCredits`。余额按地区格式显示；上游报告时会显示无限额或超额使用上限警告。由于没有积分总上限，条形表示可用状态而非百分比。此开关仅控制显示，新登录需等待其自身的查询结果。
+
 后台重新验证是独立功能，默认关闭。它要求 Token Guardian、`openai` 的 `proactive` 刷新策略及 `tokenGuardian.codexWarmupEnabled`，并跳过等待注册验证的账号。
 
 ### 账号停止处理请求的原因

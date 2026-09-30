@@ -267,12 +267,14 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
-    // grok-4.7-build-fast arrives only through OAuth discovery. We read it as the Grok Build id of
-    // what xAI documents as Grok 4.7 Fast: "the same model served on faster infrastructure",
-    // offered in Cursor and Grok Build only, not on the public xAI API (docs.x.ai/developers/grok-4-7,
-    // fetched 2026-09-24). It therefore inherits grok-4.7's documented facts in the lists below.
-    // Its wire pin and service tier stay unclaimed until probed, which is why it is absent from
-    // XAI_MODELS, modelWireDefaults and modelSupportsServiceTier.
+    // grok-4.7-build-fast arrives only through OAuth discovery: xAI's Grok 4.7 Fast, "the same model
+    // served on faster infrastructure" (docs.x.ai/developers/grok-4-7). Probed 2026-09-30
+    // (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
+    // input, 500k limit and advertised defaults, 1.5-1.7x faster, ~2x the ticks per output token. It is
+    // not a second model row: shouldExposeProviderModel hides it, and grok-4.7's Fast selection on OAuth
+    // serializes it (src/providers/xai-fast-model.ts). It keeps grok-4.7's facts in the lists below so an
+    // explicit legacy request still works, plus the probed OAuth Responses wire. No service-tier claim:
+    // priority multiplied its ticks ~5.9x for no measured gain.
     // Live 2026-09-20: Chat Completions rejects `stop` on grok-4.6
     // (`400 invalid-argument "Model grok-4.6 does not support parameter stop."`).
     // xAI documents `stop` as unsupported for reasoning models. Claude Code
@@ -325,6 +327,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // "default", so forwarding a caller tier would advertise a tier it does not get.
     modelWireDefaults: {
       "grok-4.7": {
+        wire: "openai-responses",
+        inbound: ["responses"],
+        authModes: ["oauth"],
+      },
+      "grok-4.7-build-fast": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],

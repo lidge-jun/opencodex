@@ -292,12 +292,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // browser profile other than the OS default, or on a different machine
       // than the proxy. Declining changes nothing else: the URL is still
       // returned below and every login surface renders it with a copy button.
+      //
+      // The launch outcome is returned rather than discarded, the same contract the Codex
+      // account login already keeps: a login whose browser never opened otherwise reads as one
+      // that did, and the dashboard can only say so if it is told. `openUrl` answers within its
+      // short settle window and never rejects.
       const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      let browserLaunch: "started" | "failed" | "skipped" = "skipped";
       if (authUrl && !deviceCode && shouldOpenBrowserForLogin(body.openBrowser, config)) {
         const { openUrl } = await import("../../lib/open-url");
-        void openUrl(authUrl);
+        browserLaunch = (await openUrl(authUrl)).status === "started" ? "started" : "failed";
       }
-      return jsonResponse({ url: authUrl, instructions, deviceCode });
+      return jsonResponse({ url: authUrl, instructions, deviceCode, browserLaunch });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
       const message = err instanceof Error ? err.message : String(err);

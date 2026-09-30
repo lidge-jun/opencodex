@@ -6,6 +6,7 @@ import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import AddCodexAccountModal from "./AddCodexAccountModal";
 import { useCodexAccountPool, type CodexAccountPoolController } from "../hooks/useCodexAccountPool";
+import { useCodexCreditsVisibility } from "../hooks/useCodexCreditsVisibility";
 import { useMainDeviceReauth } from "./use-main-device-reauth";
 import NativeMainProfiles from "./NativeMainProfiles";
 import type { ReactNode } from "react";
@@ -151,6 +152,22 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   useEffect(() => () => {
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
   }, []);
+
+  const credits = useCodexCreditsVisibility(apiBase, load, showActionFeedback, t, {
+    revision: quotaReadRevision,
+    onRead: (read, signal) => {
+      const mutationRevision = quotaAutoRefreshMutationRevisionRef.current;
+      read.then(payload => {
+        if (signal.aborted || quotaAutoRefreshMutationRevisionRef.current !== mutationRevision) return;
+        setQuotaState({ apiBase, revision: quotaReadRevision, settings: readQuotaActivationSettings(payload), error: false });
+        setQuotaBusyScope(null);
+      }).catch(() => {
+        if (signal.aborted || quotaAutoRefreshMutationRevisionRef.current !== mutationRevision) return;
+        setQuotaState({ apiBase, revision: quotaReadRevision, settings: null, error: true });
+        setQuotaBusyScope(null);
+      });
+    },
+  });
 
   const copyDoctor = useCallback((accountId: string) => {
     doctorCopy.copy(DOCTOR_CMD, accountId);
@@ -373,35 +390,12 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   useEffect(() => {
-    // AbortController rather than a `cancelled` flag: the in-flight request is actually torn
-    // down on unmount, and the state update lands in a .then() the linter can see is guarded.
+    // The credits hook shares the parsed settings GET above; this scope still
+    // owns teardown for the quota activation writes and their reconciliation.
     const abort = new AbortController();
-    const read = createBoundedFetch(15_000);
     quotaScopeRef.current = abort;
-    const mutationRevision = quotaAutoRefreshMutationRevisionRef.current;
-    fetch(`${apiBase}/api/settings`, { signal: read.signal })
-      .then(response => { if (!response.ok) throw new Error("read"); return response.json(); })
-      .then((payload: {
-        codexQuotaAutoRefresh?: QuotaAutoRefreshSettings;
-      } | null) => {
-        if (abort.signal.aborted) return;
-        if (!payload) throw new Error("read");
-        if (quotaAutoRefreshMutationRevisionRef.current === mutationRevision) {
-          setQuotaState({ apiBase, revision: quotaReadRevision, settings: readQuotaActivationSettings(payload), error: false });
-          setQuotaBusyScope(null);
-        }
-      })
-      .catch(() => {
-        if (!abort.signal.aborted && quotaAutoRefreshMutationRevisionRef.current === mutationRevision) {
-          setQuotaState({ apiBase, revision: quotaReadRevision, settings: null, error: true });
-          setQuotaBusyScope(null);
-        }
-      })
-      .finally(() => read.clear());
     return () => {
       abort.abort();
-      read.controller.abort();
-      read.clear();
       quotaMutationRef.current?.controller.abort();
       quotaMutationRef.current?.clear();
       quotaMutationRef.current = null;
@@ -468,6 +462,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       <CodexAccountPoolPageHead
         t={t}
         embedded={embedded}
+        creditsVisible={credits.visible}
+        creditsBusy={credits.busy}
+        onToggleCredits={() => { void credits.toggle(); }}
         refreshingQuota={refreshingQuota}
         actionFeedback={actionFeedback}
         actionFeedbackTone={actionFeedbackTone}
@@ -509,6 +506,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           <CodexAccountPoolMainCard
             t={t}
             main={main}
+            creditsVisible={credits.visible}
+            loading={loadState === "loading"}
             isMainActive={isMainActive}
             accountModeState={accountModeState}
             threshold={autoSwitchThreshold}
@@ -552,6 +551,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
           <CodexAccountPoolCards
             pool={pool}
+            creditsVisible={credits.visible}
+            loading={loadState === "loading"}
             activeId={activeId}
             accountModeState={accountModeState}
             switchActionLabel={switchActionLabel}

@@ -1,5 +1,6 @@
 import { useT } from "../i18n/shared";
 import { LoginHint } from "./login-url-block";
+import type { BrowserLaunch } from "../oauth-browser-launch";
 import type { StatusTone } from "./add-codex-account-reducer";
 
 export function AddCodexAccountWaitingStep({
@@ -7,6 +8,7 @@ export function AddCodexAccountWaitingStep({
   authUrl,
   deviceCode,
   instructions,
+  browserLaunch,
   manualCode,
   manualCodeBusy,
   manualCodeWaiting,
@@ -24,6 +26,7 @@ export function AddCodexAccountWaitingStep({
   /** Short human code when the login is a device flow; empty otherwise. */
   deviceCode?: string;
   instructions?: string;
+  browserLaunch?: BrowserLaunch;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeWaiting: boolean;
@@ -44,7 +47,7 @@ export function AddCodexAccountWaitingStep({
       <h3 style={{ marginBottom: 4 }}>{reauthAccountId ? t("codexAuth.reauthenticate") : t("codexAuth.oauthLogin")}</h3>
       <p className="modal-desc">{t("codexAuth.oauthWaiting")}</p>
       <LoginHint
-        hint={{ url: authUrl, deviceCode, instructions }}
+        hint={{ url: authUrl, deviceCode, instructions, browserLaunch }}
         paste={{
           value: manualCode,
           busy: manualCodeBusy,

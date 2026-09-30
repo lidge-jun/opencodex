@@ -289,6 +289,12 @@ paste the redirect URL or authorization code back. During device approval that f
 enter the displayed code on the provider's verification page instead. If the provider switches
 to manual input, the dashboard replaces the old code and instructions on its next status poll.
 
+If the proxy tries to open a browser and cannot, the login says so above the URL and keeps
+going: open the sign-in page from the link or copy it. A device login never opens a browser by
+itself; **Copy code & open** copies the code and opens the verification page in one click, and
+the dashboard keeps waiting for as long as the provider's code stays valid. In the desktop app
+these links open in your default browser.
+
 To stop the proxy from opening a browser at all, tick **Don't open a browser on the proxy machine**
 beside the login button, or set it permanently:
 
@@ -593,6 +599,18 @@ picker and marks it as a sponsor, and nothing else about routing or defaults cha
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
 window; these are display observations and do not change model routing.
+
+`MiniMax-M3.1-Flash-Preview` (1M context) is listed on both MiniMax presets. MiniMax serves it
+only to Token Plan subscription keys and MiniMax Code for now, so a pay-as-you-go API key gets an
+error for it. Thinking is always on: the effort picker offers `low` through `max` and defaults to
+`max`, and there is no way to turn thinking off. MiniMax has not published a per-token price
+for the preview; usage is drawn from your
+[Token Plan quota](https://platform.minimax.io/docs/guides/pricing-token-plan), so OpenCodex
+shows no estimated cost for it. MiniMax's `/models` endpoint does not list
+the preview yet, so OpenCodex keeps it in the catalog from the preset. An install whose saved
+MiniMax model list is still the previous default receives it on the next start; a list you edited
+is left as it is; register the preview by hand with
+`ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
 
 **OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's

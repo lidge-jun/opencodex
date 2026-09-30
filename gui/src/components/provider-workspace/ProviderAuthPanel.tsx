@@ -504,6 +504,7 @@ export default function ProviderAuthPanel({
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,
                       instructions: hintForThis.instructions,
+                      browserLaunch: hintForThis.browserLaunch,
                     }}
                     paste={{
                       value: manualCode,
