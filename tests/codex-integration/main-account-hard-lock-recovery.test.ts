@@ -677,7 +677,7 @@ describe("main hard-lock background recovery", () => {
 
   test("owned metadata recovery replaces an obsolete short block with the current weekly window", async () => {
     const calls = fetchWith(async () => Response.json({ plan_type: "pro", rate_limit: {
-      primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,
+      primary_window: null, secondary_window: { used_percent: 35, limit_window_seconds: 604_800 }, tertiary_window: null,
     } }));
     await runMainAccountHardLockRecovery(config());
     expect(calls).toEqual([whamUrl]);

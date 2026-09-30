@@ -1055,6 +1055,7 @@
     "main-device-reauth-ui.test.ts": "gui",
     "main-device-reauth.test.ts": "codex-integration",
     "main-quota-evidence-validation.test.ts": "codex-integration",
+    "main-account-hard-lock-retirement.test.ts": "codex-integration",
     "main-quota-provenance.test.ts": "codex-integration",
     "main-quota-window-observation.test.ts": "codex-integration",
     "management-anthropic-reset-grants.test.ts": "server",

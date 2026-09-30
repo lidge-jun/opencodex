@@ -827,8 +827,8 @@ function filterMainPolicyMonthlyQuota(
 
 /**
  * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
- * Mark a valid primary of at least 24h as replacement evidence only when both other windows
- * are explicitly null or at least 24h. A null result supplies no usable policy observation.
+ * A measured long primary, or explicitly absent primary with measured weekly secondary,
+ * proves replacement only with complete long/null topology. Null supplies no usable evidence.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
@@ -840,7 +840,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   // carries a valid usage reading: a long window without used_percent leaves that
   // window's usage unknown, and unknown usage must never release a block.
   // Headers never supply this proof, and reset time alone still cannot release a block.
-  if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
+  if (quota && (isMeasuredLongWindow(primary)
+      || (primary === null && isMeasuredLongWindow(secondary) && quota.weeklyPercent !== undefined))
     && (secondary === null || isMeasuredLongWindow(secondary))
     && (tertiary === null || isMeasuredLongWindow(tertiary))) {
     return { ...quota, shortWindowAbsent: true };
