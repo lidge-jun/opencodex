@@ -5,6 +5,7 @@
  * delegation save, the same write the model and effort selects make.
  */
 import { useState } from "react";
+import { ROLE_INSTRUCTIONS_EXCERPT_CHARS } from "../../../../src/codex/role-sizing-limits";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
@@ -76,7 +77,7 @@ export default function DelegationSuggest({
           id="swi-suggest-work"
           className="input"
           rows={2}
-          maxLength={1500}
+          maxLength={ROLE_INSTRUCTIONS_EXCERPT_CHARS}
           value={work}
           placeholder={t("sub.suggest.placeholder")}
           onChange={e => setWork(e.target.value)}

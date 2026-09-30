@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { ROLE_INSTRUCTIONS_EXCERPT_CHARS } from "../../src/codex/role-sizing-limits";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -133,6 +134,7 @@ test("a persistent polite live region announces the running state and then the r
   suggestHold = new Promise<void>(resolve => { release = resolve; });
   await renderAndDescribe("read-only repo searches");
   const live = container.querySelector<HTMLElement>(".swi-suggest [aria-live='polite']");
+  expect(container.querySelector<HTMLTextAreaElement>("#swi-suggest-work")!.maxLength).toBe(ROLE_INSTRUCTIONS_EXCERPT_CHARS);
   expect(live).not.toBeNull();
   expect(live!.className).toContain("sr-only");
   expect(live!.textContent).toBe("");
