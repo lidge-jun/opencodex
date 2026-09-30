@@ -100,13 +100,6 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
     ),
     "element",
   ],
-  [
-    new RegExp(
-      `(<[^\\S\\r\\n]*(?:[A-Za-z_][\\w.-]*:)?[A-Za-z_][\\w:.-]*)(?=[^>]*?(?<![\\w:.-])(?:name|key|id)[^\\S]*=[^\\S]*["']?(?:${CREDENTIAL_HEADER_LABEL})["']?(?=[\\s/>]))[\\s\\S]*`,
-      "gi",
-    ),
-    "element",
-  ],
   // Multipart part: everything from a credential-named part header to the end
   // of the input. Part-based, not line-based — a body can span lines and the
   // blank line is often missing in a malformed echo.
@@ -136,7 +129,44 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
 function maskOtherFramings(value: string): string {
   // Same union rule as the header pass: decoding may add coverage, never
   // remove it.
-  return maskOtherFramingsOnce(maskOtherFramingsOnce(value, true), false);
+  const decoded = maskOtherFramingsOnce(value, true);
+  const decodedXml = maskXmlIdentifyingAttribute(decoded, true);
+  const plain = maskOtherFramingsOnce(decodedXml, false);
+  return maskXmlIdentifyingAttribute(plain, false);
+}
+
+const XML_TAG_NAME = /<[^\S\r\n]*(?:[A-Za-z_][\w.-]*:)?[A-Za-z_][\w:.-]*/y;
+const XML_CREDENTIAL_ATTRIBUTE = new RegExp(
+  `(?<![\\w:.-])(?:name|key|id)[^\\S]*=[^\\S]*["']?(?:${CREDENTIAL_HEADER_LABEL})["']?(?=[\\s/>])`,
+  "i",
+);
+
+/** Scan each tag once; a suffix-searching lookahead here makes unterminated tags quadratic. */
+function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): string {
+  const { folded, map } = foldForMatching(value, decodeEscapes);
+  let searchFrom = 0;
+  while (searchFrom < folded.length) {
+    const relativeStart = folded.indexOf("<", searchFrom);
+    if (relativeStart === -1) return value;
+    const tagStart = relativeStart;
+    XML_TAG_NAME.lastIndex = tagStart;
+    const tagName = XML_TAG_NAME.exec(folded);
+    if (!tagName) {
+      searchFrom = tagStart + 1;
+      continue;
+    }
+    const close = folded.indexOf(">", tagStart + tagName[0].length);
+    const tagEnd = close === -1 ? folded.length : close + 1;
+    const attributes = folded.slice(tagStart + tagName[0].length, tagEnd);
+    if (XML_CREDENTIAL_ATTRIBUTE.test(attributes)) {
+      const start = map[tagStart] ?? value.length;
+      const headEnd = map[tagStart + tagName[0].length] ?? value.length;
+      return value.slice(0, start) + value.slice(start, headEnd) + REDACTED_SECRET;
+    }
+    if (close === -1) return value;
+    searchFrom = tagEnd;
+  }
+  return value;
 }
 
 function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
