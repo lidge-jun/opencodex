@@ -20,6 +20,7 @@ import {
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+  ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
   ZAI_GLM_52_REASONING_EFFORTS,
   ZAI_GLM_53_REASONING_EFFORTS,
@@ -489,6 +490,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
     // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
@@ -516,6 +518,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     fastWire: ANTHROPIC_FAST_WIRE,
     modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },

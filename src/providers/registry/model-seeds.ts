@@ -19,9 +19,38 @@ export const ANTHROPIC_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object
   ANTHROPIC_MODELS.map(id => [id, ["text", "image"]]),
 );
 // Every current Claude family accepts at least 64k output tokens (Haiku 4.5 / Sonnet 4.x
-// through Opus 5 and Fable 5). Anthropic caps max_tokens per model server-side, so a
-// larger request never over-allocates; it only stops the 8192 truncation.
+// through Opus 5 and Fable 5), so this stays the floor for a model id not listed in
+// ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS below.
 export const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
+/**
+ * Per-model synchronous Messages API output maxima, each read from that model's own overview
+ * page on platform.claude.com (`/docs/en/models/<slug>/overview`), which states the number in
+ * its header line and again in the Capabilities table. Deliberately NOT the 300K Message
+ * Batches extended-output beta, which needs `output-300k-2026-03-24` and does not apply to the
+ * synchronous route these providers use.
+ *
+ * Every seeded Claude model except Haiku 4.5 is 128K. Haiku 4.5 is genuinely 64K and is left
+ * out so it keeps inheriting ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS.
+ *
+ * Without this the 64000 default stood in for all of them, which understates the real ceiling
+ * by half on every Opus, Sonnet and Fable model. `resolveOutputCeiling` is the value the
+ * adapter budgets against when a caller declares no `max_tokens`, so a 128K-capable model
+ * stopped at 64000 with `stop_reason: max_tokens`; the same figure feeds the combo admission
+ * reserve in `checkComboTargetInputAdmission`, where understating a target's output makes its
+ * headroom arithmetic wrong.
+ */
+export const ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "claude-fable-5-1": 128_000,
+  "claude-fable-5": 128_000,
+  "claude-sonnet-5-5": 128_000,
+  "claude-sonnet-5": 128_000,
+  "claude-opus-5-5": 128_000,
+  "claude-opus-5": 128_000,
+  "claude-opus-4-8": 128_000,
+  "claude-opus-4-7": 128_000,
+  "claude-opus-4-6": 128_000,
+  "claude-sonnet-4-6": 128_000,
+};
 /**
  * The effort rungs opencodex exposes for native Anthropic models. Without this the
  * providers advertised no ladder at all, so every client that keys its effort control off
