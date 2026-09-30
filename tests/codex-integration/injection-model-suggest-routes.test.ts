@@ -18,6 +18,7 @@ const saved = {
 };
 let root = "";
 let calls: RoleSizingCall[] = [];
+let catalogLoads = 0;
 let answer: { text: string; error?: string } = { text: "" };
 
 function sized(tier: string, effort: string) {
@@ -41,6 +42,7 @@ beforeEach(() => {
   process.env.HOME = join(root, "home");
   process.env.USERPROFILE = join(root, "home");
   calls = [];
+  catalogLoads = 0;
   answer = { text: sized("fast", "glance") };
   config = {
     port: 10100,
@@ -62,12 +64,15 @@ afterEach(() => {
 });
 
 const deps = {
-  fetchAllModels: async () => [
-    routed("cheapest", ["low", "medium"]),
-    routed("small", ["minimal", "low", "medium", "high"]),
-    routed("mid", ["low", "medium", "high"]),
-    routed("big", ["low", "medium", "high", "xhigh"]),
-  ],
+  fetchAllModels: async () => {
+    catalogLoads += 1;
+    return [
+      routed("cheapest", ["low", "medium"]),
+      routed("small", ["minimal", "low", "medium", "high"]),
+      routed("mid", ["low", "medium", "high"]),
+      routed("big", ["low", "medium", "high", "xhigh"]),
+    ];
+  },
   completeCodexRoleSizing: async (call: RoleSizingCall) => {
     calls.push(call);
     return answer;
@@ -104,6 +109,7 @@ describe("POST /api/injection-model/suggest", () => {
     expect(result.status).toBe(200);
     expect(snapshot()).toEqual(before);
     expect(calls).toHaveLength(1);
+    expect(catalogLoads).toBe(1);
     expect(calls[0]!.model).toBe("stub/sizer");
     expect(calls[0]!.user).toContain("Rename symbols across one file");
     expect(result.body.sizingModel).toBe("stub/sizer");

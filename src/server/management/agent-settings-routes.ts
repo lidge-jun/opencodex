@@ -589,14 +589,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return jsonResponse({ error: "model must be a string", code: "invalid_model" }, 400);
     }
     const { proposeDelegationModel, NoSizingModelError } = await import("./codex-role-auto-assign");
-    const loadModels = deps.fetchAllModels ?? fetchAllModels;
+    const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
     try {
       return jsonResponse(await proposeDelegationModel({
         config,
         work: work.trim(),
-        offered: (await injectionModelOptions(config, await loadModels(config))).map(option => option.namespaced),
+        offered: (await injectionModelOptions(config, models)).map(option => option.namespaced),
         ...(typeof model === "string" ? { sizingModel: model } : {}),
-        fetchAllModels: loadModels,
+        models,
         ...(deps.completeCodexRoleSizing ? { completeRoleSizing: deps.completeCodexRoleSizing } : {}),
       }));
     } catch (error) {
