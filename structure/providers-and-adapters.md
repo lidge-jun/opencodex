@@ -214,8 +214,7 @@ changing its capability or adapter wire mapping.
 The image/video loop bounds each hidden iteration before replay or fulfillment; see
 [media iteration retention](transports/inventory.md#media-iteration-retention).
 
-Live model discovery is bounded and registry-driven through `src/providers/model-discovery.ts`.
-Ordinary discovery records the new-arrival policy before exposing its rows through the shared management fetcher; see the [catalog contract](catalog.md#shared-catalog). Only authoritative provider results advance the baseline, and manual choices survive subsequent refreshes.
+Live model discovery is bounded and registry-driven through `src/providers/model-discovery.ts`. Ordinary discovery records the new-arrival policy before exposing its rows through the shared management fetcher; see the [catalog contract](catalog.md#shared-catalog). Only authoritative provider results advance the baseline, and manual choices survive subsequent refreshes.
 Custom providers keep the conventional `${baseUrl}/models` request, normalized by
 `providerModelsUrl` the same way `openaiChatCompletionsUrl` normalizes the send path: outer
 whitespace and trailing slashes are trimmed and an already-pasted `/models` is not doubled, so a
