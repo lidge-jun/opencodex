@@ -1013,6 +1013,42 @@ describe("headless GUI parity CLI", () => {
     expect(output).toContain("Applied 2 of 4 roles. Skipped 2 already set: explorer, reviewer.");
   });
 
+  test("agent roles suggest --apply names each role whose omo.jsonc mirror was not written", async () => {
+    const proposals = {
+      sizingModel: "gpt-5.5",
+      proposals: ["explorer", "reviewer", "planner", "worker"].map(role => ({
+        role, model: null, effort: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null,
+      })),
+    };
+    const mirror: Record<string, string> = { explorer: "written", reviewer: "write_failed", planner: "invalid", worker: "skipped_comments" };
+    const runtime = fakeRuntime(req => req.method === "POST"
+      ? proposals
+      : { ok: true, toml: { status: "written" }, omoJsonc: { status: mirror[new URL(req.url).pathname.split("/").pop()!] } });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let output = "";
+    let json: { applied?: unknown[]; omoJsoncNotWritten?: unknown } = {};
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).toBe(0);
+      output = logSpy.mock.calls.flat().join("\n");
+      logSpy.mockClear();
+      expect(await handleAgentCommand(["roles", "suggest", "--apply", "--json"], runtime.deps)).toBe(0);
+      json = JSON.parse(String(logSpy.mock.calls.flat().join("")));
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(output).toContain("Applied 4 of 4 roles.");
+    expect(output).toContain("reviewer: omo.jsonc not written (write_failed)");
+    expect(output).toContain("planner: omo.jsonc not written (invalid)");
+    expect(output).toContain("worker: omo.jsonc not written (skipped_comments)");
+    expect(output).not.toContain("explorer: omo.jsonc");
+    expect(json.applied).toHaveLength(4);
+    expect(json.omoJsoncNotWritten).toEqual([
+      { role: "reviewer", status: "write_failed" },
+      { role: "planner", status: "invalid" },
+      { role: "worker", status: "skipped_comments" },
+    ]);
+  });
+
   test("agent roles suggest --apply stops at the lazycodex_not_detected refusal and writes nothing", async () => {
     const runtime = fakeRuntime(req => req.method === "POST"
       ? Response.json({ error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME", code: "lazycodex_not_detected" }, { status: 409 })

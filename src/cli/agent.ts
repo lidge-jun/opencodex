@@ -261,6 +261,8 @@ function proposalAlreadySet(proposal: CodexRoleProposal): boolean {
     && (proposal.proposedEffort == null || proposal.proposedEffort === proposal.effort);
 }
 
+const OMO_JSONC_NOT_WRITTEN = new Set(["skipped_comments", "invalid", "write_failed"]);
+
 async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
   const model = takeOption(args, "--model");
   const apply = takeFlag(args, "--apply");
@@ -273,6 +275,7 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
   const proposals = result.proposals ?? [];
   const applied: Array<{ role: string; model: string; effort?: string }> = [];
   const skipped: string[] = [];
+  const omoJsoncNotWritten: Array<{ role: string; status: string }> = [];
   if (apply) {
     for (const proposal of proposals) {
       if (proposal.status !== "proposed" || !proposal.proposedModel) continue;
@@ -281,11 +284,17 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
         continue;
       }
       const body = { model: proposal.proposedModel, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) };
-      await runtimeRequest(`/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`, { method: "PUT", body: JSON.stringify(body) }, deps);
+      const written = await runtimeRequest<{ omoJsonc?: { status?: string } } | null>(
+        `/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`,
+        { method: "PUT", body: JSON.stringify(body) },
+        deps,
+      );
       applied.push({ role: proposal.role, ...body });
+      const omoStatus = written?.omoJsonc?.status;
+      if (omoStatus && OMO_JSONC_NOT_WRITTEN.has(omoStatus)) omoJsoncNotWritten.push({ role: proposal.role, status: omoStatus });
     }
   }
-  printData(apply ? { ...result, applied, skipped } : result, wantsJson, [
+  printData(apply ? { ...result, applied, skipped, omoJsoncNotWritten } : result, wantsJson, [
     `Sized with ${result.sizingModel ?? "unknown"}.`,
     ...proposals.map(p => p.status === "unsized"
       ? `${p.role}: not sized (${p.reason ?? "unknown"})`
@@ -295,6 +304,7 @@ async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApi
     apply
       ? `Applied ${applied.length} of ${proposals.length} roles.${skipped.length > 0 ? ` Skipped ${skipped.length} already set: ${skipped.join(", ")}.` : ""}`
       : "Nothing was written; rerun with --apply to write every proposal that differs from the role's current pin.",
+    ...omoJsoncNotWritten.map(entry => `${entry.role}: omo.jsonc not written (${entry.status}); the role TOML was updated.`),
   ]);
 }
 
