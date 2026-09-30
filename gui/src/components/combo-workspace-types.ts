@@ -16,6 +16,8 @@ export type ModelOption = {
   inputModalities?: string[];
   /** Operator-declared modalities; beats the (sidecar-widened) catalog view on reload. */
   inputModalitiesDeclared?: string[];
+  /** Authoritative runtime verdict from /api/models: the Vision Sidecar describes this model's images. */
+  visionSidecarConsumer?: boolean;
 };
 
 export type ComboAddIntent = "blank" | "jev-auto";

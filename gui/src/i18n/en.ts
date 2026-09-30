@@ -3038,7 +3038,7 @@ export const en = {
   "cws.capability.imageInputUnavailable": "Pick every target from the catalog first — unknown models can't be covered by the Vision Sidecar.",
   "cws.capability.imageInputHint": "On by default when every target supports images. Turn off to accept text only.",
   "cws.capability.imageInputSidecarHint": "On by default. {models} will be declared text-only on save and use the Vision Sidecar for images.",
-  "cws.capability.imageInputSidecarDisabled": "The Vision Sidecar is turned off — {models} will reject images until it is enabled in dashboard settings.",
+  "cws.capability.imageInputSidecarDisabled": "The Vision Sidecar is turned off — images sent to {models} are replaced with an omission note and the request continues without them. Enable it in dashboard settings to restore image descriptions.",
   "cws.capability.imageInputBlockedHint": "{models} cannot be covered by the Vision Sidecar: its input modalities are unknown or have no text.",
   "cws.capability.imageInput": "Image / multimodal",
   "cws.capability.adaptiveEffort": "Adaptive reasoning ladder",

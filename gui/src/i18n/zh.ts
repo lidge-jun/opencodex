@@ -2952,7 +2952,7 @@ export const zh: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "请先从目录中选择所有目标——未知模型无法由 Vision Sidecar 处理。",
   "cws.capability.imageInputHint": "所有目标均支持图片时默认开启；关闭后仅接受文本。",
   "cws.capability.imageInputSidecarHint": "默认开启。{models} 将在保存时声明为纯文本，并使用 Vision Sidecar 处理图片。",
-  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar 已关闭——{models} 在仪表板设置中启用它之前将拒绝图片。",
+  "cws.capability.imageInputSidecarDisabled": "Vision Sidecar 已关闭——发送给 {models} 的图片将被替换为省略说明，请求会继续进行。在仪表板设置中启用它可恢复图片描述。",
   "cws.capability.imageInputBlockedHint": "{models} 无法由 Vision Sidecar 覆盖：其输入模态未知或不含文本。",
   "cws.capability.imageInput": "图片 / 多模态",
   "cws.capability.adaptiveEffort": "自适应推理档位",

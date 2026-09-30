@@ -185,6 +185,7 @@ export default function Combos({
         reasoningEfforts?: unknown;
         inputModalities?: unknown;
         inputModalitiesDeclared?: unknown;
+        visionSidecarConsumer?: unknown;
       };
       if (typeof model.provider !== "string" || typeof model.id !== "string") continue;
       const provider = model.provider.trim();
@@ -207,6 +208,7 @@ export default function Combos({
         ...(reasoningEfforts ? { reasoningEfforts } : {}),
         ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
         ...(inputModalitiesDeclared && inputModalitiesDeclared.length > 0 ? { inputModalitiesDeclared } : {}),
+        ...(model.visionSidecarConsumer === true ? { visionSidecarConsumer: true } : {}),
       });
     }
 

@@ -495,8 +495,9 @@ so the [Vision Sidecar](/guides/sidecars/) describes their images. The switch's 
 members that will be enrolled. A member whose modalities are unknown or have no text input (for
 example an audio-only model) cannot be covered by the sidecar; it keeps the switch unavailable and
 is named in the hint. If the [Vision Sidecar](/guides/sidecars/) is disabled globally, enabling the
-switch shows a warning linking to the dashboard: enrollment still saves, but image requests are
-rejected until the sidecar is re-enabled. Turning the switch off disables image input for the combo
+switch shows a warning linking to the dashboard: enrollment still saves, but images are replaced
+with an omission note and requests continue without image descriptions until the sidecar is
+re-enabled. Turning the switch off disables image input for the combo
 but keeps those provider declarations, and `PUT /api/combos` accepts the same enrollment as an
 optional top-level `visionSidecarTargets` array of exact `{ provider, model }` targets
 (request-only; it is never stored on the combo and is rejected while `imageInput` is

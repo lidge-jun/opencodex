@@ -44,6 +44,7 @@ import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-p
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
+import { isVisionSidecarConsumer } from "../../vision";
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -70,6 +71,15 @@ export type ManagementModelRow = Partial<CatalogModel> & {
    * one thing and saves another, so its own writes never appear to take.
    */
   inputModalitiesDeclared?: string[];
+  /**
+   * The runtime's verdict on whether the Vision Sidecar describes this model's images, from
+   * the same predicate the request path consults (legacy `noVisionModels`, registry
+   * enrichment, explicit declarations, custom rows). `inputModalitiesDeclared` cannot answer
+   * this: a model covered ONLY by legacy `noVisionModels` has no declaration while its
+   * advertised modalities are widened to image, so a client inferring consumer status from
+   * declared-vs-advertised modalities misclassifies the row after reload.
+   */
+  visionSidecarConsumer?: boolean;
   /** Exact stored context override, distinct from the effective catalog window. */
   contextWindowDeclared?: number;
   /**
@@ -424,6 +434,9 @@ export async function listManagementModelRows(
       ? config.providers[row.provider]?.modelCosts : undefined;
     return {
       ...row,
+      // One shared definition with the request path: the GUI must not re-derive consumer
+      // status from declared-vs-advertised modalities (see the field doc above).
+      visionSidecarConsumer: isVisionSidecarConsumer(config, row.provider, row.id),
       ...(!row.native && modelCosts !== undefined && Object.hasOwn(modelCosts, row.id)
         ? { manualPricing: true } : {}),
       ...(pending ? { disabled: true, initialSelectionPending: true } : {}),

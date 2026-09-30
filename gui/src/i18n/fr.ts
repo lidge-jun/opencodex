@@ -2916,7 +2916,7 @@ export const fr: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Sélectionnez d'abord chaque cible dans le catalogue — les modèles inconnus ne peuvent pas être couverts par le Vision Sidecar.",
   "cws.capability.imageInputHint": "Activé par défaut lorsque toutes les cibles prennent en charge les images. Désactivez cette option pour n'accepter que du texte.",
   "cws.capability.imageInputSidecarHint": "Activé par défaut. Lors de l’enregistrement, les cibles {models} seront déclarées en mode texte uniquement et utiliseront le Vision Sidecar pour les images.",
-  "cws.capability.imageInputSidecarDisabled": "Le Vision Sidecar est désactivé — {models} refusera les images tant qu’il ne sera pas activé dans les paramètres du tableau de bord.",
+  "cws.capability.imageInputSidecarDisabled": "Le Vision Sidecar est désactivé — les images envoyées à {models} sont remplacées par une note d’omission et la requête continue sans elles. Activez-le dans les paramètres du tableau de bord pour rétablir les descriptions.",
   "cws.capability.imageInputBlockedHint": "{models} ne peut pas être couvert par le Vision Sidecar : ses modalités d’entrée sont inconnues ou sans texte.",
   "cws.capability.imageInput": "Images / multimodal",
   "cws.capability.adaptiveEffort": "Échelle de raisonnement adaptative",
