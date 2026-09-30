@@ -73,7 +73,7 @@ After a CLI catalog/cache write, advisory restart guidance compares each running
 start time with the written catalog mtime. It reports only processes proven stale; a fresh or
 unreadable observation does not claim that another restart is required. Explicit
 `--restart-codex` and `--restart-app-server-only` retain their operator-consent semantics and act on
-verified matching processes regardless of the advisory freshness result.
+verified matching processes regardless of the advisory freshness result. Read-only client diagnostics in `src/codex/native-profile-processes.ts` prefer full executable paths over inferred argv0; macOS comm and args are read separately and joined by PID, so unquoted Codex Framework helper paths do not become CLI clients. Quoted immediate script entrypoints remain supported for known interpreters. This classification does not change the app-server termination selector.
 
 > Decision record: [ADR-0097](decisions/ADR-0097-post-write-app-server-freshness.md)
 

@@ -231,6 +231,10 @@ section, so the two commands should agree on restart protection. If you are diag
 compare the reported live startup verdict with the local service details rather than treating the shell
 probe as more authoritative.
 
+The `clients=pending-restart(...)` diagnostic lists Codex CLI clients that predate the routing
+injection. On macOS, Electron renderer, utility, and crashpad helpers under Codex.app's framework
+are excluded from that client list, including helpers whose executable paths contain spaces.
+
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
 non-healthy account (provider, masked account id, status such as reauthentication required, rate or
