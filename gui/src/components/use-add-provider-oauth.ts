@@ -142,12 +142,13 @@ export function useAddProviderOAuth({
           onAdded(providerId);
           return;
         }
-        if (s?.hint) {
-          if (s.hint.deviceCode) deviceFlow = true;
-          setOauthUrl(s.hint.url ?? "", providerId, s.hint.deviceCode, s.hint.instructions);
-          setOauthMsg(s.hint.url || s.hint.deviceCode
+        const hint = s?.hint;
+        if (hint) {
+          if (hint.deviceCode) deviceFlow = true;
+          setOauthUrl(hint.url ?? "", providerId, hint.deviceCode, hint.instructions);
+          setOauthMsg(hint.url || hint.deviceCode
             ? t("modal.waitingLogin")
-            : (s.hint.instructions || t("modal.loggingIn")));
+            : (hint.instructions || t("modal.loggingIn")));
         }
       }
       await cancelServerLogin(providerId);
