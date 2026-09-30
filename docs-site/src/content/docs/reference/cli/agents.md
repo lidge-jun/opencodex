@@ -28,7 +28,8 @@ and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integ
 ocx agent roles set explorer xai/grok-4.5
 ```
 
-`ocx agent roles suggest` sizes every role with one call to the default Codex model (or `--model`) and
+`ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
+installed. It sizes every role with one call to the default Codex model (or `--model`) and
 prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
 through the same write as `set`, skipping and naming the roles whose model and effort already match.
 See [Auto-assign](/guides/integrations/#auto-assign).

@@ -557,7 +557,11 @@ ocx agent roles set explorer xai/grok-4.5
 
 ### Auto-assign
 
-Auto-assign above the role table proposes a model for every role at once. opencodex asks your
+Auto-assign is part of omo (Codex / LazyCodex): it sits above the role table in that section and
+exists only while LazyCodex is detected. Without it the dashboard shows neither, the API answers
+409 `lazycodex_not_detected`, and `ocx agent roles suggest` is refused.
+
+Auto-assign proposes a model for every role at once. opencodex asks your
 default Codex model (the root `model` in Codex `config.toml`) one question: for each role, given its
 description and the start of its instructions, which capability tier (fast, standard or frontier)
 and how much reasoning (glance, measured, thorough or exhaustive) does it need? That model never

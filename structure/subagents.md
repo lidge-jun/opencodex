@@ -343,7 +343,9 @@ Sibling instances refuse the write, because it reaches the shared `CODEX_HOME`.
 ### Role model auto-assign
 
 `POST /api/codex-agent-roles/auto-assign` (dashboard Auto-assign, `ocx agent roles suggest`) proposes a
-model for every role and writes nothing. Applying a proposal is the ordinary
+model for every role and writes nothing. It belongs to omo (Codex / LazyCodex): without
+`detectLazyCodex()` it answers 409 `lazycodex_not_detected` before reading the body or calling a model,
+the same refusal as the PUT. Applying a proposal is the ordinary
 `PUT /api/codex-agent-roles/{role}`, now with an optional `effort`. The work splits in two on purpose:
 
 - **Sizing is one model call.** `src/codex/role-sizing.ts` holds the rubric (ported from the MIT-licensed
