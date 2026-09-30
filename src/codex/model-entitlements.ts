@@ -808,8 +808,14 @@ export const CODEX_ROSTER_DISCOVERY_CLIENT_VERSION = "99.0.0";
 
 export type CodexNativeRosterDiscoveryOutcome = "recorded" | "not-modified" | "unavailable";
 
-/** Last ETag per credential identity, so an unchanged roster costs a 304 when upstream honours it. */
-const discoveryEtags = new Map<string, string>();
+/**
+ * Last ETag per credential identity, so an unchanged roster costs a 304 when upstream honours it.
+ * A 304 carries no rows and so cannot renew a discovery's last-seen time; a model visible only
+ * under the discovery version would then expire after its retention while still being served.
+ * The ETag is therefore used only within a day of the full fetch that earned it.
+ */
+const discoveryEtags = new Map<string, { etag: string; fetchedAt: number }>();
+const DISCOVERY_ETAG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Background discovery of native rows this build does not pin, independent of entitlement.
@@ -861,8 +867,9 @@ async function fetchDiscoveryRoster(
   try {
     const headers = new Headers({ Authorization: `Bearer ${credential.accessToken}`, Accept: "application/json" });
     if (credential.chatgptAccountId) headers.set("ChatGPT-Account-Id", credential.chatgptAccountId);
-    const etag = discoveryEtags.get(credential.credentialIdentity);
-    if (etag) headers.set("If-None-Match", etag);
+    const now = options.now ?? Date.now();
+    const cached = discoveryEtags.get(credential.credentialIdentity);
+    if (cached && now - cached.fetchedAt < DISCOVERY_ETAG_MAX_AGE_MS) headers.set("If-None-Match", cached.etag);
     const response = await fetcher(codexModelsUrl(CODEX_ROSTER_DISCOVERY_CLIENT_VERSION), {
       headers,
       redirect: "error",
@@ -878,9 +885,9 @@ async function fetchDiscoveryRoster(
     if (!body.displaySafe || body.truncated) return "unavailable";
     const parsed = parseAccountModels(body.text);
     if (parsed === null || parsed.models.size === 0) return "unavailable";
-    recordDiscoveredNativeModels(parsed.discoveredRows, CODEX_ROSTER_DISCOVERY_CLIENT_VERSION, options.now ?? Date.now());
+    recordDiscoveredNativeModels(parsed.discoveredRows, CODEX_ROSTER_DISCOVERY_CLIENT_VERSION, now);
     const nextEtag = response.headers.get("etag");
-    if (nextEtag && nextEtag.length <= 256) discoveryEtags.set(credential.credentialIdentity, nextEtag);
+    if (nextEtag && nextEtag.length <= 256) discoveryEtags.set(credential.credentialIdentity, { etag: nextEtag, fetchedAt: now });
     else discoveryEtags.delete(credential.credentialIdentity);
     if (discoveryEtags.size > 64) discoveryEtags.delete(discoveryEtags.keys().next().value!);
     return "recorded";

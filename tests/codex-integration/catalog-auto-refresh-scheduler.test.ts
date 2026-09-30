@@ -827,3 +827,35 @@ describe("catalog auto-refresh drift heal", () => {
     expect(selectDriftHealCatalogPath(journalPath, defaultPath, path => join(openCodexHome, path))).toBeNull();
   });
 });
+
+describe("catalog auto-refresh without a managed Codex client", () => {
+  function writeIntegrationOffConfig(catalogAutoRefresh?: unknown): void {
+    const config = {
+      ...getDefaultConfig(),
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" } },
+      clientIntegrations: { codex: false },
+      ...(catalogAutoRefresh === undefined ? {} : { catalogAutoRefresh }),
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+  }
+
+  test("an absent section stays dormant: no Codex sources and no converge", async () => {
+    writeIntegrationOffConfig();
+    await runCatalogAutoRefreshTickForTests();
+    expect(convergeFactoryCalls).toBe(0);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
+    expect(catalogAutoRefreshTickCountForTests()).toBe(0);
+  });
+
+  test("an explicit enabled:true still converges but never reads Codex sources", async () => {
+    writeIntegrationOffConfig({ enabled: true, intervalMinutes: 60 });
+    await runCatalogAutoRefreshTickForTests();
+    expect(convergeFactoryCalls).toBe(1);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
+  });
+});

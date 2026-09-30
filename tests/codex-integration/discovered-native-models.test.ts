@@ -7,6 +7,7 @@ import {
   DISCOVERED_NATIVE_MAX_FILE_BYTES,
   DISCOVERED_NATIVE_MAX_ROW_BYTES,
   DISCOVERED_NATIVE_MAX_ROWS,
+  DISCOVERED_NATIVE_RENEW_INTERVAL_MS,
   DISCOVERED_NATIVE_RETENTION_MS,
   discoveredNativeModelsGeneration,
   loadDiscoveredNativeModels,
@@ -279,5 +280,40 @@ describe("discovery-only roster", () => {
     const fetcher = (() => Promise.resolve(new Response("nope", { status: 503 }))) as typeof fetch;
     expect(await discoverCodexNativeRoster({}, { credentials: [credential], fetcher })).toBe("unavailable");
     expect(SUPPORTED_NATIVE_OPENAI_SLUGS.has(FUTURE)).toBe(false);
+  });
+});
+
+describe("discovery store under concurrency and repeated fetches", () => {
+  test("a model another process recorded survives this process's next write", () => {
+    const now = Date.now();
+    recordDiscoveredNativeModels([row()], "0.160.0", now);
+    const other = persisted();
+    other.models.push({ slug: "gpt-9-other", row: row("gpt-9-other"), firstSeenAt: now, lastSeenAt: now, clientVersion: "0.160.0" });
+    writeFileSync(path, JSON.stringify(other));
+    recordDiscoveredNativeModels([row("gpt-9-third")], "0.160.0", now + 1);
+    expect(persisted().models.map(model => model.slug).sort()).toEqual(["gpt-9-other", FUTURE, "gpt-9-third"]);
+  });
+
+  test("an unchanged row renews on disk at most hourly", () => {
+    const now = Date.now() - 3 * DISCOVERED_NATIVE_RENEW_INTERVAL_MS;
+    recordDiscoveredNativeModels([row()], "0.160.0", now);
+    recordDiscoveredNativeModels([row()], "0.160.0", now + 60_000);
+    expect(persisted().models[0]!.lastSeenAt).toBe(now);
+    recordDiscoveredNativeModels([row()], "0.160.0", now + DISCOVERED_NATIVE_RENEW_INTERVAL_MS);
+    expect(persisted().models[0]!.lastSeenAt).toBe(now + DISCOVERED_NATIVE_RENEW_INTERVAL_MS);
+  });
+
+  test("a day-old ETag is not sent, so a full fetch renews what a 304 cannot", async () => {
+    resetCodexNativeRosterDiscoveryForTests();
+    const credential = { accountId: "future-test", accessToken: "fixture-token", chatgptAccountId: "", credentialIdentity: "fixture-generation" };
+    const seen: Array<string | null> = [];
+    const fetcher = ((_url: string | URL, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get("if-none-match"));
+      return Promise.resolve(Response.json({ models: [row()] }, { headers: { etag: "\"roster-3\"" } }));
+    }) as typeof fetch;
+    const start = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    await discoverCodexNativeRoster({}, { credentials: [credential], fetcher, now: start });
+    await discoverCodexNativeRoster({}, { credentials: [credential], fetcher, now: start + 25 * 60 * 60 * 1000 });
+    expect(seen).toEqual([null, null]);
   });
 });

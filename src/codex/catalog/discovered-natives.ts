@@ -14,6 +14,12 @@ export const DISCOVERED_NATIVE_MAX_ROWS = 32;
 export const DISCOVERED_NATIVE_MAX_ROW_BYTES = 256 * 1024;
 export const DISCOVERED_NATIVE_MAX_FILE_BYTES = DISCOVERED_NATIVE_MAX_ROWS * (DISCOVERED_NATIVE_MAX_ROW_BYTES + 1024);
 export const DISCOVERED_NATIVE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+/**
+ * An unchanged row renews its last-seen time on disk at most this often. The entitlement path
+ * records on every successful roster fetch, including request-time ones, so writing each renewal
+ * would put a synchronous file replace (and on Windows an ACL pass) on ordinary traffic.
+ */
+export const DISCOVERED_NATIVE_RENEW_INTERVAL_MS = 60 * 60 * 1000;
 const FILE_NAME = "discovered-native-models.json";
 
 export interface DiscoveredNativeModel {
@@ -64,12 +70,18 @@ function boundedModels(entries: DiscoveredNativeModel[], now: number): Discovere
 }
 
 function readModels(path: string, now: number): DiscoveredNativeModel[] {
+  return readModelsWithCount(path, now).models;
+}
+
+/** `storedCount` is the raw entry count, so a caller can tell pruning from an unchanged store. */
+function readModelsWithCount(path: string, now: number): { models: DiscoveredNativeModel[]; storedCount: number } {
+  const empty = { models: [], storedCount: 0 };
   try {
-    if (statSync(path).size > DISCOVERED_NATIVE_MAX_FILE_BYTES) return [];
+    if (statSync(path).size > DISCOVERED_NATIVE_MAX_FILE_BYTES) return empty;
     const bytes = readFileSync(path, "utf8");
-    if (Buffer.byteLength(bytes, "utf8") > DISCOVERED_NATIVE_MAX_FILE_BYTES) return [];
+    if (Buffer.byteLength(bytes, "utf8") > DISCOVERED_NATIVE_MAX_FILE_BYTES) return empty;
     const data = JSON.parse(bytes) as { version?: unknown; models?: unknown };
-    if (data.version !== 1 || !Array.isArray(data.models) || data.models.length > DISCOVERED_NATIVE_MAX_ROWS) return [];
+    if (data.version !== 1 || !Array.isArray(data.models) || data.models.length > DISCOVERED_NATIVE_MAX_ROWS) return empty;
     const valid = new Map<string, DiscoveredNativeModel>();
     for (const entry of data.models) {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
@@ -82,8 +94,8 @@ function readModels(path: string, now: number): DiscoveredNativeModel[] {
       valid.set(entry.slug, { slug: entry.slug, row, firstSeenAt: entry.firstSeenAt,
         lastSeenAt: entry.lastSeenAt, clientVersion: entry.clientVersion });
     }
-    return boundedModels([...valid.values()], now);
-  } catch { return []; }
+    return { models: boundedModels([...valid.values()], now), storedCount: data.models.length };
+  } catch { return empty; }
 }
 
 function publish(entries: DiscoveredNativeModel[]): void {
@@ -114,21 +126,31 @@ export function recordDiscoveredNativeModels(rows: unknown, clientVersion: strin
     if (!Number.isSafeInteger(now) || now < 0 || clientVersion.length > 64) return;
     const dir = getConfigDir();
     const path = join(dir, FILE_NAME);
-    if (loadedPath !== path) loadDiscoveredNativeModels(now);
-    const merged = new Map(models.map(entry => [entry.slug, entry]));
+    // Re-read the store rather than trusting this process's snapshot: another OpenCodex process
+    // sharing the home may have recorded a model since, and merging onto a stale copy would drop
+    // it at the replace below. The write is atomic, not locked, so only a same-instant race remains.
+    const { models: onDisk, storedCount } = readModelsWithCount(path, now);
+    const merged = new Map(loadedPath === path ? models.map(entry => [entry.slug, entry]) : []);
+    for (const entry of onDisk) {
+      const known = merged.get(entry.slug);
+      if (!known || entry.lastSeenAt >= known.lastSeenAt) merged.set(entry.slug, entry);
+    }
+    loadedPath = path;
     for (const row of validateDiscoveredNativeRows(rows)) {
       const slug = row.slug as string;
       const previous = merged.get(slug);
       if (previous && previous.lastSeenAt > now) continue;
+      if (previous && JSON.stringify(previous.row) === JSON.stringify(row)
+        && now - previous.lastSeenAt < DISCOVERED_NATIVE_RENEW_INTERVAL_MS) continue;
       merged.set(slug, { slug, row, firstSeenAt: previous?.firstSeenAt ?? now, lastSeenAt: now, clientVersion });
     }
     const next = boundedModels([...merged.values()], now);
     const serialized = JSON.stringify({ version: 1, models: next });
     if (Buffer.byteLength(serialized, "utf8") > DISCOVERED_NATIVE_MAX_FILE_BYTES) return;
-    const hadModels = models.length > 0;
     publish(next);
-    // Avoid filesystem work for unchanged empty rosters (including existing entitlement fixtures).
-    if (next.length === 0 && !hadModels && !existsSync(path)) return;
+    // Nothing new to say: skip the write (and, for empty rosters, never create the file).
+    if (storedCount === onDisk.length && serialized === JSON.stringify({ version: 1, models: onDisk })) return;
+    if (next.length === 0 && !existsSync(path)) return;
     assertNotRealHomeUnderTest(dir);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     atomicWriteFile(path, serialized + "\n");

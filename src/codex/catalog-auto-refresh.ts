@@ -203,6 +203,13 @@ async function tick(): Promise<void> {
     // and the unref'd timer is left running so flipping the minutes back on is
     // picked up without a process restart.
     if (configured === 0) return;
+    // The default-on case belongs to installs whose local Codex client this proxy manages. With
+    // the integration off (or on a hub or sibling), an absent section keeps the old opt-in
+    // meaning: no background converge may write the native Codex home unasked. An explicit
+    // `enabled: true` still refreshes, as it did before the default flipped.
+    const { shouldSyncCodexOnStart } = await import("./desired-state");
+    const codexManaged = shouldSyncCodexOnStart(config);
+    if (!codexManaged && config.catalogAutoRefresh?.enabled !== true) return;
     // A stop or restart landed while the config resolved: this tick no longer owns the timer,
     // so it must neither count as a refresh nor adopt a cadence for a generation that is gone.
     if (entryGeneration !== generation) return;
@@ -225,7 +232,8 @@ async function tick(): Promise<void> {
     const { refreshCatalogAutoRefreshSources, catalogAutoRefreshReloadRequired } =
       await import("./catalog-auto-refresh-sources");
     if (entryGeneration !== generation) return;
-    await refreshCatalogAutoRefreshSources(config, () => entryGeneration === generation);
+    // Codex sources read Codex credentials and probe its binary; only a managed client needs them.
+    if (codexManaged) await refreshCatalogAutoRefreshSources(config, () => entryGeneration === generation);
     if (entryGeneration !== generation) return;
     const [{ createManagementConvergeCodex }, { createCatalogConvergeRequest }] = await Promise.all([
       import("./management-convergence"),
