@@ -75,6 +75,23 @@ comment above other keys it manages, such as an injected
 `developer_instructions`, and deleting those will not help you sign in while
 costing you configuration you may want back.
 
+Repeated standalone ownership comments do not change TOML values or routing.
+Provider-table reinjection and removal consume the exact bare marker or its
+`(undo: ocx restore)` form immediately above `[model_providers.opencodex]`.
+Marker text inside another user comment or a multiline string is preserved;
+existing comments separated from the table are not claimed by that transform.
+Root routing ownership uses an exact adjacent marker at a structural root
+assignment. A matching injected value recorded in the journal also proves
+ownership after a Codex app rewrite drops comments. Quoting the marker in a
+user comment or a multiline string does not prove ownership. Managed
+`web_search` replacements record the complete original assignment, including
+multiline values, so switching it back on or fallback restore can put it back.
+Removal and capture validate complete assignments without converting a valid
+64-bit integer into a JavaScript number. Value-based ownership still requires
+successful value decoding; invalid or incomplete assignments are refused.
+Fallback removal compacts document
+blank lines outside multiline values, preserving blank lines within those values.
+
 Delete the `model_catalog_json` line **with** the routing, not on its own. A
 `model_catalog_json` that names a file which no longer exists makes Codex fail
 to load its configuration at all, which looks like the same lockout for a
