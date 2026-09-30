@@ -8,6 +8,7 @@ import type { CodexAccountEntry, CodexAccountLoadState } from "./codex-account-p
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { MainDeviceReauthState } from "./use-main-device-reauth";
+import { LoginHint } from "./login-url-block";
 import type { NoticeTone } from "../ui";
 import { navigateHash } from "../hash-routing";
 import {
@@ -228,12 +229,10 @@ export function CodexAccountPoolMainCard({
             )}
             {mainReauth && (mainReauth.state.phase === "pending" || mainReauth.state.phase === "committing") && (
               <span className="codex-main-reauth-pending">
-                {mainReauth.state.verificationUrl && (
-                  <span>{t("codexAuth.mainReauthOpen")}: {mainReauth.state.verificationUrl}</span>
-                )}
-                {mainReauth.state.deviceCode && (
-                  <strong>{t("codexAuth.mainReauthCode")}: {mainReauth.state.deviceCode}</strong>
-                )}
+                {/* The shared renderer every other login surface uses: a copyable code, a
+                    selectable and copyable URL, and one click to copy the code and open the
+                    page. Plain text here left the user retyping both by hand. */}
+                <LoginHint hint={{ url: mainReauth.state.verificationUrl, deviceCode: mainReauth.state.deviceCode }} />
                 <span className="faint">{t("codexAuth.mainReauthPending")}</span>
                 {mainReauth.state.cancelFailed && (
                   <span role="status" className="badge badge-amber">{t("codexAuth.mainReauthFailed")}</span>

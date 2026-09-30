@@ -318,6 +318,15 @@ callback paste field while a device code is present: the code belongs on the ven
 page, whose approval is polled by the server. A later manual continuation restores the field.
 These additive status fields preserve the initial start-response shape and need no migration.
 
+Both login starts (`POST /api/oauth/login`, `POST /api/codex-auth/login`) await the proxy-side
+launcher and return `browserLaunch: "started" | "failed" | "skipped"`; `started` proves only that
+a launcher ran. The GUI narrows the field in `gui/src/oauth-browser-launch.ts`, keeps it across
+later status hints for the same login, and `LoginHint` shows a warning only for `failed`. A device
+code gets a single "Copy code & open" action that copies before calling `window.open`, so both run
+inside the click's user activation; only http(s) URLs get it. Once a device code appears, the
+provider pollers stretch their budget to `gui/src/oauth-login-budget.ts` (longer than the longest
+provider grant) instead of cancelling a still-valid grant at the browser-flow budget.
+
 > Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md)
 
 ### Claude Desktop picker management

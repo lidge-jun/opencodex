@@ -1,5 +1,6 @@
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { ProviderPayloadForm } from "../provider-payload";
+import type { BrowserLaunch } from "../oauth-browser-launch";
 
 type Preset = CatalogPreset;
 type FormState = ProviderPayloadForm;
@@ -18,6 +19,8 @@ export type AddProviderModalState = {
   oauthDeviceCode: string;
   /** Provider-supplied prose for the in-flight login. */
   oauthInstructions: string;
+  /** What the proxy reported about opening the browser for the in-flight login. */
+  oauthBrowserLaunch?: BrowserLaunch;
   /** Provider the pending `oauthUrl` belongs to; a late response for a switched-away provider must not render. */
   oauthUrlProvider: string | null;
   manualCode: string;
@@ -38,7 +41,7 @@ export type AddProviderModalAction =
   | { type: "set-oauth-busy"; busy: boolean }
   | { type: "set-oauth-msg"; msg: string; tone?: "ok" | "warn" }
   | { type: "set-oauth-tone"; tone: "ok" | "warn" }
-  | { type: "set-oauth-url"; url: string; providerId: string; deviceCode?: string; instructions?: string }
+  | { type: "set-oauth-url"; url: string; providerId: string; deviceCode?: string; instructions?: string; browserLaunch?: BrowserLaunch }
   | { type: "set-manual-code"; code: string }
   | { type: "set-manual-code-busy"; busy: boolean }
   | { type: "set-manual-code-msg"; msg: string; ok?: boolean }
@@ -145,6 +148,11 @@ export function addProviderModalReducer(
         oauthDeviceCode: action.deviceCode ?? "",
         oauthInstructions: action.instructions ?? "",
         oauthUrlProvider: action.providerId,
+        // The launch outcome arrives once, with the POST; a later status hint for the same login
+        // omits it and must not erase it. Clearing the URL ends the login and its outcome.
+        oauthBrowserLaunch: !action.url
+          ? undefined
+          : action.browserLaunch ?? (state.oauthUrlProvider === action.providerId ? state.oauthBrowserLaunch : undefined),
       };
     case "set-manual-code":
       return { ...state, manualCode: action.code };

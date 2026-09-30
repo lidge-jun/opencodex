@@ -6,6 +6,7 @@
  * `provider-presets.ts`, which is the preset DTO / tier / search module and
  * has no business knowing about login chrome.
  */
+import type { BrowserLaunch } from "../../oauth-browser-launch";
 
 /** Login hint carried by the providers page while an account-row login is in flight. */
 export type CatalogLoginHint = {
@@ -13,6 +14,7 @@ export type CatalogLoginHint = {
   url?: string;
   instructions?: string;
   deviceCode?: string;
+  browserLaunch?: BrowserLaunch;
 };
 
 /** The account-row kinds the catalog renders; only OAuth rows own a login hint. */
