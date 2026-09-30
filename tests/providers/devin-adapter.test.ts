@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
-import { buildGetChatMessageRequestForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
@@ -310,13 +310,13 @@ describe("devin adapter", () => {
     // clause was isolated live: the full sentence is refused while every
     // sub-phrase passes, so the rewrite edits the verb phrase only.
     const trigger = "asking the user if they want to allow the action in `justification` parameter";
-    const rewritten = sanitizeToolDescriptionForCognitionForTests(
+    const rewritten = sanitizeTextForCognitionForTests(
       `Include a short question ${trigger}. e.g. "Do you want to run it?"`,
     );
     expect(rewritten).toContain("asking the user whether to allow the action in the `justification` parameter");
     expect(rewritten).not.toContain("if they want to allow the action");
     // Flexible whitespace/case, same as the other Codex entries.
-    expect(sanitizeToolDescriptionForCognitionForTests(trigger.toUpperCase()))
+    expect(sanitizeTextForCognitionForTests(trigger.toUpperCase()))
       .toContain("whether to allow the action");
 
     // The phrase must be gone from every field of the encoded request, not
@@ -334,6 +334,12 @@ describe("devin adapter", () => {
       messages: [
         { role: "system", content: sys },
         { role: "user", content: `here is a quote: ${trigger}` },
+        {
+          role: "assistant",
+          content: "ok",
+          thinking: `the prompt says: ${trigger}`,
+          tool_calls: [{ id: "c1", name: "apply_patch", arguments: `{"patch":"${trigger}"}` }],
+        },
         { role: "user", content: "hello" },
       ],
       tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],

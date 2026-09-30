@@ -207,7 +207,11 @@ function encodeChatToolCall(tc: { id: string; name: string; arguments: string })
   return Buffer.concat([
     encodeString(1, tc.id),
     encodeString(2, tc.name),
-    encodeString(3, tc.arguments),
+    // Replayed tool-call arguments are model-generated text that can carry a
+    // blocklisted phrase (e.g. a patch quoting the Codex prompt). The rewrite
+    // is a plain string substitution containing no JSON-breaking characters,
+    // so the arguments stay valid JSON.
+    encodeString(3, sanitizeTextForCognition(tc.arguments)),
   ]);
 }
 
@@ -254,7 +258,7 @@ function encodeChatMessagePrompt(
   // reasoning model restarted its chain on every turn of a tool loop. Two
   // independent clients of the same service write it here: #11 thinking,
   // #12 signature, #18 signature_type on the assistant prompt.
-  if (opts?.thinking) parts.push(encodeString(11, opts.thinking));
+  if (opts?.thinking) parts.push(encodeString(11, sanitizeTextForCognition(opts.thinking)));
   if (opts?.signature) parts.push(encodeString(12, opts.signature));
   if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
   return Buffer.concat(parts);
@@ -632,8 +636,9 @@ const MAX_TOOL_DESC_LEN = 6998;
  * this one lives in request #2 (the system prompt) and could equally appear
  * in conversation history — e.g. a tool result that returns a file quoting
  * the Codex prompt. The sanitizer therefore runs on every text the adapter
- * puts on the wire: tool descriptions, the #2 system prompt, and each
- * ChatMessagePrompt's joined text. Rewriting content the model quoted is
+ * puts on the wire: tool descriptions, the #2 system prompt, each
+ * ChatMessagePrompt's joined text, replayed thinking (#11), and tool-call
+ * arguments (#6.3). Rewriting content the model quoted is
  * semantic-preserving, the same trade-off the tool-description rewrites
  * already accepted.
  */
