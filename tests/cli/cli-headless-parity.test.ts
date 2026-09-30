@@ -1065,6 +1065,27 @@ describe("headless GUI parity CLI", () => {
     expect(output).toContain("omo (Codex / LazyCodex) is not installed");
   });
 
+  test("agent injection suggest prints the proposal, and --apply writes it through PUT /api/injection-model", async () => {
+    const suggestion = {
+      sizingModel: "gpt-5.5",
+      proposal: { model: "a/big", effort: "high", status: "proposed", tier: "fast", effortIntent: "glance", rationale: "Bounded edits.", moveUpIf: "It crosses modules.", moveDownIf: "Never.", proposedModel: "a/small", proposedEffort: "low", reason: null },
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? suggestion : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["injection", "suggest", "rename", "symbols", "--model", "a/sizer", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["injection", "suggest", "rename symbols", "--apply"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["injection", "suggest"], runtime.deps)).not.toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/injection-model/suggest", method: "POST", body: { work: "rename symbols", model: "a/sizer" } },
+      { path: "/api/injection-model/suggest", method: "POST", body: { work: "rename symbols" } },
+      { path: "/api/injection-model", method: "PUT", body: { model: "a/small", effort: "low" } },
+    ]);
+  });
+
   test("API key create returns the one-time key through the access command", async () => {
     const runtime = fakeRuntime((req) => new URL(req.url).pathname === "/api/keys"
       ? { id: "key-1", name: "deploy", key: "ocx_secret" }
