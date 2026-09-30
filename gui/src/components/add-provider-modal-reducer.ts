@@ -100,6 +100,7 @@ export function addProviderModalReducer(
         oauthUrl: "",
         oauthDeviceCode: "",
         oauthInstructions: "",
+        oauthBrowserLaunch: undefined,
         oauthUrlProvider: null,
         oauthBusy: false,
         manualCode: "",
@@ -118,6 +119,7 @@ export function addProviderModalReducer(
         oauthUrl: "",
         oauthDeviceCode: "",
         oauthInstructions: "",
+        oauthBrowserLaunch: undefined,
         oauthUrlProvider: null,
         oauthBusy: false,
         manualCode: "",
@@ -163,7 +165,7 @@ export function addProviderModalReducer(
     case "set-oauth-tos-pending":
       return { ...state, oauthTosPending: action.providerId };
     case "use-oauth-login":
-      return { ...state, form: action.form, error: "", oauthUrl: "", oauthDeviceCode: "", oauthInstructions: "", oauthUrlProvider: null };
+      return { ...state, form: action.form, error: "", oauthUrl: "", oauthDeviceCode: "", oauthInstructions: "", oauthBrowserLaunch: undefined, oauthUrlProvider: null };
     case "use-api-key-instead":
       return {
         ...state,
@@ -173,6 +175,7 @@ export function addProviderModalReducer(
         oauthUrl: "",
         oauthDeviceCode: "",
         oauthInstructions: "",
+        oauthBrowserLaunch: undefined,
         oauthUrlProvider: null,
         oauthBusy: false,
         manualCode: "",

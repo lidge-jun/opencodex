@@ -146,6 +146,10 @@ test("the add-provider modal keeps the launch outcome across a status hint for t
   // Clearing the URL ends the login, and its outcome with it.
   state = addProviderModalReducer(state, { type: "set-oauth-url", url: "", providerId: "kimi" });
   expect(state.oauthBrowserLaunch).toBeUndefined();
+  // Leaving the preset clears it with the rest of the login state.
+  state = addProviderModalReducer(state, { type: "set-oauth-url", url: URL_A, providerId: "kimi", browserLaunch: "failed" });
+  state = addProviderModalReducer(state, { type: "back" });
+  expect(state.oauthBrowserLaunch).toBeUndefined();
 });
 
 test("a device login polls for the grant's lifetime, a browser login keeps its own budget", () => {
