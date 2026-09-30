@@ -719,6 +719,16 @@ is excluded: the gateway answers `service_tier: "default"` when sent `priority`,
 unclassified and its caller tier is not forwarded. Unlisted models stay unclassified on both
 transports.
 
+On the OAuth gateway, Grok 4.7's Fast works differently. The gateway also lists
+`grok-4.7-build-fast`, which is the same model on faster serving hardware, and it measured about 1.6×
+faster than `grok-4.7`. Priority processing on `grok-4.7` measured no faster and consumed about 6× the
+subscription usage per output token. The Models list therefore shows one Grok 4.7 row. Selecting its
+Fast row (`xai/grok-4.7--fast`), sending `service_tier: "priority"`, or turning on Fast mode sends the
+request as `grok-4.7-build-fast` without a service tier. Request logs keep the model as `grok-4.7` and
+record `grok-4.7-build-fast` as the wire model. API-key mode is unchanged: build-fast is not on xAI's
+public API, so Grok 4.7 Fast there still means priority processing. An explicit
+`xai/grok-4.7-build-fast` selection from an earlier configuration keeps working.
+
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium
 only when xAI's response confirms `service_tier: "priority"`. A missing or unparsed response tier is
