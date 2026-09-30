@@ -2227,7 +2227,7 @@ export const fr: Record<TKey, string> = {
   "integrations.omoRoles.auto.proposalFor": "Proposition pour {role}",
   "integrations.omoRoles.auto.tierEffort": "Niveau {tier}, effort {effort}",
   "integrations.omoRoles.auto.tierFast": "Rapide",
-  "integrations.omoRoles.auto.tierStandard": "Standard",
+  "integrations.omoRoles.auto.tierStandard": "Courant",
   "integrations.omoRoles.auto.tierFrontier": "Pointe",
   "integrations.omoRoles.auto.effortGlance": "bref",
   "integrations.omoRoles.auto.effortMeasured": "mesuré",
