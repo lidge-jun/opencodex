@@ -598,8 +598,9 @@ window; these are display observations and do not change model routing.
 only to Token Plan subscription keys and MiniMax Code for now, so a pay-as-you-go API key gets an
 error for it. Thinking is always on: the effort picker offers `low` through `max` and defaults to
 `max`, and there is no way to turn thinking off. MiniMax has not published a per-token price
-for the preview; usage is drawn from the Token Plan quota (Plus $20, Max $50, Ultra $120 per
-month), so OpenCodex shows no estimated cost for it. MiniMax's `/models` endpoint does not list
+for the preview; usage is drawn from your
+[Token Plan quota](https://platform.minimax.io/docs/guides/pricing-token-plan), so OpenCodex
+shows no estimated cost for it. MiniMax's `/models` endpoint does not list
 the preview yet, so OpenCodex keeps it in the catalog from the preset. An install whose saved
 MiniMax model list is still the previous default receives it on the next start; a list you edited
 is left as it is; register the preview by hand with

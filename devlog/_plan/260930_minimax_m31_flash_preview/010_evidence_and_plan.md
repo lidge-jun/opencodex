@@ -4,7 +4,7 @@
 
 - `platform.minimax.io/docs/guides/text-generation` and the CN mirror `platform.minimaxi.com/docs/guides/text-generation`: model id `MiniMax-M3.1-Flash-Preview`, context window 1,000,000, multimodal chat input, "available only through Token Plan and MiniMax Code for now". Thinking is always on; `effort` accepts `low | medium | high | xhigh | max`; an omitted effort defaults to `max`. `thinking: {"type":"disabled"}` or `effort: "none"` returns 400 `requires adaptive thinking`. On the OpenAI-compatible protocol thinking is always returned in `reasoning_content`.
 - `agent.minimax.io/tools/m3-1-flash-preview`: text, image and video input, text output; prompt caching supported.
-- Pricing: `platform.minimax.io/docs/guides/pricing-paygo` and the enterprise tab of `/subscribe/token-plan` list only MiniMax-M3 and M2.7 rows. `/docs/guides/pricing-token-plan`: Plus $20, Max $50, Ultra $120 per month; Credits 1,000 = $1 charged at the resource's pay-as-you-go list price. No per-token list price exists for M3.1-Flash-Preview. OrcaRouter's 2026-09-27 write-up reaches the same conclusion.
+- Pricing: `platform.minimax.io/docs/guides/pricing-paygo` and the enterprise tab of `/subscribe/token-plan` list only MiniMax-M3 and M2.7 rows. `/docs/guides/pricing-token-plan`: Plus $22, Max $55, Ultra $132 per month (the `/subscribe/token-plan` comparison table shows $20/$50/$120, the annual-billing rate); Credits 1,000 = $1 charged at the resource's pay-as-you-go list price. No per-token list price exists for M3.1-Flash-Preview. OrcaRouter's 2026-09-27 write-up reaches the same conclusion. The public guide links the pricing page instead of restating plan prices (CodeRabbit on #6304).
 
 ## Live probe (jun-macbookpro, configured `minimax` key, `https://api.minimax.io/v1`)
 
