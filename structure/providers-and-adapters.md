@@ -192,6 +192,8 @@ rewrite rules and the routed-id settlement.
 
 Devin pairs a late signature only with immediately preceding unsigned thinking in one assistant message; a call between them breaks the pair. While a signed attempt is held for an optional unsigned retry, a timer emits plain heartbeats even when the upstream stalls. The held queue is capped at 1,024 events or approximately 1 MiB of UTF-16 reasoning/signature payload; crossing either cap releases the events and disables that retry. Held usage frames merge per cumulative field, and the refused attempt's usage is added to the retry. A signed `invalid_argument` refusal is offered the unsigned retry before the history-overflow classifier sees any final refusal. If the send budget withholds that retry, the original refusal reaches the classifier and the recovery is recorded as withheld.
 
+Devin family selection in `src/adapters/devin/live-models.ts` counts the anchor's nonzero targets once and visits each candidate's own axes. Missing axes have order zero; extra nonzero axes, including prototype names such as `toString`, count as mismatches. Effort precedence and family confinement remain unchanged; `tests/providers/devin-family-resolution.test.ts` covers the sparse-scoring contract.
+
 Inline document admission shares one encoding predicate between its scanner and parser in
 `src/responses/inline-document.ts`: malformed base64 quantum/padding lengths are refused,
 and valid padded or unpadded payloads pass unchanged without a decoding allocation.
