@@ -908,7 +908,9 @@ test("the direct ocx sync command refreshes owned clients including OpenCode and
   const start = src.indexOf("sync: async deps =>");
   const command = src.slice(start, src.indexOf("v2: async deps =>", start));
   expect(command).toContain("refreshOwnedCatalogIntegrations");
-  expect(command).toContain('["mcode", "pi", "raycast", "omo", "cline", "droid", "opencode", "kilo"]');
+  // Command Code joined this fan-out with its integration: a sync must refresh its
+  // provider block too, or the client keeps a stale catalog until the next apply.
+  expect(command).toContain('["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo"]');
   expect(command).toContain("refreshAsideProfilesThroughServer");
   expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');

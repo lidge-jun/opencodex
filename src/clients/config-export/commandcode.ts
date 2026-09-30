@@ -19,6 +19,8 @@ export interface CommandCodeProviderBlock {
 
 export interface CommandCodeGeneratedConfig {
   provider: Record<string, CommandCodeProviderBlock>;
+  /** The root a pre-existing target already uses; see {@link commandCodeProviderRoot}. */
+  providers?: Record<string, CommandCodeProviderBlock>;
 }
 
 /**
@@ -85,12 +87,47 @@ export function buildCommandCodeClientConfig(ctx: ExportContext): CommandCodeGen
   };
 }
 
+/**
+ * The root key Command Code actually reads: `provider`, else `providers`.
+ *
+ * Verified against the published client (`command-code@1.66.0`, `dist/cli.mjs`):
+ * `const o = e.provider ?? e.providers;` — singular wins, and the plural branch is
+ * only reached when the singular root is `undefined`. Adding a singular root to a
+ * document that already carries a plural one therefore does not merge the two: the
+ * old entries stay on disk, byte for byte, and become invisible to the consumer.
+ *
+ * The grammar `isPlainRecord` check mirrors the client's own guard, so a `null` or
+ * non-object root is treated as absent exactly as the client treats it.
+ */
+export function commandCodeProviderRoot(document: unknown): "provider" | "providers" {
+  const doc = document as { provider?: unknown; providers?: unknown } | null | undefined;
+  if (isPlainObject(doc?.provider)) return "provider";
+  if (isPlainObject(doc?.providers)) return "providers";
+  // Nothing established yet: the singular root is the one this exporter writes.
+  return "provider";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function summarizeCommandCode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
-  const models = Object.values((document as CommandCodeGeneratedConfig | undefined)?.provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
+  const doc = document as CommandCodeGeneratedConfig | undefined;
+  const root = commandCodeProviderRoot(document);
+  const models = Object.values(doc?.[root]?.[OPENCODE_PROVIDER_ID]?.models ?? {}) as CommandCodeModelEntry[];
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
 }
 
+/**
+ * The provider block, written under whichever root the target document already uses.
+ *
+ * `ExportContext` carries the parsed target document so the root can be chosen from
+ * what is on disk rather than assumed. A fresh file gets the singular root this
+ * exporter has always written; a document that already carries a plural root keeps
+ * it, so enabling OpenCodex never makes the user's other providers unreadable.
+ */
 export function buildCommandCodeContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildCommandCodeClientConfig(ctx);
-  return singleFragment("commandcode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
+  const root = commandCodeProviderRoot(ctx.document);
+  return singleFragment("commandcode", [root, OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
 }

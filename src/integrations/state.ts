@@ -490,7 +490,8 @@ export function exportContextOf(input: {
   config: OcxConfig;
   port: number;
   droidReasoningDefaults?: Record<string, string>;
-}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string> } {
+  document?: unknown;
+}): { baseUrl: string; models: readonly ExportModel[]; config: OcxConfig; droidReasoningDefaults?: Record<string, string>; document?: unknown } {
   return {
     /*
      * Composed through the SAME helper `ocx export` uses. Interpolating the
@@ -505,6 +506,9 @@ export function exportContextOf(input: {
     models: input.models,
     config: input.config,
     ...(input.droidReasoningDefaults === undefined ? {} : { droidReasoningDefaults: input.droidReasoningDefaults }),
+    // Forwarded only when the caller parsed a target: a client that resolves
+    // between two document roots (Command Code) needs the bytes on disk.
+    ...(input.document === undefined ? {} : { document: input.document }),
   };
 }
 
@@ -514,7 +518,10 @@ export function buildIntegrationContribution(
   parsed: unknown,
   record: OwnershipRecord | null,
 ): ManagedContribution {
-  const context = exportContextOf(input);
+  // The parsed target travels with the context: a client whose reader picks
+  // between two document roots (Command Code) must see the bytes on disk, and
+  // routing it through this one builder keeps classify, plan and write agreeing.
+  const context = exportContextOf({ ...input, document: parsed });
   if (input.clientId === "droid" && input.droidReasoningDefaults === undefined && record?.configPath === effective.configPath) {
     const inherited = recordedDroidContributionMatches(parsed, record)
       ? droidDefaultsFromOwnedRows(context, parsed, record.fragmentPaths)

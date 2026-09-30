@@ -571,6 +571,31 @@ holds the single ownership record. Committing the older row's prior record would
 ownership back at the old file and leave the active block on disk with nothing to
 disable it.
 
+## Command Code
+
+Command Code owns one block in `~/.commandcode/providers.json`, the store its
+published client opens: `homeDir15()` returns `env.HOME ?? env.USERPROFILE`, and the
+path is that plus `/.commandcode/providers.json`. That variable does not appear
+anywhere in the shipped `command-code@1.66.0` bundle, so `commandCodeHomeDir` takes no
+override — honouring one would let Apply report success at a path no Command Code
+process opens, and the user would see an empty model list with no error anywhere.
+
+The client's reader is `const o = e.provider ?? e.providers`, so the singular root
+wins whenever it exists. `commandCodeProviderRoot` mirrors that grammar against the
+parsed target document and `buildCommandCodeContribution` writes into whichever root
+the target already uses; a fresh file gets the singular root. Both roots are declared
+in `CLIENT_MANAGED_PATHS`, so Disable removes the block from either one. A target
+carrying both roots is left in the shape the client resolves, and only the root it
+reads is modified.
+
+The provider is written with `apiKey: false`, the documented keyless form. The
+published credential check accepts a `$VAR` / `{env:VAR}` / `!command` reference or
+`false` and refuses a raw string, so no service-token file is read, referenced, or
+exported. Loopback-only, like the other `api: "openai-completions"` clients.
+`tests/clients/command-code-client-contract.test.ts` states the client-side
+expressions it is proving and exercises the before/after lifecycle through a real
+file.
+
 ## Cline paired files
 
 Cline CLI uses `providers.json` for connection settings and sibling `models.json` for its

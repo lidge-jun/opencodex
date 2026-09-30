@@ -485,9 +485,23 @@ export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(zcodeHomeDir(env, home), "v2", "config.json");
 }
 
-export function commandCodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  const override = env.COMMANDCODE_HOME?.trim();
-  if (override) return absoluteClientPath(override, home, "COMMANDCODE_HOME");
+/**
+ * Command Code's provider store directory — `~/.commandcode`, with no override.
+ *
+ * There is deliberately no `COMMANDCODE_HOME` here, unlike the other clients in this
+ * file. The published client (`command-code@1.66.0`) resolves its store as
+ * `homeDir15() + "/.commandcode/providers.json"`, and `homeDir15` is exactly
+ * `env.HOME ?? env.USERPROFILE` — `grep -c COMMANDCODE_HOME` over the shipped
+ * `dist/cli.mjs` and `dist/index.mjs` returns 0.
+ *
+ * An override we honour but the client ignores is worse than none: `enable` would
+ * report success and write a provider block at a path no Command Code process ever
+ * opens, and the user would see an empty model list with no error anywhere. Every
+ * other client in this file earns its override because that client documents it;
+ * this one does not, so an apply against a relocated home is refused by `detectDir`
+ * simply not existing rather than being silently written to the wrong place.
+ */
+export function commandCodeHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(home, ".commandcode");
 }
 
@@ -1513,9 +1527,9 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     filename: "providers.json",
     destination: env => commandCodeConfigPath(env),
     // No env var exists behind this integration: buildCommandCodeClientConfig
-    // references the service token file (`!cat`) or the loopback placeholder.
+    // writes `apiKey: false`, the documented keyless form for a loopback endpoint.
     apiKeyEnv: "",
-    exportHint: "Command Code reads service token from serviceApiTokenFilePath or loopback placeholder.",
+    exportHint: "The provider is written with `apiKey: false` — Command Code treats a keyless loopback endpoint as already authenticated. No key is stored or referenced.",
     build: buildCommandCodeClientConfig,
     format: "json",
     summarize: summarizeCommandCode,
