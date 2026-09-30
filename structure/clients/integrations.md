@@ -78,7 +78,8 @@ Cursor's `cursor-local` update channel advertises for the host platform and arch
 `x64` and `arm64` on Windows, macOS and Linux map; any other host resolves to `unsupported-platform`
 with no request)
 (`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
-Only a `https://downloads.cursor.com/local-mode/` URL with a version is accepted (a Linux
+The decoded manifest is capped at 64 KiB before JSON parsing. Only a bounded
+`https://downloads.cursor.com/local-mode/` URL with a bounded version is accepted (a Linux
 `.AppImage.zsync` delta-metadata URL is mapped to its sibling `.AppImage`); anything else
 resolves to `available: false` with reason `unreachable` or `unusable-response`, and nothing is
 requested when Private Inference is already installed or no regular install exists. The module never

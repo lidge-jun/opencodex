@@ -3,23 +3,22 @@ import { existsSync, readFileSync } from "node:fs";
 import { contextCompatibleBaseLine } from "../context-compat";
 import { resolveEffectiveProjectModelProvider } from "../project-config-warnings";
 import {
-  OCX_SECTION_MARKER,
   OCX_ROUTING_MARKER_LINE,
   REALTIME_WS_BASE_URL_KEY,
+  isOcxRoutingMarkerLine,
   isRootOpenaiBaseUrlLine,
   isRootRealtimeWsBaseUrlLine,
   providerTableStart,
   providerTableString,
   rootTomlString,
-  tomlStringPattern,
 } from "../injected-marker";
 import {
   CODEX_CONFIG_PATH,
   DEFAULT_CATALOG_PATH,
-  parseTomlString,
   resolveCodexConfigPath,
   tomlString,
 } from "../paths";
+import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceAssignmentSpan, sourceText, type SourceLine } from "../toml-source-lines";
 import { readBoundedCodexConfig } from "./bounded-config-reader";
 import {
   type CodexRoutingTarget,
@@ -67,10 +66,9 @@ export function observedExternalCodexModelProvider(): string | null {
 }
 
 /**
- * Detect the file's dominant line ending. Every transform in this module is LF-pure
- * (split("\n") + hard "\n" joins), so CRLF configs (Windows-edited config.toml) are
- * normalized to LF at the pipeline boundary and converted back on write — otherwise a
- * single inject would leave a mixed-EOL file.
+ * Detect the file's dominant line ending. Structural edits retain physical line endings;
+ * the full injection/removal pipeline still normalizes to LF at its boundary and converts
+ * back on write so generated blocks do not leave a mixed-EOL file.
  */
 export function dominantEol(content: string): "\r\n" | "\n" {
   const crlf = (content.match(/\r\n/g) ?? []).length;
@@ -234,66 +232,43 @@ export function setRootOpenaiBaseUrl(
   if (typeof portOrTarget !== "number") {
     return setRootOpenaiBaseUrlForTarget(content, validateCodexRoutingTarget(portOrTarget));
   }
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLine(portOrTarget, hostname));
+  return setRootUrl(content, contextCompatibleBaseLine(content, buildOpenaiBaseUrlLine(portOrTarget, hostname)));
+}
 
-  for (let i = 0; i < rootEnd; i++) {
-    if (!isRootOpenaiBaseUrlLine(lines[i])) continue;
-    const markerOwned = i > 0 && lines[i - 1].includes(OCX_SECTION_MARKER);
-    if (!markerOwned) return { content, keptUserBaseUrl: true };
-    // Refresh the marker too, so a config injected by a build that predates the recovery
-    // hint gains it on the next `ocx start` instead of keeping a bare marker forever.
-    lines[i - 1] = OCX_ROUTING_MARKER_LINE;
-    lines[i] = key;
-    return { content: lines.join("\n"), keptUserBaseUrl: false };
-  }
+function ownedRootUrl(lines: SourceLine[], index: number, key: string): boolean {
+  return lines[index]!.structural && rootTomlString(lines[index]!.text, key) !== null
+    && index > 0 && lines[index - 1]!.structural && isOcxRoutingMarkerLine(lines[index - 1]!.text);
+}
 
-  if (firstTable === -1) {
-    return {
-      content:
-        content.replace(/\n+$/, "") +
-        "\n" +
-        OCX_ROUTING_MARKER_LINE +
-        "\n" +
-        key +
-        "\n",
-      keptUserBaseUrl: false,
-    };
+function insertRootSourceLines(content: string, added: string[]): string {
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  const eol = dominantEol(content);
+  if (rootEnd === lines.length) {
+    return content.replace(/(?:\r?\n)+$/, "") + eol + added.join(eol) + eol;
   }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, OCX_ROUTING_MARKER_LINE, key);
-  return { content: lines.join("\n"), keptUserBaseUrl: false };
+  let at = rootEnd;
+  while (at > 0 && lines[at - 1]!.structural && lines[at - 1]!.text.trim() === "") at -= 1;
+  lines.splice(at, 0, ...added.map(text => ({ text, eol, structural: true })));
+  return bom + sourceText(lines);
+}
+
+function setRootUrl(content: string, key: string): { content: string; keptUserBaseUrl: boolean } {
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  for (let index = 0; index < rootEnd; index++) {
+    if (!lines[index]!.structural || !isRootOpenaiBaseUrlLine(lines[index]!.text)) continue;
+    if (!ownedRootUrl(lines, index, "openai_base_url")) return { content, keptUserBaseUrl: true };
+    lines[index - 1]!.text = OCX_ROUTING_MARKER_LINE;
+    lines[index]!.text = key;
+    return { content: bom + sourceText(lines), keptUserBaseUrl: false };
+  }
+  return { content: insertRootSourceLines(content, [OCX_ROUTING_MARKER_LINE, key]), keptUserBaseUrl: false };
 }
 
 export function setRootOpenaiBaseUrlForTarget(
   content: string,
   target: CodexRoutingTarget,
 ): { content: string; keptUserBaseUrl: boolean } {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const key = contextCompatibleBaseLine(content, buildOpenaiBaseUrlLineForTarget(target));
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
-    const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
-    if (!markerOwned) return { content, keptUserBaseUrl: true };
-    lines[index - 1] = OCX_ROUTING_MARKER_LINE;
-    lines[index] = key;
-    return { content: lines.join("\n"), keptUserBaseUrl: false };
-  }
-  if (firstTable === -1) {
-    return {
-      content: `${content.replace(/\n+$/, "")}\n${OCX_ROUTING_MARKER_LINE}\n${key}\n`,
-      keptUserBaseUrl: false,
-    };
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt -= 1;
-  lines.splice(insertAt, 0, OCX_ROUTING_MARKER_LINE, key);
-  return { content: lines.join("\n"), keptUserBaseUrl: false };
+  return setRootUrl(content, contextCompatibleBaseLine(content, buildOpenaiBaseUrlLineForTarget(target)));
 }
 
 /**
@@ -310,25 +285,22 @@ export function setRootRealtimeWsBaseUrl(
   content: string,
   target: CodexRoutingTarget,
 ): { content: string; keptUserRealtimeWsBaseUrl: boolean } {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const { bom, lines, rootEnd } = rootSourceLines(content);
   const key = buildRealtimeWsBaseUrlLine(validateCodexRoutingTarget(target));
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!isRootRealtimeWsBaseUrlLine(lines[index])) continue;
-    const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
-    if (!markerOwned) return { content, keptUserRealtimeWsBaseUrl: true };
-    lines[index - 1] = OCX_ROUTING_MARKER_LINE;
-    lines[index] = key;
-    return { content: lines.join("\n"), keptUserRealtimeWsBaseUrl: false };
+  for (let index = 0; index < rootEnd; index++) {
+    if (!lines[index]!.structural || !isRootRealtimeWsBaseUrlLine(lines[index]!.text)) continue;
+    if (!ownedRootUrl(lines, index, REALTIME_WS_BASE_URL_KEY)) return { content, keptUserRealtimeWsBaseUrl: true };
+    lines[index - 1]!.text = OCX_ROUTING_MARKER_LINE;
+    lines[index]!.text = key;
+    return { content: bom + sourceText(lines), keptUserRealtimeWsBaseUrl: false };
   }
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
-    if (!(index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER))) continue;
-    lines.splice(index + 1, 0, OCX_ROUTING_MARKER_LINE, key);
-    return { content: lines.join("\n"), keptUserRealtimeWsBaseUrl: false };
+  for (let index = 0; index < rootEnd; index++) {
+    if (!isRootOpenaiBaseUrlLine(lines[index]!.text) || !ownedRootUrl(lines, index, "openai_base_url")) continue;
+    const eol = dominantEol(content);
+    lines[index]!.eol ||= eol;
+    lines.splice(index + 1, 0, ...[OCX_ROUTING_MARKER_LINE, key].map(text => ({ text, eol, structural: true })));
+    return { content: bom + sourceText(lines), keptUserRealtimeWsBaseUrl: false };
   }
-  // No marker-owned routing override to attach to: the override has no owner, so inject nothing.
   return { content, keptUserRealtimeWsBaseUrl: false };
 }
 
@@ -345,38 +317,28 @@ export const ROOT_WEB_SEARCH_DISABLED_LINE = 'web_search = "disabled"';
 export const ROOT_WEB_SEARCH_DISABLED_VALUE = "disabled";
 
 export function isRootWebSearchLine(line: string): boolean {
-  // The quoted spellings are the same key to TOML, and `tomlStringPattern` -- which the value
-  // evidence below goes through -- already reads them. A predicate that matched only the bare
+  // Quoted spellings (including escaped basic keys) name the same key to TOML.
+  // A predicate that matched only the bare
   // spelling would leave `"web_search" = "live"` in place while inserting our own line, and two
   // root keys of the same name stop Codex from loading the file at all.
-  return /^\s*(?:"web_search"|'web_search'|web_search)\s*=/.test(line);
+  return rootAssignmentKey(line) === ROOT_WEB_SEARCH_KEY;
 }
 
 /** What an earlier injection recorded about this key, read back from the journal. */
 export interface RootWebSearchJournal {
   /** The value that injection wrote, or null when it wrote none. */
   injectedValue?: string | null;
-  /** The user-owned line that injection had to remove, or null when there was none. */
+  /** The complete user-owned assignment removed (possibly multiline), or null. */
   replacedUserLine?: string | null;
 }
 
 /** What one pass of {@link ensureRootWebSearchDisabled} did, for the journal to record. */
 export interface RootWebSearchOutcome {
   content: string;
-  /** The user-owned root line this pass removed, or null when there was none. */
+  /** The complete user-owned root assignment removed (possibly multiline), or null. */
   replacedUserLine: string | null;
   /** The value this pass wrote, or null when it wrote none. */
   wroteValue: string | null;
-}
-
-/** Insert root-level lines ahead of the first table; TOML root keys may not follow one. */
-function insertRootLines(lines: string[], text: string): string {
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  if (firstTable === -1) return `${lines.join("\n").replace(/\n+$/, "")}\n${text}\n`;
-  let at = firstTable;
-  while (at > 0 && lines[at - 1].trim() === "") at -= 1;
-  lines.splice(at, 0, ...text.split("\n"));
-  return lines.join("\n");
 }
 
 /**
@@ -406,14 +368,13 @@ export function ensureRootWebSearchDisabled(
   disabled: boolean,
   journal: RootWebSearchJournal = {},
 ): RootWebSearchOutcome {
-  const lines = stripInjectedRootWebSearch(content, journal.injectedValue).split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const stripped = stripInjectedRootWebSearch(content, journal.injectedValue);
+  const { bom, lines, rootEnd } = rootSourceLines(stripped);
   if (!disabled) {
-    const restore = journal.replacedUserLine?.trim();
-    const owned = lines.slice(0, rootEnd).some(isRootWebSearchLine);
+    const restore = journal.replacedUserLine;
+    const owned = lines.slice(0, rootEnd).some(line => line.structural && isRootWebSearchLine(line.text));
     return {
-      content: restore && !owned ? insertRootLines(lines, restore) : lines.join("\n"),
+      content: restore?.trim() && !owned ? insertRootSourceLines(stripped, [applyEol(restore, dominantEol(stripped))]) : stripped,
       replacedUserLine: null,
       wroteValue: null,
     };
@@ -424,14 +385,21 @@ export function ensureRootWebSearchDisabled(
   // line keeps the one an earlier off pass recorded — the ordinary way to reach that state is a
   // second injection while the switch is still off (a model change), and the operator's mode must
   // not evaporate because the line it came from is already gone.
-  const replacedUserLine = lines
-    .slice(0, rootEnd)
-    .find((line) => isRootWebSearchLine(line))
-    ?.replace(/\r$/, "") ?? journal.replacedUserLine?.trim() ?? null;
+  const drop = new Set<number>();
+  let replacedUserLine = journal.replacedUserLine ?? null;
+  let foundUserAssignment = false;
+  for (let index = 0; index < rootEnd; index++) {
+    if (!lines[index]!.structural || !isRootWebSearchLine(lines[index]!.text)) continue;
+    const assignment = sourceAssignmentSpan(lines, index, rootEnd);
+    if (!assignment) throw new Error("Cannot safely rewrite an incomplete root web_search assignment.");
+    if (!foundUserAssignment) replacedUserLine = assignment.text;
+    foundUserAssignment = true;
+    for (let at = index; at < assignment.end; at++) drop.add(at);
+  }
   return {
-    content: insertRootLines(
-      lines.filter((line, index) => index >= rootEnd || !isRootWebSearchLine(line)),
-      `${OCX_ROUTING_MARKER_LINE}\n${ROOT_WEB_SEARCH_DISABLED_LINE}`,
+    content: insertRootSourceLines(
+      bom + sourceText(lines.filter((_, index) => !drop.has(index))),
+      [OCX_ROUTING_MARKER_LINE, ROOT_WEB_SEARCH_DISABLED_LINE],
     ),
     replacedUserLine,
     wroteValue: ROOT_WEB_SEARCH_DISABLED_VALUE,
@@ -446,26 +414,20 @@ export function ensureRootWebSearchDisabled(
  * comment a Codex app reserialize dropped is still recognized as ours.
  */
 export function stripInjectedRootWebSearch(content: string, injectedValue?: string | null): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const { bom, lines, rootEnd } = rootSourceLines(content);
   const drop = new Set<number>();
-  for (let i = 0; i + 1 < rootEnd; i += 1) {
-    if (lines[i].includes(OCX_SECTION_MARKER) && isRootWebSearchLine(lines[i + 1])) {
-      drop.add(i);
-      drop.add(i + 1);
-    }
+  for (let index = 0; index < rootEnd; index++) {
+    const line = lines[index]!;
+    if (!line.structural || !isRootWebSearchLine(line.text)) continue;
+    const assignment = sourceAssignment(lines, index, rootEnd);
+    if (!assignment || typeof assignment.value !== "string") continue;
+    const value = assignment.value;
+    const markerOwned = index > 0 && lines[index - 1]!.structural && isOcxRoutingMarkerLine(lines[index - 1]!.text);
+    if (!markerOwned && (!injectedValue || value !== injectedValue)) continue;
+    for (let at = index; at < assignment.end; at++) drop.add(at);
+    if (markerOwned) drop.add(index - 1);
   }
-  if (injectedValue) {
-    for (let i = 0; i < rootEnd; i += 1) {
-      if (!isRootWebSearchLine(lines[i])) continue;
-      if (rootTomlString(lines[i], ROOT_WEB_SEARCH_KEY) !== injectedValue) continue;
-      drop.add(i);
-      if (i > 0 && lines[i - 1].includes(OCX_SECTION_MARKER)) drop.add(i - 1);
-    }
-  }
-  if (drop.size === 0) return content;
-  return lines.filter((_, index) => !drop.has(index)).join("\n");
+  return drop.size ? bom + sourceText(lines.filter((_, index) => !drop.has(index))) : content;
 }
 
 /**
@@ -475,21 +437,23 @@ export function stripInjectedRootWebSearch(content: string, injectedValue?: stri
  * A marker-owned `experimental_realtime_ws_base_url` pair is removed by the same rule.
  */
 export function stripInjectedOpenaiBaseUrl(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const { bom, lines, rootEnd } = rootSourceLines(content);
   const drop = new Set<number>();
-  for (let i = 0; i < rootEnd; i++) {
-    if (!lines[i].includes(OCX_SECTION_MARKER)) continue;
-    if (i + 1 < rootEnd && (isRootOpenaiBaseUrlLine(lines[i + 1]) || isRootRealtimeWsBaseUrlLine(lines[i + 1]))) {
-      drop.add(i);
-      drop.add(i + 1);
-    } else if (i + 1 >= rootEnd || lines[i + 1].trim() === "") {
-      drop.add(i); // orphaned marker at root
+  for (let index = 0; index < rootEnd; index++) {
+    const line = lines[index]!;
+    if (!line.structural || !isOcxRoutingMarkerLine(line.text)) continue;
+    const next = lines[index + 1];
+    if (index + 1 < rootEnd && next?.structural
+      && (isRootOpenaiBaseUrlLine(next.text) || isRootRealtimeWsBaseUrlLine(next.text))) {
+      const key = rootAssignmentKey(next.text)!;
+      if (rootTomlString(next.text, key) === null) continue;
+      drop.add(index);
+      drop.add(index + 1);
+    } else if (index + 1 >= rootEnd || (next?.structural && next.text.trim() === "")) {
+      drop.add(index);
     }
   }
-  if (drop.size === 0) return content;
-  return lines.filter((_, i) => !drop.has(i)).join("\n");
+  return drop.size ? bom + sourceText(lines.filter((_, index) => !drop.has(index))) : content;
 }
 
 /**
@@ -500,18 +464,19 @@ export function stripInjectedOpenaiBaseUrl(content: string): string {
  * untouched.
  */
 export function stripExistingModelProvider(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const out: string[] = [];
-  lines.forEach((line, i) => {
-    if (/^\s*model_provider\s*=/.test(line)) {
-      const isOurs = /^\s*model_provider\s*=\s*"opencodex"\s*$/.test(line);
-      const isRoot = firstTable === -1 || i < firstTable;
-      if (isOurs || isRoot) return; // drop it
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  const drop = new Set<number>();
+  for (let index = 0; index < lines.length; index++) {
+    if (!lines[index]!.structural || rootAssignmentKey(lines[index]!.text) !== "model_provider") continue;
+    const assignment = sourceAssignmentSpan(lines, index, index < rootEnd ? rootEnd : lines.length);
+    if (!assignment) throw new Error("Cannot safely rewrite an incomplete model_provider assignment.");
+    if (index >= rootEnd) {
+      const decoded = sourceAssignment(lines, index);
+      if (typeof decoded?.value !== "string" || decoded.value.trim() !== "opencodex") continue;
     }
-    out.push(line);
-  });
-  return out.join("\n");
+    for (let at = index; at < assignment.end; at++) drop.add(at);
+  }
+  return bom + sourceText(lines.filter((_, index) => !drop.has(index)));
 }
 
 /**
@@ -521,29 +486,21 @@ export function stripExistingModelProvider(content: string): string {
  * compaction limits do not alter the advertised context window and must survive reinjection.
  */
 export function stripRootContextWindowOverrides(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  return lines
-    .filter((line, i) => {
-      const isRoot = firstTable === -1 || i < firstTable;
-      return !isRoot || !/^\s*model_context_window\s*=/.test(line);
-    })
-    .join("\n");
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  const drop = new Set<number>();
+  for (let index = 0; index < rootEnd; index++) {
+    if (!lines[index]!.structural || rootAssignmentKey(lines[index]!.text) !== "model_context_window") continue;
+    const assignment = sourceAssignmentSpan(lines, index, rootEnd);
+    if (!assignment) throw new Error("Cannot safely rewrite an incomplete model_context_window assignment.");
+    for (let at = index; at < assignment.end; at++) drop.add(at);
+  }
+  return bom + sourceText(lines.filter((_, index) => !drop.has(index)));
 }
 
 export function stripRootRoutedModel(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  return lines
-    .filter((line, i) => {
-      const isRoot = firstTable === -1 || i < firstTable;
-      if (!isRoot) return true;
-      const m = line.match(/^\s*model\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')\s*$/);
-      if (!m) return true;
-      const model = parseTomlString(m[1]);
-      return !model?.includes("/");
-    })
-    .join("\n");
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  return bom + sourceText(lines.filter((line, index) => index >= rootEnd || !line.structural
+    || !rootTomlString(line.text, "model")?.includes("/")));
 }
 
 /**
@@ -551,28 +508,16 @@ export function stripRootRoutedModel(content: string): string {
  * header (TOML root keys must precede all tables). If there are no tables, append it to the root body.
  */
 export function setRootModelProvider(content: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
-  const key = 'model_provider = "opencodex"';
-  if (firstTable === -1) {
-    return content.replace(/\n+$/, "") + "\n" + key + "\n";
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, key);
-  return lines.join("\n");
+  return insertRootSourceLines(content, ['model_provider = "opencodex"']);
 }
 
 function readRootModelCatalogPath(content: string): string | null {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
+  const { lines, rootEnd } = rootSourceLines(content);
   let ownedCatalogPath: string | null = null;
   for (let index = 0; index < rootEnd; index += 1) {
-    const match = modelCatalogAssignment.exec(lines[index]);
-    if (!match) continue;
-    const catalogPath = parseTomlString(match[1]);
+    if (!lines[index].structural) continue;
+    const catalogPath = rootTomlString(lines[index].text, "model_catalog_json");
+    if (catalogPath === null) continue;
     if (!isOpencodexCatalogPath(catalogPath)) return catalogPath;
     ownedCatalogPath ??= catalogPath;
   }
@@ -580,18 +525,14 @@ function readRootModelCatalogPath(content: string): string | null {
 }
 
 export function setRootModelCatalogPath(content: string, catalogPath: string): string {
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const { bom, lines, rootEnd } = rootSourceLines(content);
   const key = `model_catalog_json = ${tomlString(catalogPath)}`;
-  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
   const ownedAssignments: number[] = [];
   let hasUserAssignment = false;
   for (let i = 0; i < rootEnd; i++) {
-    const m = modelCatalogAssignment.exec(lines[i]);
-    if (!m) continue;
-    const existing = parseTomlString(m[1]);
-    if (isOpencodexCatalogPath(existing)) {
+    if (!lines[i].structural || rootAssignmentKey(lines[i].text) !== "model_catalog_json") continue;
+    const existing = rootTomlString(lines[i].text, "model_catalog_json");
+    if (existing !== null && isOpencodexCatalogPath(existing)) {
       ownedAssignments.push(i);
     } else {
       hasUserAssignment = true;
@@ -599,53 +540,38 @@ export function setRootModelCatalogPath(content: string, catalogPath: string): s
   }
   if (hasUserAssignment) {
     const owned = new Set(ownedAssignments);
-    return lines.filter((_, index) => !owned.has(index)).join("\n");
+    return bom + sourceText(lines.filter((_, index) => !owned.has(index)));
   }
   if (ownedAssignments.length > 0) {
-    lines[ownedAssignments[0]] = key;
+    lines[ownedAssignments[0]].text = key;
     const duplicates = new Set(ownedAssignments.slice(1));
-    return lines.filter((_, index) => !duplicates.has(index)).join("\n");
+    return bom + sourceText(lines.filter((_, index) => !duplicates.has(index)));
   }
-  if (firstTable === -1) {
-    return content.replace(/\n+$/, "") + "\n" + key + "\n";
-  }
-  let insertAt = firstTable;
-  while (insertAt > 0 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, key);
-  return lines.join("\n");
+  return insertRootSourceLines(content, [key]);
 }
 
 export function removeProfileSection(content: string): string {
-  const lines = content.split("\n");
-  const filtered: string[] = [];
+  const { bom, lines } = rootSourceLines(content);
   let inProfile = false;
-  for (const line of lines) {
-    if (line.trim() === "[profiles.opencodex]") {
-      inProfile = true;
-      continue;
+  const kept = lines.filter(line => {
+    if (line.structural && /^\s*\[/.test(line.text)) {
+      try {
+        const parsed = Bun.TOML.parse(line.text) as Record<string, unknown>;
+        inProfile = typeof parsed.profiles === "object" && parsed.profiles !== null
+          && Object.hasOwn(parsed.profiles, "opencodex");
+      } catch { inProfile = false; }
     }
-    if (inProfile) {
-      if (/^\s*\[/.test(line) && line.trim() !== "[profiles.opencodex]") {
-        inProfile = false;
-        filtered.push(line);
-      }
-      continue;
-    }
-    filtered.push(line);
-  }
-  return (
-    filtered
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n"
-  );
+    return !inProfile;
+  });
+  return normalizeStructuralWhitespace(bom + sourceText(kept));
 }
 
 export function normalizeServiceTier(content: string): string {
-  return content.replace(
-    /^(\s*service_tier\s*=\s*)["']priority["']\s*$/gm,
-    '$1"fast"',
-  );
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  for (const line of lines.slice(0, rootEnd)) {
+    if (line.structural) line.text = line.text.replace(/^(\s*service_tier\s*=\s*)["']priority["']\s*$/, '$1"fast"');
+  }
+  return bom + sourceText(lines);
 }
 
 export function ensureFastModeFeature(content: string, fastMode?: boolean): string {
@@ -654,32 +580,41 @@ export function ensureFastModeFeature(content: string, fastMode?: boolean): stri
   // untouched (no [features] table is added and an existing fast_mode line is
   // preserved as-is). Table and key matching accept the valid TOML spellings
   // `[features] # comment`, `["features"]` / `['features']`, and quoted keys.
-  const lines = content.split("\n");
-  const featuresHeader = /^\s*\[(["']?)\s*features\s*\1\]\s*(?:#.*)?$/;
-  const fastModeKey = /^\s*(?:"fast_mode"|'fast_mode'|fast_mode)\s*=/;
-  const featuresStart = lines.findIndex(line => featuresHeader.test(line));
+  if (fastMode === undefined) return content;
+  const { bom, lines } = rootSourceLines(content);
+  const eol = lines.find(line => line.eol)?.eol || "\n";
+  const featuresStart = lines.findIndex(line => {
+    if (!line.structural || !/^\s*\[/.test(line.text)) return false;
+    try {
+      const parsed = Bun.TOML.parse(line.text) as Record<string, unknown>;
+      return Object.keys(parsed).length === 1 && typeof parsed.features === "object"
+        && parsed.features !== null && !Array.isArray(parsed.features)
+        && Object.keys(parsed.features).length === 0;
+    } catch { return false; }
+  });
   if (featuresStart === -1) {
-    if (fastMode === undefined) return content;
-    return content.trimEnd() + "\n\n[features]\nfast_mode = " + (fastMode ? "true" : "false") + "\n";
+    return content.replace(/[\r\n]+$/, "") + eol + eol + "[features]" + eol
+      + "fast_mode = " + (fastMode ? "true" : "false") + eol;
   }
 
   const nextTable = lines.findIndex(
-    (line, index) => index > featuresStart && /^\s*\[/.test(line),
+    (line, index) => index > featuresStart && line.structural && /^\s*\[/.test(line.text),
   );
   const featuresEnd = nextTable === -1 ? lines.length : nextTable;
   for (let i = featuresStart + 1; i < featuresEnd; i++) {
-    if (fastModeKey.test(lines[i])) {
-      if (fastMode === undefined) return lines.join("\n");
-      lines[i] = lines[i].replace(/^(\s*)(?:"fast_mode"|'fast_mode'|fast_mode)\s*=.*$/, `$1fast_mode = ${fastMode ? "true" : "false"}`);
-      return lines.join("\n");
+    if (lines[i].structural && rootAssignmentKey(lines[i].text) === "fast_mode") {
+      // Refuse to rewrite an incomplete physical view of a collection/string value.
+      try { Bun.TOML.parse(lines[i].text); } catch { return content; }
+      lines[i].text = `${/^\s*/.exec(lines[i].text)![0]}fast_mode = ${fastMode ? "true" : "false"}`;
+      return bom + sourceText(lines);
     }
   }
 
-  if (fastMode === undefined) return lines.join("\n");
   let insertAt = featuresEnd;
-  while (insertAt > featuresStart + 1 && lines[insertAt - 1].trim() === "") insertAt--;
-  lines.splice(insertAt, 0, `fast_mode = ${fastMode ? "true" : "false"}`);
-  return lines.join("\n");
+  while (insertAt > featuresStart + 1 && lines[insertAt - 1].structural && lines[insertAt - 1].text.trim() === "") insertAt--;
+  if (insertAt > 0 && !lines[insertAt - 1].eol) lines[insertAt - 1].eol = eol;
+  lines.splice(insertAt, 0, { text: `fast_mode = ${fastMode ? "true" : "false"}`, eol, structural: true });
+  return bom + sourceText(lines);
 }
 
 function isOpencodexCatalogPath(path: string): boolean {
@@ -687,17 +622,13 @@ function isOpencodexCatalogPath(path: string): boolean {
 }
 
 export function stripOpencodexCatalogPath(content: string): string {
-  const modelCatalogAssignment = tomlStringPattern("model_catalog_json");
-  const lines = content.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
-  const rootEnd = firstTable === -1 ? lines.length : firstTable;
-  return lines
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  return bom + sourceText(lines
     .filter((line, index) => {
-      if (index >= rootEnd) return true;
-      const m = modelCatalogAssignment.exec(line);
-      return !m || !isOpencodexCatalogPath(parseTomlString(m[1]));
-    })
-    .join("\n");
+      if (index >= rootEnd || !line.structural) return true;
+      const path = rootTomlString(line.text, "model_catalog_json");
+      return path === null || !isOpencodexCatalogPath(path);
+    }));
 }
 
 export function buildProfileFile(port: number, catalogPath?: string | null, supportsWebsockets?: boolean, includeApiAuthHeader?: boolean, hostname?: string, fastMode?: boolean): string;

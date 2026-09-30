@@ -77,6 +77,8 @@ function cloudStreamHeadersMs(): number {
 export const cloudStreamHeadersMsForTests = cloudStreamHeadersMs;
 /** Maximum acceptable Connect-RPC frame length (16 MB). */
 const MAX_FRAME_LEN = 16 * 1024 * 1024;
+/** Bound the wire field before allocating its decoded UTF-8 string. */
+const MAX_SIGNATURE_TYPE_BYTES = 4 * 1024;
 
 /**
  * PromptCacheOptions.type = EPHEMERAL. Marks the system prefix as a cache entry
@@ -819,7 +821,7 @@ export function* decodeChatFrame(proto: Buffer): Generator<CloudChatEvent> {
   if (authoritativeUsage) yield authoritativeUsage;
   let signatureType: string | undefined;
   for (const f of iterFields(proto)) {
-    if (f.num === 21 && f.wire === 2 && Buffer.isBuffer(f.value)) signatureType = (f.value as Buffer).toString('utf8') || undefined;
+    if (f.num === 21 && f.wire === 2 && Buffer.isBuffer(f.value) && f.value.length <= MAX_SIGNATURE_TYPE_BYTES) signatureType = f.value.toString('utf8') || undefined;
   }
   for (const f of iterFields(proto)) {
     if (f.num === 3 && f.wire === 2 && Buffer.isBuffer(f.value)) {

@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "codex-config-preservation.test.ts": "codex-integration",
     "codex-credits.test.ts": "codex-integration",
     "codex-credits-settings.test.ts": "codex-integration",
     "codex-credits-probes.test.ts": "codex-integration",

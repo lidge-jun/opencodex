@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
 import {
   REALTIME_WS_BASE_URL_KEY,
@@ -13,7 +14,7 @@ import {
   journaledInjectedRootWebSearch,
   journaledReplacedRootWebSearch,
 } from "../journal";
-import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, readRootTomlString } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
 import { transformManagedSubagentDefaults } from "../subagent-defaults";
 import {
   applyEol,
@@ -59,6 +60,15 @@ interface StripOpencodexConfigResult {
   managedDefaultsError: string | null;
 }
 
+function hasRootOcxProvider(content: string): boolean {
+  const { lines, rootEnd } = rootSourceLines(content);
+  return lines.slice(0, rootEnd).some((line, index) => {
+    if (!line.structural || rootAssignmentKey(line.text) !== "model_provider") return false;
+    const value = sourceAssignment(lines, index, rootEnd)?.value;
+    return typeof value === "string" && value.trim() === "opencodex";
+  });
+}
+
 /**
  * Detailed form used by the on-disk restore path. A damaged ownership marker is
  * ambiguous: keep the associated value, but return the transform error so the
@@ -73,7 +83,7 @@ function stripOpencodexConfigResult(
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
-    readRootTomlString(out, "model_provider") === "opencodex";
+    hasRootOcxProvider(out);
   // #1798: marker adjacency is FORMATTING evidence, and a Codex app rewrite keeps values
   // while dropping comments. Fall back to VALUE evidence -- the exact URL we recorded
   // writing -- so an app-rewritten config is still recognized as ours.
@@ -94,10 +104,15 @@ function stripOpencodexConfigResult(
   out = removeProfileSection(out);
   // Regex (not exact-string) removal so compact `model_provider="opencodex"` is stripped too —
   // must match the detection regex above, or a detected line could survive un-removed.
-  out = out
-    .split("\n")
-    .filter((l) => !/^\s*model_provider\s*=\s*"opencodex"\s*$/.test(l))
-    .join("\n");
+  const routingSource = rootSourceLines(out);
+  const providerLines = new Set<number>();
+  routingSource.lines.forEach((line, index) => {
+    if (!line.structural || rootAssignmentKey(line.text) !== "model_provider") return;
+    const assignment = sourceAssignment(routingSource.lines, index);
+    if (!assignment || typeof assignment.value !== "string" || assignment.value.trim() !== "opencodex") return;
+    for (let at = index; at < assignment.end; at++) providerLines.add(at);
+  });
+  out = routingSource.bom + sourceText(routingSource.lines.filter((_, index) => !providerLines.has(index)));
   // Routed root model ids (`model = "provider/slug"`) only make sense while the proxy serves
   // them — strip on both the legacy re-tag form and the Design B injected-base-url form.
   if (hadRootOcxProvider || hadInjectedBaseUrl) out = stripRootRoutedModel(out);
@@ -105,7 +120,7 @@ function stripOpencodexConfigResult(
   if (managedDefaults.ok) out = managedDefaults.content;
   out = stripOpencodexCatalogPath(out);
   return {
-    content: out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n",
+    content: normalizeStructuralWhitespace(out),
     managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
   };
 }
@@ -118,7 +133,7 @@ export function stripOpencodexConfig(content: string): string {
 function hasOpencodexRouting(content: string): boolean {
   return (
     hasOcxProviderTable(content) ||
-    /^\s*model_provider\s*=\s*"opencodex"/m.test(content) ||
+    hasRootOcxProvider(content) ||
     hasInjectedOpenaiBaseUrl(content)
   );
 }
