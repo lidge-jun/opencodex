@@ -81,12 +81,14 @@ async function suggestInjection(args: string[], wantsJson: boolean, deps: Runtim
     deps,
   );
   const p = result.proposal;
+  const alreadySet = p?.status === "proposed" && !!p.proposedModel
+    && p.proposedModel === p.model && (p.proposedEffort ?? null) === (p.effort ?? null);
   let applied: { model: string; effort: string | null } | null = null;
-  if (apply && p?.status === "proposed" && p.proposedModel) {
+  if (apply && !alreadySet && p?.status === "proposed" && p.proposedModel) {
     applied = { model: p.proposedModel, effort: p.proposedEffort ?? null };
     await runtimeRequest("/api/injection-model", { method: "PUT", body: JSON.stringify(applied) }, deps);
   }
-  printData(apply ? { ...result, applied } : result, wantsJson, [
+  printData(apply ? { ...result, applied, alreadySet } : result, wantsJson, [
     `Sized with ${result.sizingModel ?? "unknown"}.`,
     !p || p.status === "unsized"
       ? `Not sized (${p?.reason ?? "unknown"}).`
@@ -96,7 +98,11 @@ async function suggestInjection(args: string[], wantsJson: boolean, deps: Runtim
     ...(p?.moveUpIf ? [`Move up if: ${p.moveUpIf}`] : []),
     ...(p?.moveDownIf ? [`Move down if: ${p.moveDownIf}`] : []),
     apply
-      ? (applied ? "Applied to the delegation model." : "Nothing to apply.")
+      ? (applied
+        ? "Applied to the delegation model."
+        : alreadySet
+          ? `Already set to ${p!.proposedModel}${p!.proposedEffort ? ` (${p!.proposedEffort})` : ""}; nothing applied.`
+          : "Nothing to apply.")
       : "Nothing was written; rerun with --apply to set the delegation model.",
   ]);
 }
