@@ -972,10 +972,10 @@ test("a terminal frame still in the buffer when the read fails counts as seen", 
 
 // --- A failed passthrough keeps its reason in the request log ---
 
-async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<string, unknown>) {
+async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<string, unknown>, overrides?: Partial<OcxConfig>) {
   const { clearRequestLogsForTests } = await import("../../src/server/request-log");
   clearRequestLogsForTests();
-  saveConfig(cfg(upstreamBase, extraClaude));
+  saveConfig({ ...cfg(upstreamBase, extraClaude), ...overrides });
   const server = startServer(0);
   try {
     const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
@@ -984,7 +984,7 @@ async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<strin
       body: JSON.stringify({ ...claudeBody(), stream: false }),
     });
     const text = await res.text();
-    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string }>(
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string; errorCode?: string }>(
       await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
     );
     expect(logs).toHaveLength(1);
@@ -1035,12 +1035,24 @@ test("a credential echoed in an upstream error message is redacted in the log", 
 });
 
 test("an unreachable upstream logs the fetch failure as the reason", async () => {
-  // Port 1 refuses the connection before any header arrives.
-  const { res, text, row } = await nativeFailureRow("http://127.0.0.1:1");
-  expect(res.status).toBe(502);
-  expect(row.status).toBe(502);
-  expect(row.upstreamError).toStartWith("anthropic passthrough failed: ");
-  expect(JSON.parse(text).error.message).toBe(row.upstreamError);
+  // Stubbed like the reject-path activation test in claude-messages-endpoint.test.ts: a real
+  // refusal can take longer than cfg()'s 250 ms header deadline on some platforms.
+  const refusedOrigin = "http://127.0.0.1:1";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin === refusedOrigin) throw Object.assign(new TypeError("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    return originalFetch(input, init);
+  }) as typeof globalThis.fetch;
+  try {
+    const { res, text, row } = await nativeFailureRow(refusedOrigin);
+    expect(res.status).toBe(502);
+    expect(row.status).toBe(502);
+    expect(row.upstreamError).toBe("anthropic passthrough failed: connect ECONNREFUSED");
+    expect(JSON.parse(text).error.message).toBe(row.upstreamError);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("an upstream that never sends headers logs the header timeout as the reason", async () => {
@@ -1064,5 +1076,109 @@ test("a non-stream body over the byte cap logs the cap as the reason", async () 
     expect(row.upstreamError).toBe("anthropic passthrough body exceeded 1024 bytes");
   } finally {
     upstream.stop(true);
+  }
+});
+
+test("an oversized upstream error body is relayed verbatim but not parsed for the log reason", async () => {
+  // Same 64 KiB bound the managed native lane reads error bodies under.
+  const errorBody = { type: "error", error: { type: "invalid_request_error", message: "x".repeat(70 * 1024) } };
+  const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
+  try {
+    const { res, text, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
+    expect(res.status).toBe(400);
+    expect(JSON.parse(text)).toEqual(errorBody);
+    expect(row.upstreamError).toBe("Provider error 400");
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a 3xx answer is not logged with an error reason", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response("choose", { status: 300 }) });
+  try {
+    const { res, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
+    expect(res.status).toBe(300);
+    expect(row.status).toBe(300);
+    expect(row.upstreamError).toBeUndefined();
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a 403 reason now drives the row's error code like the other lanes", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => Response.json({ type: "error", error: { type: "permission_error", message: "OAuth authentication is currently not supported." } }, { status: 403 }) });
+  try {
+    const { row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
+    expect(row.status).toBe(403);
+    expect(row.upstreamError).toBe("Provider error 403: permission_error: OAuth authentication is currently not supported.");
+    // Without a reason every passthrough 403 was permission_denied.
+    expect(row.errorCode).toBe("invalid_api_key");
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+/**
+ * Sends a 200 status line and headers promising a JSON body, then nothing. Bun.serve holds the
+ * headers of a streamed body until its first chunk, which would trip the header deadline instead.
+ */
+function startHeadersOnlyUpstream(onRequest?: () => void): { port: number; stop: () => void } {
+  const listener = Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      data(socket) {
+        onRequest?.();
+        socket.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n");
+      },
+    },
+  });
+  return { port: listener.port, stop: () => listener.stop(true) };
+}
+
+test("a non-stream body that stalls logs the stall as the reason", async () => {
+  const upstream = startHeadersOnlyUpstream();
+  try {
+    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${upstream.port}`, { bodyStallSec: 1 });
+    expect(res.status).toBe(504);
+    expect(row).toMatchObject({ status: 504, closeReason: "body_stall" });
+    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
+  } finally {
+    upstream.stop();
+  }
+});
+
+test("a client that leaves while a non-stream body is pending logs the cancel as the reason", async () => {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  let reached!: () => void;
+  const upstreamReached = new Promise<void>(resolve => { reached = resolve; });
+  const upstream = startHeadersOnlyUpstream(() => reached());
+  saveConfig(cfg(`http://127.0.0.1:${upstream.port}`));
+  const server = startServer(0);
+  try {
+    const client = new AbortController();
+    const pending = fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({ ...claudeBody(), stream: false }),
+      signal: client.signal,
+    }).catch(() => undefined);
+    await upstreamReached;
+    await Bun.sleep(50);
+    client.abort();
+    await pending;
+    let row: { status?: number; closeReason?: string; upstreamError?: string } | undefined;
+    for (let i = 0; i < 100 && !row; i++) {
+      row = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string }>(
+        await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
+      )[0];
+      if (!row) await Bun.sleep(20);
+    }
+    expect(row).toMatchObject({ status: 499, closeReason: "client_cancel" });
+    expect(row!.upstreamError).toBe("client closed request during anthropic passthrough");
+  } finally {
+    await server.stop(true);
+    upstream.stop();
   }
 });

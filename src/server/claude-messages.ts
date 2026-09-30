@@ -558,6 +558,7 @@ async function anthropicNativePassthrough(
   const finalize = createFinalRequestLog(logIds, logCtx).finish;
   // Every local answer carries its reason into the row, as the managed native lane's
   // finishLog does; without it a failed passthrough row has no upstreamError at all.
+  // The client still receives the unredacted message, as before.
   const fail = (status: number, closeReason: PassthroughCloseReason | "non_stream", message: string, type: string) => {
     logCtx.upstreamError = redactSecretString(message).slice(0, 500);
     finalize(status, { closeReason });
@@ -627,10 +628,14 @@ async function anthropicNativePassthrough(
       const parsed = JSON.parse(text) as { usage?: Rec };
       if (isRec(parsed?.usage)) logCtx.usage = anthropicUsageToOcx(parsed.usage);
     } catch { /* count_tokens etc. */ }
-  } else {
-    // The body is relayed verbatim; the row gets the same "Provider error" reason the
-    // adapter and managed lanes record for this upstream (formatAnthropicErrorBody redacts).
-    const detail = formatAnthropicErrorBody(upstream.status, upstream.headers, text);
+  } else if (upstream.status >= 400) {
+    // The body is relayed verbatim; the row gets a "Provider error" reason from the same
+    // redacting formatAnthropicErrorBody the managed lane falls back to. Only an error body
+    // within the managed lane's 64 KiB read bound is parsed for it: the body cap here is far
+    // larger, and parsing and redacting a huge body would block the event loop.
+    const detail = text.length <= PASSTHROUGH_ERROR_DETAIL_MAX_CHARS
+      ? formatAnthropicErrorBody(upstream.status, upstream.headers, text)
+      : "";
     logCtx.upstreamError = detail ? `Provider error ${upstream.status}: ${detail}` : `Provider error ${upstream.status}`;
   }
   finalize(upstream.status, { closeReason: "non_stream" });
@@ -641,6 +646,7 @@ async function anthropicNativePassthrough(
   });
 }
 
+const PASSTHROUGH_ERROR_DETAIL_MAX_CHARS = 64 * 1024;
 const DEFAULT_BODY_STALL_SEC = 90;
 const DEFAULT_BODY_MAX_BYTES = 64 * 1024 * 1024;
 
