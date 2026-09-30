@@ -119,6 +119,48 @@ describe("Kiro single final answer (#6270)", () => {
     expect(events.at(-1)).toMatchObject({ type: "done", endTurn: false });
   });
 
+  test("a complete retry tool releases held progress while its stream is still open", async () => {
+    let releaseEOF!: () => void;
+    const eof = new Promise<void>(resolve => { releaseEOF = resolve; });
+    let reachedOpenStream!: () => void;
+    const openStream = new Promise<void>(resolve => { reachedOpenStream = resolve; });
+    const frames = tool("bash", { command: "pwd" });
+    const retry = new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const next = frames.shift();
+        if (next) { controller.enqueue(next); return; }
+        reachedOpenStream();
+        await eof;
+        controller.close();
+      },
+    }, { highWaterMark: 0 }));
+    const adapter = createKiroAdapter(provider);
+    const budget = createTranslatorBudget();
+    const events: AdapterEvent[] = [];
+    let physicalRequests = 0;
+    try {
+      const request = await adapter.buildRequest(structuredClone(parsed));
+      const first = await adapter.fetchResponse!(request, {
+        executor: (async () => ++physicalRequests === 1
+          ? response([text("Checking the workspace.")]) : retry) as typeof fetch,
+      });
+      const draining = (async () => {
+        for await (const event of adapter.parseStream(first, budget)) {
+          events.push(event);
+        }
+      })();
+      try {
+        await openStream;
+        expect(events.filter(event => event.type === "text_delta")).toEqual([
+          { type: "text_delta", text: "Checking the workspace.", phase: "commentary" },
+        ]);
+      } finally { releaseEOF(); await draining; }
+      expect(events.at(-1)).toMatchObject({ type: "done", endTurn: false });
+      expect(physicalRequests).toBe(2);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally { budget.dispose(); }
+  });
+
   test("an accepted plain-text retry also replaces first-attempt text", async () => {
     const { events } = await run([text("The workspace is ready.")], [text("The workspace is ready.")]);
     expect(events.filter(event => event.type === "text_delta")).toEqual([

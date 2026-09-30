@@ -726,6 +726,7 @@ async function* parseKiroAttemptEvents(
           if (ev.stop === true) {
             const flushed = flushOpen();
             if (flushed.terminal) return { assistantText, sawReasoning, terminal: flushed.terminal };
+            if (priorAttempt && flushed.events.length) yield* priorAttempt.drainDeferred();
             for (const event of flushed.events) {
               yield* emitRetained(stage(event));
             }
@@ -762,6 +763,7 @@ async function* parseKiroAttemptEvents(
       }
       const flushed = flushOpen();
       if (flushed.terminal) return { assistantText, sawReasoning, terminal: flushed.terminal };
+      if (priorAttempt && flushed.events.length) yield* priorAttempt.drainDeferred();
       for (const event of flushed.events) {
         yield* emitRetained(stage(event));
       }
