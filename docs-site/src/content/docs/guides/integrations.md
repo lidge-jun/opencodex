@@ -565,7 +565,8 @@ picks a model. opencodex then picks the cheapest model from your picker list tha
 
 - Models listed under `codexRoleTiers` in the opencodex config (`{ "fast": [...], "standard": [...], "frontier": [...] }`)
   have that tier.
-- Other models with a known price are ranked by price and split evenly across the three tiers.
+- Other models with a known price are ranked by price and split evenly across the three tiers. With only
+  one or two priced models, the dearest is frontier and the other, if any, is standard.
 - Models with no price and no listed tier are never proposed. List them to include them.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move

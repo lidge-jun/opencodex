@@ -358,8 +358,10 @@ model for every role and writes nothing. Applying a proposal is the ordinary
   sizing model never names a model.
 - **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
   `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
-  opencodex config first, then price rank (input plus output per 1M tokens, split evenly across the
-  three tiers, a lone priced model is frontier). Unpriced, unmapped models are never proposed. A role
+  opencodex config first, then price rank (input plus output per 1M tokens). Three or more priced models
+  split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
+  one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
+  which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
   gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
   only for a role whose file already sets `model_reasoning_effort`, and written by the same span-preserving

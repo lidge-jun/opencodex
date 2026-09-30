@@ -4,9 +4,13 @@
  *
  * Tier of a candidate model, first rule that applies:
  * 1. codexRoleTiers in the opencodex config lists it under fast, standard or frontier.
- * 2. It has a known price. Priced candidates are ranked by input plus output USD per 1M tokens
- *    and split evenly across the three tiers by rank, cheapest in fast; a single priced model is
- *    frontier, because it is the strongest model on offer.
+ * 2. It has a known price. Priced candidates are ranked by input plus output USD per 1M tokens.
+ *    Three or more split evenly across the three tiers by rank, cheapest in fast. Fewer than three
+ *    cannot fill every tier, so the ranking is anchored at the top: the dearest is frontier,
+ *    because it is the strongest model on offer, and each cheaper one sits one tier lower. One
+ *    priced model is frontier; two are standard and frontier. The tier left empty is fast, so a
+ *    fast role steps up to the cheapest model and a standard role keeps it instead of jumping to
+ *    the dearest, which keeps every role on the cheapest sufficient model on offer.
  * 3. Otherwise it is unclassified and never proposed.
  *
  * A role gets the cheapest sufficient model: the lowest tier at or above what it was sized for,
@@ -74,7 +78,10 @@ export function classifyRoleModelCandidates(
     .sort((a, b) => a.candidate.unitPrice! - b.candidate.unitPrice! || a.order - b.order);
   const byPrice = new Map<string, SizingTier>();
   priced.forEach(({ candidate }, rank) => {
-    const index = priced.length === 1 ? 2 : Math.round((rank * 2) / (priced.length - 1));
+    const top = SIZING_TIERS.length - 1;
+    const index = priced.length < SIZING_TIERS.length
+      ? top - (priced.length - 1 - rank)
+      : Math.round((rank * top) / (priced.length - 1));
     byPrice.set(candidate.model, SIZING_TIERS[index]!);
   });
   return candidates.map(candidate => {

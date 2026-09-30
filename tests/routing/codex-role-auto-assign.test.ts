@@ -65,6 +65,14 @@ describe("classifyRoleModelCandidates", () => {
       ["cheap", "frontier", "mapping"], ["dear", "frontier", "price"], ["local", "fast", "mapping"],
     ]);
   });
+
+  test("two priced models take the top two tiers, so a standard role gets the cheaper one", () => {
+    const classified = classifyRoleModelCandidates([candidate("dear", 9), candidate("cheap", 1)]);
+    expect(classified.map(c => [c.model, c.tier])).toEqual([["dear", "frontier"], ["cheap", "standard"]]);
+    expect(cheapestSufficientCandidate(classified, "fast")!.model).toBe("cheap");
+    expect(cheapestSufficientCandidate(classified, "standard")!.model).toBe("cheap");
+    expect(cheapestSufficientCandidate(classified, "frontier")!.model).toBe("dear");
+  });
 });
 
 describe("cheapestSufficientCandidate", () => {
@@ -80,7 +88,10 @@ describe("cheapestSufficientCandidate", () => {
   });
 
   test("steps up a tier when the requested one is empty and returns null when none reach it", () => {
-    const noStandard = classifyRoleModelCandidates([candidate("fast", 1), candidate("top", 9)]);
+    const noStandard = classifyRoleModelCandidates(
+      [candidate("fast", null), candidate("top", null)],
+      { fast: ["fast"], frontier: ["top"] },
+    );
     expect(cheapestSufficientCandidate(noStandard, "standard")!.model).toBe("top");
     const onlyFast = classifyRoleModelCandidates([candidate("local", null)], { fast: ["local"] });
     expect(cheapestSufficientCandidate(onlyFast, "standard")).toBeNull();
