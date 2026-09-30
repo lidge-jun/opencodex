@@ -336,12 +336,17 @@ describe("redactSecretString", () => {
   });
 
   test("XML delimiter search work scales linearly without a wall-clock deadline", () => {
-    for (const tag of ["<a ", "<a >"]) {
+    for (const tag of ["<a ", "<a >", '<a title="x>y">', '<a title="x>y" ']) {
       const work: number[] = [];
       for (const count of [4_000, 8_000]) {
         const input = tag.repeat(count);
         let searched = 0;
         const original = String.prototype.indexOf;
+        const originalCharAt = String.prototype.charAt;
+        const characters = spyOn(String.prototype, "charAt").mockImplementation(function (this: string, index) {
+          searched += 1;
+          return originalCharAt.call(this, index);
+        });
         const scan = spyOn(String.prototype, "indexOf").mockImplementation(function (this: string, needle, start) {
           const found = original.call(this, needle, start);
           if (needle === "<" || needle === ">") {
@@ -353,6 +358,7 @@ describe("redactSecretString", () => {
           expect(redactSecretString(input)).toBe(input);
         } finally {
           scan.mockRestore();
+          characters.mockRestore();
         }
         expect(searched).toBeGreaterThan(0);
         expect(searched).toBeLessThanOrEqual(4 * input.length);
@@ -375,6 +381,22 @@ describe("redactSecretString", () => {
       expect(result).toContain(REDACTED_SECRET);
       expect(result).not.toContain("synthetic-xml-canary");
     }
+  });
+
+  test("XML quoted tag delimiters cannot hide a later credential attribute", () => {
+    for (const tag of [
+      '<field title="a>b" name="authorization">',
+      "<field title='a>b' key='x-api-key'>",
+      '<field title="a>b" note=\'c>d\' id="password">',
+      '<field title="a&gt;b" name="author&#105;zation">',
+    ]) {
+      const result = redactSecretString("diagnostic: safe\n" + tag + "synthetic-xml-canary");
+      expect(result).toBe("diagnostic: safe\n<field" + REDACTED_SECRET);
+    }
+    const harmless = '<field title="a>b">public-status</field>';
+    expect(redactSecretString(harmless)).toBe(harmless);
+    expect(redactSecretString(harmless + '<field name="authorization">synthetic-xml-canary'))
+      .toBe(harmless + "<field" + REDACTED_SECRET);
   });
 
   test("a multipart credential part is masked through the rest of the body", () => {

@@ -141,6 +141,22 @@ const XML_CREDENTIAL_ATTRIBUTE = new RegExp(
   "i",
 );
 
+/** Find a tag terminator without treating a quoted attribute's `>` as syntax. */
+function findXmlTagClose(text: string, from: number): number {
+  let quote = "";
+  for (let index = from; index < text.length; index += 1) {
+    const character = text.charAt(index);
+    if (quote) {
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
 /** Scan each tag once; a suffix-searching lookahead here makes unterminated tags quadratic. */
 function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): string {
   const { folded, map } = foldForMatching(value, decodeEscapes);
@@ -155,7 +171,7 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
       searchFrom = tagStart + 1;
       continue;
     }
-    const close = folded.indexOf(">", tagStart + tagName[0].length);
+    const close = findXmlTagClose(folded, tagStart + tagName[0].length);
     const tagEnd = close === -1 ? folded.length : close + 1;
     const attributes = folded.slice(tagStart + tagName[0].length, tagEnd);
     if (XML_CREDENTIAL_ATTRIBUTE.test(attributes)) {
