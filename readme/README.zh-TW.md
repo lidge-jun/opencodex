@@ -152,6 +152,10 @@ opencodex 也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 Chat
 <td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
 <td>感謝 <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> 贊助本專案！PackyCode 是穩定、高效能的 API 轉送供應商，提供 Claude Code、Codex、Gemini 等轉送服務。具備自動 failover、智慧路由與無限並行，讓 AI 成為真正的生產力工具。<a href="https://www.packyapi.com/register?aff=k5KT">透過此連結註冊</a>即可開始！在「新增供應商」選擇器選 <code>PackyCode</code>，或執行 <code>ocx provider add packycode</code>。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
+<tr>
+<td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
+<td>感謝 <a href="https://tokenlab.sh/r/OPENCODEX">TokenLab</a> 贊助本專案！TokenLab 為程式設計智慧體提供統一的多模型 API，一把 API Key 即可接入主流模型，支援 OpenAI Responses、Chat Completions、Anthropic Messages 和 Gemini 原生 API 格式，以及串流輸出和工具呼叫。同時提供 MCP 伺服器和 Agent Skills，方便接入現有工作流程；交付模式可選，按量付費。在「新增供應商」選擇器選 <code>TokenLab</code>，或執行 <code>ocx provider add tokenlab</code>。</td>
+</tr>
 </tbody>
 </table>
 

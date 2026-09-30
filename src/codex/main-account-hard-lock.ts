@@ -66,9 +66,9 @@ export function getMainAccountHardLockStatus(
   const windows = governingWindows(quota);
   const blocking = windows.filter(w => validPercent(w.percent) && w.percent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT);
   if (blocking.length > 0) {
-    // The lock holds until every blocking window reads lower, so the earliest possible unlock is
+    // The lock holds until every blocking window reads lower or is authoritatively absent, so the earliest possible unlock is
     // the latest blocking reset. One blocking window without a future reset makes it unknowable.
-    // A predicted reset is not evidence of recovery either way: only a fresh lower reading releases.
+    // A predicted reset is not evidence of recovery; fresh lower usage or validated WHAM absence releases.
     const resets = blocking.map(w => resetTimestamp(w.resetAt));
     const resetAt = resets.every(r => r !== undefined && r > now) ? Math.max(...(resets as number[])) : undefined;
     return { enabled: true, state: "blocked", ...(resetAt !== undefined ? { resetAt } : {}) };

@@ -368,6 +368,7 @@ describe("devin adapter", () => {
     // a Claude row five times too small, a Grok row about half its real size,
     // and a GPT row rounded up past what the service accepts.
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5"]).toBe(1_000_000);
+    expect(DEVIN_MODEL_CONTEXT_WINDOWS["claude-sonnet-5-5"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["grok-4-5"]).toBe(500_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["gpt-5-6-sol"]).toBe(1_000_000);
     expect(DEVIN_MODEL_CONTEXT_WINDOWS["swe-2"]).toBe(262_000);
@@ -379,12 +380,14 @@ describe("devin adapter", () => {
 });
 
 describe("SWE-2 wire effort selection", () => {
+  // Every case here passes a null catalog: this is the degraded path. With a
+  // catalog, family metadata decides (devin-family-resolution.test.ts).
   // Cognition spells SWE-2 effort as the model id, so an explicit effort has to
   // beat a suffix the picker already chose. Before this, swe-2-high asked for at
   // medium stayed high and the caller was silently ignored.
   test.each(["medium", "high", "max"])("an explicit %s effort overrides every SWE-2 variant", async (effort) => {
     for (const model of ["swe-2", "swe-2-medium", "swe-2-high", "swe-2-max", "swe-2.high"]) {
-      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort)).toBe(`swe-2-${effort}`);
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", effort, null)).toBe(`swe-2-${effort}`);
     }
   });
 
@@ -392,23 +395,23 @@ describe("SWE-2 wire effort selection", () => {
     ["none", "medium"], ["off", "medium"], ["minimal", "medium"],
     ["low", "medium"], ["xhigh", "max"], ["ultra", "max"],
   ])("maps %s to the supported SWE-2 %s lane", async (effort, expected) => {
-    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", effort)).toBe(`swe-2-${expected}`);
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", effort, null)).toBe(`swe-2-${expected}`);
   });
 
   // Case is normalised, which the source contribution did not do: a caller that
   // sends HIGH means the same lane as high.
   test("effort matching is case-insensitive", async () => {
-    expect(await resolveWireModelUidForTests("swe-2-medium", "unused", "unused", "HIGH")).toBe("swe-2-high");
+    expect(await resolveWireModelUidForTests("swe-2-medium", "unused", "unused", "HIGH", null)).toBe("swe-2-high");
   });
 
   test("omitted or unknown effort preserves an explicit variant", async () => {
-    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused")).toBe("swe-2-high");
-    expect(await resolveWireModelUidForTests("swe-2-max", "unused", "unused", "future-effort")).toBe("swe-2-max");
+    expect(await resolveWireModelUidForTests("swe-2-high", "unused", "unused", undefined, null)).toBe("swe-2-high");
+    expect(await resolveWireModelUidForTests("swe-2-max", "unused", "unused", "future-effort", null)).toBe("swe-2-max");
   });
 
-  test("other model families keep their existing suffix precedence", async () => {
+  test("without a catalog, other model families keep their suffix precedence", async () => {
     for (const model of ["claude-opus-5-medium", "gpt-5-6-sol-high", "swe-1-7-high", "swe-20-high"]) {
-      expect(await resolveWireModelUidForTests(model, "unused", "unused", "max")).toBe(model);
+      expect(await resolveWireModelUidForTests(model, "unused", "unused", "max", null)).toBe(model);
     }
   });
 });
@@ -419,24 +422,24 @@ describe("effort suffix detection and caller effort values are different sets", 
   // the exact shape Cognition answers with an opaque permission_denied.
   test("a UID carrying the priority tier is recognised as already suffixed", async () => {
     for (const uid of ["gpt-5-6-sol-priority", "gpt-5-6-sol-medium-priority"]) {
-      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(uid);
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high", null)).toBe(uid);
     }
   });
 
   test("detection handles a compound suffix, which a last-token test could not", async () => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol-medium-priority", "unused", "unused")).toBe(
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol-medium-priority", "unused", "unused", undefined, null)).toBe(
       "gpt-5-6-sol-medium-priority",
     );
   });
 
   test("a bare model still receives the caller effort", async () => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "high")).toBe("gpt-5-6-sol-high");
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "high", null)).toBe("gpt-5-6-sol-high");
   });
 
   // `priority` is a service tier, not something a caller asks for as effort.
   // Sharing one set between detection and caller validity would admit it.
   test("priority is not accepted as a caller reasoning effort", async () => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "priority")).toBe(
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", "priority", null)).toBe(
       "gpt-5-6-sol-medium",
     );
   });
@@ -444,7 +447,7 @@ describe("effort suffix detection and caller effort values are different sets", 
   // These never appear as a trailing token, so they are meaningless to detection,
   // but a caller can still name them and they must survive.
   test.each(["max-1m", "none-1m", "1m", "fast"])("the compound caller value %p is preserved", async (effort) => {
-    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", effort)).toBe(
+    expect(await resolveWireModelUidForTests("gpt-5-6-sol", "unused", "unused", effort, null)).toBe(
       `gpt-5-6-sol-${effort}`,
     );
   });
@@ -452,7 +455,7 @@ describe("effort suffix detection and caller effort values are different sets", 
   test("a model name is never mistaken for a suffix", async () => {
     // Greedy collapse must not eat part of a real model name.
     for (const uid of ["claude-opus-5", "swe-1-7", "glm-5-3"]) {
-      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high")).toBe(`${uid}-high`);
+      expect(await resolveWireModelUidForTests(uid, "unused", "unused", "high", null)).toBe(`${uid}-high`);
     }
   });
 });

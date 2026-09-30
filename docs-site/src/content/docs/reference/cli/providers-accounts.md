@@ -16,7 +16,7 @@ both `--adapter` and `--base-url`.
 | --- | --- | --- |
 | `list` | `--json`, `--jsonl` | List configured providers and the remaining registry entries; `--jsonl` emits one configured provider object per line. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Add a registry/custom provider. `--force` overwrites; `--sync` refreshes a running proxy in human-output mode. |
-| `edit <name>` | provider field flags, `--headers <json>`, `--json` | Edit validated live provider fields without replacing key pools. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
+| `edit <name>` | provider field flags, `--headers <json>`, `--model-context-tier <model=default\|long_context>`, `--json` | Edit validated live provider fields without replacing key pools. Repeat `--model-context-tier` for multiple Copilot models. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
 | `test <name>` | `--json` | Probe the real upstream model endpoint. |
 | `show <name>` | `--json` | Show config with API keys masked. |
 | `remove <name>` | `--json` | Remove a non-default provider; the last provider cannot be removed. |
@@ -34,6 +34,7 @@ ocx provider test ark
 ocx provider add anthropic --api-key sk-ant-... --set-default --sync
 ocx provider add local-dev --adapter openai-chat --base-url http://localhost:11434/v1
 ocx provider show anthropic --json
+ocx provider edit github-copilot --model-context-tier gpt-5.6-luna=long_context
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
@@ -156,15 +157,28 @@ window. The block releases automatically, with the switch still on, once every b
 reports a fresh reading below 98% (a 0% reset counts); the next 98% observation blocks again.
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
-While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
-invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
+While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
+If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
+schedule; a longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
+can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
+a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
-its primary window explicitly lasts **at least 24 hours** and secondary/tertiary windows are explicitly `null`
-or also explicitly last at least 24 hours and report their usage. This follows the parser's short/long boundary, so a
+its primary window explicitly lasts **at least 24 hours** and reports valid usage, or its primary window is
+explicitly `null` and a measured secondary supplies the weekly usage. In either case, secondary/tertiary
+windows must be explicitly `null` or explicitly last at least 24 hours and report valid usage. This follows the parser's short/long boundary, so a
 one-day window qualifies as well as weekly/monthly windows. The current window still uses the same
 98% threshold. This relies on the single reported snapshot; repeated observations are not required.
-Omitted secondary/tertiary fields, an unknown primary duration, or partial response headers cannot clear a previous block.
+Any omitted window field, an unknown duration, or partial response headers cannot clear a previous block.
+All-null responses carrying only credits and supplementary monthly-only readings also cannot establish recovery.
+The proxy checks the stored credential again before applying a delayed response. An unreadable file
+or replaced bearer cannot update the usage cache, release the lock, or quarantine the new credential,
+even for the same account with no second quota read.
+Its parsed ordinary usage can still be returned to the requesting caller, without shared-state updates
+or recovery evidence. The account card shows the published cached usage, keeping its quota aligned
+with the lock status; Direct provider quota omits an unpublished response and its older cached report. Conflicting account
+identities and stale 401/403 replies retain the current
+cached info and cannot clear or set the current account's reauthentication state.
 
 The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or
 `true` means on; only an explicit `false` turns it off, and that is what switching the setting off
@@ -239,7 +253,7 @@ alias <provider> <id|alias> <display-name|->  Set or clear an account's display 
 pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
-clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -351,7 +365,7 @@ returns:
 ```
 
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
-per-account probe (Anthropic, Kiro, and Google Antigravity today). It is opt-in because the proxy probes the upstream
+per-account probe (Anthropic, Kiro, Google Antigravity, and Devin today). It is opt-in because the proxy probes the upstream
 once per stored credential; the default listing stays a local read. `--refresh` bypasses the
 cached result. An account with no per-account quota shows `-`, and one whose probe failed shows
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
@@ -363,6 +377,15 @@ talks to Google's Cloud Code Assist host through the pinned outbound transport, 
 configured `baseUrl`: a custom base URL is a routing choice for requests, not a second source of
 Google's accounting for a stored credential. An account without a project id, or one whose probe
 is redirected or fails, shows `unavailable`.
+
+Devin rows come from Cognition's `GetUserStatus` for that account's own key, sent to its
+allowlisted api-server host. If an older credential has no host, the probe uses the configured
+provider base URL when allowlisted, or the US default. They show the dated daily and weekly
+windows the plan exposes, and a monthly credit window only on a credit-billed plan that reports
+a credit balance; an unknown billing strategy uses that credit fallback only if both reset dates
+are absent. Expired daily and weekly windows stay hidden without becoming monthly credit quota.
+An unlimited balance, or a status with no balance at all, shows no credit window.
+Only a rejected key (401) clears a cached reading; other probe failures retain the last reading.
 
 ```text
 $ ocx account list anthropic --quota
@@ -448,20 +471,39 @@ Clear the manual Codex account selection without resolving an account id, so it 
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-Pause or resume one account in the Codex pool or a generic OAuth provider pool, including
+Pause or resume one account in the Codex, Anthropic, or generic OAuth provider pool, including
 `google-antigravity`. For the Codex pool, `main` identifies only the built-in Codex account;
-generic OAuth accounts must be identified by id or a unique alias. A paused generic OAuth account
+OAuth accounts must be identified by id or a unique alias. A paused OAuth account
 is excluded from request selection, 429 failover, and proactive token refresh, and cannot be
 selected manually. Pausing the active account switches to the next usable account when one exists.
 If every account is paused, requests that need that pool return 403 until an account is resumed.
 
-For a generic OAuth provider, identify the account by id or by a unique exact or case-insensitive
+For Anthropic and generic OAuth providers, identify the account by id or by a unique exact or case-insensitive
 alias. The JSON response reports the account id, pause state, and active account id.
+
+Anthropic pause applies even when proactive pooling is disabled, including session affinity and
+429 successors. It survives restart and reauthentication, preserves credentials and health,
+and does not interrupt a turn already sent. Removing the account removes its pause state.
+Per-account Anthropic auto-switch thresholds are not part of this control.
 
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>
 ```
+
+### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
+
+Drops a process-local failure cooldown without changing stored credentials. Use `openai` for a Codex
+pool account or `anthropic` for an Anthropic OAuth account; other providers are rejected. Both forms
+accept an account id or unique alias, while `main` is specific to the Codex pool.
+
+```bash
+ocx account clear-cooldown anthropic <id-or-alias>
+```
+
+The command reports success even when no cooldown is active, with `cleared: false` in JSON. Clearing
+an Anthropic cooldown also advances the account generation so an older in-flight quota probe cannot
+restore the cleared state or publish stale quota-derived eligibility afterward.
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -478,7 +520,11 @@ instead (exit 0), matching the dashboard's quota bars.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers, Anthropic and invalid values are rejected.
+Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers and invalid values are rejected.
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+For Anthropic OAuth, use `ocx account auto-switch anthropic threshold 90 --account <id>` (integer 0–100), `off --account <id>` (0), `on --account <id>` (80), `inherit --account <id>` (reset), or `status --account <id>` (read-only); append `--json` for structured output. The account card offers the same custom-threshold toggle. Missing/null inherits `anthropicAccountPool.autoSwitchThreshold` (default 80); 0 disables usage-driven switching for that account, not pause or reactive 429 recovery. Overrides survive restart and re-login and are removed with the account. With pooling enabled, quota and fill-first compare each source/candidate against its own threshold in the selected quota window. Manual/affinity precedence, identity-less round-robin/fill-first behavior, unknown-quota fallback and all-drained fallback remain unchanged. Round-robin is not usage-driven; disabled pools ignore these thresholds. Model-route allowlists still constrain every candidate.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }
@@ -741,3 +787,15 @@ Use `ocx provider add mine --adapter openai-chat --base-url https://example.com/
 Ordinary token refresh preserves history. Reauthentication, removal or account replacement retires the old publication. Native main and probes performed before a login is published are not included. Missing history means insufficient observations, not zero usage. This command does not spend quota. Effective estimates, when supported by observations, carry the limitations below.
 
 The history output also includes effective reported-token estimates when same-window observations and attributable usage support them. Each estimate includes a sample count and low confidence. Quota rounding, external usage and assumed log-label continuity limit the inference; it is not your provider’s token allowance. Missing or truncated ledger evidence returns insufficient evidence. `--limit` controls displayed history, not the bounded estimate input.
+
+### `ocx account routes anthropic`
+
+Read the saved Anthropic OAuth model routes, replace them from a local JSON array, or clear them:
+
+```sh
+ocx account routes anthropic --json
+ocx account routes anthropic --file routes.json
+ocx account routes anthropic --clear
+```
+
+The file is limited to 64 KiB. The server validates each route and stores it under `anthropicAccountPool.routes`; writes require the running proxy. Use stored account IDs from `ocx account list anthropic --json`. Rules only affect the enabled pool and never claim that an account is entitled to a model. Request logs identify a matched rule as `route:#<n>` (1-based list position), without its operator name.

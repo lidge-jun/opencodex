@@ -39,6 +39,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // 260923 Opus 5.5: live GetUsableModels roster advertises low..max in both regular and fast forms.
   "claude-opus-5-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-opus-5-5-fast": ["low", "medium", "high", "xhigh", "max"],
+  // 260929 preemptive Sonnet 5.5: Anthropic documents low..max; flat ids like Opus 5.5 until the
+  // live GetUsableModels roster lists the model.
+  "claude-sonnet-5-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "glm-5.2": ["high", "max"],
   // 260825 live GetUsableModels. gemini-3.6-flash was the first Cursor model exposing

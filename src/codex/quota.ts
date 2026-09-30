@@ -4,6 +4,7 @@ import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
 import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
+import { observeCodexLowQuota } from "./low-quota-observer";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
@@ -276,7 +277,7 @@ function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean
   return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota);
 }
 /**
- * Publish parsed display quota and separately validated main-policy evidence after writer checks.
+ * Publish parsed display quota and separately validated policy evidence after writer checks.
  * A null policy observation retains only the matching main identity's previous evidence;
  * transient replacement markers are consumed during merging and never enter stored snapshots.
  */
@@ -285,7 +286,7 @@ export function setAccountQuotaFromParsed(
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
-  policyQuota: MainPolicyQuotaObservation | null = quota,
+  policyQuota: MainPolicyQuotaObservation | null = accountId === MAIN_CODEX_ACCOUNT_ID ? quota : null,
   historyEvidence?: QuotaObservationEvidence,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
@@ -322,6 +323,7 @@ export function setAccountQuotaFromParsed(
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
+    if (!isMain && policyQuota) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
 }
@@ -650,6 +652,9 @@ export function updateAccountQuota(
   // otherwise bypass detection AND leave a stale baseline that corrupts the next real diff.
   // The credits-only path at setAccountQuotaFromParsed deliberately does not notify; this one
   // writes window percentages and deadlines, so it must.
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && nextWeekly !== undefined && !isInvalidPolicyUsagePercent(weekly)) observeCodexLowQuota(accountId, {
+    weeklyPercent: nextWeekly, weeklyResetAt: nextWeeklyResetAt,
+  });
   notifyCodexQuotaSnapshot(accountId, quota);
 }
 
@@ -822,8 +827,8 @@ function filterMainPolicyMonthlyQuota(
 
 /**
  * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
- * Mark a valid primary of at least 24h as replacement evidence only when both other windows
- * are explicitly null or at least 24h. A null result supplies no usable policy observation.
+ * A measured long primary, or explicitly absent primary with measured weekly secondary,
+ * proves replacement only with complete long/null topology. Null supplies no usable evidence.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
@@ -835,7 +840,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   // carries a valid usage reading: a long window without used_percent leaves that
   // window's usage unknown, and unknown usage must never release a block.
   // Headers never supply this proof, and reset time alone still cannot release a block.
-  if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
+  if (quota && (isMeasuredLongWindow(primary)
+      || (primary === null && isMeasuredLongWindow(secondary) && quota.weeklyPercent !== undefined))
     && (secondary === null || isMeasuredLongWindow(secondary))
     && (tertiary === null || isMeasuredLongWindow(tertiary))) {
     return { ...quota, shortWindowAbsent: true };

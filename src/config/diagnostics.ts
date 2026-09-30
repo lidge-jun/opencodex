@@ -3,7 +3,9 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
+import { parseAnthropicModelRoutes } from "../oauth/anthropic-model-routes";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { loopbackCompanionAllowed } from "../codex/loopback-target";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../codex/upstream-host-health";
@@ -103,6 +105,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
+  if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -452,6 +455,14 @@ function dropCodexSafetyBufferingError(value: unknown): string | null {
   return "schema_invalid: dropCodexSafetyBuffering: must be a boolean or omitted";
 }
 
+function showCodexCreditsError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "showCodexCredits")) return null;
+  const enabled = raw.showCodexCredits;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: showCodexCredits: must be a boolean or omitted";
+}
+
 function oauthOpenBrowserError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "oauthOpenBrowser")) return null;
@@ -616,7 +627,13 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (memoryModels !== undefined && !memoryModelsSchema.safeParse(memoryModels).success) {
     return { ok: false, error: "schema_invalid: memoryModels: requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" };
   }
-  const boundaryError = compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
+  const routeValue = (rawConfigRecord(value)?.anthropicAccountPool as Record<string, unknown> | undefined)?.routes;
+  if (routeValue !== undefined) {
+    const parsed = parseAnthropicModelRoutes(routeValue);
+    if (!parsed.ok) return { ok: false, error: `schema_invalid: anthropicAccountPool.routes: ${parsed.error}` };
+  }
+  const boundaryError = blockedModelRedirectsError(value)
+    ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
@@ -636,6 +653,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? emptyCompletionRetryError(value)
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
+    ?? showCodexCreditsError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)

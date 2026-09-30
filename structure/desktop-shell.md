@@ -5,6 +5,13 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
+The desktop Cargo package requires Rust 1.88 or newer. Its committed lockfile already
+contains dependencies with that minimum; the package declaration must not advertise 1.77.
+The lockfile selects patched `serde_with` and `time` releases, with compatible exact
+`serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
+committed lockfile (`--locked`); the dependency update does not change app configuration,
+the bundled model proxy, or the minimum supported operating-system versions.
+
 `desktop/ui/` is the startup surface. Once the runtime reports healthy, a visible or manually
 launched shell navigates the webview to the proxy's loopback dashboard (`/#/usage`) rather than
 bundling or serving `gui/dist` itself. A hidden login launch retains the small bundled ready surface
@@ -295,6 +302,12 @@ here. The shell does not read the record: resolving a claim means reading every 
 failing closed on an unreadable one, on a corrupt anchor and on paths that disagree, and a second
 weaker implementation of a question core already answers is the mistake this tree has made before.
 The bundled CLI answers ownership and takeover compatibility through `ocx resolve --json`.
+It also answers how the live runtime's version compares to the bundled CLI's
+(`versionSkew.relation`; future relation strings read as unknown without discarding the live answer), and the shell acts on the direction instead of reparsing the
+warning: `proxy-newer` makes a supported takeover a downgrade, so the run attaches as a
+guest with the versions, downgrade risk and verbatim CLI warning rather than asking consent to it. Every other guest path — held
+consent, an unreadable owner, a blocked takeover, a declined prompt, a recovery — appends
+the CLI's warning to its phase detail, and the consent panel shows it beside the subject.
 Unknown ownership never means "nobody owns it". A supported offer shows the endpoint, home
 and owner. After consent, the shell resolves again and refuses a changed answer without
 invoking stop. It passes the approved token, endpoint and PID to the CLI's opt-in guarded stop.
@@ -353,6 +366,33 @@ Bun targets and prepares the external binary plus dashboard resources used by
 Tauri. Generated files under desktop/src-tauri/binaries/ and
 desktop/src-tauri/resources/ remain ignored.
 
+### Packaged native keyring binding
+
+The compiled `ocx` sidecar cannot resolve or execute a N-API addon from Bun's virtual
+`$bunfs`. `scripts/build-standalone.ts` therefore stages the exact target's pinned
+`@napi-rs/keyring-*` binary under `keyring/`, and `desktop/scripts/prepare-sidecar.ts`
+copies that directory into Tauri resources. A universal macOS bundle carries both Darwin
+architectures. `src/lib/keyring-native.ts` selects only the platform/architecture filename
+under `Contents/Resources/keyring` (or an adjacent standalone `keyring/` directory); it never
+searches the launch working directory. Source and npm installs retain ordinary package
+resolution and never probe beside the shared Bun or Node executable. Compiled installs derive
+their asset root from the executable's canonical real path, so a symlinked launcher still finds
+the addon shipped with the real binary.
+
+The macOS bundle verifier launches the signed sidecar from a disposable unrelated directory and
+requires its bounded, load-only keyring probe to expose both native constructors. It does not read
+or write an OS credential, which would make an ad-hoc CI identity depend on a consent dialog.
+Release verification separately requires both Darwin architecture files inside the universal app.
+Merely finding a `.node` file in the source checkout is not sufficient evidence.
+
+Linux desktop bundles place resources under `usr/lib/OpenCodex` while the sidecar lives under
+`usr/bin`. The compiled loader recognizes only that exact bundle shape after the adjacent
+standalone directory, and the extracted-AppImage verifier executes the same bounded load-only
+probe in ordinary PR CI and release CI. This keeps source/npm runtimes and non-`usr/bin`
+standalone layouts out of the Tauri resource fallback.
+
+> Decision record: [ADR-6139](decisions/ADR-6139-packaged-native-keyring-binding.md)
+
 The management API companion presence check in
 `src/server/management/companion-routes.ts` accepts both
 `OpenCodexMenuBar/` (legacy Swift companion) and `OpenCodexDesktop/` user agents.
@@ -376,6 +416,14 @@ the path a close button takes) and requires the app to exit on its own with code
 the runtime to be gone; destroying the X window or a crash does not count as a drain. Its
 report records readiness time and whole app-process-tree RSS as evidence; those observations are not
 pass/fail budgets until a reviewed cross-platform baseline exists.
+
+The lane takes about 15 minutes, so a pull request selects it only through the `changes` job's
+`desktop` filter: `desktop/**`, the standalone build and its runtime locator
+(`scripts/build-standalone.ts`, `scripts/standalone-targets.ts`, `src/lib/standalone.ts`,
+`src/lib/bun-runtime.ts`), native keyring staging (`scripts/standalone-keyring.ts`,
+`src/lib/keyring-native.ts`), `package.json`, `bun.lock` and `ci.yml` itself. Ordinary `src/**` and
+`gui/**` edits do not run it on a pull request; promotion pushes to `main` and `preview` and
+`workflow_dispatch` always do, so a packaging regression from such an edit surfaces at promotion.
 
 Extraction is intentional. A GitHub-hosted runner is disposable but its package database is still a
 shared job resource, and a normal pull request does not need passwordless package installation or GUI

@@ -81,6 +81,17 @@ olayı gibi Responses olaylarını yayar. Normal bir akış `data: [DONE]` ile b
 Responses JSON nesnesinde toplanır. Her iki form da seçilen modeli, çıktı
 öğelerini, terminal durumunu ve kullanımı korur.
 
+Canonical ChatGPT Codex rotasının yukarı akışı yalnızca SSE kabul ettiğinden,
+yalnızca yukarı akış isteği `stream: true` kullanır. OpenCodex terminal akışı
+sınırlı boyutlar içinde doğrular ve istemcinin istediği JSON biçimine katlar;
+açık bir `store` değeri değişmez. Doğrulama başarısız olursa HTTP 200 ile kısmi
+JSON yerine hata döner. Sınırlar çerçeve başına 4 MiB, transcript ve yeniden
+oluşturma kaynağı için ayrı ayrı 32 MiB, 100.000 SSE çerçevesi ve 10.000 yeniden
+oluşturulmuş çıktı öğesidir. `stallTimeoutSec` hem ilk body byte'ını hem de
+sonraki sessiz aralıkları sınırlar. Değer `0` olduğunda veya yerel upstream için
+varsayılan olarak devre dışı bırakıldığında hemen zaman aşımına uğramaz; yalnızca
+bağımsız 15 dakikalık toplam tur sınırı kalır. Streaming istemcileri değişmez.
+
 İstemciye yönelik Responses SSE çerçeveleri, SSE blok sınırlayıcısından önceki
 ham bayt cinsinden ölçülen çerçeve başına 4 MiB ile sınırlandırılmıştır. HTTP
 üzerinde sınırı aşan sonlandırılmamış bir yukarı akış çerçevesi, ardından `data:

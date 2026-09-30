@@ -23,10 +23,13 @@ export function resolveBlockedModelRedirect(
   config: { blockedModelRedirects?: Record<string, string> } | undefined,
   modelId: string,
 ): string | undefined {
-  if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object") {
+  if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object"
+    || modelId === "__proto__" || modelId === "prototype" || modelId === "constructor") {
     return undefined;
   }
-  return config.blockedModelRedirects[modelId];
+  return Object.prototype.hasOwnProperty.call(config.blockedModelRedirects, modelId)
+    ? config.blockedModelRedirects[modelId]
+    : undefined;
 }
 
 /** Normalize a persisted `sourceModels` override; falls back to the defaults. */

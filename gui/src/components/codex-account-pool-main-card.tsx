@@ -3,11 +3,14 @@ import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
 import QuotaBars from "./QuotaBars";
+import CodexCreditsRow from "./CodexCreditsRow";
+import { useI18n } from "../i18n/shared";
 import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry, CodexAccountLoadState } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { MainDeviceReauthState } from "./use-main-device-reauth";
+import { LoginHint } from "./login-url-block";
 import type { NoticeTone } from "../ui";
 import { navigateHash } from "../hash-routing";
 import {
@@ -42,9 +45,13 @@ export function CodexAccountPoolMainCard({
   doctorCopyOutcomeFor,
   onManageMainHardLock,
   mainReauth,
+  creditsVisible,
+  loading = false,
 }: {
   t: TFn;
   main: CodexAccountEntry | undefined;
+  creditsVisible?: boolean;
+  loading?: boolean;
   isMainActive: boolean;
   accountModeState: CodexAccountModeState | null;
   threshold: number;
@@ -76,6 +83,8 @@ export function CodexAccountPoolMainCard({
     cancel: () => Promise<void>;
   } | undefined;
 }) {
+  const { locale } = useI18n();
+  const showCredits = creditsVisible === true && main?.credits !== undefined;
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
   const mainSwitchEntry: CodexAccountEntry = {
@@ -228,12 +237,10 @@ export function CodexAccountPoolMainCard({
             )}
             {mainReauth && (mainReauth.state.phase === "pending" || mainReauth.state.phase === "committing") && (
               <span className="codex-main-reauth-pending">
-                {mainReauth.state.verificationUrl && (
-                  <span>{t("codexAuth.mainReauthOpen")}: {mainReauth.state.verificationUrl}</span>
-                )}
-                {mainReauth.state.deviceCode && (
-                  <strong>{t("codexAuth.mainReauthCode")}: {mainReauth.state.deviceCode}</strong>
-                )}
+                {/* The shared renderer every other login surface uses: a copyable code, a
+                    selectable and copyable URL, and one click to copy the code and open the
+                    page. Plain text here left the user retyping both by hand. */}
+                <LoginHint hint={{ url: mainReauth.state.verificationUrl, deviceCode: mainReauth.state.deviceCode }} />
                 <span className="faint">{t("codexAuth.mainReauthPending")}</span>
                 {mainReauth.state.cancelFailed && (
                   <span role="status" className="badge badge-amber">{t("codexAuth.mainReauthFailed")}</span>
@@ -257,7 +264,8 @@ export function CodexAccountPoolMainCard({
               plan={main?.plan}
               threshold={mainSwitchEntry.autoSwitchThresholdOverride ?? threshold}
               t={t}
-              pending={main != null && main.quota == null}
+              pending={main != null && main.quota == null && (loading || !showCredits)}
+              afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={main?.credits} t={t} locale={locale} /> : undefined}
             />
           </>}
     </div>
@@ -274,9 +282,16 @@ export function CodexAccountPoolPageHead({
   actionFeedbackTone,
   onRefresh,
   onPauseExhausted,
+  creditsVisible,
+  creditsBusy,
+  onToggleCredits,
 }: {
   t: TFn;
   embedded: boolean;
+  /** Undefined until settings loads. */
+  creditsVisible?: boolean;
+  creditsBusy?: boolean;
+  onToggleCredits?: () => void;
   refreshingQuota: boolean;
   pausingExhausted: boolean;
   pauseBusy?: boolean;
@@ -299,6 +314,22 @@ export function CodexAccountPoolPageHead({
         >
           {actionFeedback ?? ""}
         </span>
+        {creditsVisible !== undefined && onToggleCredits && (
+          <span className="codex-auth-credits-toggle">
+            <span className="codex-auth-credits-toggle__label">{t("codexAuth.creditsToggle")}</span>
+            <button
+              type="button"
+              className={`toggle ${creditsVisible ? "on" : ""}`}
+              onClick={onToggleCredits}
+              disabled={!!creditsBusy}
+              aria-pressed={creditsVisible}
+              aria-label={t("codexAuth.creditsToggle")}
+              title={t("codexAuth.creditsToggleHint")}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </span>
+        )}
         {/* The standalone pause/refresh row sits next to the account cards. Embedded
             surfaces keep those actions beside feedback because there is no page title. */}
         {embedded && (

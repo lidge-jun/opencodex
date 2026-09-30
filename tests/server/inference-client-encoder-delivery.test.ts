@@ -19,7 +19,8 @@ import { markProtocolEntry, protocolTraceForRequest } from "../../src/protocols/
 import { parseRequest } from "../../src/responses/parser";
 import { buildToolBridgeMaps } from "../../src/server/responses";
 import { deliverAdapterResponse } from "../../src/server/responses/adapter-delivery";
-import type { AdapterEvent, OcxConfig, OcxUsage } from "../../src/types";
+import { peekReasoningForCall } from "../../src/responses/reasoning-replay-cache";
+import type { AdapterEvent, OcxConfig, OcxReasoningReplayScopeRef, OcxUsage } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const ON = { protocols: { rollout: { directEncoders: true } } } as Pick<OcxConfig, "protocols">;
@@ -185,6 +186,79 @@ describe("deliverClientEncodedResponse", () => {
     expect(body.object).toBe("chat.completion");
     expect(body.model).toBe("client-model");
     expect(body.choices[0]!.message.content).toBe("hi");
+    expect(run.completed).toHaveLength(1);
+  });
+
+  test("hidden raw reasoning still reaches the replay cache through the delivery's own fold", async () => {
+    // The Chat wire has no field for the ocxr1 envelope (`reasoningDone` is a deliberate no-op in
+    // src/protocols/encoders/chat.ts), so a hidden raw block cannot ride the client frame. The text
+    // has to survive in the proxy-side replay cache instead, which the terminal fold fills here
+    // exactly as the bridge fills it on the Responses path.
+    const scope: OcxReasoningReplayScopeRef = {
+      clientThreadId: "direct-hidden-thread",
+      current: {
+        providerName: "routed",
+        providerDestinationIdentity: "destination:provider",
+        adapterName: "openai-chat",
+        modelId: "model",
+        credentialIdentity: "key:test",
+      },
+    };
+    const hidden: AdapterEvent[] = [
+      { type: "reasoning_raw_delta", text: "chain " },
+      { type: "reasoning_raw_delta", text: "of thought" },
+      { type: "tool_call_start", id: "call_direct_hidden", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"a.txt\"}" },
+      { type: "tool_call_end" },
+      { type: "done", usage },
+    ];
+    const run = delivery(true, { model: "m", provider: "p" });
+    const response = await deliverClientEncodedResponse({
+      ...run.input,
+      adapterName: "openai-chat",
+      events: replay(hidden),
+      fold: { hideRawReasoning: true, replayCacheScope: scope },
+    });
+    const wire = await response.text();
+    expect(wire).not.toContain("chain");
+    expect(wire).toContain("read_file");
+    expect(peekReasoningForCall("call_direct_hidden", scope)).toBe("chain of thought");
+  });
+
+  test("a hidden block that fits live delivery still reaches the replay cache under a tight budget", async () => {
+    // The fold used to build a client-bound ocxr1 envelope before the cache write. Envelope
+    // encoding reserves about ten times the text, so a block that fit the live stream overflowed
+    // only there; the delivery then reported success without writing the replay cache.
+    const scope: OcxReasoningReplayScopeRef = {
+      clientThreadId: "direct-hidden-tight-budget",
+      current: {
+        providerName: "routed",
+        providerDestinationIdentity: "destination:provider",
+        adapterName: "openai-chat",
+        modelId: "model",
+        credentialIdentity: "key:test",
+      },
+    };
+    const thought = "thought ".repeat(1_250);
+    const hidden: AdapterEvent[] = [
+      { type: "reasoning_raw_delta", text: thought },
+      { type: "tool_call_start", id: "call_direct_hidden_tight", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"a.txt\"}" },
+      { type: "tool_call_end" },
+      { type: "done", usage },
+    ];
+    const run = delivery(true, { model: "m", provider: "p" });
+    const response = await deliverClientEncodedResponse({
+      ...run.input,
+      translatorBudget: createTestTranslatorBudget({ maxTurnBytes: 60_000 }),
+      adapterName: "openai-chat",
+      events: replay(hidden),
+      fold: { hideRawReasoning: true, replayCacheScope: scope },
+    });
+    const wire = await response.text();
+    expect(wire).not.toContain("thought");
+    expect(wire).toContain("read_file");
+    expect(peekReasoningForCall("call_direct_hidden_tight", scope)).toBe(thought);
     expect(run.completed).toHaveLength(1);
   });
 

@@ -118,7 +118,7 @@ alias <provider> <id|alias> <display-name|->  Set or clear an account's display 
 pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
-clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -214,9 +214,28 @@ faire basculer la requête vers un autre compte de pool admissible. Ces transiti
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+La commande CLI suspend ou reprend un compte Anthropic OAuth par id ou alias unique (correspondance exacte, puis sans distinction de casse). Utilise `PUT /api/oauth/accounts/pause` avec `{ provider: "anthropic", accountId, paused }`, également utilisé par le tableau de bord. L’état `paused` est enregistré dans le compte et exposé par `GET /api/oauth/accounts`. La suspension s’applique même si le pool proactif est désactivé : le compte est exclu de la sélection, des affinités et des successeurs 429. Si tous les comptes sont suspendus, les requêtes renvoient 403 jusqu’à une reprise. Les requêtes déjà envoyées continuent ; les identifiants et l’état de santé sont conservés. La suspension survit au redémarrage et à une nouvelle connexion, et disparaît avec la suppression du compte. Les seuils individuels ne font pas partie de cette commande.
+
 ### `ocx account clear <provider> [--json]`
 
 Efface la sélection manuelle du compte Codex sans résoudre d'id de compte, donc fonctionne même lorsqu'un compte s'appelle littéralement `auto`. Pools Codex uniquement ; les autres types de fournisseur n'ont pas de sélection automatique à rétablir.
+
+### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
+
+Supprime un délai d'échec local au processus sans modifier les identifiants enregistrés. Utilisez
+`openai` pour un compte du pool Codex ou `anthropic` pour un compte OAuth Anthropic ; les autres
+fournisseurs sont refusés. Les deux formes acceptent un id de compte ou un alias unique, tandis que
+`main` est réservé au pool Codex.
+
+```bash
+ocx account clear-cooldown anthropic <id-or-alias>
+```
+
+La commande réussit même sans délai actif, avec `cleared: false` dans le JSON. La suppression d'un
+délai Anthropic avance aussi la génération du compte afin qu'une ancienne sonde de quota ne puisse
+pas rétablir l'état supprimé ni publier une éligibilité périmée.
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -233,7 +252,11 @@ renvoient 1 ; une sonde de quota en amont qui échoue ou expire produit plutôt 
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Contrôle le seuil du pool Codex `openai`, ou enregistre celui d’un pool OAuth générique. `on` enregistre 80 %, `off` 0 % et `threshold <n>` accepte 0–100. Un seuil générique n’oriente la sélection que si `pool.kernel` est activé avec `strategy: "fill-first"` ; le drapeau désactivé, sa sauvegarde n’active pas le basculement par seuil. Dans les deux cas, elle ne change ni l’activation du fournisseur, ni la rotation réactive après une erreur 429. Pour les pools génériques, les sorties utilisent la réponse confirmée du serveur. Pour un pool générique, `poolEnabled` est le réglage enregistré (`null` signifie non spécifié), pas l’état effectif hérité. `inert: true` indique un seuil enregistré mais non appliqué, `inert: false` un seuil que le pool applique réellement. L’absence d’`inert` signale une capacité inconnue, qui ne produit jamais `enabled: true`. Les fournisseurs à clé API, Anthropic et les valeurs invalides sont refusés.
+Contrôle le seuil du pool Codex `openai`, ou enregistre celui d’un pool OAuth générique. `on` enregistre 80 %, `off` 0 % et `threshold <n>` accepte 0–100. Un seuil générique n’oriente la sélection que si `pool.kernel` est activé avec `strategy: "fill-first"` ; le drapeau désactivé, sa sauvegarde n’active pas le basculement par seuil. Dans les deux cas, elle ne change ni l’activation du fournisseur, ni la rotation réactive après une erreur 429. Pour les pools génériques, les sorties utilisent la réponse confirmée du serveur. Pour un pool générique, `poolEnabled` est le réglage enregistré (`null` signifie non spécifié), pas l’état effectif hérité. `inert: true` indique un seuil enregistré mais non appliqué, `inert: false` un seuil que le pool applique réellement. L’absence d’`inert` signale une capacité inconnue, qui ne produit jamais `enabled: true`. Les fournisseurs à clé API et les valeurs invalides sont refusés.
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Pour Anthropic OAuth, `ocx account auto-switch anthropic threshold 90 --account <id>` enregistre un entier de 0 à 100. `off --account <id>` vaut 0, `on --account <id>` vaut 80, `inherit --account <id>` rétablit l’héritage et `status --account <id>` lit sans écrire ; `--json` est disponible. La carte propose le même réglage. Une valeur absente/null hérite de `anthropicAccountPool.autoSwitchThreshold` (80 par défaut) ; 0 désactive seulement le basculement selon l’utilisation de ce compte. Le réglage survit au redémarrage et à la reconnexion, et disparaît avec le compte. Les priorités manuelle/affinité, les replis en cas de quota inconnu ou de comptes épuisés et les routes de modèles restent inchangés. Les seuils sont inactifs si le pool est désactivé ; pause et reprise après 429 restent actives.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

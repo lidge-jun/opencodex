@@ -35,6 +35,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   rotateAnthropicAccountOn429,
+  recordAnthropicAccount429,
   getAnthropicPoolAccessSnapshot,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -83,6 +84,7 @@ export function createAdapterContinuations(
     | "oauthDispatch"
     | "invalidateSameTargetRequest"
     | "resolveSelectionAdapter"
+    | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
     | "anthropicSessionKey"
@@ -178,6 +180,7 @@ export function createAdapterContinuations(
         try {
           continuationRequest = await transportState.activeAdapter.buildRequest(nextParsed, {
             headers: requestState.selectedForwardHeaders,
+            providerName: route.providerName,
             translatorBudget,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
@@ -398,6 +401,7 @@ export function createAdapterContinuations(
           anthropicSessionKey,
           Date.now(),
           response.headers,
+          transportState.anthropicRouteDecision,
         );
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
@@ -421,6 +425,11 @@ export function createAdapterContinuations(
             // fall through to emit continuation error below
           }
         }
+      }
+      if (response.status === 429 && transportState.anthropicPoolAccountId
+        && transportState.anthropicPoolFailovers >= ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST) {
+        recordAnthropicAccount429(config, transportState.anthropicPoolAccountId,
+          response.headers.get("retry-after"), Date.now(), response.headers);
       }
       // Generic OAuth rotation for the continuation loop. The streaming loop grew this arm with
       // #2568 and this one did not, so an xAI/Cursor/Kimi/Copilot/Antigravity/Nous continuation

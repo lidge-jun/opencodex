@@ -4,6 +4,8 @@ import {
   markNativePassthroughSseResponse,
   isEagerRelaySseResponse,
   markEagerRelaySseResponse,
+  isPreinspectedJsonResponse,
+  markPreinspectedJsonResponse,
 } from "../relay";
 
 // runTurn adapters own an event queue and perform their combo preflight before
@@ -77,6 +79,7 @@ export function finalizeOwnedTranslatorBudget(response: Response, budget: Transl
   if (isEagerRelaySseResponse(response)) {
     markEagerRelaySseResponse(finalizedResponse);
   }
+  if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(finalizedResponse);
   return finalizedResponse;
 }
 
@@ -99,6 +102,7 @@ export function finalizeAccountLease(response: Response, release: () => void): R
   const wrapped = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
   if (isNativePassthroughSseResponse(response)) markNativePassthroughSseResponse(wrapped);
   if (isEagerRelaySseResponse(response)) markEagerRelaySseResponse(wrapped);
+  if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(wrapped);
   return wrapped;
 }
 

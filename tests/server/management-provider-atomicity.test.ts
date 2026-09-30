@@ -69,10 +69,10 @@ function harness(config = fixture(), save: (config: OcxConfig) => void = () => {
     clearThreadAccountMap: () => { events.push("threads"); },
     primeCodexPoolQuotas: async () => { events.push("prime"); },
   };
-  async function patch(body: unknown, name = "relay") {
+  async function request(method: "PATCH" | "POST", body: unknown, name = "relay") {
     const url = new URL(`http://127.0.0.1/api/providers?name=${name}`);
     return handleProviderRoutes({
-      req: new Request(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+      req: new Request(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
       url, config, deps, version: "test", trustedLoopbackIngress: true, guiSessionIssuance: null,
       convergeCodexCatalog: async () => {
         events.push("catalog");
@@ -81,7 +81,8 @@ function harness(config = fixture(), save: (config: OcxConfig) => void = () => {
       syncClaudeAgentDefsBestEffort: async () => {},
     });
   }
-  return { config, patch, events, reconcile };
+  return { config, patch: (body: unknown, name?: string) => request("PATCH", body, name),
+    post: (body: unknown) => request("POST", body), events, reconcile };
 }
 
 describe("provider PATCH durable atomicity", () => {
@@ -360,5 +361,33 @@ describe("provider PATCH durable atomicity", () => {
       headers: { "X-Keep": "original", "X-Committed": "first", "X-Delayed": "later" },
     });
     expect(config.providers.relay).toEqual(persisted!.providers.relay);
+  });
+
+  test.each([false, true])("POST uses a concurrent tier clear while validation awaits (submitted=%s)", async submitted => {
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    spyOn(destinationPolicy, "providerDestinationResolvedError").mockImplementation(async (_name, candidate) => {
+      if (candidate.note === "delayed-overwrite") { entered(); await gate; }
+      return null;
+    });
+    const config = fixture();
+    config.providers.relay.modelContextTiers = { "relay-model": "long_context" };
+    let persisted: OcxConfig | undefined;
+    const h = harness(config, saved => { persisted = structuredClone(saved); });
+    const delayed = h.post({ name: "relay", provider: {
+      adapter: "openai-chat", baseUrl: "https://relay.example/v1", note: "delayed-overwrite",
+      ...(submitted ? { modelContextTiers: { "relay-model": "default" } } : {}),
+    } });
+    await waiting;
+    try {
+      expect((await h.patch({ modelContextTiers: null }))?.status).toBe(200);
+      expect(config.providers.relay.modelContextTiers).toBeUndefined();
+    } finally { release(); }
+    expect((await delayed)?.status).toBe(200);
+    const expected = submitted ? { "relay-model": "default" } : undefined;
+    expect(config.providers.relay.modelContextTiers).toEqual(expected);
+    expect(persisted?.providers.relay.modelContextTiers).toEqual(expected);
   });
 });

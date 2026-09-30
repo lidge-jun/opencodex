@@ -1,7 +1,7 @@
 import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
-import { getAccountCredential, getAccountSet } from "../../oauth/store";
+import { captureOAuthAccountSelection, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
@@ -18,6 +18,8 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
+  accountReportCurrent,
+  TERMINAL_QUOTA_FAILURE,
   hasQuotaRows,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -25,6 +27,7 @@ import {
   report,
   tagNativeMainReport,
   type CodexAuthAccountsSnapshotPromise,
+  type ProviderQuotaProbeResult,
   type ProviderQuotaReport,
 } from "./report-cache";
 import {
@@ -36,6 +39,7 @@ import {
 } from "./account-cache";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
+import { AnthropicQuotaProbeOwnershipError, assertAnthropicQuotaSendAllowed, probeAnthropicQuotaWithRecovery } from "./anthropic-cooldown-recovery";
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
@@ -46,9 +50,11 @@ export async function fetchChatGptForwardQuota(
   providerConfig: OcxProviderConfig,
   forceRefresh: boolean,
   prefetchedSnapshot?: CodexAuthAccountsSnapshotPromise,
-): Promise<ProviderQuotaReport | null> {
+): Promise<ProviderQuotaProbeResult> {
   if (providerCodexAccountMode(provider, providerConfig) === "direct") {
-    const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh);
+    const snapshot = await fetchMainAccountInfoSnapshot(forceRefresh, config);
+    // A parsed return from a replaced credential cannot retain an older cached report either.
+    if (snapshot.infoUnpublished) return TERMINAL_QUOTA_FAILURE;
     const quota = providerQuotaFromCodexQuota(snapshot.info.quota);
     if (quota) quota.updatedAt = Date.now();
     return quota
@@ -258,6 +264,56 @@ function parseClaudeLimit(value: unknown): ProviderQuotaWindow | null {
 /** Claude's OAuth usage endpoint, probed with ONE account's own bearer token. */
 const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
 
+async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
+  const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "Content-Type": "application/json",
+      "User-Agent": CLAUDE_CLI_USER_AGENT,
+      "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) return null;
+  const body = asRecord(await readQuotaJson(response));
+  if (!body) return null;
+  const fiveHour = parseClaudeBucket(body.five_hour);
+  const sevenDay = parseClaudeBucket(body.seven_day);
+  const fable = parseClaudeBucket(body.seven_day_fable);
+  const opus = parseClaudeBucket(body.seven_day_opus);
+  const sonnet = parseClaudeBucket(body.seven_day_sonnet);
+  const customWindows: ProviderQuotaWindow[] = [];
+  if (fable?.percent !== undefined) customWindows.push({ label: "Fable", scope: "model", percent: fable.percent, ...(fable.resetAt !== undefined ? { resetAt: fable.resetAt } : {}) });
+  if (opus?.percent !== undefined) customWindows.push({ label: "Opus", scope: "model", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
+  if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", scope: "model", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
+  const knownLabels = new Set(customWindows.map(window => window.label.toLowerCase()));
+  const limits = Array.isArray(body.limits) ? body.limits : [];
+  for (const rawLimit of limits) {
+    const limitRecord = asRecord(rawLimit);
+    // `session` and `weekly_all` mirror the canonical five-hour and weekly
+    // buckets above; only model-scoped weekly limits add a third window.
+    if (String(limitRecord?.kind ?? "").trim().toLowerCase() !== "weekly_scoped") continue;
+    const limit = parseClaudeLimit(rawLimit);
+    if (!limit || knownLabels.has(limit.label.toLowerCase())) continue;
+    knownLabels.add(limit.label.toLowerCase());
+    customWindows.push(limit);
+  }
+  const quota: ProviderQuota = {
+    // Claude's 5-hour window is a first-class rate limit, same as the Codex login 5h/weekly
+    // rows: report it in the canonical fields so the dashboard renders it with the standard
+    // "5-hour limit" label and ordering instead of as a generic extra window.
+    ...(fiveHour?.percent !== undefined ? { fiveHourPercent: fiveHour.percent } : {}),
+    ...(fiveHour?.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
+    ...(sevenDay?.percent !== undefined ? { weeklyPercent: sevenDay.percent } : {}),
+    ...(sevenDay?.resetAt !== undefined ? { weeklyResetAt: sevenDay.resetAt } : {}),
+    ...(customWindows.length > 0 ? { customWindows } : {}),
+    updatedAt: Date.now(),
+  };
+  // Empty / schema-changed payloads must not cache as "success with no bars".
+  return hasQuotaRows(quota) ? quota : null;
+}
+
 /**
  * Anthropic per-credential usage.
  *
@@ -273,59 +329,16 @@ const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
  * model-scoped window tracks entitlement rather than seat size. Populate `plan` only when
  * upstream returns the tier itself.
  */
-export async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
-  const joinable = anthropicUsageInflight.get(accessToken);
+export async function fetchAnthropicUsageQuota(
+  accessToken: string,
+  requireFreshDispatch = false,
+): Promise<ProviderQuota | null> {
+  // Recovery evidence must be requested after the claimed cooldown. Joining an older request
+  // can return after the 429 while still describing provider state from before that refusal.
+  const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(accessToken);
   if (joinable) return joinable;
 
-  const probe = (async (): Promise<ProviderQuota | null> => {
-    const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "User-Agent": CLAUDE_CLI_USER_AGENT,
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) return null;
-    const body = asRecord(await readQuotaJson(response));
-    if (!body) return null;
-    const fiveHour = parseClaudeBucket(body.five_hour);
-    const sevenDay = parseClaudeBucket(body.seven_day);
-    const fable = parseClaudeBucket(body.seven_day_fable);
-    const opus = parseClaudeBucket(body.seven_day_opus);
-    const sonnet = parseClaudeBucket(body.seven_day_sonnet);
-    const customWindows: ProviderQuotaWindow[] = [];
-    if (fable?.percent !== undefined) customWindows.push({ label: "Fable", scope: "model", percent: fable.percent, ...(fable.resetAt !== undefined ? { resetAt: fable.resetAt } : {}) });
-    if (opus?.percent !== undefined) customWindows.push({ label: "Opus", scope: "model", percent: opus.percent, ...(opus.resetAt !== undefined ? { resetAt: opus.resetAt } : {}) });
-    if (sonnet?.percent !== undefined) customWindows.push({ label: "Sonnet", scope: "model", percent: sonnet.percent, ...(sonnet.resetAt !== undefined ? { resetAt: sonnet.resetAt } : {}) });
-    const knownLabels = new Set(customWindows.map(window => window.label.toLowerCase()));
-    const limits = Array.isArray(body.limits) ? body.limits : [];
-    for (const rawLimit of limits) {
-      const limitRecord = asRecord(rawLimit);
-      // `session` and `weekly_all` mirror the canonical five-hour and weekly
-      // buckets above; only model-scoped weekly limits add a third window.
-      if (String(limitRecord?.kind ?? "").trim().toLowerCase() !== "weekly_scoped") continue;
-      const limit = parseClaudeLimit(rawLimit);
-      if (!limit || knownLabels.has(limit.label.toLowerCase())) continue;
-      knownLabels.add(limit.label.toLowerCase());
-      customWindows.push(limit);
-    }
-    const quota: ProviderQuota = {
-      // Claude's 5-hour window is a first-class rate limit, same as the Codex login 5h/weekly
-      // rows: report it in the canonical fields so the dashboard renders it with the standard
-      // "5-hour limit" label and ordering instead of as a generic extra window.
-      ...(fiveHour?.percent !== undefined ? { fiveHourPercent: fiveHour.percent } : {}),
-      ...(fiveHour?.resetAt !== undefined ? { fiveHourResetAt: fiveHour.resetAt } : {}),
-      ...(sevenDay?.percent !== undefined ? { weeklyPercent: sevenDay.percent } : {}),
-      ...(sevenDay?.resetAt !== undefined ? { weeklyResetAt: sevenDay.resetAt } : {}),
-      ...(customWindows.length > 0 ? { customWindows } : {}),
-      updatedAt: Date.now(),
-    };
-    // Empty / schema-changed payloads must not cache as "success with no bars".
-    return hasQuotaRows(quota) ? quota : null;
-  })().finally(() => {
+  const probe = readAnthropicUsageQuota(accessToken).finally(() => {
     if (anthropicUsageInflight.get(accessToken) === probe) anthropicUsageInflight.delete(accessToken);
   });
   anthropicUsageInflight.set(accessToken, probe);
@@ -335,7 +348,8 @@ export async function fetchAnthropicUsageQuota(accessToken: string): Promise<Pro
 export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaReport | null> {
   // Capture the account we intend to probe before awaiting — a mid-flight active
   // switch must not seed the wrong account's cache with this response.
-  const probedAccountId = getAccountSet("anthropic")?.activeAccountId;
+  const selection = captureOAuthAccountSelection("anthropic");
+  const probedAccountId = selection?.accountId;
   const probedAccountKey = probedAccountId ? accountCacheKey("anthropic", probedAccountId) : null;
   const writerGeneration = captureConfigGeneration();
   let accessToken: string;
@@ -344,17 +358,34 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
   } catch {
     return null;
   }
-  const quota = await fetchAnthropicUsageQuota(accessToken);
+  if (!probedAccountId || !probedAccountKey) return null;
+  let quota: ProviderQuota | null;
+  let anthropicCurrent: (() => boolean) | undefined;
+  try {
+    const result = await probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
+      fresh => { assertAnthropicQuotaSendAllowed(probedAccountId, accessToken); return fetchAnthropicUsageQuota(accessToken, fresh); },
+      () => mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
+    if (result && !result.isCurrent()) return null;
+    quota = result?.quota ?? null;
+    anthropicCurrent = result?.isCurrent;
+  } catch (error) {
+    if (error instanceof AnthropicQuotaProbeOwnershipError) return null;
+    throw error;
+  }
   if (!quota) return null;
   // Share the active-account probe with the per-account cache so Providers-page
   // loads do not double-hit Anthropic's rate-limited usage endpoint.
   if (probedAccountId && probedAccountKey) {
     const stillOwnsToken = getAccountCredential("anthropic", probedAccountId)?.access === accessToken;
-    if (stillOwnsToken && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent });
     }
   }
-  return report(provider, "anthropic:oauth-usage", quota);
+  const quotaReport = report(provider, "anthropic:oauth-usage", quota);
+  if (quotaReport && anthropicCurrent) {
+    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet("anthropic")?.activeAccountId === probedAccountId);
+  }
+  return quotaReport;
 }
 
 /**

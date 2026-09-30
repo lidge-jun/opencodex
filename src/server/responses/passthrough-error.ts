@@ -79,6 +79,8 @@ export function formatPassthroughUpstreamError(
     statusText?: string;
     headers?: Headers;
     now?: number;
+    /** Caller holds an authoritative fatal verdict; neither inherited nor inferred waits apply. */
+    suppressRetryAfter?: boolean;
     /**
      * Provenance from the caller that still holds the response: this body is a refusal this
      * proxy synthesized. The body check below is the fallback for a re-wrapped body, and it
@@ -96,7 +98,7 @@ export function formatPassthroughUpstreamError(
   const replayRefusal = options?.replayRefusal === true || isReplayRefusalBody(trimmed);
   // Two different reasons to answer with no wait at all, handled the same way: a hard policy
   // block will not become servable, and a refusal we made was never a rate limit.
-  const suppressRetryAfter = cyberPolicyFailure || replayRefusal;
+  const suppressRetryAfter = options?.suppressRetryAfter === true || cyberPolicyFailure || replayRefusal;
   const resolved = suppressRetryAfter
     ? undefined
     : resolveClientRetryAfter({

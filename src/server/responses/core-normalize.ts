@@ -38,6 +38,7 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { recordAttemptRequestedEffort } from "../request-log";
 import type { ResolvedFastPolicy } from "../../providers/fastwire";
+import { applyXaiOauthFastModel } from "../../providers/xai-fast-model";
 
 export const MAX_FAST_WIRE_CAPABILITY_WARNINGS = 256;
 
@@ -176,6 +177,10 @@ export async function applyFinalRouteRequestNormalization(args: {
       || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
         && route.provider.showThinkingSummary !== true);
   }
+  // Provider policy, recomputed per final route like the summary default above so a fallback
+  // cannot inherit the previous target's choice. Raw content-channel reasoning is suppressed;
+  // provider-authored summaries stay on the summary channel and remain visible.
+  parsed.options.hideRawReasoning = route.provider.hideRawReasoning === true;
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = virtualModel?.selectedModelId ?? route.modelId;
   logCtx.provider = route.providerName;
@@ -242,6 +247,8 @@ export async function applyFinalRouteRequestNormalization(args: {
     inboundWire,
     fastPolicy,
   );
+  // xAI OAuth Fast is a serving-lane switch: serialize the variant id, keep the logical id for policy.
+  applyXaiOauthFastModel(parsed, route, logCtx);
   if (modelServiceTierSupport === false) {
     logCtx.requestedServiceTier = undefined;
     logCtx.requestedSpeedLabel = undefined;

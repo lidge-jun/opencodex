@@ -61,6 +61,18 @@ embedded dashboard and your normal browser. The tray also provides update checks
 
 On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
 
+## Startup safety on macOS
+
+Startup safety reports **Desktop app** protection when OpenCodex's recorded ownership,
+**Start at Login** registration, and live supervision of its bundled proxy all match.
+A missing or stale check remains **At risk**. If the desktop app owns the proxy but
+protection cannot be verified, reopen OpenCodex and check **Start at Login**. Service
+and launcher installation or repair stays disabled while that ownership remains;
+`ocx restore` is still available to undo Codex routing.
+
+Normal desktop updates replace the bundled CLI with the fixed startup probe. No local
+patch needs to be preserved across an update.
+
 ## Keeping the proxy running
 
 The app keeps the proxy it started running. When that proxy restarts itself — after

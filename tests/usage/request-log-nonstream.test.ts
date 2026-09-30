@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { responseWithDeferredRequestLog } from "../../src/server/relay";
+import { markPreinspectedJsonResponse, responseWithDeferredRequestLog } from "../../src/server/relay";
 import { MAX_RESPONSE_LOG_INSPECTION_BYTES } from "../../src/server/response-log-body";
+import { finalizeAccountLease, finalizeOwnedTranslatorBudget } from "../../src/server/responses/core-lifetime";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { RequestLogContext, RequestLogEntry } from "../../src/server/request-log";
 
 const encoder = new TextEncoder();
@@ -43,6 +45,31 @@ describe("deferred non-stream request log integration", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.resolvedModel).toBe("resolved-model");
     expect(entries[0]?.status).toBe(200);
+  });
+
+  test("preinspected JSON keeps EOF logging without reparsing the response body", async () => {
+    const payload = JSON.stringify({
+      model: "must-not-replace",
+      usage: { input_tokens: 99, output_tokens: 99, total_tokens: 198 },
+    });
+    const logCtx: RequestLogContext = {
+      model: "requested-model",
+      provider: "fixture-provider",
+      resolvedModel: "already-inspected",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+    };
+    const marked = markPreinspectedJsonResponse(new Response(payload, {
+      headers: { "content-type": "application/json" },
+    }));
+    const finalized = finalizeAccountLease(
+      finalizeOwnedTranslatorBudget(marked, createTranslatorBudget()),
+      () => undefined,
+    );
+    const { result, entries } = tracked(finalized, logCtx);
+    expect(await result.text()).toBe(payload);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.resolvedModel).toBe("already-inspected");
+    expect(entries[0]?.usage).toEqual({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
   });
 
   test("does not overwrite routed model/usage context from oversized JSON", async () => {

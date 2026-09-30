@@ -37,6 +37,10 @@ import {
   MINIMAX_MODEL_CONTEXT_WINDOWS,
   MINIMAX_M3_REASONING_EFFORTS,
   MINIMAX_M3_REASONING_EFFORT_MAP,
+  MINIMAX_M31_FLASH_PREVIEW,
+  MINIMAX_M31_REASONING_EFFORTS,
+  MINIMAX_M31_DEFAULT_REASONING_EFFORT,
+  MINIMAX_REASONING_SPLIT_MODELS,
   THINKING_TOGGLE_EFFORTS,
   THINKING_TOGGLE_MAP,
   ZHIPU_BIGMODEL_MODELS,
@@ -1020,22 +1024,24 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.minimax.io", defaultModel: "MiniMax-M3", models: MINIMAX_MODELS,
     modelContextWindows: MINIMAX_MODEL_CONTEXT_WINDOWS,
-    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS },
-    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
+    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS, [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_M31_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium", [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
     modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
     preserveReasoningContentModels: MINIMAX_MODELS,
     // MiniMax-M3 low effort maps to thinking disabled, so a legitimate tool
     // round can carry no reasoning at all; only replay real recorded text,
     // never a fabricated placeholder (chatgpt-codex-connector P2 on #1205).
     requiresReasoningPlaceholderModels: [],
-    reasoningSplitModels: MINIMAX_MODELS,
+    // M3.1-Flash-Preview ignores reasoning_split and always answers with reasoning_content,
+    // so it stays off the split/details lists and replays as a reasoning_content string.
+    reasoningSplitModels: MINIMAX_REASONING_SPLIT_MODELS,
     // With reasoning_split the upstream returns thinking as a structured
     // reasoning_details array (cumulative text snapshots per stream chunk) and
     // requires that array back verbatim on the next turn — a reasoning_content
     // string replay is the native-format pass-back the docs say is unsupported.
     // Evidence: platform.minimax.io/docs/guides/text-m3-function-call and
     // /docs/api-reference/text-openai-api (verified 2026-09-01).
-    reasoningDetailsModels: MINIMAX_MODELS,
+    reasoningDetailsModels: MINIMAX_REASONING_SPLIT_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "Subscription Key or API Key",
   },
@@ -1043,13 +1049,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     id: "minimax-cn", label: "MiniMax — Coding Plan (CN)", baseUrl: "https://api.minimaxi.com/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://platform.minimaxi.com", defaultModel: "MiniMax-M3", models: MINIMAX_MODELS,
     modelContextWindows: MINIMAX_MODEL_CONTEXT_WINDOWS,
-    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS },
-    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
+    modelReasoningEfforts: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORTS, [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_M31_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { "MiniMax-M3": "medium", [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
     modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
     preserveReasoningContentModels: MINIMAX_MODELS,
     requiresReasoningPlaceholderModels: [],
-    reasoningSplitModels: MINIMAX_MODELS,
-    reasoningDetailsModels: MINIMAX_MODELS,
+    reasoningSplitModels: MINIMAX_REASONING_SPLIT_MODELS,
+    reasoningDetailsModels: MINIMAX_REASONING_SPLIT_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "中国区 Subscription Key",
   },
@@ -1136,6 +1142,48 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelMaxOutputTokens: OPPER_MODEL_MAX_OUTPUT_TOKENS,
     modelInputModalities: OPPER_MODEL_INPUT_MODALITIES,
     note: "EU-hosted AI gateway: one OpenAI-compatible endpoint and one key in front of 30+ providers. Bare model ids are pools (claude-sonnet-4-6, gpt-5.5) and Opper picks the route per request; vendor/model ids (anthropic/claude-sonnet-4-6) pin one provider. The catalogue is discovered live from /v3/compat/models with your key; the public list is at opper.ai/models. Token rates are the model providers' rates with no markup; Opper charges a 3% fee when you buy credits.",
+  },
+  {
+    // Public contract checked 2026-09-29: https://docs.tokenlab.sh/api-reference/models/list-models
+    // A supplied key is validated and scopes the catalog; anonymous discovery is also public.
+    id: "tokenlab",
+    label: "TokenLab",
+    adapter: "openai-chat",
+    baseUrl: "https://api.tokenlab.sh/v1",
+    authKind: "key",
+    dashboardUrl: "https://tokenlab.sh/dashboard/api?tab=keys",
+    // Standard sponsor under SPONSORS.md (agreement dated 2026-09-29). Pins the row in the
+    // picker and adds the chip; nothing about routing, discovery or defaults changes.
+    sponsor: { tier: "standard", url: "https://tokenlab.sh/r/OPENCODEX" },
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "gpt-5.6-terra",
+    models: ["gpt-5.6-terra"],
+    modelContextWindows: { "gpt-5.6-terra": 1_050_000 },
+    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000 },
+    modelInputModalities: { "gpt-5.6-terra": ["text", "image"] },
+    // Per-model wires from `tokenlab.accepted_request_formats` (GET /v1/models/{id}, 2026-09-30).
+    // The provider stays on Chat, the released and end-to-end verified path, and every model
+    // accepts it. Models that also declare Responses use it for Codex (Responses inbound) only,
+    // so Chat and Anthropic clients skip a translation hop; an explicit modelAdapters entry wins.
+    // Claude ids ride Anthropic Messages through the endpoint-bound pin in src/types/wire.ts.
+    // gemini-3.8-flash declares Chat + Gemini native and stays on Chat. No delivery-policy
+    // header is sent: the API key's own policy stays authoritative.
+    modelWireDefaults: Object.fromEntries([
+      "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
+      "deepseek-v4.1-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.3",
+    ].map(id => [id, { wire: "openai-responses", inbound: ["responses"] }])),
+    modelDiscovery: {
+      path: "models",
+      query: { category: "chat" },
+      filter: {
+        allOf: [
+          { path: ["tokenlab", "category"], equalsAny: ["chat"] },
+          { path: ["tokenlab", "capabilities"], containsAny: ["tool-use"] },
+        ],
+      },
+    },
+    note: "OpenAI-compatible API gateway. Create a workspace API key at tokenlab.sh. Live discovery lists tool-capable chat models available to your key and delivery policy.",
   },
   {
     id: "opencode-free",
@@ -1311,7 +1359,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna"],
+    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"],
     defaultModel: "gpt-4o",
     // Copilot fronts a mixed-wire catalog: these models reject /chat/completions for
     // real Codex-agent traffic (function tools + reasoning), so every inbound wire
@@ -1331,6 +1379,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       // 260923 preemptive: GPT-6 Sol/Luna ride Responses like every GPT-5.6/6 row above.
       "gpt-6-sol": "openai-responses",
       "gpt-6-luna": "openai-responses",
+      // GPT-6.1 Sol: GA in Copilot 2026-09-29 (github.blog changelog); rides Responses like GPT-6 Sol.
+      "gpt-6.1-sol": "openai-responses",
       "grok-4.5": "openai-responses",
       "grok-4.6": "openai-responses",
       "mai-code-1.1-flash": "openai-responses",

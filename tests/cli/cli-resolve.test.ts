@@ -72,7 +72,25 @@ describe("buildResolveJson", () => {
       },
       ownership: OWNERSHIP_OWNED,
       takeover: TAKEOVER_SUPPORTED,
+      versionSkew: {
+        cliVersion: "1.2.3",
+        proxyVersion: "9.9.9",
+        skewed: true,
+        relation: "proxy-newer",
+        warning: expect.stringContaining("1.2.3"),
+      },
     });
+  });
+
+  test("the skew names the direction, and absence omits the field", () => {
+    const live = buildResolveJson({}, fakeLive({ version: "1.2.2" }), "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED);
+    expect(live.versionSkew?.relation).toBe("cli-newer");
+    expect(live.versionSkew?.warning).toContain("the running proxy is older");
+    const matching = buildResolveJson({}, fakeLive({ version: "1.2.3" }), "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED);
+    expect(matching.versionSkew?.relation).toBe("match");
+    const unreported = buildResolveJson({}, fakeLive({ version: undefined }), "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED);
+    expect(unreported.versionSkew?.relation).toBe("unknown");
+    expect(buildResolveJson({}, null, "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED).versionSkew).toBeUndefined();
   });
 
   test("without a live proxy the configured port is the effective one", () => {
@@ -346,11 +364,14 @@ describe("runResolve", () => {
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
-    expect(lines).toHaveLength(4);
+    // The fifth line is the version-skew warning the same document carries on the wire;
+    // a CLI older than the live proxy says so in the operator output too.
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toBe("Config home: /home/fixture/.opencodex");
     expect(lines[1]).toContain("Proxy live on port 10110 (PID 4242, 9.9.9)");
     expect(lines[2]).toBe("Owner: none recorded");
     expect(lines[3]).toBe("Takeover: blocked (managing-cli-unobserved: no managing OpenCodex CLI installation was observed)");
+    expect(lines[4]).toContain("Version skew: CLI 1.2.3 does not match the running proxy 9.9.9");
     expect(lines.every(line => { try { JSON.parse(line); return false; } catch { return true; } })).toBe(true);
   });
 

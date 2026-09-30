@@ -100,7 +100,10 @@ export function createResponsesEffects(
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       delete (parsed._rawBody as Record<string, unknown>).text;
     }
-    parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
+    parsed.context.messages = [
+      ...parsed.context.messages,
+      { role: "user", content: COMPACT_PROMPT, timestamp: Date.now() },
+    ];
   }
 
   let routedNamespaceToolAliases: RoutedNamespaceToolAliases = new Map();

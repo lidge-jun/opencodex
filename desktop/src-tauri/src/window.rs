@@ -1,5 +1,6 @@
 use crate::{auth::Auth, exit, AppState};
-use tauri::{AppHandle, Manager, Url, WebviewWindow, WindowEvent};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::{AppHandle, Manager, Runtime, Url, WebviewWindow, WindowEvent};
 
 pub fn webview_user_agent() -> String {
     let platform = if cfg!(target_os = "macos") {
@@ -50,11 +51,44 @@ pub fn navigation_allowed(app: AppHandle) -> impl Fn(&Url) -> bool {
             if url.scheme() == "http" && url.host_str() == Some(endpoint.host) {
                 return url.port_or_known_default() == Some(endpoint.port);
             }
-            if matches!(url.scheme(), "http" | "https") {
-                let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
-            }
+            open_in_default_browser(url);
         }
         false
+    }
+}
+
+/// Whether a URL the dashboard asked for belongs in the user's default browser.
+///
+/// Only web addresses leave the app. Anything else a page could name (`file:`, `javascript:`,
+/// a custom scheme) has no business being handed to the OS launcher from a webview.
+fn opens_in_default_browser(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
+pub fn open_in_default_browser(url: &Url) {
+    if opens_in_default_browser(url) {
+        let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+    }
+}
+
+/// What a `window.open` or `target="_blank"` link from a shell webview does.
+///
+/// The shell never grows a second webview: every such request is answered in the default
+/// browser and the in-app window is denied. Without this handler the pinned wry answers the
+/// request itself, and on no platform does that reach a browser: WebView2 marks it handled and
+/// drops it, WebKitGTK creates nothing, and WKWebView only gets there when its navigation policy
+/// happens to see the URL first. That is how the dashboard's "didn't open? open the login page"
+/// link, and the device-code logins that rely on it, did nothing in the app.
+///
+/// It is also why the opener plugin's click interceptor is switched off in `lib.rs`: that script
+/// cancels a `_blank` click and asks for `plugin:opener|open_url` over IPC, which the loopback
+/// dashboard is not granted, so the click was consumed and nothing opened. Routing links here
+/// instead keeps the decision in one Rust function and adds no IPC grant to a remote origin.
+pub fn open_new_windows_in_default_browser<R: Runtime>(
+) -> impl Fn(Url, NewWindowFeatures) -> NewWindowResponse<R> + Send + 'static {
+    |url, _features| {
+        open_in_default_browser(&url);
+        NewWindowResponse::Deny
     }
 }
 
@@ -150,11 +184,31 @@ pub fn set_tray_policy(app: &AppHandle, visible: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_app_origin, is_update_page_url, webview_user_agent};
+    use super::{is_app_origin, is_update_page_url, opens_in_default_browser, webview_user_agent};
     use tauri::Url;
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("a url")
+    }
+
+    #[test]
+    fn only_web_addresses_are_handed_to_the_default_browser() {
+        for value in [
+            "https://auth.openai.com/oauth/authorize?client_id=x",
+            "https://github.com/login/device",
+            "http://127.0.0.1:1455/auth/callback",
+        ] {
+            assert!(opens_in_default_browser(&url(value)), "{value}");
+        }
+        for value in [
+            "about:blank",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "tauri://localhost/index.html",
+            "mailto:someone@example.com",
+        ] {
+            assert!(!opens_in_default_browser(&url(value)), "{value}");
+        }
     }
 
     #[test]

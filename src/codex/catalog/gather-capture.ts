@@ -120,6 +120,8 @@ export interface CatalogGatherProviderModelOutcome {
 export interface ModelsAuthResolution {
   readonly apiKey: string | undefined;
   readonly observed: boolean;
+  readonly oauthAccountId?: string;
+  readonly oauthGeneration?: string;
   readonly oauthApiBaseUrl?: string;
   readonly oauthProjectId?: string;
 }
@@ -531,6 +533,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     defaultModel: prov.defaultModel ?? null,
     ctx: prov.contextWindow ?? null,
     ctxW: prov.modelContextWindows ?? null,
+    ctxTier: prov.modelContextTiers ?? null,
     maxIn: prov.modelMaxInputTokens ?? null,
     maxOut: prov.modelMaxOutputTokens ?? null,
     autoCompact: prov.modelAutoCompactTokenLimits ?? null,

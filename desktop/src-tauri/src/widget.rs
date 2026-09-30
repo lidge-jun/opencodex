@@ -296,8 +296,8 @@ mod macos {
         last_reload: Option<f64>,
         now: f64,
     ) -> bool {
-        previous.map_or(true, |previous| displayed(previous) != displayed(snapshot))
-            && last_reload.map_or(true, |last| now - last >= RELOAD_INTERVAL_SECONDS)
+        previous.is_none_or(|previous| displayed(previous) != displayed(snapshot))
+            && last_reload.is_none_or(|last| now - last >= RELOAD_INTERVAL_SECONDS)
     }
 
     static LAST_RELOAD: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);

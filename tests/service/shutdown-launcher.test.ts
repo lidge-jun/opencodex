@@ -108,6 +108,11 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         // no-ops when no config.toml exists) — this lets us prove the config is RESTORED.
         const codexConfig = join(home, "config.toml");
         writeFileSync(codexConfig, 'model = "gpt-5.1"\n');
+        // Pin the configured port to this test's own port. `ocx start` probes the CONFIGURED
+        // port for a live owner even with no state files, and a fresh home defaults to 10100.
+        // On a developer machine running ocx there, the child found that proxy, took the sibling
+        // path and by design never injected Codex config, so this test could not pass locally.
+        writeFileSync(join(home, "config.json"), JSON.stringify({ port }));
 
         // stdout/stderr are CAPTURED, not discarded.
         //
@@ -126,6 +131,10 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
             USERPROFILE: identity.userProfile,
             OPENCODEX_HOME: home,
             CODEX_HOME: home,
+            // Inherited real state must not make the child a sibling of the host's proxy either
+            // (same pinning as tests/cli/sibling-home-client-sync.test.ts).
+            GROK_HOME: join(home, "grok"),
+            OCX_OWNER_REGISTRY_DIR: join(identity.homeDir, ".opencodex", "ocx-homes"),
             ...identity.serviceManagerEnv,
           },
         });

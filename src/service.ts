@@ -26,6 +26,8 @@ export type { WindowsSchedulerRegistrationStageDeps, FreshWindowsSchedulerRegist
 export { windowsListenPort, winswListenPort, writeServiceDefinitionFile, definitionCarriesCredential, stageWindowsSchedulerRegistrationXml, stageElevatedSchedulerRegistration, describeElevatedRegistrationFailure, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, assertWindowsNativeServiceAccountSupported, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, classifyWindowsServiceStop } from "./service/windows-ops";
 export type { ServiceRepairVerb, RepairServiceDeps } from "./service/repair";
 export { repairService, foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./service/repair";
+export type { ServiceChildOwnershipDecision } from "./service/service-child-ownership";
+export { serviceChildOwnershipDecision, serviceChildStayOutExitCode } from "./service/service-child-ownership";
 export type { ServiceInstallPreparationDeps, FreshWindowsSchedulerInstallDeps, ServiceStopOutcome, ServiceUninstallOutcome } from "./service/orchestration";
 export { proxyStillLiveAfterStop, prepareServiceInstall, installServiceSafely, installFreshWindowsSchedulerSafely, installedServiceRespawnRisk, stopServiceIfInstalledDetailed, setUninstallServiceHooksForTests, uninstallServiceDetailed, uninstallServiceIfInstalled, isServiceInstalled, isServiceViable } from "./service/orchestration";
 export type { ServiceDiagnostic, WindowsTaskDiagnosticIdentityDeps, WindowsServiceDiagnosticInputs, LaunchdServiceDiagnosticInputs } from "./service/diagnostics";

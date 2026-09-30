@@ -1,6 +1,13 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 
+export interface AnthropicModelRoute {
+  name: string;
+  match: string;
+  accounts: string[];
+  fallback?: boolean;
+}
+
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
   /**
@@ -520,6 +527,8 @@ export interface OcxConfig {
    * the guess is wrong.
    */
   oauthOpenBrowser?: boolean;
+  /** Display Codex credits on account cards; display only, default off. */
+  showCodexCredits?: boolean;
   /**
    * @deprecated Compatibility-only limit for bounded legacy usage readers.
    * `GET /api/usage` always aggregates the complete ledger.
@@ -846,13 +855,14 @@ export interface OcxConfig {
    */
   quotaResetNotify?: OcxQuotaResetNotifyConfig;
   /**
-   * Periodic provider model-catalog refresh (issue #3630). Absent means off: no timer, no
-   * refresh pass, no outcome record.
+   * Periodic provider model-catalog refresh (issue #3630). Absent means on at the hourly
+   * default; `enabled: false` or `intervalMinutes: 0` turns it off.
    *
-   * Off by default for the same reason every optional subsystem here is: a refresh spends a
-   * live /models call against every enabled provider, and this repository's rule is that a
-   * default install runs no detection code and starts no live timer work. Not in
-   * `getDefaultConfig()` — absence is the only default state this feature has.
+   * It started opt-in, and that is why GPT-6.1 Sol never reached an install without a
+   * release: nobody had turned the section on, so the authenticated Codex roster that
+   * announces a new model was never re-read. One hourly pass costs a live /models call per
+   * enabled provider, which is the price of new models appearing on their own. Not in
+   * `getDefaultConfig()` — absence is the default state.
    */
   catalogAutoRefresh?: OcxCatalogAutoRefreshConfig;
   /** Active provider context limits; native long windows remain within their supported ceilings. */
@@ -1197,6 +1207,8 @@ export interface OcxConfig {
     stickyLimit?: number;
     /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
     quotaWindow?: OcxAccountPoolQuotaWindow;
+    /** Ordered model allowlists; inactive while the pool is disabled. Stored account IDs only. */
+    routes?: AnthropicModelRoute[];
   };
   /**
    * Generic OAuth multi-account PROACTIVE account preference (#2568, #695).
@@ -1569,6 +1581,23 @@ export interface OcxCodexPoolConfig {
    * operator never meant to exclude.
    */
   excludedPlans?: string[];
+  /** Optional per-account response to fresh quota observations at or above a usage percentage. */
+  lowQuotaProtection?: CodexLowQuotaProtectionConfig;
+}
+
+/** Optional policy for pausing accounts and notifying when selected quota windows are low. */
+export interface CodexLowQuotaProtectionConfig {
+  enabled: boolean;
+  /** Inclusive usage percentage from 1 to 100. */
+  threshold: number;
+  actions: {
+    pause: boolean;
+    notify: boolean;
+  };
+  windows: {
+    short: boolean;
+    weekly: boolean;
+  };
 }
 
 /**
@@ -1619,14 +1648,12 @@ export interface OcxQuotaResetNotifyConfig {
 /**
  * Periodic model-catalog auto-refresh settings (issue #3630).
  *
- * Every field is optional and the whole section defaults to off. Each tick converges the
+ * Every field is optional and an absent section runs hourly. Each tick converges the
  * served catalog the same way `ocx sync` does, which costs a live /models call against
- * every enabled provider — so an install that never asked for this must run no refresh
- * code and start no timer, matching the optional-subsystem rule the rest of this file
- * follows.
+ * every enabled provider; set `enabled: false` to keep the catalog to explicit syncs.
  */
 export interface OcxCatalogAutoRefreshConfig {
-  /** Master switch. Default false — no scheduler, no tick, no upstream calls. */
+  /** Master switch. Default true; false leaves the timer dormant with no upstream calls. */
   enabled?: boolean;
   /**
    * Minutes between refresh ticks. Default 60, floor 15, and 0 keeps the timer dormant

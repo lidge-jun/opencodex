@@ -110,9 +110,9 @@ Provider Overview consumes the existing shared `add-provider-presets` resource f
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
 endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.
 `ProviderSponsor` keeps localized promotional copy and outbound HTTP(S) links separate from
-operator notes. Notes remain complete and editable once in the main column; stats and current
-account quota remain in the side column. This presentation does not write provider configuration
-or participate in routing.
+operator notes; its brand table maps each sponsor preset id (OrcaRouter, PackyCode, TokenLab) to a
+name and i18n copy, and a sponsor preset without a row renders nothing. Notes stay editable once in
+the main column; stats and account quota stay in the side column. Nothing here writes config or routes.
 
 Provider marks remain a name-to-asset projection in `gui/src/provider-icons.ts`. The Crusoe preset
 maps to the self-hosted multicolor `gui/public/provider-icons/crusoe.svg`; the gradient is rendered
@@ -292,7 +292,7 @@ surface filtering. `managementUsageMaxReadBytes` remains a recognized compatibil
 bounded legacy readers, but it is not an accuracy limit or tuning knob for `GET /api/usage`.
 A Codex-surface response includes an `accounts` breakdown keyed by stable non-PII `accountLogLabel`; cards join it to the management account DTO for 30-day tokens, API-equivalent cost and coverage. New main-pool rows use `main`; legacy bare `openai` rows remain ambiguous.
 A missing `usage.jsonl` returns a zeroed summary with 200 because a fresh install has no usage. Unmeasured requests remain distinct from measured zero through `measured / reported / unreported / unsupported / estimated` counts and their coverage totals.
-The Usage tab renders that shape and the main Dashboard shows its 30-day summary. The 200-entry in-memory `requestLog` is not the aggregation source; the JSONL ledger is.
+The Usage tab renders that shape and the main Dashboard shows its 30-day summary. The 200-entry in-memory `requestLog` is not the aggregation source; the JSONL ledger is. Usage table scrollports in `gui/src/styles-usage-workspace.css` contain absolute screen-reader captions so long tables do not extend the outer document beyond the report; `gui/tests/usage-scroll-browser.ts` measures that boundary and last-row reachability at desktop and mobile widths.
 Ledger read failures instead return `500 { error: "read_failed" }`. Shared GUI usage admission reads that body before classifying HTTP failure and also rejects the legacy HTTP-200 envelope, so every shared cache retains its last valid report rather than fabricating zero totals.
 > Decision record: [ADR-0106](decisions/ADR-0106-usage-read-failure-contract.md)
 
@@ -382,7 +382,7 @@ roster the exporter itself iterates. The count is
 deliberately not restated here: it was written as eight, a bounded label value was added, and the
 documentation then contradicted the output it describes. A
 logical request increments once, physical sends sum the finalized attempt counts, and each distinct
-recovery kind already retained on an attempt contributes once to its coarse class.
+recovery kind already retained on an attempt contributes once to its coarse class. The Antigravity validation-refusal sibling resend records `oauth-account-403`, which Logs labels from the shared recovery roster.
 `opencodex_request_failures_total` counts the cause the recorder derived and never re-derives one,
 and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
@@ -478,7 +478,7 @@ advances the observation clock, so a retained older row cannot defer evaluation 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
 
-The provider editor field policy exposes `showThinkingSummary` as a boolean provider option; it controls Responses summary defaults without a dashboard rendering change. See [Google provider](providers/google.md).
+The provider editor field policy exposes `showThinkingSummary` as a boolean provider option; it controls Responses summary defaults without a dashboard rendering change. See [Google provider](providers/google.md). It also exposes `hideRawReasoning` as a boolean option, which suppresses only the raw reasoning channel and leaves provider-authored summaries visible; a dashboard save keeps an omitted value for the same provider name even after a destination move, while `PATCH` accepts a boolean or `null` to clear it. The display contract is owned by [Chat compatibility](providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
 
 The same editor policy accepts the per-model `inlineThinkTagModels` string list. Its opt-in
 format contract is owned by [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).

@@ -73,6 +73,14 @@ deltas, 그리고 정확히 하나의 종료 `response.completed`, `response.fai
 `stream: false`이거나 `stream`이 없으면, 같은 adapter 이벤트가 하나의 Responses JSON 객체로 수집됩니다.
 두 형식 모두 선택한 모델, output item, 종료 상태, usage를 보존합니다.
 
+canonical ChatGPT Codex 경로는 upstream이 SSE만 받으므로 upstream 요청에만 `stream: true`를 사용합니다.
+OpenCodex는 종료 스트림을 제한된 크기 안에서 검증한 뒤 클라이언트가 요청한 JSON 형태로 접습니다.
+명시적인 `store` 값은 바꾸지 않으며, 검증에 실패하면 일부 JSON을 HTTP 200으로 반환하지 않고 오류로
+끝냅니다. 한도는 프레임당 4 MiB, transcript와 재구성 입력 각각 32 MiB, 100,000 SSE 프레임, 재구성
+output item 10,000개입니다. `stallTimeoutSec`는 첫 body byte와 이후 무응답 간격에 모두 적용됩니다.
+값이 `0`이거나 로컬 upstream 기본값으로 비활성화된 경우 즉시 만료하지 않고, 독립된 15분 전체 상한만
+적용합니다. 스트리밍 클라이언트의 동작은 바뀌지 않습니다.
+
 클라이언트로 전달되는 Responses SSE 프레임은 SSE 블록 구분자 앞의 원시 바이트 기준으로 프레임당 4 MiB로 제한됩니다. HTTP에서는 구분자 없이 이 한도를 초과한 업스트림 프레임을 합성 `response.failed` 이벤트와 이어지는 `data: [DONE]`으로 fail closed 처리합니다. Responses WebSocket 브리지에서는 같은 조건에서 502 `websocket_protocol_error`를 보내고 업스트림 reader를 취소합니다. 완전한 Responses 종료 프레임이 이미 수신된 경우에는 그 종료가 우선하며, 이후의 과도한 크기 또는 잘못된 바이트는 완료된 턴을 전송 오류로 바꾸지 않고 버립니다.
 
 :::note

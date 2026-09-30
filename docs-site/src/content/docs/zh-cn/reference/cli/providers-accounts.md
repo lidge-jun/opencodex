@@ -97,7 +97,7 @@ alias <provider> <id|alias> <display-name|->  Set or clear an account's display 
 pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
-clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -173,9 +173,26 @@ Codex Pool 选择会清除进程本地 affinity，并从下一次请求开始生
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+CLI 命令通过 id 或唯一别名暂停或恢复 Anthropic OAuth 账户。别名先精确匹配，再进行不区分大小写的匹配。CLI 和仪表板使用同一个 `PUT /api/oauth/accounts/pause`，请求体为 `{ provider: "anthropic", accountId, paused }`。`paused` 保存在账户中，并通过 `GET /api/oauth/accounts` 返回。即使主动账户池已关闭，暂停账户也会从选择、会话绑定和 429 后继候选中排除。所有账户暂停时，请求返回 403，直到恢复一个账户。已经发送的请求继续执行，凭证和健康状态保持不变。重启或重新登录仍保留暂停，删除账户时一并清除。此操作不包含账户级自动切换阈值。
+
 ### `ocx account clear <provider> [--json]`
 
 在不解析账号 id 的情况下清除 Codex 账号的手动选择，因此即使存在名为 `auto` 的账号也有效。仅适用于 Codex Pool；其他提供商类型没有可恢复的自动选择。
+
+### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
+
+清除进程本地的失败冷却，但不更改已保存的凭据。Codex Pool 账号使用 `openai`，Anthropic
+OAuth 账号使用 `anthropic`；其他 provider 会被拒绝。两种形式都接受账号 id 或唯一别名，
+而 `main` 仅适用于 Codex Pool。
+
+```bash
+ocx account clear-cooldown anthropic <id-or-alias>
+```
+
+即使没有活动冷却，命令也会成功，JSON 中的 `cleared` 为 `false`。清除 Anthropic 冷却还会
+推进账号 generation，因此旧的 quota probe 无法恢复已清除的状态或发布过期的配额资格。
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -192,7 +209,11 @@ token，也不是简单重读账号列表。`--json` 返回
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值只有在 `pool.kernel` 打开且 `strategy: "fill-first"` 时才参与选择；标志关闭时，保存阈值不会启用阈值切换。两种情况下都不会改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值已保存但未应用，`inert: false` 表示账户池正在应用它。没有 `inert` 字段表示能力未知，此时同样不会报告 `enabled: true`。API 密钥提供方、Anthropic 和无效值会被拒绝。
+控制 `openai` Codex 账户池阈值，或保存通用 OAuth 账户池阈值。`on` 保存 80%，`off` 保存 0%，`threshold <n>` 接受 0–100。通用池的阈值只有在 `pool.kernel` 打开且 `strategy: "fill-first"` 时才参与选择；标志关闭时，保存阈值不会启用阈值切换。两种情况下都不会改变提供方启用设置或禁用 429 错误后的轮换。通用池的查询和修改结果使用服务器确认值。通用池的 `poolEnabled` 是已保存的提供方设置，`null` 表示未指定，并不代表继承后的实际状态。`inert: true` 表示阈值已保存但未应用，`inert: false` 表示账户池正在应用它。没有 `inert` 字段表示能力未知，此时同样不会报告 `enabled: true`。API 密钥提供方和无效值会被拒绝。
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Anthropic OAuth 使用 `ocx account auto-switch anthropic threshold 90 --account <id>` 保存账户专属整数 0–100。`off --account <id>` 设为 0，`on --account <id>` 设为 80，`inherit --account <id>` 恢复继承，`status --account <id>` 只读查询；可加 `--json`。账户卡片提供相同控制。未设置/null 继承 `anthropicAccountPool.autoSwitchThreshold`（默认 80）；0 只禁用该账户按用量切换。设置在重启和重新登录后保留，删除账户时移除。手动选择、affinity、未知或全部耗尽时的后备行为与模型路由限制不变。池禁用时不应用阈值；暂停与 429 恢复仍有效。
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

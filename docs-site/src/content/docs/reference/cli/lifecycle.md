@@ -88,12 +88,25 @@ one-line message. Exit codes are identical with and without `--json`: 0 on succe
 79 when only Codex history cleanup did not complete, and 80 when the shared teardown was deferred
 and is still owed.
 
+For a desktop-approved takeover, `ocx stop --json` also accepts the complete set of
+`--expect-*` values supplied by `ocx resolve --json`. On Windows, this guarded stop can
+stop a Task Scheduler task only when its registered definition, running state, and wrapper
+ancestor prove it owns the approved proxy. A WinSW service must prove its installed binary
+path and service PID ancestry. After stopping either manager, the CLI signals the approved
+proxy separately and verifies that the task is no longer running, no wrapper survives, and
+WinSW is stopped. A `wscript.exe`, `cscript.exe`, or `cmd.exe` process with an
+unreadable command line in the approved proxy's supervision chain (or surviving under the
+stopped manager) leaves wrapper ownership unknown, so the guarded stop cannot report success.
+Missing or unreadable evidence blocks the guarded stop.
+
 ### `ocx restart`
 
 When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
 normal drain, and verify a different runtime PID on the same port. Managed routing and service
 supervision stay installed throughout; an uncertain request is observed rather than replayed as a
 separate stop/start. If no proxy is running, the command falls back to the normal `ensure` start.
+If an accepted restart loses its replacement, the command attempts a bounded recovery start even
+when Codex autostart is disabled, and reports failure if no proxy starts.
 When the proxy starts its own replacement (no background service supervises it) after the drain
 finished normally, a replacement that exits before it answers is started again up to twice. What
 the replacement prints goes to `~/.opencodex/restart-handoff.log`, which stays near 256 KiB: a
@@ -104,6 +117,27 @@ If a live listener cannot be attested to a runtime PID (including a pre-update p
 closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by
 `ocx service start` so supervision is restored.
+One invocation re-observes transient discovery races. A failed start is retried only when
+the previous attempt never launched a child or the launched child is known to have exited.
+If a launch may still be running, restart reports the original failure without starting
+a second proxy, even when a health probe finds nothing. When an accepted restart never publishes a replacement, the command re-observes
+once before giving up — a proxy that crashed mid-restart reads absent and is started fresh,
+while a replacement that landed just past the shortened replacement wait still proves success within the overall observation deadline. A live target is
+never stopped to make room, so a stale-but-listening process can not be replaced by a second
+proxy racing it for the port.
+Every failed start attempt is followed by a beat and a strong re-observation before the
+next attempt: a child that was just launched may still be binding, and post-health steps
+may have thrown on an already-serving proxy. A live reading means
+no second start is spawned: a clean refusal then attests success, while a throw
+propagates as a start failure because post-health work failed on a serving process.
+During crash recovery after an accepted live restart, success instead requires a different
+runtime PID on the original port: if the original PID reads live again, the restart fails
+as a missed replacement rather than reporting success.
+Confirmed absence and launch-exit evidence together permit another start attempt. While the previous PID is still live, or a probe is uncertain, the
+confirmation window keeps polling for a replacement inside the reserve instead of
+failing at once. A second proxy is never spawned next to a live one.
+The replacement wait ends early enough that the confirmation window still fits inside the
+overall observation deadline.
 
 Port recovery after stop or update respects a failed OCX process check even when the PID was
 recorded before shutdown. A rejected live holder is left running and prevents TCP-row cleanup.
@@ -287,6 +321,11 @@ effective port, and the identity-checked liveness verdict. `--json` emits one ve
 document (`schema: "ocx-resolve/1"`) with `cliVersion`, `configHome`, `port`
 (`effective`, `configured`, and `source`), and `liveness` (`status`, `pid`, `port`,
 `source`, plus `version`, `role`, and `hostname` when the live proxy reports them).
+When a proxy is live the document also carries `versionSkew` — the same comparison
+`ocx status` and `ocx doctor` surface — with `cliVersion`, `proxyVersion`, `skewed`,
+a `relation` of `match`, `cli-newer`, `proxy-newer`, `incomparable`, or `unknown`,
+and the operator-facing `warning`. Shells read `relation` rather than reparsing the
+warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the listener.
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
@@ -431,6 +470,15 @@ previous catalog from memory.
 
 ## Background service
 
+A managed service may start a newer installation that previously served the same
+OpenCodex home, even when its service definition still points to an older install.
+If that newer child exits before binding, with any exit code, the original service starts instead
+and applies its own checks before serving.
+Foreground starts and client-launched proxies keep their selected executable.
+On Windows, this applies to Task Scheduler and newly installed or repaired native WinSW
+services. A native WinSW definition created before this behavior needs `ocx service repair`
+to refresh its XML before it can hand off to a newer install.
+
 ### `ocx service [install|repair|restart|start|stop|status|uninstall|remove]`
 
 On Windows Task Scheduler, the service wrapper restarts the proxy after five seconds
@@ -454,6 +502,10 @@ interrupted package update removed either file, it logs one `installation is inc
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
 run `ocx service repair` to refresh the task with the restored package paths.
 
+Service definitions omit shell-local version-manager multishell directories from their saved
+`PATH`. This includes the native Windows service installed with `ocx service install --native`;
+run `ocx service repair` to regenerate an older WinSW definition with a durable `PATH`.
+
 On Linux, the systemd unit invokes the first regular, executable `ocx` file found on `PATH` at
 install time rather than the Bun and CLI paths inside the installed package tree. Version managers
 such as **mise** and **asdf** install into a versioned directory and delete the old one on upgrade;
@@ -465,6 +517,9 @@ On macOS, launchd instead uses the package-local Bun and CLI paths selected duri
 repair. This prevents a mutable PATH shim from receiving the service API token and configured proxy
 environment on a later restart. After upgrading a version-manager installation, run
 `ocx service repair` to refresh those paths before restarting the service.
+Launchd restarts the proxy after a crash or failed restart handoff, but leaves it stopped when
+the service deliberately exits cleanly because the desktop app owns the runtime. Run
+`ocx service repair` once to apply this behavior to a service installed by an older version.
 
 Definitions installed before this change still carry the old versioned paths and cannot migrate
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
@@ -501,6 +556,11 @@ supersedes it rather than replacing it.
 
 A state file with no ownership record means the CLI installation owns the runtime, which is what
 every installation made before this feature is in. Nothing changes for you until an app takes over.
+
+Supervised service children also check the recorded owner before startup and once more while
+holding the startup ownership lease, before choosing a port or publishing a PID. If the desktop
+app claims the runtime during startup, the service child stands down even if the desktop proxy
+has not begun listening yet. An unreadable ownership record has the same stand-down behavior.
 
 Home paths inside a state record are compared with the current home by the physical directory they
 resolve to, not just their spelling. A junction or symlink recorded under an older install still

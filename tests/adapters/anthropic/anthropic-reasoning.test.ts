@@ -26,17 +26,19 @@ async function bodyOf(p: OcxParsedRequest, configuredProvider = provider): Promi
 }
 
 describe("anthropic extended-thinking gate", () => {
-  test("reasoning 'none' does NOT enable thinking and preserves temperature/top_p", async () => {
+  // Sonnet 4.5 takes temperature or top_p alone but 400s on both (live 2026-09-29), so a request
+  // carrying both keeps temperature; each field alone survives.
+  test("reasoning 'none' does NOT enable thinking and preserves temperature", async () => {
     const b = await bodyOf(parsed("none", { temperature: 0.3, topP: 0.9 }));
     expect(b.thinking).toBeUndefined();
     expect(b.temperature).toBe(0.3);
-    expect(b.top_p).toBe(0.9);
+    expect(b.top_p).toBeUndefined();
   });
 
   test("reasoning absent does NOT enable thinking and preserves sampling", async () => {
-    const b = await bodyOf(parsed(undefined, { temperature: 0.5, topP: 0.8 }));
+    expect((await bodyOf(parsed(undefined, { temperature: 0.5 }))).temperature).toBe(0.5);
+    const b = await bodyOf(parsed(undefined, { topP: 0.8 }));
     expect(b.thinking).toBeUndefined();
-    expect(b.temperature).toBe(0.5);
     expect(b.top_p).toBe(0.8);
   });
 
@@ -366,7 +368,8 @@ describe("anthropic extended-thinking gate", () => {
     const b = await bodyOf(parsed("none", { temperature: 0.3 }, "claude-fable-5"));
     expect(b.thinking).toBeUndefined();
     expect(b.output_config).toBeUndefined();
-    expect(b.temperature).toBe(0.3);
+    // Fable rejects any non-default temperature (live 2026-09-29), so the adapter drops it.
+    expect(b.temperature).toBeUndefined();
   });
 
   // #545: Claude Desktop's Auto Mode classifier sends thinking:{type:"disabled"} with

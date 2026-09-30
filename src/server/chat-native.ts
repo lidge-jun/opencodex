@@ -336,6 +336,7 @@ export async function runNativeChatAttempt(
       requestedStream,
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
       config.fastMode,
+      route.providerName,
     );
   };
   try {

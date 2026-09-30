@@ -58,9 +58,9 @@ import {
   selectProactiveApiKeyTransport,
   transientRetryPolicyFor,
 } from "../providers/key-failover";
-import { stampApiKeyAccountLabel, stampOAuthAccountLabel } from "../providers/label";
-import { publicOAuthAuthenticationErrorMessage } from "../oauth";
-import { hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
+import { stampApiKeyAccountLabel } from "../providers/label";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
 import { resolveProtocolSettings } from "../protocols/settings";
 import { addProtocolEntryReason, markProtocolBlocked } from "../protocols/trace";
 import type { OcxProviderTransport } from "../providers/xai-transport";
@@ -150,7 +150,7 @@ export interface HandleNativeMessagesOptions {
   callerAnthropicBeta?: string | null;
 }
 
-type FinishLog = (status: number, message?: string, closeReason?: FinalRequestLogMeta["closeReason"]) => void;
+type FinishLog = (status: number, message?: string, meta?: FinalRequestLogMeta) => void;
 
 /** Relay an upstream body unchanged, recording first output on its first non-empty chunk. */
 function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void): ReadableStream<Uint8Array> {
@@ -311,10 +311,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   attemptHandle.seal(logCtx.accountLogLabel);
   const { attempt } = attemptHandle;
   const finalLog = createFinalRequestLog(logIds, logCtx);
-  const finishLog: FinishLog = (status, message, closeReason = "non_stream") => {
+  const finishLog: FinishLog = (status, message, meta = { closeReason: "non_stream" }) => {
     if (finalLog.finished()) return;
     if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
-    finalLog.finish(status, { closeReason });
+    finalLog.finish(status, meta);
   };
   const bindUsage = (usage: OcxUsage | undefined) => {
     if (!usage) return;
@@ -327,6 +327,16 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
     return anthropicErrorResponse(status, safeMessage, type, code);
+  };
+  const localOAuthFailure = (error: unknown): Response | null => {
+    if (error instanceof AnthropicAccountCooldownError) {
+      const response = fail(429, error.message, "rate_limit_error");
+      if (error.retryAfterSeconds !== null) response.headers.set("retry-after", String(error.retryAfterSeconds));
+      return response;
+    }
+    if (error instanceof OAuthAccountPausedError) return fail(403, publicOAuthAuthenticationErrorMessage(error), "permission_error");
+    if (error instanceof OAuthLoginRequiredError) return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+    return null;
   };
 
   try {
@@ -366,6 +376,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       cleanupAbort();
       upstream.abort();
       if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
+      const localRefusal = localOAuthFailure(error);
+      if (localRefusal) return localRefusal;
       if (error instanceof NativeOAuthSelectionChangedError) return fail(409, error.message, "api_error");
       return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
     }
@@ -376,7 +388,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   }
   let activeProvider: OcxProviderConfig = oauthBinding ? oauthProvider(oauthBinding) : route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-  if (oauthBinding) stampOAuthAccountLabel(logCtx, route.providerName, activeProvider, oauthBinding.snapshot.accountId);
+  if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = attachRequestSpendTracker(req, logCtx);
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
@@ -460,14 +472,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             if (oauthBinding) {
               // The OAuth twin of the key check below: re-resolve through the same selection
               // owner when the committed account or its credential moved since the build.
-              if (!nativeOAuthBindingIsCurrent(oauthBinding)) {
+              for (let attempt = 0; !nativeOAuthBindingIsCurrent(oauthBinding); attempt++) {
+                if (attempt >= 3) throw new NativeOAuthSelectionChangedError();
                 try {
                   oauthBinding = await resolveNativeOAuthBinding(config);
-                } catch {
+                } catch (error) {
+                  if (error instanceof OAuthAccountPausedError || error instanceof OAuthLoginRequiredError
+                    || error instanceof AnthropicAccountCooldownError) throw error;
                   throw new NativeOAuthSelectionChangedError();
                 }
                 rebuildFor(oauthProvider(oauthBinding));
-                stampOAuthAccountLabel(logCtx, route.providerName, activeProvider, oauthBinding.snapshot.accountId);
+                logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
               }
             } else if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
               const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
@@ -569,6 +584,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       finishLog(429);
       return refusal;
     }
+    const localRefusal = localOAuthFailure(sendError);
+    if (localRefusal) return localRefusal;
     if (sendError instanceof NativeOAuthSelectionChangedError) return fail(409, sendError.message, "api_error");
     if (sendError instanceof NativeOpaqueStateRefusal) {
       logCtx.errorCode = "unsupported_feature";
@@ -597,7 +614,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
+    // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
+    // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
+    const bodyGuard = resolvePassthroughBodyGuard(config, upstream.signal);
     const observed = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
@@ -609,7 +628,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         try {
           cleanupAbort();
           bindUsage(logCtx.usage);
-          finishLog(status, undefined, meta.closeReason);
+          finishLog(status, undefined, meta);
           if (meta.closeReason !== "terminal") upstream.abort();
         } finally {
           releaseStreamTurn();
@@ -621,9 +640,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       });
     }
     // A non-streaming caller whose upstream streamed anyway: fold the stream into one message.
-    const tapState: { closeReason?: FinalRequestLogMeta["closeReason"] } = {};
+    const tapState: { closeReason?: FinalRequestLogMeta["closeReason"]; meta?: FinalRequestLogMeta } = {};
     const tapped = tapAnthropicSseForLog(source, logCtx, (_status, meta) => {
       tapState.closeReason = meta.closeReason;
+      tapState.meta = meta;
     }, bodyGuard);
     try {
       const message = await collectAnthropicMessage(tapped, requestedModel, translatorBudget);
@@ -634,7 +654,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       bindUsage(logCtx.usage);
       if (message.type === "error") {
         const error = isRec(message.error) ? message.error : {};
-        return fail(502, typeof error.message === "string" ? error.message : "upstream stream failed", "api_error");
+        const text = typeof error.message === "string" ? error.message : "upstream stream failed";
+        // The tap's own verdict (a reset, a stall, the byte cap) closes this row with the same meta
+        // as the streaming lane's row; a plain upstream error event keeps the non_stream row.
+        const tapMeta = tapState.meta;
+        if (tapMeta && (tapMeta.terminalStatus || tapMeta.closeReason !== "terminal")) finishLog(502, text, tapMeta);
+        return fail(502, text, "api_error");
       }
       finishLog(200);
       return Response.json(message);

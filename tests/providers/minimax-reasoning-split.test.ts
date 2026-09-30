@@ -375,3 +375,85 @@ describe("MiniMax split reasoning", () => {
     expect(events.some(e => e.type === "reasoning_raw_delta")).toBe(false);
   });
 });
+
+describe("MiniMax-M3.1-Flash-Preview reasoning wire", () => {
+  // Probed 2026-09-30: thinking cannot be turned off (effort none or thinking disabled
+  // answers 400 code 2013), effort low..max is accepted as-is, reasoning_split is ignored
+  // and thinking always returns as reasoning_content.
+  const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+
+  test("Codex efforts go out as identity reasoning_effort and never disable thinking", () => {
+    const route = minimaxRoute(PREVIEW);
+    for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+      const sent = body(route.provider, route.modelId, effort);
+      expect(sent).toMatchObject({ model: PREVIEW, reasoning_effort: effort });
+      expect(sent).not.toHaveProperty("thinking");
+      expect(sent).not.toHaveProperty("reasoning_split");
+    }
+    expect(body(route.provider, route.modelId, "minimal")).toMatchObject({ reasoning_effort: "low" });
+    expect(body(route.provider, route.modelId, "ultra" as ReasoningEffort)).toMatchObject({ reasoning_effort: "max" });
+    const none = body(route.provider, route.modelId, "none" as ReasoningEffort);
+    expect(none).not.toHaveProperty("reasoning_effort");
+    expect(none).not.toHaveProperty("thinking");
+  });
+
+  test("the preview advertises low..max with max as the default", () => {
+    const route = minimaxRoute(PREVIEW);
+    expect(route.provider.modelReasoningEfforts?.[PREVIEW]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(route.provider.modelDefaultReasoningEfforts?.[PREVIEW]).toBe("max");
+    expect(route.provider.thinkingToggleModels ?? []).not.toContain(PREVIEW);
+    expect(route.provider.reasoningSplitModels ?? []).not.toContain(PREVIEW);
+    expect(route.provider.reasoningDetailsModels ?? []).not.toContain(PREVIEW);
+  });
+
+  test("prior thinking replays as reasoning_content", () => {
+    const route = minimaxRoute(PREVIEW);
+    const request = createOpenAIChatAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: {
+        messages: [
+          { role: "user", content: "first", timestamp: 0 },
+          {
+            role: "assistant",
+            timestamp: 1,
+            content: [
+              { type: "thinking", thinking: "prior reasoning" },
+              { type: "text", text: "prior answer" },
+            ],
+          },
+          { role: "user", content: "continue", timestamp: 2 },
+        ],
+      },
+      stream: false,
+      options: {},
+    });
+    const sent = JSON.parse(request.body as string) as { messages: Array<Record<string, unknown>> };
+    expect(sent.messages[1]?.reasoning_content).toBe("prior reasoning");
+    expect(sent.messages[1]?.reasoning_details).toBeUndefined();
+  });
+
+  test("streamed reasoning_content deltas surface as reasoning", async () => {
+    const route = minimaxRoute(PREVIEW);
+    const chunks = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "The user" } }] },
+      { choices: [{ index: 0, delta: { reasoning_content: " asks" } }] },
+      { choices: [{ index: 0, delta: { content: "391" } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const chunk of chunks) controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const events: Array<{ type: string; text?: string }> = [];
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(new Response(stream), createTranslatorBudget())) {
+      events.push(event);
+    }
+    const reasoning = events.filter(e => e.type === "reasoning_raw_delta").map(e => e.text).join("");
+    expect(reasoning).toBe("The user asks");
+    expect(events.filter(e => e.type === "text_delta").map(e => e.text).join("")).toBe("391");
+  });
+});

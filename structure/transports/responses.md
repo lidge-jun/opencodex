@@ -14,7 +14,7 @@ When a successful streamed native response has a missing or unrecognized non-JSO
 Optional Codex memory selection enters `src/server/responses/request-prepare.ts` for HTTP and WebSocket frames, as specified in [memory phase routing](responses-failover.md#memory-phase-routing); an unset phase keeps its existing route and starts no background work. Responses request preparation stabilizes incoming `<skills_instructions>` under `skills.catalog_refresh`: `per_session` (default) reuses the first received catalog for a conversation; `per_turn` leaves the supplied catalog unchanged. Other instruction sections and user/tool content remain untouched. Requests without a reliable conversation identity bypass snapshots; shared prompt-cache cohorts are not conversation identities. Only a body with exactly one catalog block across its instructions and developer/system content takes part; two or more pass through unchanged. A known snapshot is substituted before parsing, but a new catalog is stored only when preparation reaches its success return, so a request rejected by parsing or admission pins nothing. Without a named principal, snapshots are shared by conversation id only on a server that requires no data-plane auth. Snapshots are process-local, expire after four idle hours, and use bounded LRU retention; oversized blocks bypass caching. The dashboard's `src/codex/prompt-layers.ts` and `src/codex/prompt-text-probe.ts` continue observing current files for previews and do not own session snapshots.
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
-Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).
+Responses-compatible streaming output. The routed provider name follows every adapter build, including retries and continuations; only `github-copilot` injects a configured `modelContextTiers` value as upstream `contextTier`, while unconfigured passthrough retains the caller field. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).
 
 The `openai-responses` adapter preserves the incoming `User-Agent` as a non-credential fallback in
 both key and forward modes. A configured provider header with that name wins case-insensitively;
@@ -297,7 +297,7 @@ Anthropic Fast eligibility and downgrade recovery use the [Responses failover co
 
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
-to GUI static serving.
+to GUI static serving. Translated compaction uses the [historical image projection](responses-wire-shapes.md#compaction-image-input).
 
 Both entry points apply the Reserve opt-in refusal in
 [providers/openai-tiers.md](../providers/openai-tiers.md#public-provider-contract) before auth, host-circuit
@@ -417,14 +417,14 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission. |
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. |
-| `request-sidecar-auth.ts` | Sidecar credential resolution and vision preprocessing. |
+| `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
 | `response-effects.ts` | Completion notification, replay publication and live request-tool aliases. |
 | `request-send-budget.ts` | Request-wide send accounting, remaining allowance, the pending recovery permit and the shared ambiguous-resend grant. |
 | `reset-replay.ts` | The operator opt-in for replacing an ambiguous native Responses send, and the per-request grant both stages claim from. |
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
 | `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
-| `passthrough-delivery.ts` | Native HTTP/SSE/JSON delivery, rewrite/inspection, terminal accounting, and xAI tool-envelope filtering before continuation storage. |
+| `passthrough-delivery.ts`, `terminal-error-redaction.ts` | Native HTTP/SSE/JSON delivery, rewrite/inspection, terminal accounting, terminal diagnostic redaction before client delivery, and xAI tool-envelope filtering before continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
 | `sidecar-execution.ts` | Image/video versus web-search execution and their shared rotation hook. |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
@@ -584,8 +584,8 @@ count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bri
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in
 `sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
 keeps only allowlisted transport verdict codes. Adapter error events take a different path:
-`src/bridge/internal.ts` carries an event's own `code` into the SSE and JSON failure, after
-mapping cyber-policy codes to HTTP 400. The same file holds the shared usage shaping; `input_tokens_details` and
+`src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
+([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). The shared usage shaping's `input_tokens_details` and
 `output_tokens_details` are always emitted, with zero defaults, because strict Responses clients
 deserialize them as required fields.
 

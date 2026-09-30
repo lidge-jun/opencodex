@@ -88,6 +88,8 @@ export type EagerRelayOptions = {
   upstreamError?: string;
   /** Optional client-facing hint policy; inspection retains original frames. */
   terminalBoundary?: CodexSafetyBufferingFilterOptions;
+  /** Mask the selected outbound credential in synthetic failures. */
+  maskCredential?: (text: string) => string;
   /** Injectable clock for tests. */
   now?: () => number;
 };
@@ -123,7 +125,7 @@ export function relaySseEagerBounded(
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
   const encodeFailedTail = (error: unknown): Uint8Array | null => {
     try {
-      return failedTailFrame(terminalEncoder, error);
+      return failedTailFrame(terminalEncoder, error, opts?.maskCredential);
     } catch {
       return null;
     }
@@ -140,7 +142,7 @@ export function relaySseEagerBounded(
       return encodeFailedTail(error);
     }
     try {
-      return refusalFailedTailFrame(terminalEncoder, refusalMessage, refusalCode);
+      return refusalFailedTailFrame(terminalEncoder, refusalMessage, refusalCode, opts?.maskCredential);
     } catch {
       return null;
     }
@@ -335,6 +337,7 @@ export function relaySseEagerBounded(
                 terminalEncoder,
                 upstreamError,
                 terminalBoundary.upstreamRefusalCode(),
+                opts?.maskCredential,
               );
             queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {

@@ -803,7 +803,7 @@ JSON mode: `payload`.
 
 ### `ocx account pause`
 
-Exclude one account in a Codex or supported generic OAuth pool from automatic selection.
+Exclude one account in a Codex, Anthropic or supported generic OAuth pool from automatic selection.
 
 | Method | Route |
 |---|---|
@@ -817,11 +817,11 @@ Exclude one account in a Codex or supported generic OAuth pool from automatic se
 
 JSON mode: `envelope`.
 
-- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Generic OAuth pause never dispatches to that account: it is excluded from new requests, failover and refresh, and an all-paused pool answers 403. Anthropic is unsupported.
+- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
 
 ### `ocx account resume`
 
-Return a paused account to a Codex or supported generic OAuth pool.
+Return a paused account to a Codex, Anthropic or supported generic OAuth pool.
 
 | Method | Route |
 |---|---|
@@ -890,6 +890,25 @@ JSON mode: `envelope`.
 
 - Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting.
 
+### `ocx account routes`
+
+Read, replace, or clear Anthropic OAuth model account routes.
+
+| Method | Route |
+|---|---|
+| GET | `/api/pool/settings` |
+| PUT | `/api/pool/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--file` | string | Read a bounded JSON route array from a local file. |
+| `--clear` | boolean | Remove the stored routes. |
+| `--json` | boolean | Emit the unified settings response as JSON. |
+
+JSON mode: `envelope`.
+
+- Only anthropic is supported. The server validates route names, patterns, and account IDs.
+
 ### `ocx account auto-switch`
 
 Show or set the usage percentage at which a pool moves to another account.
@@ -900,15 +919,19 @@ Show or set the usage percentage at which a pool moves to another account.
 | PUT | `/api/codex-auth/auto-switch` |
 | GET | `/api/oauth/accounts/pool` |
 | PUT | `/api/oauth/accounts/pool` |
+| GET | `/api/oauth/accounts` |
+| PUT | `/api/oauth/accounts/auto-switch` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the stored threshold and whether it is applied. |
+| `--account` | string | Anthropic account ID; inherit restores the pool default, off stores zero. |
 
 JSON mode: `envelope`.
 
 - A bare invocation reads and never writes.
 - `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0-100.
+- Anthropic requires --account <id>; inherit sends null to restore its pool default. Manual/affinity precedence and pool-off recovery are unchanged.
 - For a generic OAuth pool, `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability.
 
 ### `ocx storage cleanup`
@@ -1077,7 +1100,7 @@ JSON mode: `none`.
 
 ### `ocx integration native`
 
-Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen).
+Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen) and, on request, the Private Inference installer Cursor's update channel advertises.
 
 | Method | Route |
 |---|---|
@@ -1087,6 +1110,7 @@ Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, 
 | PUT | `/api/native-integrations/codex` |
 | PUT | `/api/native-integrations/grok` |
 | GET | `/api/native-integrations/cursor` |
+| GET | `/api/native-integrations/cursor/local-installer` |
 
 | Flag | Value | Meaning |
 |---|---|---|
@@ -1183,6 +1207,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 66
-- of those, state-changing: 36
+- declared capabilities: 67
+- of those, state-changing: 37
 - head-resolved invocations: 2

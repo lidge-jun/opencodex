@@ -88,7 +88,7 @@ export function StartupDetailsSection({
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
   const serviceNeedsRepair = data.serviceSupported && data.serviceInstalled && data.serviceStale && !data.serviceConflict;
   const shimNeedsRepair = data.shimInstalled && !data.shimHealthy;
-  const actionsDisabled = installBusy !== null || failed || loading;
+  const actionsDisabled = installBusy !== null || failed || loading || data.desktop?.owned === true;
 
   return (
     <section className="panel startup-details">
@@ -96,6 +96,14 @@ export function StartupDetailsSection({
         <h3 className="panel-title">{t("startup.details")}</h3>
         <span className="muted mono">{data.platform}</span>
       </div>
+      {data.desktop && (
+        <div className="startup-detail-row">
+          <div><strong>{t("startup.protection.desktop")}</strong><span>{t(!failed && data.desktop.viable ? "startup.desktopHint" : "startup.desktopRecovery")}</span></div>
+          <div className="startup-detail-actions">
+            <StartupStateBadge ok={!failed && data.desktop.viable} yes={t("startup.viable")} no={t("startup.unhealthy")} />
+          </div>
+        </div>
+      )}
       <div className="startup-detail-row">
         <div><strong>{t("startup.service")}</strong><span>{t("startup.serviceHint")}</span></div>
         <div className="startup-detail-actions">
@@ -248,9 +256,10 @@ export function StartupRecoverySection({
         commands are the fallback. Open by default only while protection is missing.
       */}
       <details className="startup-recovery-details" open={data.status !== "protected"}>
-        <summary className="muted">{t("startup.recoveryHint")}</summary>
+        <summary className="muted">{t(data.desktop?.owned ? "startup.protection.desktop" : "startup.recoveryHint")}</summary>
+      {data.desktop?.owned && <p className="muted">{t("startup.desktopRecovery")}</p>}
       <div className="startup-command-list">
-        {data.serviceSupported && (
+        {data.serviceSupported && !data.desktop?.owned && (
           <div className="startup-command-row">
             <div>
               <strong>{t("startup.command.service")}</strong>
@@ -261,7 +270,7 @@ export function StartupRecoverySection({
             </button>
           </div>
         )}
-        <div className="startup-command-row">
+        {!data.desktop?.owned && <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.shim")}</strong>
             <code>{data.commands.installShim}</code>
@@ -269,7 +278,7 @@ export function StartupRecoverySection({
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(data.commands.installShim)}>
             {copied === data.commands.installShim ? t("startup.copied") : t("startup.copy")}
           </button>
-        </div>
+        </div>}
         <div className="startup-command-row">
           <div>
             <strong>{t("startup.command.native")}</strong>
@@ -280,9 +289,9 @@ export function StartupRecoverySection({
           </button>
         </div>
       </div>
-      {data.status === "at-risk" && (
+      {data.status === "at-risk" && data.recommendedCommand && !data.desktop?.owned && (
         <div className="notice notice-warn startup-action-notice" role="alert">
-          <IconPower /> {t("startup.recommended", { cmd: data.recommendedCommand ?? data.commands.installService })}
+          <IconPower /> {t("startup.recommended", { cmd: data.recommendedCommand })}
         </div>
       )}
       </details>

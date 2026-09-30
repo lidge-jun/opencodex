@@ -18,6 +18,12 @@ const packy: CatalogPreset = {
   sponsorUrl: "https://www.packyapi.com/register?aff=k5KT",
   dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
 };
+const tokenlab: CatalogPreset = {
+  id: "tokenlab", label: "TokenLab", adapter: "openai-chat", auth: "key",
+  baseUrl: "https://api.tokenlab.sh/v1", sponsor: "standard",
+  sponsorUrl: "https://tokenlab.sh/r/OPENCODEX",
+  dashboardUrl: "https://tokenlab.sh/dashboard/api?tab=keys",
+};
 const configured = (preset: CatalogPreset): WorkspaceItem => ({
   name: preset.id, adapter: preset.adapter, baseUrl: preset.baseUrl, authMode: preset.auth,
 });
@@ -58,6 +64,21 @@ test("Packy preserves its affiliate link and does not repeat an identical consol
   const html = render(packy, configured(packy));
   expect(html).toContain('href="https://www.packyapi.com/register?aff=k5KT"');
   expect(html.match(/<a /g)).toHaveLength(1);
+});
+
+test("TokenLab renders its own copy with separate sponsor and API-key links", () => {
+  const html = render(tokenlab, configured(tokenlab));
+  expect(html).toContain("TokenLab");
+  expect(html).toContain("One API key for leading models");
+  expect(html).not.toContain("A model for every prompt");
+  expect(html).toContain('href="https://tokenlab.sh/r/OPENCODEX"');
+  expect(html).toContain('href="https://tokenlab.sh/dashboard/api?tab=keys"');
+  expect(html.match(/<a /g)).toHaveLength(2);
+});
+
+test("a sponsor preset with no brand row renders nothing instead of another sponsor's copy", () => {
+  const unknown = { ...tokenlab, id: "future-sponsor" };
+  expect(render(unknown, configured(unknown))).toBe("");
 });
 
 test("missing and non-sponsor presets render nothing; non-web links never become anchors", () => {

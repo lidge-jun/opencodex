@@ -79,7 +79,7 @@ function stubPool(initial: PoolPayload): Record<string, unknown>[] {
   return puts;
 }
 
-async function mountPool(): Promise<HTMLElement> {
+async function mountPool(onThresholdChange?: (threshold: number) => void): Promise<HTMLElement> {
   const host = testWindow.document.createElement("div");
   testWindow.document.body.appendChild(host as never);
   const { createRoot } = await import("react-dom/client");
@@ -88,7 +88,7 @@ async function mountPool(): Promise<HTMLElement> {
     mountedRoots.push(root);
     root.render(
       <LanguageProvider>
-        <AnthropicAccountPoolSettings apiBase="http://proxy" accountCount={2} />
+        <AnthropicAccountPoolSettings apiBase="http://proxy" accountCount={2} onThresholdChange={onThresholdChange} />
       </LanguageProvider>,
     );
   });
@@ -120,6 +120,43 @@ afterEach(async () => {
 });
 
 describe("Anthropic account pool quota window", () => {
+  test("only confirmed pool defaults seed account override controls", async () => {
+    let fail = false;
+    globalThis.fetch = (async (_input, init) => init?.method === "PUT"
+      ? fail ? new Response(null, { status: 500 }) : Response.json({ enabled: false, autoSwitchThreshold: 73 })
+      : Response.json({ enabled: true, autoSwitchThreshold: 64, strategy: "quota", stickyLimit: 1, quotaWindow: "five-hour" })) as typeof fetch;
+    const values: number[] = [];
+    const host = await mountPool(value => { values.push(value); });
+    expect(values).toEqual([64]);
+    const toggle = host.querySelector('button[aria-pressed]') as HTMLButtonElement;
+    await act(async () => { toggle.click(); await flush(); });
+    expect(values).toEqual([64, 73]);
+    fail = true;
+    await act(async () => { toggle.click(); await flush(); });
+    expect(values).toEqual([64, 73]);
+  });
+
+  test("an unmounted settings card aborts its save without publishing the old server value", async () => {
+    let aborted = false;
+    globalThis.fetch = (async (_input, init) => {
+      if (init?.method !== "PUT") return Response.json({ enabled: true, autoSwitchThreshold: 64, strategy: "quota", stickyLimit: 1, quotaWindow: "five-hour" });
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        }, { once: true });
+      });
+    }) as typeof fetch;
+    const values: number[] = [];
+    const host = await mountPool(value => { values.push(value); });
+    const toggle = host.querySelector('button[aria-pressed]') as HTMLButtonElement;
+    await act(async () => { toggle.click(); await Promise.resolve(); });
+    const root = mountedRoots.pop();
+    await act(async () => { root?.unmount(); await Promise.resolve(); });
+    expect(aborted).toBe(true);
+    expect(values).toEqual([64]);
+  });
+
   test("quota window selector renders for quota and fill-first strategies", async () => {
     stubPool({
       enabled: true,

@@ -81,7 +81,38 @@ jobs:
                   github.rest.repos.listPullRequestsAssociatedWithCommit,
                   { owner, repo, commit_sha: statusSha, per_page: 100 }
                 );
-                candidates = associatedPrs.filter(
+                // The index spans the whole fork network: a commit that heads
+                // a PR in another repository comes back with that PR's number,
+                // which `pulls.get` cannot resolve in THIS repository (404).
+                // Only a candidate based on this repository is usable identity.
+                const inRepoPrs = associatedPrs.filter(
+                  candidate =>
+                    candidate.base?.repo?.owner?.login === owner &&
+                    candidate.base?.repo?.name === repo
+                );
+                // A null base.repo is not "another repository": it is a base the
+                // index could not identify, so log it as its own kind of skip.
+                const foreignRepoPrs = associatedPrs.filter(
+                  candidate =>
+                    candidate.base?.repo != null &&
+                    !(
+                      candidate.base.repo.owner?.login === owner &&
+                      candidate.base.repo.name === repo
+                    )
+                );
+                const unidentifiedPrs =
+                  associatedPrs.length - inRepoPrs.length - foreignRepoPrs.length;
+                if (foreignRepoPrs.length > 0) {
+                  core.info(
+                    `Ignored ${foreignRepoPrs.length} associated PR(s) based on other repositories in the fork network.`
+                  );
+                }
+                if (unidentifiedPrs > 0) {
+                  core.info(
+                    `Ignored ${unidentifiedPrs} associated PR(s) whose base repository could not be identified.`
+                  );
+                }
+                candidates = inRepoPrs.filter(
                   candidate =>
                     candidate.state === "open" &&
                     candidate.head?.sha === statusSha

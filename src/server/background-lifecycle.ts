@@ -1,4 +1,6 @@
-import type { StorageCleanupPolicy } from "../types";
+import type { OcxConfig, StorageCleanupPolicy } from "../types";
+import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../codex/low-quota-protection";
+import type { LowQuotaEvent } from "../codex/low-quota-events";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   abortStorageCleanupPolicyJobAsync,
@@ -40,10 +42,12 @@ type LeaseOwner = {
   token: symbol;
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
+  lowQuota: LowQuotaRegistration;
 };
 
 export type ServerBackgroundLifecycleLease = {
   scheduleStartupRun(): void;
+  listLowQuotaEvents(limit?: number): LowQuotaEvent[];
   release(): Promise<void>;
   releaseAfterFailedStart(): void;
 };
@@ -75,8 +79,8 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next tick adopts it.
       });
-    // Opt-in: the tick is a no-op unless catalogAutoRefresh.enabled is true, and the
-    // interval is unref'd, so a default install pays one dormant timer. The scheduler
+    // Default-on: explicit false or a zero cadence makes ticks dormant. Both startup
+    // and interval timers are unref'd. The scheduler
     // module keeps every heavy import inside its tick, so naming it statically here
     // costs a module record and nothing else.
     startCatalogAutoRefresh();
@@ -148,6 +152,7 @@ function removeOwner(owner: LeaseOwner): boolean {
 
 function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "last" {
   if (!removeOwner(owner)) return "inactive";
+  owner.lowQuota();
   owner.resources.release();
   const nextOwner = owners.at(-1);
   if (nextOwner) {
@@ -168,6 +173,7 @@ function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "
  */
 export function acquireServerBackgroundLifecycle(
   applyPolicy: PolicyApply,
+  config: OcxConfig,
 ): ServerBackgroundLifecycleLease {
   if (cleanupInProgress) {
     throw new Error("server background lifecycle cleanup is still in progress");
@@ -177,6 +183,7 @@ export function acquireServerBackgroundLifecycle(
     token: Symbol("server-background-lifecycle"),
     applyPolicy,
     resources: acquireServerResourceOwner(),
+    lowQuota: registerCodexLowQuotaProtection(config),
   };
   try {
     if (!processLoops) {
@@ -186,12 +193,20 @@ export function acquireServerBackgroundLifecycle(
     }
     owners.push(owner);
   } catch (error) {
+    owner.lowQuota();
     owner.resources.release();
     throw error;
   }
 
   let releaseFlight: Promise<void> | null = null;
+  function finishRelease(): Promise<void> {
+    const outcome = releaseOwnerSynchronously(owner);
+    if (outcome !== "last") return Promise.resolve();
+    cleanupInProgress = true;
+    return stopStoragePolicyWorker().finally(() => { cleanupInProgress = false; });
+  }
   return {
+    listLowQuotaEvents(limit) { return owner.lowQuota.listEvents(limit); },
     scheduleStartupRun() {
       if (owners.some(candidate => candidate.token === owner.token)) {
         scheduleStorageCleanupStartupRun();
@@ -199,19 +214,15 @@ export function acquireServerBackgroundLifecycle(
     },
     release() {
       if (releaseFlight) return releaseFlight;
-      const outcome = releaseOwnerSynchronously(owner);
-      if (outcome !== "last") {
-        releaseFlight = Promise.resolve();
-        return releaseFlight;
-      }
-      cleanupInProgress = true;
-      releaseFlight = stopStoragePolicyWorker().finally(() => {
-        cleanupInProgress = false;
-      });
+      // Default installs have no low-quota write. Preserve synchronous owner removal;
+      // an unconditional await here extends process-global ownership into later starts.
+      if (!owner.lowQuota.hasPendingSave()) releaseFlight = finishRelease();
+      else releaseFlight = owner.lowQuota.flush().then(finishRelease, finishRelease);
       return releaseFlight;
     },
     releaseAfterFailedStart() {
       if (releaseFlight) return;
+      owner.lowQuota();
       // Startup evaluation is scheduled only after both listeners bind, so a
       // failed start cannot have spawned a Worker for this lease. Keep rollback
       // synchronous so a caller may immediately retry a different port.

@@ -32,6 +32,7 @@ const NATIVE_ROUTE_PREFIX = "native/";
  */
 export const DESKTOP_PICKER_ID_SUGGESTIONS: readonly string[] = [
   "claude-opus-5-5",
+  "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-fable-5-1",
   "claude-haiku-4-5",

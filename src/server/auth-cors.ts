@@ -1,5 +1,5 @@
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
-import { modelCapabilitiesConfigError } from "../config/provider-validation";
+import { contextTierRecordConfigError, modelCapabilitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { initialModelSelection } from "../providers/initial-model-selection";
 import { extractAccountId } from "../oauth/chatgpt";
@@ -16,6 +16,7 @@ import {
 } from "../config";
 import {
   apiKeyTransportConfigError,
+  projectContextConfigError,
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   booleanRecordConfigError,
@@ -693,6 +694,8 @@ export function providerManagementConfigError(
     return "provider must be a plain object";
   }
   const raw = provider as Record<string, unknown>;
+  const contextTiersError = contextTierRecordConfigError(raw.modelContextTiers);
+  if (contextTiersError) return contextTiersError;
   const capabilitiesError = modelCapabilitiesConfigError(raw.modelCapabilities);
   if (capabilitiesError) return capabilitiesError;
   const pinsError = providerReasoningPinsConfigError(raw);
@@ -828,6 +831,8 @@ export function providerManagementConfigError(
   }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
+  const projectContextError = projectContextConfigError(typed);
+  if (projectContextError) return `provider ${JSON.stringify(redactSecretString(name))} ${projectContextError}`;
   const maxInputError = positiveIntegerRecordConfigError(raw.modelMaxInputTokens, "modelMaxInputTokens");
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const autoCompactError = modelAutoCompactTokenLimitsConfigError(
@@ -967,6 +972,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   defaultAliases: "editor",
   adapter: "editor",
   codexToolMode: "editor",
+  projectContext: "editor",
   requestPacing: "editor",
   mcpMaxTools: "editor",
   mcpMaxSchemaBytes: "editor",
@@ -1021,6 +1027,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelPreset: "editor",
   contextWindow: "editor",
   modelContextWindows: "editor",
+  modelContextTiers: "editor",
   modelInputModalities: "editor",
   modelCapabilities: "editor",
   modelMaxInputTokens: "runtime",
@@ -1084,6 +1091,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   preserveReasoningContentModels: "editor",
   requiresReasoningPlaceholderModels: "editor",
   showThinkingSummary: "editor",
+  hideRawReasoning: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
   retryOnReset: "editor",
@@ -1250,6 +1258,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // The GUI's browser-open toggle reads and writes this; absent means the
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
+    showCodexCredits: config.showCodexCredits === true,
     providers,
   };
 }

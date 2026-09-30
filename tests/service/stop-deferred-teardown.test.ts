@@ -773,7 +773,7 @@ describe("self-unloading manager refusal (#4023)", () => {
   });
 
   test("a manually started proxy is unaffected, even with a service installed", async () => {
-    // Only the plist and unit write OCX_SERVICE_MANAGED. Without it this process is not
+    // Managed service definitions write OCX_SERVICE_MANAGED. Without it this process is not
     // the managed job, so no unload can reach it and the inline stop stays available.
     const { installedServiceRespawnRisk } = await import("../../src/service");
     expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "darwin", {

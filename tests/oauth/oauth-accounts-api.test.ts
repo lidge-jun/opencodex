@@ -512,7 +512,32 @@ describe("multiauth accounts API", () => {
     }
   });
 
-  test("pause API rejects Anthropic and a generic OAuth account behind an API-key route", async () => {
+  test("Anthropic pause validates input, persists resume and never alters credentials", async () => {
+    const before = getAccountSet("anthropic")!;
+    const server = startServer(0);
+    const pause = (accountId: string, paused: unknown) => fetch(new URL("/api/oauth/accounts/pause", server.url), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "anthropic", accountId, paused }),
+    });
+    try {
+      expect((await pause("aaaa1111", "true")).status).toBe(400);
+      expect((await pause("missing", true)).status).toBe(404);
+      expect(getAccountSet("anthropic")).toEqual(before);
+      expect((await pause("aaaa1111", true)).status).toBe(200);
+      expect((await pause("bbbb2222", true)).status).toBe(200);
+      const disk = JSON.parse(readFileSync(join(testDir, "auth.json"), "utf8"));
+      expect(disk.anthropic.accounts.every((row: { paused: boolean }) => row.paused)).toBe(true);
+      const resumed = await pause("aaaa1111", false);
+      expect(await resumed.json()).toMatchObject({ paused: false, activeAccountId: "aaaa1111", activeAccountChanged: true });
+      const after = getAccountSet("anthropic")!;
+      expect(after.accounts.map(row => row.credential)).toEqual(before.accounts.map(row => row.credential));
+      expect(after.accounts.find(row => row.id === "aaaa1111")?.paused).toBeUndefined();
+      const serialized = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url)).then(response => response.text());
+      expect(serialized).not.toContain('"access"');
+      expect(serialized).not.toContain('"refresh"');
+    } finally { await server.stop(true); }
+  });
+
+  test("pause API supports Anthropic but rejects a generic OAuth account behind an API-key route", async () => {
     enableGoogleAntigravityAccounts();
     const keyRouteConfig = baseConfig();
     keyRouteConfig.providers["google-antigravity"] = {
@@ -525,7 +550,12 @@ describe("multiauth accounts API", () => {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "anthropic", accountId: "aaaa1111", paused: true }),
       });
-      expect(anthropicPause.status).toBe(400);
+      expect(anthropicPause.status).toBe(200);
+      expect(await anthropicPause.json()).toMatchObject({ paused: true, activeAccountId: "bbbb2222" });
+      const listed = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      const rows = await listed.json() as { accounts: Array<{ id: string; paused: boolean }> };
+      expect(rows.accounts.find(row => row.id === "aaaa1111")?.paused).toBe(true);
+      expect(rows.accounts.find(row => row.id === "bbbb2222")?.paused).toBe(false);
 
       const keyRoutePause = await fetch(new URL("/api/oauth/accounts/pause", server.url), {
         method: "PUT", headers: { "Content-Type": "application/json" },

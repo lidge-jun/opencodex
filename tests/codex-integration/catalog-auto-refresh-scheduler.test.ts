@@ -16,6 +16,9 @@ import {
 } from "../../src/codex/catalog-auto-refresh";
 import { lastCatalogAutoRefreshOutcome, resetCatalogAutoRefreshStatusForTests } from "../../src/codex/catalog-refresh-status";
 import type { CatalogOnlyOutcome } from "../../src/codex/convergence-types";
+import * as bundled from "../../src/codex/catalog/bundled";
+import * as entitlements from "../../src/codex/model-entitlements";
+import * as appServerProcesses from "../../src/codex/app-server-processes";
 import * as managementConvergence from "../../src/codex/management-convergence";
 import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import {
@@ -44,6 +47,7 @@ let openCodexHome = "";
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let convergeFactoryCalls = 0;
 let convergeImpl: (config: OcxConfig) => Promise<CatalogOnlyOutcome> = async () => COMMITTED_CATALOG_ONLY;
+let sourceSpies: Array<{ mockRestore(): void }> = [];
 let convergeSpy: { mockRestore(): void } | null = null;
 let releaseHanging: ((outcome: CatalogOnlyOutcome) => void) | null = null;
 let pendingTick: Promise<unknown> | null = null;
@@ -71,6 +75,14 @@ beforeEach(() => {
   writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify({ models: [] }), "utf8");
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
+  sourceSpies = [
+    spyOn(bundled, "loadBundledCodexCatalog").mockReturnValue(null),
+    spyOn(entitlements, "ensureCodexEntitlementFreshness").mockResolvedValue(undefined),
+    spyOn(entitlements, "discoverCodexNativeRoster").mockResolvedValue("unavailable"),
+    spyOn(appServerProcesses, "listCodexAppServerProcesses").mockReturnValue([]),
+    spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin")
+      .mockResolvedValue({ state: "not_running", processes: [], catalogMtimeMs: null }),
+  ];
   convergeFactoryCalls = 0;
   convergeImpl = async () => COMMITTED_CATALOG_ONLY;
   releaseHanging = null;
@@ -93,6 +105,8 @@ afterEach(async () => {
   stopCatalogAutoRefresh();
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
+  for (const spy of sourceSpies) spy.mockRestore();
+  sourceSpies = [];
   convergeSpy?.mockRestore();
   convergeSpy = null;
   isolatedCodexHome?.restore();
@@ -153,17 +167,157 @@ describe("catalog auto-refresh scheduler", () => {
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
   });
 
-  test("a tick with catalogAutoRefresh absent or enabled:false performs no converge", async () => {
+  test("the unref'd startup tick fires once, survives cadence changes, and stop cancels it", async () => {
+    writeCatalogAutoRefreshConfig({ intervalMinutes: 30 });
+    const delayed: Array<{ callback: () => unknown; unrefs: number }> = [];
+    const original = globalThis.setTimeout;
+    const set = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => unknown, delay?: number) => {
+      if (delay !== 3 * 60_000) return original(callback, delay);
+      const handle = { callback, unrefs: 0, unref() { this.unrefs += 1; return this; } };
+      delayed.push(handle);
+      return handle;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      startCatalogAutoRefresh();
+      startCatalogAutoRefresh();
+      expect(delayed).toHaveLength(1);
+      expect(delayed[0]!.unrefs).toBe(1);
+      await delayed[0]!.callback();
+      expect(convergeFactoryCalls).toBe(1);
+      expect(catalogAutoRefreshIntervalForTests()).toBe(30 * 60_000);
+      expect(delayed).toHaveLength(1);
+      stopCatalogAutoRefresh();
+      startCatalogAutoRefresh();
+      stopCatalogAutoRefresh();
+      expect(clear).toHaveBeenCalledWith(delayed[1]);
+      // Even an already queued callback loses publication authority after stop.
+      await delayed[1]!.callback();
+      expect(convergeFactoryCalls).toBe(1);
+    } finally {
+      stopCatalogAutoRefresh();
+      set.mockRestore();
+      clear.mockRestore();
+    }
+  });
+
+  test.each(["none", "bundled", "roster", "discovery"])("sources settle before converge despite %s failure", async failure => {
     writeCatalogAutoRefreshConfig();
+    const steps: string[] = [];
+    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+      steps.push("bundled");
+      if (failure === "bundled") throw new Error("private source failure");
+      return null;
+    });
+    spyOn(entitlements, "ensureCodexEntitlementFreshness").mockImplementation(async (_config, options) => {
+      steps.push("roster");
+      expect(options?.waitMs).toBe(15_000);
+      if (failure === "roster") throw new Error("private roster failure");
+    });
+    spyOn(entitlements, "discoverCodexNativeRoster").mockImplementation(async () => {
+      steps.push("discovery");
+      if (failure === "discovery") throw new Error("private discovery failure");
+      return "recorded";
+    });
+    convergeImpl = async () => { steps.push("converge"); return COMMITTED_CATALOG_ONLY; };
     await runCatalogAutoRefreshTickForTests();
-    expect(catalogAutoRefreshTickCountForTests()).toBe(0);
+    expect(steps).toEqual(["bundled", "roster", "discovery", "converge"]);
+    expect(lastCatalogAutoRefreshOutcome()?.disposition.status).toBe("committed");
+  });
+
+  test("stopping during source refresh prevents roster warm and convergence", async () => {
+    writeCatalogAutoRefreshConfig();
+    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+      stopCatalogAutoRefresh();
+      return null;
+    });
+    await runCatalogAutoRefreshTickForTests();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
     expect(convergeFactoryCalls).toBe(0);
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
+  });
 
+  test("a roster wait that exceeds its bound still allows convergence", async () => {
+    writeCatalogAutoRefreshConfig();
+    let entered!: () => void;
+    const rosterEntered = new Promise<void>(resolve => { entered = resolve; });
+    spyOn(entitlements, "ensureCodexEntitlementFreshness").mockImplementation(() => {
+      entered();
+      return new Promise<void>(() => {});
+    });
+    const deadlines: Array<() => void> = [];
+    const original = globalThis.setTimeout;
+    const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+      if (delay !== 15_000) return original(callback, delay);
+      deadlines.push(callback);
+      return { unref() { return this; } };
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      const pending = runCatalogAutoRefreshTickForTests();
+      await rosterEntered;
+      expect(deadlines).toHaveLength(2);
+      deadlines[1]!();
+      await pending;
+      expect(convergeFactoryCalls).toBe(1);
+    } finally {
+      timeout.mockRestore();
+      clear.mockRestore();
+    }
+  });
+
+  test("a changed set records reloadRequired and logs one safe restart hint", async () => {
+    writeCatalogAutoRefreshConfig();
+    spyOn(appServerProcesses, "listCodexAppServerProcesses").mockReturnValue([{ pid: 123, commandLine: "private fixture" }]);
+    spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin").mockResolvedValue({
+      state: "stale", processes: [{ pid: 123, startedAtMs: 1 }],
+      catalogMtimeMs: 2,
+    });
+    convergeImpl = async () => ({
+      kind: "catalog-only", changed: true,
+      catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] },
+    });
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+      expect(info.mock.calls).toEqual([[
+        "[catalog-auto-refresh] served model set changed; running Codex sessions keep the old list until restarted (ocx sync --restart-codex)",
+      ]]);
+      convergeImpl = async () => COMMITTED_CATALOG_ONLY;
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+      expect(info).toHaveBeenCalledTimes(1);
+      spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin").mockResolvedValue({
+        state: "unknown", processes: [], catalogMtimeMs: null,
+      });
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+      spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin").mockResolvedValue({
+        state: "fresh", processes: [{ pid: 124, startedAtMs: 3 }],
+        catalogMtimeMs: 2,
+      });
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(false);
+    } finally { info.mockRestore(); }
+  });
+
+  test("a tick with catalogAutoRefresh absent performs a converge", async () => {
+    writeCatalogAutoRefreshConfig();
+    await runCatalogAutoRefreshTickForTests();
+    expect(catalogAutoRefreshTickCountForTests()).toBe(1);
+    expect(convergeFactoryCalls).toBe(1);
+    expect(lastCatalogAutoRefreshOutcome()?.disposition.status).toBe("committed");
+  });
+
+  test("explicit enabled:false performs no converge", async () => {
     writeCatalogAutoRefreshConfig({ enabled: false, intervalMinutes: 60 });
     await runCatalogAutoRefreshTickForTests();
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
     expect(convergeFactoryCalls).toBe(0);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
   });
 
@@ -264,6 +418,7 @@ describe("catalog auto-refresh drift heal", () => {
     const desired = await import("../../src/codex/desired-state");
     const processState = await import("../../src/config/process-state");
     const inject = await import("../../src/codex/inject");
+    const ownership = await import("../../src/integrations/native/ownership-preflight");
     writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
     const fixture = JSON.parse(readFileSync(getConfigPath(), "utf8")) as Record<string, unknown>;
     fixture.apiKeys = [{ key: "fixture-key", name: "fixture", createdAt: "2026-01-01T00:00:00.000Z" }];
@@ -288,6 +443,7 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({ ownership: "owned", reason: "fixture" }),
       spyOn(inject, "injectCodexConfig").mockImplementation((async (_port, _config, options) => {
         injectorCalls += 1;
         if (editBeforeWrite) {
@@ -327,6 +483,7 @@ describe("catalog auto-refresh drift heal", () => {
     const processState = await import("../../src/config/process-state");
     const sync = await import("../../src/codex/sync");
     const inject = await import("../../src/codex/inject");
+    const ownership = await import("../../src/integrations/native/ownership-preflight");
     const configPath = join(openCodexHome, "healed-config.toml");
     const injected: Array<{ port: number; lockTimeoutMs: number | undefined }> = [];
     const info: string[] = [];
@@ -337,6 +494,7 @@ describe("catalog auto-refresh drift heal", () => {
         configPath,
       )),
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({ ownership: "owned", reason: "fixture" }),
       spyOn(sync, "syncModelsToCodex").mockImplementation((async () => { throw new Error("full sync must not run"); }) as never),
       spyOn(inject, "injectCodexConfig").mockImplementation((async (port, _config, options) => {
         options?.beforeClientWrite?.();
@@ -369,12 +527,104 @@ describe("catalog auto-refresh drift heal", () => {
     expect(ceded.info.some(line => line.includes("not re-injected this tick"))).toBe(true);
   });
 
+  test("a foreign service home prevents the drift healer from reaching the injector", async () => {
+    const drift = await import("../../src/codex/config-drift-heal");
+    const desired = await import("../../src/codex/desired-state");
+    const processState = await import("../../src/config/process-state");
+    const ownership = await import("../../src/integrations/native/ownership-preflight");
+    const inject = await import("../../src/codex/inject");
+    const spies = [
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
+      spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({
+        ownership: "foreign",
+        reason: "fixture foreign install",
+      }),
+      spyOn(inject, "injectCodexConfig"),
+      spyOn(console, "info").mockImplementation(() => {}),
+    ];
+    try {
+      writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+      await runCatalogAutoRefreshTickForTests();
+      expect(inject.injectCodexConfig).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  test.each(["config", "generation"] as const)("admission refused on %s does not bypass the ownership veto on a foreign home", async (authority) => {
+    const drift = await import("../../src/codex/config-drift-heal");
+    const desired = await import("../../src/codex/desired-state");
+    const processState = await import("../../src/config/process-state");
+    const admission = await import("../../src/codex/admission");
+    const ownership = await import("../../src/integrations/native/ownership-preflight");
+    const inject = await import("../../src/codex/inject");
+    // A write guard that derives veto from the admission result would pass here:
+    // the refusal authority is not service-home. Ownership must veto on its own.
+    const spies = [
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
+      spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(admission, "admitCodexWrite").mockReturnValue({
+        kind: "refused",
+        authority,
+        message: "fixture refusal",
+      }),
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({
+        ownership: "foreign",
+        reason: "fixture foreign install",
+      }),
+      spyOn(inject, "injectCodexConfig"),
+      spyOn(console, "info").mockImplementation(() => {}),
+    ];
+    try {
+      writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+      await runCatalogAutoRefreshTickForTests();
+      expect(inject.injectCodexConfig).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  test("service-home ownership is rechecked at the injector write boundary", async () => {
+    const drift = await import("../../src/codex/config-drift-heal");
+    const desired = await import("../../src/codex/desired-state");
+    const processState = await import("../../src/config/process-state");
+    const ownership = await import("../../src/integrations/native/ownership-preflight");
+    const inject = await import("../../src/codex/inject");
+    const own = spyOn(ownership, "inspectNativeCodexOwnership")
+      .mockReturnValueOnce({ ownership: "owned", reason: "fixture" })
+      .mockReturnValue({ ownership: "foreign", reason: "fixture foreign install" });
+    const injector = spyOn(inject, "injectCodexConfig").mockImplementation((async (_port, _config, options) => {
+      options?.beforeClientWrite?.();
+      return { success: true, message: "fixture" };
+    }) as typeof inject.injectCodexConfig);
+    const spies = [
+      spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
+      spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
+      spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      own,
+      injector,
+      spyOn(console, "info").mockImplementation(() => {}),
+    ];
+    try {
+      writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+      await runCatalogAutoRefreshTickForTests();
+      expect(own).toHaveBeenCalledTimes(2);
+      expect(injector).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
   test.each(["stop", "restart", "settings", "off"])("a deferred injector cannot write or log success after %s", async (change) => {
     const drift = await import("../../src/codex/config-drift-heal");
     const desired = await import("../../src/codex/desired-state");
     const processState = await import("../../src/config/process-state");
     const sync = await import("../../src/codex/sync");
     const inject = await import("../../src/codex/inject");
+    const ownership = await import("../../src/integrations/native/ownership-preflight");
     let entered!: () => void;
     const enteredInjector = new Promise<void>(resolve => { entered = resolve; });
     let release!: () => void;
@@ -385,6 +635,7 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true),
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] }),
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43_210 } as never),
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({ ownership: "owned", reason: "fixture" }),
       spyOn(sync, "syncModelsToCodex").mockImplementation((async () => {
         entered();
         await released;
@@ -450,17 +701,23 @@ describe("catalog auto-refresh drift heal", () => {
     const syncPath = fileURLToPath(new URL("../../src/codex/sync.ts", import.meta.url));
     const injectPath = fileURLToPath(new URL("../../src/codex/inject.ts", import.meta.url));
     const configPath = fileURLToPath(new URL("../../src/config.ts", import.meta.url));
+    const admissionPath = fileURLToPath(new URL("../../src/codex/admission.ts", import.meta.url));
+    const ownershipPath = fileURLToPath(new URL("../../src/integrations/native/ownership-preflight.ts", import.meta.url));
     const script = `
       const { spyOn } = require("bun:test");
       const fs = require("node:fs");
       const path = require("node:path");
       const configModule = require(${JSON.stringify(configPath)});
+      const sources = require(${JSON.stringify(fileURLToPath(new URL("../../src/codex/catalog-auto-refresh-sources.ts", import.meta.url)))});
+      spyOn(sources, "refreshCatalogAutoRefreshSources").mockResolvedValue(undefined);
       const scheduler = require(${JSON.stringify(schedulerPath)});
       const drift = require(${JSON.stringify(driftPath)});
       const desired = require(${JSON.stringify(desiredPath)});
       const processState = require(${JSON.stringify(processStatePath)});
       const sync = require(${JSON.stringify(syncPath)});
       const inject = require(${JSON.stringify(injectPath)});
+      const admission = require(${JSON.stringify(admissionPath)});
+      const ownership = require(${JSON.stringify(ownershipPath)});
       const catalogPath = path.join(process.env.CODEX_HOME, "alternate-catalog.json");
       fs.writeFileSync(catalogPath, JSON.stringify({ models: [{ slug: "alternate" }] }));
       fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), 'model = "gpt-5"\\n');
@@ -469,6 +726,8 @@ describe("catalog auto-refresh drift heal", () => {
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true);
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] });
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43210 });
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" });
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({ ownership: "owned", reason: "fixture" });
       spyOn(sync, "syncModelsToCodex").mockImplementation(async () => { throw new Error("full sync called"); });
       let received = null;
       spyOn(inject, "injectCodexConfig").mockImplementation(async (_port, _config, options) => { received = options.catalogPath; options.beforeClientWrite(); return { success: true, message: "fixture" }; });
@@ -503,18 +762,24 @@ describe("catalog auto-refresh drift heal", () => {
       const fs = require("node:fs");
       const path = require("node:path");
       const config = require(${JSON.stringify(source("config.ts"))});
+      const sources = require(${JSON.stringify(fileURLToPath(new URL("../../src/codex/catalog-auto-refresh-sources.ts", import.meta.url)))});
+      spyOn(sources, "refreshCatalogAutoRefreshSources").mockResolvedValue(undefined);
       const scheduler = require(${JSON.stringify(source("codex/catalog-auto-refresh.ts"))});
       const drift = require(${JSON.stringify(source("codex/config-drift-heal.ts"))});
       const desired = require(${JSON.stringify(source("codex/desired-state.ts"))});
       const processState = require(${JSON.stringify(source("config/process-state.ts"))});
       const inject = require(${JSON.stringify(source("codex/inject.ts"))});
       const management = require(${JSON.stringify(source("codex/management-convergence.ts"))});
+      const admission = require(${JSON.stringify(source("codex/admission.ts"))});
+      const ownership = require(${JSON.stringify(source("integrations/native/ownership-preflight.ts"))});
       const catalog = path.join(process.env.CODEX_HOME, "opencodex-catalog.json");
       fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), 'model = "gpt-5"\\n');
       fs.writeFileSync(config.getConfigPath(), JSON.stringify({ ...config.getDefaultConfig(), defaultProvider: "xai", providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" } }, catalogAutoRefresh: { enabled: true, intervalMinutes: 60 } }));
       spyOn(desired, "shouldSyncCodexOnStart").mockReturnValue(true);
       spyOn(drift, "codexConfigDrift").mockReturnValue({ drifted: true, missingKeys: ["openai_base_url"] });
       spyOn(processState, "readRuntimePort").mockReturnValue({ pid: process.pid, port: 43210 });
+      spyOn(admission, "admitCodexWrite").mockReturnValue({ kind: "admitted" });
+      spyOn(ownership, "inspectNativeCodexOwnership").mockReturnValue({ ownership: "owned", reason: "fixture" });
       const received = [];
       spyOn(inject, "injectCodexConfig").mockImplementation(async (_port, _config, options) => { received.push(options.catalogPath); return { success: true, message: "fixture" }; });
       let converges = 0;
@@ -560,5 +825,37 @@ describe("catalog auto-refresh drift heal", () => {
     expect(selectDriftHealCatalogPath(journalPath, defaultPath, path => join(openCodexHome, path))).toBe(defaultPath);
     writeFileSync(defaultPath, "not a catalog");
     expect(selectDriftHealCatalogPath(journalPath, defaultPath, path => join(openCodexHome, path))).toBeNull();
+  });
+});
+
+describe("catalog auto-refresh without a managed Codex client", () => {
+  function writeIntegrationOffConfig(catalogAutoRefresh?: unknown): void {
+    const config = {
+      ...getDefaultConfig(),
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" } },
+      clientIntegrations: { codex: false },
+      ...(catalogAutoRefresh === undefined ? {} : { catalogAutoRefresh }),
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+  }
+
+  test("an absent section stays dormant: no Codex sources and no converge", async () => {
+    writeIntegrationOffConfig();
+    await runCatalogAutoRefreshTickForTests();
+    expect(convergeFactoryCalls).toBe(0);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
+    expect(catalogAutoRefreshTickCountForTests()).toBe(0);
+  });
+
+  test("an explicit enabled:true still converges but never reads Codex sources", async () => {
+    writeIntegrationOffConfig({ enabled: true, intervalMinutes: 60 });
+    await runCatalogAutoRefreshTickForTests();
+    expect(convergeFactoryCalls).toBe(1);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
   });
 });

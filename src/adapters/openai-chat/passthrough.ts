@@ -6,6 +6,7 @@ import { applyExplicitChatDeveloperRole } from "./developer-role";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../../providers/service-tier";
+import { applyGithubCopilotContextTier } from "../../providers/github-copilot-context";
 import { canonicalFastTierMarker, decideTier, type ResolvedFastPolicy } from "../../providers/fastwire";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { isDebugEnabled } from "../../lib/debug-settings";
@@ -53,6 +54,7 @@ export function buildOpenAIChatPassthroughRequest(
   stream: boolean,
   fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
   fastMode?: boolean,
+  providerName?: string,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
@@ -153,7 +155,7 @@ export function buildOpenAIChatPassthroughRequest(
     body.stream_options = rawBody.stream_options;
   }
 
-  const bodyJson = JSON.stringify(body);
+  const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, modelId, providerName));
 
   if (isDebugEnabled()) {
     let host = "upstream";

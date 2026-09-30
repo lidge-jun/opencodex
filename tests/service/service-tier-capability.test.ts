@@ -72,6 +72,7 @@ describe("registry capability reaches saved configs without overriding them", ()
       "openai/gpt-5.6-luna": true,
       "openai/gpt-6-sol": true,
       "openai/gpt-6-luna": true,
+      "openai/gpt-6.1-sol": true,
     });
     expect(entry.modelSupportsServiceTier).not.toHaveProperty("anthropic/claude-sonnet-5");
     expect(providerConfigSeed(entry).modelSupportsServiceTier).toBeUndefined();

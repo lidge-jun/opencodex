@@ -122,6 +122,18 @@ raw body.
 
 ## Bounded fallback HTTP errors
 
+Tool-enabled turns in `src/adapters/kiro/stream.ts` hold ordinary text through the one
+bounded completion retry. A valid private final answer or accepted retry text supersedes
+first-attempt prose, so the client receives one final answer. A real tool call releases
+held progress as commentary before the tool; failed validation also releases progress
+and preserves the non-retryable boundary. Held events stay charged to the translator
+budget until emitted, discarded, or cancelled; replay collectors are released after
+retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
+progress from an answer and therefore still require validation. Normal private completion
+and real tool calls need no completion retry.
+Coverage: `tests/providers/kiro/kiro-single-final.test.ts` and
+`tests/server/server-kiro-completion-e2e.test.ts`.
+
 `src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
 
 When a first Kiro stream needs a completion fallback, the fallback response's non-success
@@ -200,19 +212,33 @@ Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
 `tests/providers/kiro/kiro-metering-usage.test.ts`, and
 `tests/server/server-kiro-completion-e2e.test.ts`.
 
+## Image count limits
+
+`src/adapters/kiro-images.ts` limits each user input message to 20 inline images and
+the whole `GenerateAssistantResponse` request to 100. It applies the per-message
+limit first, then removes the oldest structurally usable history images to meet
+the request count before applying the separate 18 MiB image byte budget.
+A bounded text marker remains in each affected message; the current turn's
+newest images are retained.
+
 ## Remote image references
 
 Kiro's wire inlines base64 bytes only, so a remote `https` image reference cannot be
 sent. It used to be dropped with neither bytes nor any marker, so the payload and the
 evidence that an attachment existed both disappeared.
 
-`countKiroUninlinableImages` reports how many parts `parseDataUrlImage` could not
-inline, and the payload builder appends a bounded marker to that turn's text. The
+`countKiroUninlinableImages` counts non-`data:` image references, and the payload
+builder appends a bounded marker to that turn's text. The
 marker is appended before `rawGroupText` is computed, because adjacency grouping
 rebuilds a turn's content from its collected texts and would otherwise discard it.
 
 No fetch is introduced: resolving the reference server-side would add an outbound
 request on a request path. The marker carries a count and no URL, because a remote
 image URL can carry a signed token.
+
+Malformed `data:` image URLs that lack a comma or image bytes also cannot be
+inlined. `kiroImageOmissionMarker` reports those separately from remote references,
+without echoing the URL or its bytes. The payload builder carries that marker in
+both user turns and tool results, including grouped adjacent tool outputs.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.

@@ -432,6 +432,8 @@ Yeni OAuth belirteciyle yapılan kota sorgusu 5 saatlik, haftalık veya aylık k
 
 `ocx account refresh openai` ve `ocx account list openai --quota --refresh` yalnızca kullanımı okur. Model doğrulaması kota tüketir ve insanın pano oturumunu gerektirir: kota yenilendikten sonra `ocx gui` açıp **Refresh quotas** düğmesine tıklayın. Grafik arayüzü olmayan bir sunucunun panosuna da tarayıcınızdan erişin; yalnızca yönetici belirteci doğrulama yetkisi vermez. Duraklatılmış hesap doğrulanabilir, ancak devam ettirilmez veya seçilmez. Model yetkilendirme hataları başarılı doğrulama veya yeniden girişe kadar görünür kalır.
 
+**Codex Set → Multi-auth** bölümünde **Codex Auth** başlığındaki **Codex kredileri** anahtarını açarak ana hesap ve havuz hesaplarının son gözlenen kredilerini Week satırının hemen altında görebilirsiniz. Varsayılan olarak kapalıdır ve `showCodexCredits` olarak kaydedilir. Bakiye yerel sayı biçiminde gösterilir; bildirildiğinde sınırsız kullanım veya aşım sınırı uyarısı görünür. Toplam kredi sınırı verilmediği için çubuk yüzdeyi değil kullanılabilirliği gösterir. Anahtar yalnızca görünümü değiştirir; yeni giriş kendi gözlemini bekler.
+
 Arka plan doğrulaması ayrı ve varsayılan olarak kapalıdır. Token Guardian, `openai` için `proactive` yenileme ilkesi ve `tokenGuardian.codexWarmupEnabled` gerektirir; kayıt doğrulaması bekleyen hesapları atlar.
 
 ### Bir hesabın istek karşılamayı bırakma nedeni

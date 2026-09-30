@@ -7,6 +7,7 @@ import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimeP
 import { installCrashGuards } from "../lib/crash-guard";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
+import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import {
   DESKTOP_RESTART_EXIT_CODE,
   DESKTOP_SUPERVISED_ENV,
@@ -169,7 +170,8 @@ export async function recycleStandalone(
   // operator noticed. Exit 1 is what those configs are watching for, and it is the same
   // policy the dashboard recycle already uses (src/server/management/system-restart.ts).
   //
-  // launchd's KeepAlive restarts on any exit, so it is correct under both branches.
+  // launchd's KeepAlive is failure-only too (`SuccessfulExit` false), so exit 1 is what
+  // relaunches it as well; an exit 0 would leave the job stopped.
   if (process.env.OCX_SERVICE === "1") {
     exit(1);
     return;
@@ -266,7 +268,7 @@ export async function bindClientListener(
 }
 
 export async function startClientRuntime(
-  options: { port?: number; block?: boolean } = {},
+  options: { port?: number; block?: boolean; afterPublish?: () => void } = {},
   io: ClientRuntimeIo = {},
 ): Promise<void> {
   const state = readClientConnectionState();
@@ -310,9 +312,10 @@ export async function startClientRuntime(
   installCrashGuards();
   writePid(process.pid);
   writeRuntimePort(clientRuntimeRecord(process.pid, boundPort));
+  options.afterPublish?.();
 
   let shuttingDown = false;
-  const shutdown = () => {
+  const shutdown = (signal?: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
     void (async () => {
@@ -328,7 +331,8 @@ export async function startClientRuntime(
         console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         cleanup();
-        process.exit(0);
+        // launchd relaunches only unsuccessful exits; an external signal must still count.
+        process.exit(handledSignalExitCode(signal));
       }
     })();
   };

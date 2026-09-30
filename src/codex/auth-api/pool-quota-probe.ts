@@ -1,3 +1,6 @@
+import { parseCodexCredits, rememberCodexCredits } from "../credits";
+import { fetchCodexUsage } from "../quota-query-backoff";
+import type { CodexUsageOwner } from "../quota-query-backoff";
 import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
 import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
@@ -101,7 +104,9 @@ export function withQuotaProbeEvidence(
   result: PoolQuotaResult,
   evidence: PoolQuotaProbeEvidence,
 ): PoolQuotaResult {
-  return evidence.attempted ? { ...result, quotaProbeAttempted: evidence.attempted } : result;
+  return evidence.attempted
+    && (result.quotaProbeAttempted?.dispatchSequence ?? 0) < evidence.attempted.dispatchSequence
+    ? { ...result, quotaProbeAttempted: evidence.attempted } : result;
 }
 
 export interface PoolQuotaRefreshFlight {
@@ -167,6 +172,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
   resp: Response;
   quotaProbeEvidence: PoolQuotaProbeEvidence;
   onCredentialGeneration?: (generation: number) => void;
+  recoveryProbeNow?: number;
 }): Promise<PoolQuotaResult> {
   const { accountId, existing, configuredPlan, rejectedAccessToken, rejectedGeneration, resp } = ctx;
 
@@ -252,37 +258,61 @@ export async function recoverPoolQuotaFrom401(ctx: {
   ctx.onCredentialGeneration?.(refreshed.generation);
 
   const writerGeneration = captureConfigGeneration();
-  markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation);
   const poolWriter = capturePoolQuotaWriter(accountId, refreshed);
-  const replay = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+  const replayRead = await fetchCodexUsage<PoolQuotaResult>(`pool:${accountId}:${writerGeneration}:${refreshed.generation}`, {
     headers: {
       Authorization: `Bearer ${refreshed.accessToken}`,
       "ChatGPT-Account-Id": refreshed.chatgptAccountId,
     },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
-  });
-  if (!replay.ok) {
-    if (replay.status === 401 && await isTerminalPoolAuthResponse(replay)) {
-      // The refresh already settled this claim non-terminally, so the record alone would
-      // let the next poll call a dead credential healthy. The evidence is about the
-      // REFRESHED credential, which is what the replay used.
-      markAccountNeedsReauth(accountId, writerGeneration, refreshed.generation);
-      return { quota: existing ?? null, needsReauth: true, reauthReason: "quota_unauthorized", credentialGeneration: refreshed.generation };
+  }, () => markQuotaProbeAttempted(ctx.quotaProbeEvidence, refreshed.generation),
+  ctx.recoveryProbeNow === undefined ? { poolAccountId: accountId }
+    : { poolAccountId: accountId, recoveryProbe: true, now: () => ctx.recoveryProbeNow! });
+  if (!replayRead) return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
+  if (replayRead.kind === "joined") {
+    if (!isCodexAccountGenerationLive(accountId, refreshed.generation)
+      || ctx.quotaProbeEvidence.mayPublish?.() === false) {
+      return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: refreshed.generation };
     }
-    return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation };
+    const joined = replayRead.result;
+    return joined.freshCredentialGeneration === refreshed.generation ? {
+      ...joined,
+      resetRefreshLineage: {
+        fromGeneration: rejectedGeneration, toGeneration: refreshed.generation,
+        provenance: refreshed.provenance,
+      },
+    } : joined;
   }
-  const result = await commitPoolQuotaResponse(replay, {
-    accountId, existing, configuredPlan, generation: refreshed.generation, writerGeneration, poolWriter,
-    mayPublish: ctx.quotaProbeEvidence.mayPublish,
-  });
-  return result.freshCredentialGeneration === refreshed.generation ? {
-    ...result,
-    resetRefreshLineage: {
-      fromGeneration: rejectedGeneration,
-      toGeneration: refreshed.generation,
-      provenance: refreshed.provenance,
-    },
-  } : result;
+  let usableReplay = false;
+  const finishReplay = async (): Promise<PoolQuotaResult> => {
+    const replay = replayRead.response;
+    if (!replay.ok) {
+      if (replay.status === 401 && await isTerminalPoolAuthResponse(replay)) {
+        // The refresh already settled this claim non-terminally, so the record alone would
+        // let the next poll call a dead credential healthy. The evidence is about the
+        // REFRESHED credential, which is what the replay used.
+        markAccountNeedsReauth(accountId, writerGeneration, refreshed.generation);
+        return { quota: existing ?? null, needsReauth: true, reauthReason: "quota_unauthorized", credentialGeneration: refreshed.generation };
+      }
+      return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation };
+    }
+    const result = await commitPoolQuotaResponse(replay, {
+      accountId, existing, configuredPlan, generation: refreshed.generation, writerGeneration, poolWriter,
+      mayPublish: ctx.quotaProbeEvidence.mayPublish,
+    });
+    usableReplay = result.freshQuota !== undefined;
+    return result.freshCredentialGeneration === refreshed.generation ? {
+      ...result,
+      resetRefreshLineage: {
+        fromGeneration: rejectedGeneration,
+        toGeneration: refreshed.generation,
+        provenance: refreshed.provenance,
+      },
+    } : result;
+  };
+  let replayOutcome: PoolQuotaResult | undefined;
+  try { replayOutcome = await finishReplay(); return replayOutcome; }
+  finally { replayRead.settle(usableReplay, replayOutcome); }
 }
 
 /** Backoff after a refresh failure that proved nothing about the credential. */
@@ -324,6 +354,9 @@ export async function commitPoolQuotaResponse(
   if (ctx.mayPublish?.() === false) {
     return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
   }
+  if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
+    rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseCodexCredits(data.credits));
+  }
   const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
   const quota = parseUsageQuota({ ...data, plan_type: freshPlan ?? configuredPlan });
   const freshResetCredits = quota?.resetCredits;
@@ -338,8 +371,9 @@ export async function commitPoolQuotaResponse(
   if (!isCodexAccountGenerationLive(accountId, generation)) {
     return { quota: null, needsReauth: false, credentialGeneration: generation };
   }
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, quota,
-    ctx.poolWriter && isValidWhamHistoryObservation(data) ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined);
+  const validPolicyObservation = isValidWhamHistoryObservation(data);
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, validPolicyObservation ? quota : null,
+    ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined);
   return {
     quota: getAccountQuota(accountId),
     needsReauth: false,
@@ -358,81 +392,100 @@ export async function fetchFreshPoolAccountQuota(
   onCredentialGeneration?: (generation: number) => void,
   getValidToken: typeof getValidCodexToken = getValidCodexToken,
   quotaProbeEvidence: PoolQuotaProbeEvidence = {},
+  afterDispatchSequence?: number,
+  recoveryProbeNow?: number,
 ): Promise<PoolQuotaResult> {
   const writerGeneration = captureConfigGeneration();
   let requestCredentialGeneration = readCodexAccountRecord(accountId)?.generation;
-  try {
-    const { accessToken, chatgptAccountId, generation } = await getValidToken(accountId);
-    const poolWriter = capturePoolQuotaWriter(accountId, { accessToken, chatgptAccountId, generation });
-    requestCredentialGeneration = generation;
-    onCredentialGeneration?.(generation);
-    markQuotaProbeAttempted(quotaProbeEvidence, generation);
-    const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
-      headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!resp.ok) {
-      if (resp.status !== 401) {
+  const readState: { owner?: CodexUsageOwner<PoolQuotaResult>; usable: boolean } = { usable: false };
+  const read = async (): Promise<PoolQuotaResult> => {
+    try {
+      const { accessToken, chatgptAccountId, generation } = await getValidToken(accountId);
+      const poolWriter = capturePoolQuotaWriter(accountId, { accessToken, chatgptAccountId, generation });
+      requestCredentialGeneration = generation;
+      onCredentialGeneration?.(generation);
+      const admission = await fetchCodexUsage<PoolQuotaResult>(
+        `pool:${accountId}:${writerGeneration}:${generation}${afterDispatchSequence === undefined ? "" : `:post-reset:${afterDispatchSequence}`}`, {
+        headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
+        signal: AbortSignal.timeout(8000),
+      }, () => markQuotaProbeAttempted(quotaProbeEvidence, generation),
+      recoveryProbeNow === undefined ? { poolAccountId: accountId }
+        : { poolAccountId: accountId, recoveryProbe: true, now: () => recoveryProbeNow });
+      if (!admission) return { quota: existing ?? null, needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
+      if (admission.kind === "joined") return isCodexAccountGenerationLive(accountId, generation)
+        && quotaProbeEvidence.mayPublish?.() !== false
+        ? admission.result
+        : { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
+      readState.owner = admission;
+      const resp = admission.response;
+      if (!resp.ok) {
+        if (resp.status !== 401) {
+          return withQuotaProbeEvidence(
+            { quota: existing ?? null, needsReauth: false, credentialGeneration: generation },
+            quotaProbeEvidence,
+          );
+        }
+        // A bare 401 is what a stale-but-refreshable bearer produces after a plan change, so
+        // quarantining on it tells the operator to re-authenticate an account that was fine
+        // (#3019). Refresh once, replay once, and only then decide.
+        const recovered = await recoverPoolQuotaFrom401({
+          accountId,
+          existing,
+          configuredPlan,
+          rejectedAccessToken: accessToken,
+          rejectedGeneration: generation,
+          resp,
+          quotaProbeEvidence,
+          onCredentialGeneration,
+          recoveryProbeNow,
+        });
+        return withQuotaProbeEvidence(recovered, quotaProbeEvidence);
+      }
+      const committed = await commitPoolQuotaResponse(resp, {
+        accountId, existing, configuredPlan, generation, writerGeneration, poolWriter,
+        mayPublish: quotaProbeEvidence.mayPublish,
+      });
+      readState.usable = committed.freshQuota !== undefined;
+      return withQuotaProbeEvidence(committed, quotaProbeEvidence);
+    } catch (e) {
+      if (e instanceof CodexCredentialGenerationConflictError || e instanceof CodexCredentialRefreshLockTimeoutError
+        || e instanceof CodexCredentialRefreshBusyError || e instanceof CodexCredentialRefreshStaleError) {
+        return withQuotaProbeEvidence({
+          quota: existing ?? null,
+          needsReauth: false,
+          credentialGeneration: requestCredentialGeneration,
+          quotaProbeSkipped: true,
+        }, quotaProbeEvidence);
+      }
+      // Terminal means the grant itself is dead or missing; an `unknown` refresh failure (a
+      // token-endpoint 5xx, a transport blip) may clear, so it reports transient like the
+      // 401-recovery path instead of quarantining a healthy account (#2887). A revoked or
+      // expired grant is also written to the record as a terminal validation failure, the same
+      // verdict the token guardian persists: the in-memory mark dies with this process, and
+      // the stored verdict is what keeps a cached listing from calling the dead grant healthy
+      // after a restart.
+      if (isTerminalCodexPoolRefreshFailure(e)) {
+        if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
+          markCodexAccountValidationFailed(accountId, `refresh_${e.reason}`, {
+            expectedGeneration: requestCredentialGeneration,
+            terminal: true,
+          });
+        }
+        markAccountNeedsReauth(accountId, captureConfigGeneration(), requestCredentialGeneration);
         return withQuotaProbeEvidence(
-          { quota: existing ?? null, needsReauth: false, credentialGeneration: generation },
+          { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: requestCredentialGeneration },
           quotaProbeEvidence,
         );
       }
-      // A bare 401 is what a stale-but-refreshable bearer produces after a plan change, so
-      // quarantining on it tells the operator to re-authenticate an account that was fine
-      // (#3019). Refresh once, replay once, and only then decide.
-      const recovered = await recoverPoolQuotaFrom401({
-        accountId,
-        existing,
-        configuredPlan,
-        rejectedAccessToken: accessToken,
-        rejectedGeneration: generation,
-        resp,
-        quotaProbeEvidence,
-        onCredentialGeneration,
-      });
-      return withQuotaProbeEvidence(recovered, quotaProbeEvidence);
-    }
-    const committed = await commitPoolQuotaResponse(resp, {
-      accountId, existing, configuredPlan, generation, writerGeneration, poolWriter,
-      mayPublish: quotaProbeEvidence.mayPublish,
-    });
-    return withQuotaProbeEvidence(committed, quotaProbeEvidence);
-  } catch (e) {
-    if (e instanceof CodexCredentialGenerationConflictError || e instanceof CodexCredentialRefreshLockTimeoutError
-      || e instanceof CodexCredentialRefreshBusyError || e instanceof CodexCredentialRefreshStaleError) {
-      return withQuotaProbeEvidence({
-        quota: existing ?? null,
-        needsReauth: false,
-        credentialGeneration: requestCredentialGeneration,
-        quotaProbeSkipped: true,
-      }, quotaProbeEvidence);
-    }
-    // Terminal means the grant itself is dead or missing; an `unknown` refresh failure (a
-    // token-endpoint 5xx, a transport blip) may clear, so it reports transient like the
-    // 401-recovery path instead of quarantining a healthy account (#2887). A revoked or
-    // expired grant is also written to the record as a terminal validation failure, the same
-    // verdict the token guardian persists: the in-memory mark dies with this process, and
-    // the stored verdict is what keeps a cached listing from calling the dead grant healthy
-    // after a restart.
-    if (isTerminalCodexPoolRefreshFailure(e)) {
-      if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
-        markCodexAccountValidationFailed(accountId, `refresh_${e.reason}`, {
-          expectedGeneration: requestCredentialGeneration,
-          terminal: true,
-        });
-      }
-      markAccountNeedsReauth(accountId, captureConfigGeneration(), requestCredentialGeneration);
       return withQuotaProbeEvidence(
-        { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: requestCredentialGeneration },
+        { quota: existing ?? null, needsReauth: false, credentialGeneration: requestCredentialGeneration },
         quotaProbeEvidence,
       );
     }
-    return withQuotaProbeEvidence(
-      { quota: existing ?? null, needsReauth: false, credentialGeneration: requestCredentialGeneration },
-      quotaProbeEvidence,
-    );
-  }
+  };
+  let outcome: PoolQuotaResult | undefined;
+  try { outcome = await read(); return outcome; }
+  finally { readState.owner?.settle(readState.usable, outcome); }
 }
 
 export async function fetchPoolAccountQuota(
@@ -442,6 +495,7 @@ export async function fetchPoolAccountQuota(
   getValidToken: typeof getValidCodexToken = getValidCodexToken,
   validatePending = false,
   afterDispatchSequence?: number,
+  recoveryProbeNow?: number,
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
   if (afterDispatchSequence === undefined && !forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL) {
@@ -489,6 +543,8 @@ export async function fetchPoolAccountQuota(
       onDispatch: sequence => { state.dispatchSequence = sequence; },
       mayPublish: () => state.superseded !== true,
     },
+    afterDispatchSequence,
+    recoveryProbeNow,
   ).then(async result => {
     // A passive flight has consumed its validation decision. Remove it before
     // promise settlement queues other continuations, so a late explicit caller

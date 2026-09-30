@@ -126,7 +126,7 @@ alias <provider> <id|alias> <display-name|->  Set or clear an account's display 
 pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
-clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -235,9 +235,28 @@ ayar yalnızca kullanıma dayalı proaktif geçişi devre dışı bırakır.
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+CLI komutu Anthropic OAuth hesabını id veya benzersiz takma ad ile duraklatır ya da sürdürür. Önce tam eşleşme, ardından büyük/küçük harf duyarsız eşleşme aranır. CLI ve kontrol paneli aynı `PUT /api/oauth/accounts/pause` uç noktasına `{ provider: "anthropic", accountId, paused }` gönderir. `paused` hesapta saklanır ve `GET /api/oauth/accounts` yanıtında gösterilir. Proaktif havuz kapalı olsa bile duraklatılan hesap seçimden, oturum bağlarından ve 429 sonrası adaylardan çıkarılır. Tüm hesaplar duraklatılmışsa biri sürdürülene kadar istekler 403 döndürür. Önceden gönderilmiş istekler devam eder; kimlik bilgileri ve sağlık durumu korunur. Duraklatma yeniden başlatma ve yeniden girişten sonra da sürer, hesap silinince kaldırılır. Hesaba özel eşikler bu işleme dahil değildir.
+
 ### `ocx account clear <provider> [--json]`
 
 Bir hesap id'si çözümlemeden Codex hesabının elle seçimini temizler; `auto` adında bir hesap olsa bile çalışır. Yalnızca Codex havuzları içindir; diğer sağlayıcı türlerinde geri yüklenecek otomatik seçim yoktur.
+
+### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
+
+Kaydedilmiş kimlik bilgilerini değiştirmeden süreç içi hata cooldown durumunu kaldırır. Codex havuzu
+hesabı için `openai`, Anthropic OAuth hesabı için `anthropic` kullanın; diğer sağlayıcılar reddedilir.
+Her iki biçim de hesap id'sini veya benzersiz takma adı kabul eder, `main` ise yalnızca Codex havuzuna
+özgüdür.
+
+```bash
+ocx account clear-cooldown anthropic <id-or-alias>
+```
+
+Etkin cooldown olmasa da komut başarılı olur ve JSON'da `cleared: false` döner. Anthropic cooldown
+temizliği hesap generation değerini de ilerletir; böylece eski bir quota probe temizlenen durumu geri
+getiremez veya eski quota uygunluğunu yayımlayamaz.
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -258,7 +277,11 @@ eşleşen null veya eski bir rapora düşer (çıkış 0).
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-`openai` Codex havuzunun eşiğini yönetir veya genel OAuth havuzunun eşiğini kaydeder. `on` %80, `off` %0 kaydeder; `threshold <n>` 0–100 kabul eder. Genel havuz eşiği yalnızca `pool.kernel` açıkken ve `strategy: "fill-first"` seçiliyken seçimi yönlendirir; bayrak kapalıyken kayıt işlemi eşik tabanlı geçişi etkinleştirmez. Her iki durumda da sağlayıcının etkinlik ayarını veya 429 hatasından sonraki otomatik hesap değişimini etkilemez. Genel havuz çıktısı sunucunun doğruladığı değerleri kullanır. Genel havuzlarda `poolEnabled`, kaydedilmiş sağlayıcı ayarıdır (`null` belirtilmemiş demektir); devralınmış etkin durumu göstermez. `inert: true` eşiğin kaydedildiğini ama uygulanmadığını, `inert: false` ise havuzun onu uyguladığını belirtir. `inert` yoksa yetenek bilinmiyordur ve bu durumda da `enabled: true` bildirilmez. API anahtarlı sağlayıcılar, Anthropic ve geçersiz değerler reddedilir.
+`openai` Codex havuzunun eşiğini yönetir veya genel OAuth havuzunun eşiğini kaydeder. `on` %80, `off` %0 kaydeder; `threshold <n>` 0–100 kabul eder. Genel havuz eşiği yalnızca `pool.kernel` açıkken ve `strategy: "fill-first"` seçiliyken seçimi yönlendirir; bayrak kapalıyken kayıt işlemi eşik tabanlı geçişi etkinleştirmez. Her iki durumda da sağlayıcının etkinlik ayarını veya 429 hatasından sonraki otomatik hesap değişimini etkilemez. Genel havuz çıktısı sunucunun doğruladığı değerleri kullanır. Genel havuzlarda `poolEnabled`, kaydedilmiş sağlayıcı ayarıdır (`null` belirtilmemiş demektir); devralınmış etkin durumu göstermez. `inert: true` eşiğin kaydedildiğini ama uygulanmadığını, `inert: false` ise havuzun onu uyguladığını belirtir. `inert` yoksa yetenek bilinmiyordur ve bu durumda da `enabled: true` bildirilmez. API anahtarlı sağlayıcılar ve geçersiz değerler reddedilir.
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Anthropic OAuth için `ocx account auto-switch anthropic threshold 90 --account <id>` komutu 0–100 arasında tam sayı kaydeder. `off --account <id>` 0, `on --account <id>` 80 kaydeder; `inherit --account <id>` devralmayı geri getirir, `status --account <id>` yalnızca okur. `--json` desteklenir. Hesap kartı aynı ayarı sunar. Eksik/null değer `anthropicAccountPool.autoSwitchThreshold` varsayılanını (80) devralır; 0 yalnızca bu hesabın kullanıma dayalı geçişini kapatır. Yeniden başlatma ve girişte korunur, hesap silinince kaldırılır. Manuel seçim, affinity, bilinmeyen/tükenmiş kota yedek davranışı ve model rotaları değişmez. Havuz kapalıyken eşikler uygulanmaz; duraklatma ve 429 kurtarması sürer.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

@@ -10,7 +10,10 @@ bunx tauri dev
 ```
 
 The sidecar is generated from the repository's standalone binary build and is
-not checked into git.
+not checked into git. That build also stages the target-matching native keyring addon
+under `keyring/`; Tauri copies it as a resource because Bun cannot load a `.node` addon
+from the compiled executable's virtual filesystem. Universal macOS preparation requires
+both Darwin optional packages (`bun install --frozen-lockfile --os=darwin --cpu=*`).
 
 The macOS tray panel is a SwiftUI/AppKit static library built from
 `app/Sources/NativeTray` by the Rust build script and linked into this process.
