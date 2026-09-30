@@ -22,6 +22,7 @@
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const GUARD_ENV = "OCX_TEST_HOME_GUARD";
 /**
@@ -185,16 +186,57 @@ function isInside(parent: string, child: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+let checkoutRootSpellings: readonly string[] | undefined;
+
+/**
+ * Both spellings of the checkout that loaded this module (`src/lib` -> repository root).
+ *
+ * Lazy so a production process, which never removes anything through this guard, does no work
+ * for it at module load. In a compiled binary the module URL sits under a virtual root, so the
+ * result names no real checkout and the exemption below can never apply.
+ */
+function checkoutRoots(): readonly string[] {
+  if (checkoutRootSpellings === undefined) {
+    let lexical: string | null = null;
+    try {
+      lexical = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+    } catch {
+      // A non-file module URL names no checkout: no exemption.
+    }
+    checkoutRootSpellings = lexical === null ? [] : [...new Set([canonicalize(lexical), lexical])];
+  }
+  return checkoutRootSpellings;
+}
+
+/**
+ * Whether `candidate` is repository content of a checkout that itself lives inside `protectedPath`.
+ *
+ * A Codex-app worktree is a checkout under `~/.codex/worktrees/`, and forty suites keep their
+ * fixture directory beside the test file. Refusing every path inside `~/.codex` refused those
+ * suites' own cleanup, 863 failures in one run, although nothing there is Codex state. The lift
+ * is deliberately narrow: it applies to one tree, only when a checkout spelling is strictly
+ * inside that tree and the candidate is strictly inside that checkout. The checkout root itself,
+ * its ancestors and every sibling stay refused, and a checkout that merely CONTAINS a protected
+ * tree (one at `$HOME`, or the virtual root of a compiled build) never qualifies.
+ */
+function isOwnCheckoutContent(protectedPath: string, candidate: string): boolean {
+  return checkoutRoots().some(root => isInside(protectedPath, root) && isInside(root, candidate));
+}
+
 /**
  * Why removing `target` is refused, or `null` when it is not a protected location.
  *
  * Three relations are refused, not one. Equality alone would still permit
  * `rmSync(getConfigPath())` against a live `config.json`, and it would permit
  * `rmSync(homedir())`, which takes the protected tree with it. So a target is refused when it
- * IS a protected tree, when it sits INSIDE one, or when it is an ANCESTOR of one.
+ * IS a protected tree, when it sits INSIDE one, or when it is an ANCESTOR of one. The one lift is
+ * content of the running checkout when that checkout lives inside the tree
+ * ({@link isOwnCheckoutContent}); it never applies to equality or ancestry.
  *
  * Canonicalization is what makes a symlink useless as a bypass: a temp path that merely points
- * at the real home resolves to the real home before any comparison happens.
+ * at the real home resolves to the real home before any comparison happens. Each spelling is
+ * judged on its own and any refusal wins, so a link inside the checkout that resolves into the
+ * protected tree is refused through its canonical form.
  */
 export function protectedRemovalReason(target: string): string | null {
   // Both spellings are judged, not just the canonical one. Canonicalization is what defeats a
@@ -209,7 +251,9 @@ export function protectedRemovalReason(target: string): string | null {
     for (const tree of PROTECTED_TREES) {
       for (const protectedPath of [tree.path, tree.lexical]) {
         if (candidate === protectedPath) return `${tree.label} (${protectedPath})`;
-        if (isInside(protectedPath, candidate)) return `a path inside ${tree.label} (${protectedPath})`;
+        if (isInside(protectedPath, candidate) && !isOwnCheckoutContent(protectedPath, candidate)) {
+          return `a path inside ${tree.label} (${protectedPath})`;
+        }
         if (isInside(candidate, protectedPath)) return `an ancestor of ${tree.label} (${protectedPath})`;
       }
     }
