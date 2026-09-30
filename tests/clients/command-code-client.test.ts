@@ -75,18 +75,22 @@ describe("Command Code client config", () => {
     expect(contribution.fragments.map(f => f.path)).toEqual([["provider", OPENCODE_PROVIDER_ID]]);
   });
 
-  test("resolves the home directory override and the documented destination", () => {
+  test("resolves ~/.commandcode and the documented destination, with no override", () => {
     expect(commandCodeHomeDir({}, "/home/u")).toBe(join("/home/u", ".commandcode"));
     expect(commandCodeConfigPath({}, "/home/u")).toBe(join("/home/u", ".commandcode", "providers.json"));
-    expect(commandCodeConfigPath({ COMMANDCODE_HOME: "/elsewhere" }, "/home/u")).toBe(join("/elsewhere", "providers.json"));
-    expect(commandCodeConfigPath({ COMMANDCODE_HOME: "~/alt" }, "/home/u")).toBe(join("/home/u", "alt", "providers.json"));
-    expect(() => commandCodeConfigPath({ COMMANDCODE_HOME: "relative" }, "/home/u")).toThrow(ClientPathError);
+    // COMMANDCODE_HOME is deliberately ignored: the published client
+    // (`command-code@1.66.0`) resolves `HOME ?? USERPROFILE` + `/.commandcode` and
+    // never reads it, so honouring it here would report an enable as successful at
+    // a path no Command Code process opens. See commandCodeHomeDir's doc comment
+    // and tests/clients/command-code-client-contract.test.ts.
+    expect(commandCodeConfigPath({ COMMANDCODE_HOME: "/elsewhere" }, "/home/u")).toBe(join("/home/u", ".commandcode", "providers.json"));
+    expect(commandCodeConfigPath({ COMMANDCODE_HOME: "relative" }, "/home/u")).toBe(join("/home/u", ".commandcode", "providers.json"));
   });
 
-  test("detects installation by the .commandcode directory the override names", () => {
+  test("detects installation by ~/.commandcode, which is where the client looks", () => {
     const spec = INTEGRATION_CLIENTS.commandcode;
     expect(spec.detectDir({}, "/home/u")).toBe(join("/home/u", ".commandcode"));
-    expect(spec.detectDir({ COMMANDCODE_HOME: "/elsewhere" } as NodeJS.ProcessEnv, "/home/u")).toBe("/elsewhere");
+    expect(spec.detectDir({ COMMANDCODE_HOME: "/elsewhere" } as NodeJS.ProcessEnv, "/home/u")).toBe(join("/home/u", ".commandcode"));
   });
 
   test("ships as a loopback-only integration with proper export metadata", () => {
