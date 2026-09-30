@@ -75,15 +75,29 @@ describe("parseRoleSizingResponse", () => {
       badTier: { ...GOOD, tier: "premium" },
       badEffort: { ...GOOD, effort: "high" },
       noRationale: { ...GOOD, rationale: "  " },
-      namedModel: { ...GOOD, model: "some-model" },
+      noMoveDown: { tier: GOOD.tier, effort: GOOD.effort, rationale: GOOD.rationale, move_up_if: GOOD.move_up_if },
       notObject: "standard",
     };
     const roles = ["ok", ...Object.keys(cases), "missing"];
     const out = parseRoleSizingResponse(JSON.stringify({ roles: { ok: GOOD, ...cases } }), roles);
     expect(out.get("ok")).toHaveProperty("sizing");
     for (const role of roles.slice(1)) expect(out.get(role), role).toHaveProperty("unsized");
-    expect(out.get("namedModel")).toEqual({ unsized: "the sizing answer has unexpected fields: model" });
     expect(out.get("missing")).toEqual({ unsized: "the sizing model did not size this role" });
+  });
+
+  test("ignores keys beyond the five it reads and keeps them out of the sizing", () => {
+    const out = parseRoleSizingResponse(JSON.stringify({
+      roles: { explorer: { ...GOOD, confidence: 0.8, notes: ["cheap"] } },
+    }), ["explorer"]);
+    expect(out.get("explorer")).toEqual({
+      sizing: {
+        tier: "standard",
+        effort: "measured",
+        rationale: GOOD.rationale,
+        moveUpIf: GOOD.move_up_if,
+        moveDownIf: GOOD.move_down_if,
+      },
+    });
   });
 
   test("ignores roles the model invented", () => {

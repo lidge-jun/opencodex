@@ -136,8 +136,6 @@ export function buildRoleSizingUserMessage(inputs: readonly RoleSizingInput[]): 
   }, null, 2);
 }
 
-const ANSWER_FIELDS = ["tier", "effort", "rationale", "move_up_if", "move_down_if"] as const;
-
 function oneLine(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const collapsed = value.replace(/\s+/g, " ").trim();
@@ -153,8 +151,6 @@ function validateEntry(entry: unknown): RoleSizingOutcome {
     return { unsized: "the sizing answer for this role is not an object" };
   }
   const fields = entry as Record<string, unknown>;
-  const extra = Object.keys(fields).filter(key => !(ANSWER_FIELDS as readonly string[]).includes(key));
-  if (extra.length > 0) return { unsized: "the sizing answer has unexpected fields: " + extra.join(", ") };
   if (!isMember(SIZING_TIERS, fields.tier)) return { unsized: "the sizing answer has no valid tier" };
   if (!isMember(SIZING_EFFORTS, fields.effort)) return { unsized: "the sizing answer has no valid effort" };
   const rationale = oneLine(fields.rationale);
@@ -171,10 +167,11 @@ const CODE_FENCE = /^\x60{3}(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\x60{3}$/i;
 /**
  * Validate the sizing model's answer for each requested role.
  *
- * The answer must be one JSON object of the shape the rubric asks for. The only leniency is a
- * single surrounding code fence, which models add out of habit and which carries no content.
- * Anything else wrong marks the affected role, or every role when the whole answer is unusable,
- * as unsized with the reason.
+ * The answer must be one JSON object of the shape the rubric asks for. Two leniencies, both for
+ * content the mapping never reads: a single surrounding code fence, which models add out of habit,
+ * and keys beyond the five fields in a role's entry, which are ignored. Every one of the five must
+ * still be present and valid. Anything else wrong marks the affected role, or every role when the
+ * whole answer is unusable, as unsized with the reason.
  */
 export function parseRoleSizingResponse(text: string, roles: readonly string[]): Map<string, RoleSizingOutcome> {
   const out = new Map<string, RoleSizingOutcome>();

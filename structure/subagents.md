@@ -354,7 +354,8 @@ model for every role and writes nothing. Applying a proposal is the ordinary
   `postLocalChatCompletion` (`src/lib/local-chat-completion.ts`, shared with the routed vision describer), on
   the root `model` of Codex `config.toml` unless the caller names one. An answer that is not the strict JSON
   shape, a missing role, or a field outside the vocabulary leaves that role **unsized** with the reason;
-  nothing is guessed. The sizing model never names a model.
+  nothing is guessed. Keys beyond the five answer fields are ignored, and all five stay required. The
+  sizing model never names a model.
 - **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
   `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
   opencodex config first, then price rank (input plus output per 1M tokens, split evenly across the
