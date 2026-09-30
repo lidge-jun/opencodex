@@ -336,6 +336,7 @@ describe("devin adapter", () => {
         { role: "user", content: `here is a quote: ${trigger}` },
         { role: "user", content: "hello" },
       ],
+      tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
     });
     expect(req.includes(Buffer.from(trigger, "utf8"))).toBe(false);
     expect(req.includes(Buffer.from("asking the user whether to allow the action", "utf8"))).toBe(true);
