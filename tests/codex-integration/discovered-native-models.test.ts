@@ -36,7 +36,6 @@ import { refreshConfigDerivedRegistries } from "../../src/config/derived-registr
 import {
   CODEX_ROSTER_DISCOVERY_CLIENT_VERSION,
   discoverCodexNativeRoster,
-  getCodexModelEntitlementStatus,
   resetCodexModelEntitlementCacheForTests,
   resetCodexNativeRosterDiscoveryForTests,
   resolveCodexModelEntitlements,
@@ -248,7 +247,24 @@ describe("discovery-only roster", () => {
     expect(SUPPORTED_NATIVE_OPENAI_SLUGS.has(FUTURE)).toBe(true);
     expect(persisted().models.map(model => model.slug)).toEqual([FUTURE]);
     // A discovery roster must never answer an entitlement question for another client version.
-    expect(getCodexModelEntitlementStatus("future-test")).toEqual({ status: "unavailable" });
+    // Resolving under the discovery version must still fetch, proving no entry was cached.
+    let entitlementFetches = 0;
+    await resolveCodexModelEntitlements({}, {
+      clientVersion: CODEX_ROSTER_DISCOVERY_CLIENT_VERSION,
+      credentials: [credential],
+      fetcher: (() => {
+        entitlementFetches += 1;
+        return Promise.resolve(Response.json({ models: [row()] }));
+      }) as typeof fetch,
+    });
+    expect(entitlementFetches).toBe(1);
+  });
+
+  test("a discovery whose scheduler generation ended does not publish", async () => {
+    resetCodexNativeRosterDiscoveryForTests();
+    const fetcher = (() => Promise.resolve(Response.json({ models: [row()] }))) as typeof fetch;
+    expect(await discoverCodexNativeRoster({}, { credentials: [credential], fetcher, isCurrent: () => false })).toBe("unavailable");
+    expect(SUPPORTED_NATIVE_OPENAI_SLUGS.has(FUTURE)).toBe(false);
   });
 
   test("revalidates with the last ETag and treats 304 as unchanged", async () => {

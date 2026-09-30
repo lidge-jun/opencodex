@@ -426,8 +426,11 @@ There is no dashboard control for this yet; set it in `config.json` or with
 
 ## Catalog auto-refresh (`catalogAutoRefresh`)
 
-Enabled by default, even when the section or `enabled` is absent. The proxy refreshes its
-model catalog every 60 minutes, with one initial refresh about three minutes after startup.
+Enabled by default when OpenCodex manages your local Codex client: the section or `enabled`
+may be absent. The proxy refreshes its model catalog every 60 minutes, with one initial refresh
+about three minutes after startup. When the Codex integration is turned off, or the instance
+runs as a hub or beside another live proxy, background refresh runs only with an explicit
+`"enabled": true`, and it never reads Codex sources.
 
 ```json
 {

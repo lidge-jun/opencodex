@@ -808,6 +808,14 @@ export const CODEX_ROSTER_DISCOVERY_CLIENT_VERSION = "99.0.0";
 
 export type CodexNativeRosterDiscoveryOutcome = "recorded" | "not-modified" | "unavailable";
 
+export interface CodexNativeRosterDiscoveryOptions extends Pick<
+  CodexModelEntitlementResolveOptions,
+  "credentials" | "fetcher" | "signal" | "now" | "nativeMainRefreshDependencies"
+> {
+  /** Checked right before publication; false means the caller's scheduler generation is gone. */
+  readonly isCurrent?: () => boolean;
+}
+
 /**
  * Last ETag per credential identity, so an unchanged roster costs a 304 when upstream honours it.
  * A 304 carries no rows and so cannot renew a discovery's last-seen time; a model visible only
@@ -828,7 +836,7 @@ const DISCOVERY_ETAG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  */
 export async function discoverCodexNativeRoster(
   config: Pick<OcxConfig, "codexAccounts">,
-  options: Pick<CodexModelEntitlementResolveOptions, "credentials" | "fetcher" | "signal" | "now" | "nativeMainRefreshDependencies"> = {},
+  options: CodexNativeRosterDiscoveryOptions = {},
 ): Promise<CodexNativeRosterDiscoveryOutcome> {
   const fetcher = options.fetcher ?? fetch;
   const run = async (excluded: ReadonlySet<string>, releaseMainLease?: () => void) => {
@@ -858,7 +866,7 @@ export async function discoverCodexNativeRoster(
 async function fetchDiscoveryRoster(
   credential: CodexModelEntitlementCredentialSnapshot,
   fetcher: typeof fetch,
-  options: Pick<CodexModelEntitlementResolveOptions, "signal" | "now">,
+  options: Pick<CodexNativeRosterDiscoveryOptions, "signal" | "now" | "isCurrent">,
 ): Promise<CodexNativeRosterDiscoveryOutcome> {
   const controller = new AbortController();
   const abort = () => controller.abort(options.signal?.reason);
@@ -885,6 +893,7 @@ async function fetchDiscoveryRoster(
     if (!body.displaySafe || body.truncated) return "unavailable";
     const parsed = parseAccountModels(body.text);
     if (parsed === null || parsed.models.size === 0) return "unavailable";
+    if (controller.signal.aborted || options.isCurrent?.() === false) return "unavailable";
     recordDiscoveredNativeModels(parsed.discoveredRows, CODEX_ROSTER_DISCOVERY_CLIENT_VERSION, now);
     const nextEtag = response.headers.get("etag");
     if (nextEtag && nextEtag.length <= 256) discoveryEtags.set(credential.credentialIdentity, { etag: nextEtag, fetchedAt: now });
