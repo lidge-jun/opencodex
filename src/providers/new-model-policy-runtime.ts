@@ -34,6 +34,8 @@ export function finalizeModelDiscovery(
   models: Iterable<{ provider: string; id: string; custom?: boolean }>,
   authoritativeProviders: string[],
   revisions: Map<string, string>,
+  /** Read consumers may publish detached policy state; writers require persisted decisions. */
+  publishProjection?: (projection: OcxConfig) => void,
 ): boolean {
   const filePath = fileBackedConfigPath(config);
   const rows = [...models];
@@ -48,6 +50,15 @@ export function finalizeModelDiscovery(
   if (!baseline.persisted && filePath === undefined) {
     // Standalone/synthetic callers may project their own config, never overwrite another home.
     reconcile(config);
+    return true;
+  }
+  if (!baseline.persisted && publishProjection) {
+    // Drift already existed at admission. Do not add unsaved disables or advance the live
+    // merge baseline: a later rebase-save must preserve the operator's on-disk choices.
+    const projection = { ...config, modelDiscovery: structuredClone(config.modelDiscovery),
+      disabledModels: config.disabledModels === undefined ? undefined : [...config.disabledModels] };
+    reconcile(projection);
+    publishProjection(projection);
     return true;
   }
   // A file-loaded instance remains file-backed after inventory drift. The locked

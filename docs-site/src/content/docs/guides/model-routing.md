@@ -88,6 +88,8 @@ Routing and catalog visibility are separate controls:
   The policy applies before publishing newly discovered models through `/v1/models`, the dashboard,
   client configuration exports, or a Codex catalog sync (including service startup).
   Enabling an arrival manually keeps it enabled on later refreshes and exports.
+  If the running provider configuration differs from disk, model lists still apply the policy
+  using a temporary projection; they leave the running configuration and saved choices untouched.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
   with a non-empty `selectedModels` (including preset mode) are already curated, so this policy is

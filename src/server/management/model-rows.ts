@@ -279,7 +279,7 @@ export async function listManagementModelRows(
    */
   const models = options.models === undefined
     ? (await Promise.all([
-      fetchAllModels(config, options.providerContentRevisions),
+      fetchAllModels(config, options.providerContentRevisions, projection => { config = projection; }),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,
       }),

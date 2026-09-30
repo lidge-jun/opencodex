@@ -268,6 +268,8 @@ export async function fetchAllModels(
   config: OcxConfig,
   /** Filled with each provider's content revision as of the moment its rows were chosen. */
   providerContentRevisions?: Map<string, string>,
+  /** Management renders disabled rows using this detached state after inventory drift. */
+  publishProjection?: (projection: OcxConfig) => void,
 ): Promise<CatalogModel[]> {
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
@@ -280,9 +282,16 @@ export async function fetchAllModels(
   });
   finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models),
     outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
+  let publicationConfig = config;
   if (!finalizeModelDiscovery(config, discoveryBaseline, models,
-    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider), revisions)) {
+    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider), revisions,
+    projection => { publicationConfig = projection; publishProjection?.(projection); })) {
     throw new CatalogGatherBusyError();
+  }
+  if (publicationConfig !== config && !publishProjection) {
+    // Other consumers keep their live config, so only return rows visible under the projection.
+    const { filterCatalogVisibleModels } = await import("../../codex/catalog");
+    return filterCatalogVisibleModels(models, publicationConfig);
   }
   return models;
 }

@@ -158,6 +158,30 @@ test("a stale file-backed discovery preserves another writer's enabled model thr
   expect(published).toBe(false);
 });
 
+test("a read projection preserves a concurrent manual enable through the live writer's later save", () => {
+  saveConfig(fixture());
+  const config = loadConfig();
+  armClaudeCodeBaseline(config);
+  const concurrent = loadConfig();
+  concurrent.providers.vendor.models!.push("c");
+  concurrent.modelDiscovery!.knownModels!.vendor.ids.push("c");
+  saveConfig(concurrent);
+  const before = bytes();
+  const liveBefore = structuredClone(config);
+  let projection: OcxConfig | undefined;
+  expect(finalizeModelDiscovery(config, captureModelDiscoveryBaseline(config), rows, ["vendor"],
+    new Map(), projected => { projection = projected; })).toBe(true);
+  expect(projection?.disabledModels).toEqual(["vendor/b", "vendor/c"]);
+  expect(projection?.modelDiscovery?.knownModels?.vendor.ids).toEqual(["a", "b", "c"]);
+  expect(config).toEqual(liveBefore);
+  expect(bytes()).toBe(before);
+  config.contextCapValue = 320000;
+  saveConfigPreservingClaudeCode(config);
+  expect(loadConfig().disabledModels).toEqual(["vendor/b"]);
+  expect(loadConfig().providers.vendor.models).toEqual(["a", "b", "c"]);
+  expect(loadConfig().contextCapValue).toBe(320000);
+});
+
 
 test.each([false, true])("an unarmed file-backed caller rejects stale discovery (detached baseline: %s)", detached => {
   saveConfig(fixture());

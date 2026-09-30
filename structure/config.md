@@ -57,7 +57,7 @@ and fresh-location examples. Diagnostics do not introduce a fallback or alter fi
 `src/config/persisted-mutation.ts` owns schema-valid on-disk mutations under the shared lock.
 It rechecks the file before committing, retries a changed snapshot up to three times, and
 returns unavailable for missing, invalid, or persistently conflicting config. Its one-shot
-test seam and the mutation types remain re-exported through `src/config.ts`. Successful, repaired, and salvaged file loads record their source path in the private WeakMap owned by `src/config/rebase-provenance.ts`; defaults and synthetic objects do not acquire it. This metadata is never serialized. Inventory drift cannot turn a file-backed instance into a synthetic discovery caller, and changing the resolved config home refuses publication.
+test seam and the mutation types remain re-exported through `src/config.ts`. Successful, repaired, and salvaged file loads record their source path in the private WeakMap owned by `src/config/rebase-provenance.ts`; defaults and synthetic objects do not acquire it. This metadata is never serialized. Inventory drift cannot turn a file-backed instance into a synthetic discovery writer. Read publication may use the detached policy projection described by the [catalog contract](catalog.md#shared-catalog), without changing the live merge baseline; changing the resolved config home refuses publication.
 
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
