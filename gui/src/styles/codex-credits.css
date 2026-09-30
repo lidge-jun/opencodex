@@ -1,0 +1,14 @@
+/* Credits lives inside the existing compact slot, so no second slot padding. */
+.quota-row--codex-credits .quota-val {
+  white-space: nowrap;
+}
+.codex-auth-credits-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+.codex-auth-credits-toggle__label {
+  font-size: var(--text-label);
+  color: var(--muted);
+}

@@ -3,6 +3,8 @@ import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
 import QuotaBars from "./QuotaBars";
+import CodexCreditsRow from "./CodexCreditsRow";
+import { useI18n } from "../i18n/shared";
 import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry, CodexAccountLoadState } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
@@ -43,9 +45,13 @@ export function CodexAccountPoolMainCard({
   doctorCopyOutcomeFor,
   onManageMainHardLock,
   mainReauth,
+  creditsVisible,
+  loading = false,
 }: {
   t: TFn;
   main: CodexAccountEntry | undefined;
+  creditsVisible?: boolean;
+  loading?: boolean;
   isMainActive: boolean;
   accountModeState: CodexAccountModeState | null;
   threshold: number;
@@ -77,6 +83,8 @@ export function CodexAccountPoolMainCard({
     cancel: () => Promise<void>;
   } | undefined;
 }) {
+  const { locale } = useI18n();
+  const showCredits = creditsVisible === true && main?.credits !== undefined;
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
   const mainSwitchEntry: CodexAccountEntry = {
@@ -256,7 +264,8 @@ export function CodexAccountPoolMainCard({
               plan={main?.plan}
               threshold={mainSwitchEntry.autoSwitchThresholdOverride ?? threshold}
               t={t}
-              pending={main != null && main.quota == null}
+              pending={main != null && main.quota == null && (loading || !showCredits)}
+              afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={main?.credits} t={t} locale={locale} /> : undefined}
             />
           </>}
     </div>
@@ -273,9 +282,16 @@ export function CodexAccountPoolPageHead({
   actionFeedbackTone,
   onRefresh,
   onPauseExhausted,
+  creditsVisible,
+  creditsBusy,
+  onToggleCredits,
 }: {
   t: TFn;
   embedded: boolean;
+  /** Undefined until settings loads. */
+  creditsVisible?: boolean;
+  creditsBusy?: boolean;
+  onToggleCredits?: () => void;
   refreshingQuota: boolean;
   pausingExhausted: boolean;
   pauseBusy?: boolean;
@@ -298,6 +314,22 @@ export function CodexAccountPoolPageHead({
         >
           {actionFeedback ?? ""}
         </span>
+        {creditsVisible !== undefined && onToggleCredits && (
+          <span className="codex-auth-credits-toggle">
+            <span className="codex-auth-credits-toggle__label">{t("codexAuth.creditsToggle")}</span>
+            <button
+              type="button"
+              className={`toggle ${creditsVisible ? "on" : ""}`}
+              onClick={onToggleCredits}
+              disabled={!!creditsBusy}
+              aria-pressed={creditsVisible}
+              aria-label={t("codexAuth.creditsToggle")}
+              title={t("codexAuth.creditsToggleHint")}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </span>
+        )}
         {/* The standalone pause/refresh row sits next to the account cards. Embedded
             surfaces keep those actions beside feedback because there is no page title. */}
         {embedded && (
