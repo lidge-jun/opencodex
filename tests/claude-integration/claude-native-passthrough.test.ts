@@ -12,6 +12,7 @@ import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
+import { readRecentUsageEntries } from "../../src/usage/log";
 import { tapAnthropicSseForLog } from "../../src/server/claude-messages";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
@@ -967,4 +968,101 @@ test("a terminal frame still in the buffer when the read fails counts as seen", 
   expect(text).toBe(`${withoutDelimiter}\n\n`);
   expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
   expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
+});
+
+// --- A failed passthrough keeps its reason in the request log ---
+
+async function nativeFailureRow(upstreamBase: string, extraClaude?: Record<string, unknown>) {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  saveConfig(cfg(upstreamBase, extraClaude));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify({ ...claudeBody(), stream: false }),
+    });
+    const text = await res.text();
+    const logs = logsFromApiBody<{ status?: number; closeReason?: string; upstreamError?: string }>(
+      await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
+    );
+    expect(logs).toHaveLength(1);
+    return { res, text, row: logs[0]! };
+  } finally {
+    await server.stop(true);
+  }
+}
+
+test("an upstream error response is relayed verbatim and its reason reaches the request log and usage.jsonl", async () => {
+  const errorBody = { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 213000 tokens > 200000 maximum" }, request_id: "req_fixture" };
+  const upstream = Bun.serve({ port: 0, fetch: () => Response.json(errorBody, { status: 400 }) });
+  try {
+    const { res, text, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
+    expect(res.status).toBe(400);
+    expect(JSON.parse(text)).toEqual(errorBody);
+    expect(row.status).toBe(400);
+    expect(row.upstreamError).toBe("Provider error 400: invalid_request_error: prompt is too long: 213000 tokens > 200000 maximum");
+    // usage.jsonl carries failure diagnostics for >= 400 rows; this row used to persist none.
+    expect(readRecentUsageEntries(1)[0]?.upstreamError).toBe(row.upstreamError);
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a non-JSON upstream error still logs its status as the reason", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response("<html>bad gateway</html>", { status: 502, headers: { "content-type": "text/html" } }) });
+  try {
+    const { res, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
+    expect(res.status).toBe(502);
+    expect(row.upstreamError).toBe("Provider error 502");
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a credential echoed in an upstream error message is redacted in the log", async () => {
+  const leaked = "sk-ant-api03-" + "Z".repeat(40);
+  const upstream = Bun.serve({ port: 0, fetch: () => Response.json({ type: "error", error: { type: "authentication_error", message: `invalid x-api-key ${leaked}` } }, { status: 401 }) });
+  try {
+    const { row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""));
+    expect(row.status).toBe(401);
+    expect(row.upstreamError).toStartWith("Provider error 401: authentication_error: invalid x-api-key ");
+    expect(row.upstreamError).not.toContain(leaked);
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("an unreachable upstream logs the fetch failure as the reason", async () => {
+  // Port 1 refuses the connection before any header arrives.
+  const { res, text, row } = await nativeFailureRow("http://127.0.0.1:1");
+  expect(res.status).toBe(502);
+  expect(row.status).toBe(502);
+  expect(row.upstreamError).toStartWith("anthropic passthrough failed: ");
+  expect(JSON.parse(text).error.message).toBe(row.upstreamError);
+});
+
+test("an upstream that never sends headers logs the header timeout as the reason", async () => {
+  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() { /* accept, never answer */ } } });
+  try {
+    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`);
+    expect(res.status).toBe(504);
+    expect(row.status).toBe(504);
+    expect(row.upstreamError).toBe("anthropic passthrough timed out waiting for response headers");
+  } finally {
+    silent.stop(true);
+  }
+});
+
+test("a non-stream body over the byte cap logs the cap as the reason", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => Response.json({ type: "message", content: [{ type: "text", text: "x".repeat(4096) }] }) });
+  try {
+    const { res, row } = await nativeFailureRow(upstream.url.toString().replace(/\/$/, ""), { bodyMaxBytes: 1024 });
+    expect(res.status).toBe(502);
+    expect(row).toMatchObject({ status: 502, closeReason: "body_overflow" });
+    expect(row.upstreamError).toBe("anthropic passthrough body exceeded 1024 bytes");
+  } finally {
+    upstream.stop(true);
+  }
 });
