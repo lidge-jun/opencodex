@@ -132,6 +132,7 @@
     "anthropic-image-retry-e2e.test.ts": "adapters/anthropic",
     "anthropic-image-retry.test.ts": "adapters/anthropic",
     "anthropic-sonnet-5-5-contract.test.ts": "adapters/anthropic",
+    "anthropic-output-maxima.test.ts": "adapters/anthropic",
     "anthropic-parallel-tool-disable.test.ts": "adapters/anthropic",
     "anthropic-pool-toggle-copy.test.ts": "adapters/anthropic",
     "anthropic-quorum-cache.test.ts": "routing",
