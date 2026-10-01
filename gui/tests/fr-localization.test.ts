@@ -204,6 +204,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Both labels are ordinary French words with the same spelling and meaning.
   "cws.jev.stats.efforts",
   "cws.jev.stats.total",
+  // The TypeSafe decision method is a product name, rendered as written in every locale.
+  "cws.jev.backend.typesafe",
   "claudeDesktop.alias",
   "lab.filter.verdict",
   "lab.col.suite",

@@ -947,6 +947,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleLabCommand } = await import("./lab");
     return await handleLabCommand(deps.args.slice(1));
   },
+  chatgpt: async deps => {
+    const { handleChatgptCommand } = await import("./chatgpt-command");
+    return await handleChatgptCommand(deps.args.slice(1));
+  },
   claude: async deps => {
     const { cmdClaude } = await import("./claude");
     // "ocx claude desktop" → write Desktop 3P config

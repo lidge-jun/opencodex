@@ -80,6 +80,11 @@ export interface HandleResponsesOptions {
   codexAuthPolicy?: CodexAuthPolicyConfig;
   turnAdmissionLease?: AdmissionLease;
   /**
+   * A JEV decision-model call issued by a combo. It never carries caller credentials, is never
+   * rewritten by memory or shadow-call routing, and may not dispatch into a JEV combo.
+   */
+  internalDecisionCall?: boolean;
+  /**
    * How the caller proved data-plane admission (#1686).
    *
    * A bearer-presented admission secret is one of OUR OWN secrets, so a Direct turn must

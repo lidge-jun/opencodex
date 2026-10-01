@@ -73,7 +73,7 @@ After a CLI catalog/cache write, advisory restart guidance compares each running
 start time with the written catalog mtime. It reports only processes proven stale; a fresh or
 unreadable observation does not claim that another restart is required. Explicit
 `--restart-codex` and `--restart-app-server-only` retain their operator-consent semantics and act on
-verified matching processes regardless of the advisory freshness result.
+verified matching processes regardless of the advisory freshness result. Read-only client diagnostics in `src/codex/native-profile-processes.ts` prefer full executable paths over inferred argv0; macOS comm and args are read separately and joined by PID, so unquoted Codex Framework helper paths do not become CLI clients. The initial split Codex.app framework-path token pair is also rejected when only a process basename is available; later path arguments do not override a client match. Quoted immediate script entrypoints remain supported for known interpreters. This classification does not change the app-server termination selector.
 
 > Decision record: [ADR-0097](decisions/ADR-0097-post-write-app-server-freshness.md)
 
@@ -597,4 +597,4 @@ registration succeeds.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction).
 
-Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch. The serving-install census and bounded foreground delegation in `src/config/serving-runtimes.ts` follow [service command selection](ops/service-and-sidecars.md#background-service-command-selection).
+Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch. The serving-install census and bounded foreground delegation in `src/config/serving-runtimes.ts` follow [service command selection](ops/service-and-sidecars.md#background-service-command-selection). The experimental macOS `ocx chatgpt` launcher, restore and status commands follow the [ChatGPT Desktop contract](clients/chatgpt-desktop.md); the internal stdout filter remains hidden from public capability discovery.
