@@ -83,5 +83,9 @@ export function warnIfSyncedStateDirectory(dir: string, warn: (line: string) => 
   try { location = syncedStateLocation(dir); } catch { return; }
   if (location === undefined) return;
   warned = true;
-  for (const line of syncedStateWarning(location)) warn(line);
+  // Runs while the startup owner lease is held and before its rollback is registered, so a
+  // throwing sink must not escape and strand the lease.
+  try {
+    for (const line of syncedStateWarning(location)) warn(line);
+  } catch { /* advisory output only */ }
 }
