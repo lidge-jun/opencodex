@@ -187,8 +187,9 @@ export async function proposeDelegationModel(options: {
     system: sizing.DELEGATED_WORK_SIZING_SYSTEM_PROMPT,
     user: sizing.buildRoleSizingUserMessage([{ role: DELEGATED_WORK_ROLE, instructions: options.work }]),
   }, options.config);
-  const outcomes = answer.error
-    ? new Map([[DELEGATED_WORK_ROLE, { unsized: `the sizing call failed: ${answer.error}` }]])
+  const sizingError = answer.error ? publicSizingError(answer.error) : null;
+  const outcomes = sizingError
+    ? new Map([[DELEGATED_WORK_ROLE, { unsized: `the sizing call failed: ${sizingError}` }]])
     : sizing.parseRoleSizingResponse(answer.text, [DELEGATED_WORK_ROLE]);
   const candidates = (await modelCandidates(options.offered, options.models))
     .map(candidate => ({ ...candidate, efforts: candidate.efforts.filter(isCodexReasoningEffort) }));
@@ -200,7 +201,7 @@ export async function proposeDelegationModel(options: {
   }], outcomes, classified, { alwaysProposeEffort: true });
   return {
     sizingModel,
-    sizingError: answer.error ?? null,
+    sizingError,
     proposal: proposal!,
     candidates: classified.map(({ model, tier, tierSource, unitPrice }) => ({ model, tier, tierSource, unitPrice })),
   };

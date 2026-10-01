@@ -140,8 +140,14 @@ describe("POST /api/injection-model/suggest", () => {
     expect(result.body.proposal.status).toBe("unsized");
     answer = { text: "", error: "role sizing HTTP 502: boom" };
     result = await suggest({ work: "Review a release branch." });
-    expect(result.body.sizingError).toBe("role sizing HTTP 502: boom");
+    expect(result.body.sizingError).toBe("HTTP 502");
     expect(result.body.proposal.reason).toContain("the sizing call failed");
+    answer = { text: "", error: "connect ECONNREFUSED while opening /Users/example/secret.sock for acct_123 key=sk-live-abc" };
+    result = await suggest({ work: "Review a release branch." });
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).not.toContain("/Users/example");
+    expect(serialized).not.toContain("acct_123");
+    expect(serialized).not.toContain("sk-live-abc");
   });
 
   test("rejects a blank or oversized description and a missing sizing model without calling a model", async () => {
