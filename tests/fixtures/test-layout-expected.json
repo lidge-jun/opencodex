@@ -339,6 +339,8 @@
   "claude-desktop-picker-routes.test.ts": "claude-integration",
   "claude-desktop-native-context.test.ts": "claude-integration",
   "claude-desktop-policy.test.ts": "claude-integration",
+  "claude-cli-picker.test.ts": "claude-integration",
+  "claude-cli-picker-surface.test.ts": "claude-integration",
   "claude-picker-bootstrap.test.ts": "claude-integration",
   "claude-picker-ca.test.ts": "claude-integration",
   "claude-picker-listener.test.ts": "claude-integration",
