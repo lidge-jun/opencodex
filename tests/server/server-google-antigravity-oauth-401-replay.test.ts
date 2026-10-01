@@ -411,6 +411,23 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id", "project-b"]);
     } finally { await server.stop(true); }
   });
+  test("validation 403 followed by a sibling terminal refresh failure does not reach a third account", async () => {
+    await seedOAuth();
+    await seedSibling();
+    await seedThirdSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([{ status: 403, reason: "VALIDATION_REQUIRED" }, 401, 200], {
+      tokenThrow: "invalid_grant",
+    });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(401);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b"]);
+      expect(observed.chatProjects).toEqual(["initial-project-id", "project-b"]);
+      expect(observed.counts.refresh).toBe(1);
+    } finally { await server.stop(true); }
+  });
   test("same-account refresh succeeds without pool rotation", async () => {
     await seedOAuth();
     await seedSibling();

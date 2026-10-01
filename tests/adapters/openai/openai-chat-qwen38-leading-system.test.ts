@@ -46,7 +46,13 @@ function assertTemplateAccepts(messages: Array<{ role: string }>): void {
 }
 
 describe("Qwen3.8-27B leading-system template", () => {
-  test.each(["Qwen3.8-27B", "Qwen/Qwen3.8-27B"])("keeps a late reminder after the first user without an invalid system role: %s", modelId => {
+  test.each([
+    "Qwen3.8-27B",
+    "Qwen/Qwen3.8-27B",
+    // Internal Eliza serves the same pinned template under dashed checkpoint ids.
+    "qwen3-8-27b-fp8",
+    "qwen3-8-27b-lora",
+  ])("keeps a late reminder after the first user without an invalid system role: %s", modelId => {
     const messages = serialize(modelId);
     expect(messages).toEqual([
       { role: "system", content: "Base instructions." },

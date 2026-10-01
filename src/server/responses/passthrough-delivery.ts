@@ -99,6 +99,7 @@ import {
   PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE,
 } from "../../responses/plaintext-v2-agent-messages";
 import { createResponsesFieldBackfillBlockRewrite } from "./responses-field-backfill";
+import { createHostedImageDisplayRewrite, isLocalCodexImageClient } from "../responses-hosted-image-display";
 import { createResponsesFunctionToolRepairBlockRewrite } from "../responses-function-tool-repair";
 import {
   createUndeclaredToolCallGuardBlockRewrite,
@@ -840,6 +841,10 @@ export async function deliverPassthroughResponse(
           : undefined,
         createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
+        // Display-only projection must follow every continuation-cache observer.
+        isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
+          ? createHostedImageDisplayRewrite()
+          : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const clientBlockRewrite = blockRewrites.length > 0
         ? composeSseBlockRewrites(...blockRewrites)
@@ -1318,6 +1323,17 @@ export async function deliverPassthroughResponse(
           JSON.parse(grokUpstreamEchoEnabled ? clientJson : text) as { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
         );
       } catch { /* non-JSON despite content-type; recording is best-effort */ }
+      if (isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)) {
+        const imageDisplay = createHostedImageDisplayRewrite();
+        try {
+          clientJson = imageDisplay.json(clientJson);
+        } catch (error) {
+          if (error instanceof RangeError) {
+            return formatErrorResponse(502, "upstream_error", "hosted image result count exceeds local display limit");
+          }
+          throw error;
+        } finally { imageDisplay.dispose?.(); }
+      }
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON
       // as the canonical terminal SSE sequence (created → output_item.done →
