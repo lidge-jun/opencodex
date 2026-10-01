@@ -3,7 +3,7 @@
  *
  * Default OFF. When enabled:
  * - Sticky session affinity across requests that share a session key
- * - 429 cools the failed account and fails over to another eligible account
+ * - 429 and classified pre-output account 403s cool the failed account and fail over
  * - New sessions use `strategy` (default quota): lowest known fiveHour usage (#493),
  *   round-robin, or fill-first — affinity still wins for bound sessions
  *
@@ -12,8 +12,8 @@
  *
  * Affinity is process-local (lost on restart). Cooldown uses Retry-After when present, else
  * the reset time of whichever rate-limit window upstream reports as rejected, else a default
- * backoff. 401/403 credential failures should set needsReauth on the store (existing OAuth
- * path) so the account is excluded from eligibility.
+ * backoff. Classified entitlement/billing 403s use a ten-minute default cooldown.
+ * Token refresh failures retain the existing store needsReauth policy.
  */
 import { createHash } from "node:crypto";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
@@ -53,6 +53,7 @@ export type AnthropicRateLimitHeaders = Pick<Headers, "get">;
 const PROVIDER = "anthropic";
 /** Backoff only when upstream supplies no usable deadline. */
 const DEFAULT_COOLDOWN_MS = 60_000;
+const ACCOUNT_REFUSAL_COOLDOWN_MS = 10 * 60_000;
 const AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 const MAX_AFFINITY_ENTRIES = 2_000;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
@@ -879,7 +880,21 @@ export function rotateAnthropicAccountOn429(
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
   decision: AnthropicRouteDecision | null = null,
 ): string | null {
-  if (!recordAnthropicAccount429(config, failedAccountId, retryAfterHeader, now, rateLimitHeaders)) return null;
+  return rotateAnthropicAccountOnRefusal(config, failedAccountId, 429, retryAfterHeader, sessionKey, now, rateLimitHeaders, decision);
+}
+
+/** The caller proves that a 403 is an account refusal before entering this pool policy. */
+export function rotateAnthropicAccountOnRefusal(
+  config: OcxConfig,
+  failedAccountId: string,
+  status: 429 | 403,
+  retryAfterHeader: string | null | undefined,
+  sessionKey?: string | null,
+  now = Date.now(),
+  rateLimitHeaders?: AnthropicRateLimitHeaders | null,
+  decision: AnthropicRouteDecision | null = null,
+): string | null {
+  if (!recordAnthropicAccountRefusal(config, failedAccountId, status, retryAfterHeader, now, rateLimitHeaders)) return null;
 
   // The pool's strategy is a PROACTIVE policy. When the pool is disabled, reactive
   // presence-only recovery must not silently reactivate round-robin/fill-first merely
@@ -889,13 +904,14 @@ export function rotateAnthropicAccountOn429(
     ? pickAlternateAnthropicAccount(config, failedAccountId, now, decision)
     : pickLowestUsage(config, failedAccountId, now);
   if (!next) {
-    console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning 429`);
+    console.warn(`[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}no eligible replacement; returning ${status}`);
     return null;
   }
 
-  console.warn(
-    `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`,
-  );
+  console.warn(status === 403
+    ? `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}account unavailable (403); failing over`
+    : `[anthropic-pool] ${decision ? `route:#${decision.position} ` : ""}429 on ${formatAnthropicAccountOrdinal(failedAccountId)}; failing over to ${formatAnthropicAccountOrdinal(next)}`);
+
   return next;
 }
 
@@ -903,6 +919,18 @@ export function rotateAnthropicAccountOn429(
 export function recordAnthropicAccount429(
   config: OcxConfig,
   failedAccountId: string,
+  retryAfterHeader: string | null | undefined,
+  now = Date.now(),
+  rateLimitHeaders?: AnthropicRateLimitHeaders | null,
+): boolean {
+  return recordAnthropicAccountRefusal(config, failedAccountId, 429, retryAfterHeader, now, rateLimitHeaders);
+}
+
+/** Account entitlement refusals use a finite backoff; renewing a plan does not require login. */
+export function recordAnthropicAccountRefusal(
+  config: OcxConfig,
+  failedAccountId: string,
+  status: 429 | 403,
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   rateLimitHeaders?: AnthropicRateLimitHeaders | null,
@@ -923,8 +951,8 @@ export function recordAnthropicAccount429(
   // without that fallback such a refusal cools for the 60s default and the exhausted
   // account is back in the rotation a minute later.
   const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
-  const resetDerived = parsedRetry === undefined ? parseRateLimitReset(rateLimitHeaders, now) : undefined;
-  const cooldownMs = parsedRetry ?? resetDerived?.delayMs ?? DEFAULT_COOLDOWN_MS;
+  const resetDerived = status === 429 && parsedRetry === undefined ? parseRateLimitReset(rateLimitHeaders, now) : undefined;
+  const cooldownMs = parsedRetry ?? resetDerived?.delayMs ?? (status === 403 ? ACCOUNT_REFUSAL_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   const cooldownGeneration = noteAnthropicCooldownMutation(failedAccountId);
   upstreamHealth.set(failedAccountId, {
     cooldownUntil: now + cooldownMs,

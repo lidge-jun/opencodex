@@ -28,8 +28,7 @@ Comportement lorsque cette option est activée :
 - Un **429** en amont place le compte en temporisation selon `Retry-After` lorsqu'il est présent, ou selon un délai de repli,
   efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues.
 - L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
-- Les erreurs d'identification **401/403** mettent le compte en quarantaine (`needsReauth`) afin de l'exclure de la
-  sélection jusqu'à sa réauthentification.
+- Les erreurs de renouvellement du jeton conservent la règle `needsReauth`. Un 403 confirmé lié à un abonnement ou à la facturation du compte peut déclencher un basculement avant la sortie, avec une temporisation selon `Retry-After` ou de dix minutes. Un refus d’autorisation ordinaire reste terminal. Voir la [reprise des comptes](/guides/claude-code/).
 - Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
 - La récupération, y compris le basculement 429, utilise `quotaWindow` pour classer les comptes de

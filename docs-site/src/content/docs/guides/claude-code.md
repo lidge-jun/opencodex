@@ -61,8 +61,15 @@ Operational contract when enabled:
   whose known reset time has passed are discarded as unknown, including retained model-specific
   windows. Values without a known reset are preserved; missing data is never reported as zero usage.
 - Affinity is **process-local** (lost on proxy restart).
-- **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
-  selection until re-authenticated.
+- A complete, structured **403** account-entitlement or billing refusal can rotate before
+  output. Recognized cases include no Claude Code access, an expired/inactive subscription,
+  and an insufficient Anthropic credit balance. The refused account loses its affinities and
+  cools for `Retry-After`, or ten minutes without a deadline. Generic permission, model/resource
+  access, policy and unrecognized errors stay terminal. Recovery respects model routes and
+  send limits; if no replacement is eligible, the original 403 is returned. This also works
+  with proactive pooling off. A 403 after assistant output starts never switches accounts.
+- Token-refresh credential failures retain the existing `needsReauth` policy. Subscription
+  renewal does not require reauthentication, but the account waits for its cooldown to expire.
 - If every eligible account is cooling, the proxy returns **429** (not 401) with `Retry-After`
   when known.
 - Recovery, including 429 failover, uses `quotaWindow` to rank eligible replacements without

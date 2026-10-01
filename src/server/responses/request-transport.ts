@@ -1,3 +1,4 @@
+import { bindAnthropicRefusalCredential } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -521,6 +522,7 @@ export async function prepareResponsesTransport(
             try {
               const current = getAccountCredentialWithStatus("anthropic", snapshot.accountId);
               if (current && !current.needsReauth && credentialGeneration(current.credential) === snapshot.generation) {
+                bindAnthropicRefusalCredential(response, snapshot);
                 recordAnthropicAccountQuotaFromHeaders(snapshot.accountId, response.headers, writerGeneration);
               }
             } catch { /* best-effort observation cannot fail the response */ }
