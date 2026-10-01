@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import { scanCodexAppServerProcesses } from "../../src/codex/app-server-processes";
 import type { CodexCliInstallReport } from "../../src/codex/cli-install-provenance";
@@ -540,6 +540,69 @@ describe("registry configuration isolation", () => {
       else process.env.NODE_V8_COVERAGE = priorCoverage;
       if (priorWarnings === undefined) delete process.env.NODE_REDIRECT_WARNINGS;
       else process.env.NODE_REDIRECT_WARNINGS = priorWarnings;
+    }
+  });
+
+  test("real Node cannot write output sentinels outside the owned npm root", () => {
+    const fixture = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-update-node-output-")));
+    const sentinels = {
+      NODE_V8_COVERAGE: join(fixture, "escaped-coverage"),
+      NODE_REDIRECT_WARNINGS: join(fixture, "escaped-warnings.log"),
+    };
+    const previous = Object.fromEntries(Object.keys(sentinels).map(key => [key, process.env[key]]));
+    const makeTemp = fs.mkdtempSync;
+    // Both the owned npm root and its external sentinels stay inside this fixture.
+    const ownedTemp = spyOn(fs, "mkdtempSync").mockImplementation(prefix => {
+      expect(String(prefix)).toBe(join(tmpdir(), "ocx-codex-cli-meta-"));
+      return makeTemp(join(fixture, "owned-"));
+    });
+    let ownedRoot = "";
+    let checked = false;
+    try {
+      Object.assign(process.env, sentinels);
+      const node = Bun.which("node");
+      expect(node).not.toBeNull();
+      const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+        ownedRoot = options.cwd as string;
+        expect(dirname(ownedRoot)).toBe(fixture);
+        if (!checked) {
+          const childEnv = options.env as NodeJS.ProcessEnv;
+          const runNode = (env: NodeJS.ProcessEnv) => {
+            const result = spawnSync(node!, ["-e",
+              "process.emitWarning('ocx-output-sentinel'); console.log('ocx-runtime:' + process.release.name)",
+            ], { cwd: ownedRoot, env, encoding: "utf8", timeout: 5_000, windowsHide: true });
+            expect(result.error).toBeUndefined();
+            expect(result.status).toBe(0);
+            expect(result.stdout.trim()).toBe("ocx-runtime:node");
+          };
+          // Positive control: this actual Node supports both output channels. It
+          // writes to separate fixture paths, so missing Node/output cannot pass.
+          const controlCoverage = join(fixture, "control-coverage");
+          const controlWarnings = join(fixture, "control-warnings.log");
+          runNode({ ...childEnv, NODE_V8_COVERAGE: controlCoverage, NODE_REDIRECT_WARNINGS: controlWarnings });
+          expect(readdirSync(controlCoverage).some(name => name.endsWith(".json"))).toBe(true);
+          expect(fs.readFileSync(controlWarnings, "utf8")).toContain("ocx-output-sentinel");
+          // Exercise the exact environment supplied by the real resolver, with
+          // no registry access. Observe absence before its finally removes cwd.
+          runNode(childEnv);
+          expect(existsSync(ownedRoot)).toBe(true);
+          expect(existsSync(sentinels.NODE_V8_COVERAGE)).toBe(false);
+          expect(existsSync(sentinels.NODE_REDIRECT_WARNINGS)).toBe(false);
+          checked = true;
+        }
+        const field = queriedField({ bin, args, options } as CapturedCall);
+        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+      }) as never;
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(checked).toBe(true);
+      expect(existsSync(ownedRoot)).toBe(false);
+    } finally {
+      ownedTemp.mockRestore();
+      for (const key of Object.keys(sentinels)) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+      rmSync(fixture, { recursive: true, force: true });
     }
   });
 
