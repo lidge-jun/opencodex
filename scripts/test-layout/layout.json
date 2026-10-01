@@ -361,6 +361,7 @@
     "claude-models-discovery.test.ts": "claude-integration",
     "claude-native-affinity.test.ts": "claude-integration",
     "claude-native-passthrough.test.ts": "claude-integration",
+    "claude-native-rate-limit-headers.test.ts": "claude-integration",
     "claude-outbound.test.ts": "claude-integration",
     "claude-shell-hook.test.ts": "claude-integration",
     "claude-sidecar-override.test.ts": "claude-integration",

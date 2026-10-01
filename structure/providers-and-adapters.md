@@ -265,9 +265,9 @@ and `skills`, and leaves existing `config` metadata unchanged without invoking
 `src/adapters/command-code-project-context.ts`. The loader reads only the proxy process
 working directory's `AGENTS.md`, `.commandcode/taste/taste.md`, and immediate child
 `SKILL.md` files under `.commandcode/skills`, `.agents/skills`, and `.pi/skills`.
-Asynchronous path checks share one deadline and use relative-path containment even at
-filesystem roots. On macOS/Linux a nonblocking, no-follow open is followed by file-inode
-comparison and fresh canonical containment checks before and after reading; an intermediate
+Asynchronous path checks share one deadline and require an exact, case-preserving canonical
+path prefix, including at filesystem roots. On macOS/Linux a nonblocking, no-follow open is
+followed by file-inode comparison and fresh canonical containment checks before and after reading; an intermediate
 directory replaced by an outside symlink cannot publish its file contents. Windows applies
 the path and identity checks as best effort. Every visited directory entry consumes the
 scan budget before filtering; at most 16 skills are selected. Individual files, aggregate skill reads, serialized XML, and the full
