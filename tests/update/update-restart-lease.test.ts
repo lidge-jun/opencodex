@@ -467,7 +467,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
     expect(existsSync(box.lockDir)).toBe(false);
   }, watchdogMs(30_000));
 
-  test("a lease held through the refresh window fails closed before any kill or start", async () => {
+  test("a lease held through the refresh window fails closed before any kill or start, and the job fails", async () => {
     const box = sandbox();
     const port = await freePort();
     const job = writeJob(box.ocxHome);
@@ -486,7 +486,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
             const holder = Bun.spawn([process.execPath, "-e", `
               const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
               const lease = acquireOwnershipMutationLease([process.env.FIXTURE_AUTHORITY]);
-              await Bun.sleep(4_000);
+              await Bun.sleep(13_000);
               lease.release();
             `], {
               env: { ...process.env, FIXTURE_AUTHORITY: authorityPath(box) },
@@ -520,10 +520,13 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
     expect(spawned).toBe(0);
     expect(killed).toBe(0);
     const saved = readUpdateJob(job.id);
-    expect(saved?.status).toBe("succeeded");
+    // The refresh produced no serving proxy and nothing was started, so this is not a success.
+    expect(saved?.status).toBe("failed");
     expect(saved?.restarted).toBe(false);
-    expect(saved?.log.some(line => line.includes("stayed claimed"))).toBe(true);
-  }, watchdogMs(30_000));
+    expect(saved?.error).toContain("no proxy was started");
+    expect(saved?.log.some(line => line.includes("left running"))).toBe(false);
+    expect(saved?.log.some(line => line.includes("lease claimed"))).toBe(true);
+  }, watchdogMs(45_000));
 
   test("the lease covers the veto, frees on request, re-acquires, and vetoAgain re-reads ownership", async () => {
     const box = sandbox();
@@ -546,7 +549,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
       expect(process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]).toBeTruthy();
       expect(contenderAcquire(box)).not.toBe(0);
       claimed = true;
-      expect(lease.reacquireForDirectStart()).toContain("app-install-a");
+      expect(lease.reacquireForDirectStart()).toEqual({ notice: expect.stringContaining("app-install-a"), failed: false });
       expect(lease.vetoAgain()).toContain("app-install-a");
       return "ok";
     });

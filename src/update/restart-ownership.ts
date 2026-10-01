@@ -54,12 +54,26 @@ export interface UpdateRestartLeaseControl {
   /**
    * Take the lease back before the fallthrough mutates the port, then re-run the veto
    * under it. A lease that stays claimed (a live claimant mid-mutation) fails closed:
-   * the returned notice stops the restart before any kill or start.
+   * the returned notice stops the restart before any kill or start, and `failed` marks
+   * the job failed — the refresh just before this did not produce a serving proxy, so
+   * nothing is known to be running. An ownership veto is not a failure.
    */
-  reacquireForDirectStart(): string | null;
+  reacquireForDirectStart(): UpdateRestartStop | null;
   /** Re-run the recorded-owner veto; a non-null notice must stop the restart there. */
   vetoAgain(): string | null;
 }
+
+/** Why the direct-start fallthrough stopped; `failed` means no proxy is known to be serving. */
+export interface UpdateRestartStop {
+  readonly notice: string;
+  readonly failed: boolean;
+}
+
+/**
+ * Long enough to outlast one service-wrapper respawn cycle (5 s) of the managed child the
+ * refresh just started, which briefly holds the lease while it binds and publishes.
+ */
+const REACQUIRE_WAIT_MS = 10_000;
 
 export async function runUpdateRestartWithOwnershipLease<T>(
   resolve: (() => ServiceOwnershipResolution) | undefined,
@@ -79,17 +93,22 @@ export async function runUpdateRestartWithOwnershipLease<T>(
     restoreEnv();
     lease.release();
   };
-  const reacquireForDirectStart = () => {
+  const reacquireForDirectStart = (): UpdateRestartStop | null => {
     if (!heldNow) {
       try {
-        lease = acquireOwnershipMutationLease(serviceStatePaths());
+        lease = acquireOwnershipMutationLease(serviceStatePaths(), { waitMs: REACQUIRE_WAIT_MS });
       } catch {
-        return "The runtime ownership lease stayed claimed; the runtime was left running.";
+        return {
+          failed: true,
+          notice: "Update installed, but another process kept the runtime ownership lease claimed, so no proxy was started. "
+            + "Run 'ocx service status', then 'ocx service repair' or 'ocx start'.",
+        };
       }
       heldNow = true;
       process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
     }
-    return updateRestartVeto(resolve);
+    const veto = updateRestartVeto(resolve);
+    return veto ? { notice: veto, failed: false } : null;
   };
   try {
     const veto = updateRestartVeto(resolve);

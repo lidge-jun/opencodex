@@ -1004,7 +1004,7 @@ export interface RestartIo {
    */
   releaseForServiceManagerFn?: () => void;
   /** Re-acquire the lease for the direct-start fallthrough, then re-run the veto; a notice stops the restart. */
-  reacquireForDirectStartFn?: () => string | null;
+  reacquireForDirectStartFn?: () => { readonly notice: string; readonly failed: boolean } | null;
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
@@ -1253,7 +1253,7 @@ async function restartAfterUpdate(
   // The service refresh ran outside the lease; take it back so the veto and the kills/start below stay serialized.
   const restartVeto = io.reacquireForDirectStartFn?.();
   if (restartVeto) {
-    updateJob(job, { status: "succeeded", restarted: false }, restartVeto);
+    updateJob(job, restartVeto.failed ? { status: "failed", restarted: false, error: restartVeto.notice } : { status: "succeeded", restarted: false }, restartVeto.notice);
     return false;
   }
 
