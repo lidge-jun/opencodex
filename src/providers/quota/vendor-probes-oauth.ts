@@ -496,20 +496,17 @@ export async function fetchMuseAccountQuota(
       outcome = outcome.quota ? { kind: "quota", quota: outcome.quota } : { kind: "empty" };
     }
 
-    if (outcome.kind === "empty" || outcome.kind === "terminal") {
+    if (outcome.kind === "terminal") {
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(), quota: null, quotaObserved: false,
-        ...(outcome.kind === "terminal" ? {
-          unavailable: true,
-          quotaFailure: outcome.failure,
-          quotaFailureIsCurrent: isCurrent,
-        } : {}),
+        unavailable: true,
+        quotaFailure: outcome.failure,
+        quotaFailureIsCurrent: isCurrent,
         identity,
         isCurrent,
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {
         accountQuotaCache.delete(key);
-        if (outcome.kind === "empty") accountQuotaCache.set(key, entry);
         persistAccountQuotaCache();
       }
       return entry;
@@ -527,15 +524,19 @@ export async function fetchMuseAccountQuota(
       return entry;
     }
 
-    const retainQuota = cached?.identity === identity && cached?.quota && Date.now() - cached.quota.updatedAt < LAST_GOOD_MAX_AGE_MS
-      ? cached.quota : null;
+    const latest = accountQuotaCache.get(key);
+    const lastGood = latest?.identity === identity && latest.isCurrent?.() !== false ? latest : undefined;
+    const retainQuota = lastGood?.quota && Date.now() - lastGood.quota.updatedAt < LAST_GOOD_MAX_AGE_MS
+      ? lastGood.quota : null;
     const entry: AccountQuotaCacheEntry = {
-      ts: cached?.ts ?? Date.now(),
+      ts: lastGood?.ts ?? Date.now(),
       quota: retainQuota,
       unavailable: true,
-      quotaFailure: outcome.failure,
-      quotaFailureIsCurrent: isCurrent,
-      ...(cached?.quotaObserved === undefined ? {} : { quotaObserved: cached.quotaObserved }),
+      ...(outcome.kind === "transient" ? {
+        quotaFailure: outcome.failure,
+        quotaFailureIsCurrent: isCurrent,
+      } : {}),
+      ...(lastGood?.quotaObserved === undefined ? {} : { quotaObserved: lastGood.quotaObserved }),
       identity, isCurrent,
     };
     if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {

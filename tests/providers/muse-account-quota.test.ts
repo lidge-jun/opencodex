@@ -109,6 +109,7 @@ test("closed outcomes preserve terminal auth and distinguish empty from unusable
 
 test("Muse transient refresh retains the original reading and terminal auth clears it", async () => {
   const id = await seed("diagnostics");
+  const before = getAccountSet("meta-muse");
   const nativeNow = Date.now;
   let now = nativeNow();
   let status = 200;
@@ -122,15 +123,109 @@ test("Muse transient refresh retains the original reading and terminal auth clea
     expect(transient.quota).toEqual(original.quota);
     expect(transient.quotaFailure).toBe("upstream_error");
     expect(transient.unavailable).toBe(true);
+    expect(getAccountSet("meta-muse")).toEqual(before);
     now += 300_001; status = 401;
     const terminal = (await fetchProviderAccountQuotas("meta-muse", true))[0];
     expect(terminal.quota).toBeNull();
     expect(terminal.quotaFailure).toBe("access_denied");
+    expect(getAccountSet("meta-muse")).toEqual(before);
     now += 300_001; status = 200;
     const recovered = (await fetchProviderAccountQuotas("meta-muse", true))[0];
     expect(recovered.quota?.fiveHourPercent).toBe(27);
     expect(recovered.quotaFailure).toBeUndefined();
     expect(recovered.unavailable).toBeUndefined();
+  } finally {
+    Date.now = nativeNow;
+  }
+});
+
+test("Muse empty refresh retains passive provenance and its observation time", async () => {
+  const id = await seed("observed-empty");
+  const observed = { fiveHourPercent: 0, weeklyPercent: 42, updatedAt: Date.now() - 300_001 };
+  recordPassiveAccountQuota("meta-muse", id, observed, 0);
+  globalThis.fetch = (async () => Response.json({ is_subs_active: false })) as typeof fetch;
+  const retained = (await fetchProviderAccountQuotas("meta-muse", true))[0];
+  expect(retained.quota).toEqual(observed);
+  expect(retained.quotaObserved).toBe(true);
+  expect(retained.unavailable).toBe(true);
+});
+
+test.each([
+  { is_subs_active: false },
+  { require_payment: true },
+  { action_url: "https://example.com/subscription" },
+])("Muse empty refresh retains same-login observations without changing credentials or selection (%j)", async (empty) => {
+  const id = await seed("empty-reading");
+  const selected = await seed("selected");
+  const before = getAccountSet("meta-muse");
+  const nativeNow = Date.now;
+  let now = nativeNow();
+  let response: object = usage(27);
+  Date.now = () => now;
+  globalThis.fetch = (async () => Response.json(response)) as typeof fetch;
+  try {
+    const original = (await fetchProviderAccountQuotas("meta-muse", true)).find(row => row.accountId === id)!;
+    now += 300_001; response = empty;
+    const retained = (await fetchProviderAccountQuotas("meta-muse", true)).find(row => row.accountId === id)!;
+    expect(retained.quota).toEqual(original.quota);
+    expect(retained.quotaObserved).toBe(false);
+    expect(retained.unavailable).toBe(true);
+    expect(retained.quotaFailure).toBeUndefined();
+    expect((await fetchProviderAccountQuotas("meta-muse", true)).find(row => row.accountId === id)?.quota).toEqual(original.quota);
+    expect(getAccountSet("meta-muse")).toEqual(before);
+    expect(getAccountSet("meta-muse")?.activeAccountId).toBe(selected);
+    now += 30 * 60_000;
+    expect((await fetchProviderAccountQuotas("meta-muse", true)).find(row => row.accountId === id)?.quota).toBeNull();
+    now += 300_001; response = usage(18);
+    const recovered = (await fetchProviderAccountQuotas("meta-muse", true)).find(row => row.accountId === id)!;
+    expect(recovered.quota?.fiveHourPercent).toBe(18);
+    expect(recovered.quota?.updatedAt).toBe(now);
+    expect(recovered.unavailable).toBeUndefined();
+  } finally {
+    Date.now = nativeNow;
+  }
+});
+
+test("Muse empty reads cannot invent quota or retain a replaced login's observations", async () => {
+  const id = await seed("empty-replacement");
+  globalThis.fetch = (async () => Response.json(usage(27))) as typeof fetch;
+  expect((await fetchProviderAccountQuotas("meta-muse", true))[0].quota?.fiveHourPercent).toBe(27);
+  await saveCredential("meta-muse", { access: apiKey, refresh: apiKey, expires: Number.MAX_SAFE_INTEGER,
+    email: "empty-replacement@example.com", muse: { oauthAccessToken: accountToken("new-login") } });
+  const before = getAccountSet("meta-muse");
+  globalThis.fetch = (async () => Response.json({ is_subs_active: false })) as typeof fetch;
+  const empty = (await fetchProviderAccountQuotas("meta-muse", true)).find(row => row.accountId === id)!;
+  expect(empty.quota).toBeNull();
+  expect(empty.unavailable).toBe(true);
+  expect(getAccountSet("meta-muse")).toEqual(before);
+});
+
+test.each(["empty", "transient"])("a late Muse %s response retains a newer stream observation", async (kind) => {
+  const id = await seed("late-observation");
+  const nativeNow = Date.now;
+  let now = nativeNow();
+  Date.now = () => now;
+  globalThis.fetch = (async () => Response.json(usage(27))) as typeof fetch;
+  try {
+    await fetchProviderAccountQuotas("meta-muse", true);
+    now += 300_001;
+    let resolveProbe!: (response: Response) => void;
+    let started!: () => void;
+    const dispatched = new Promise<void>(resolve => { started = resolve; });
+    globalThis.fetch = (async () => {
+      started(); return new Promise<Response>(resolve => { resolveProbe = resolve; });
+    }) as typeof fetch;
+    const pending = fetchProviderAccountQuotas("meta-muse", true);
+    await dispatched;
+    now += 1;
+    const observed = { fiveHourPercent: 45, weeklyPercent: 56, updatedAt: now };
+    recordPassiveAccountQuota("meta-muse", id, observed, 0);
+    resolveProbe(kind === "empty" ? Response.json({ is_subs_active: false }) : new Response("{}", { status: 503 }));
+    const retained = (await pending)[0];
+    expect(retained.quota).toEqual(observed);
+    expect(retained.quotaObserved).toBe(true);
+    expect(retained.unavailable).toBe(true);
+    expect((await fetchProviderAccountQuotas("meta-muse"))[0].quota).toEqual(observed);
   } finally {
     Date.now = nativeNow;
   }

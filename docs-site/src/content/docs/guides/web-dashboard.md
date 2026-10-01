@@ -195,8 +195,9 @@ new or that every upstream measurement was refreshed.
 For Meta Muse, a direct quota probe requires the account's Muse access token. Without that token,
 the dashboard uses subscription usage observed in response streams when available. Refresh does
 not open a browser, switch accounts, or replace the Model API key. An empty quota window does not
-render as 0%. A temporary probe failure keeps the last good value and its timestamp; an inactive
-subscription or terminal authentication failure clears it.
+render as 0%. Empty or inactive subscription responses and temporary probe failures keep the
+same login's last good value and original timestamp for up to 30 minutes, marked unavailable.
+A terminal authentication failure clears that reading.
 
 ## Model visibility
 

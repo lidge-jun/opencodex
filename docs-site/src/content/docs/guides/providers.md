@@ -1359,8 +1359,9 @@ custom provider.
 **Meta Muse Code quota.** Accounts with a Muse access token use a direct quota probe.
 Other accounts use subscription usage observed in response streams when available.
 Refresh does not open a browser, switch the active account, or replace the Model API key.
-A missing quota window stays unknown, never 0%. A temporary probe failure keeps the last good
-value and its timestamp; an inactive subscription or terminal authentication failure clears it.
+A missing quota window stays unknown, never 0%. Empty or inactive subscription responses and
+temporary probe failures keep the same login's last good value and original timestamp for up to
+30 minutes, marked unavailable. A terminal authentication failure clears that reading.
 Muse key-mint probes are spaced at least five minutes apart per account, even after a forced
 refresh. This display does not change Meta's billing or usage terms above.
 
