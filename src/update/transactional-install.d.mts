@@ -31,6 +31,8 @@ export function transactionalNpmUpdate(args: {
   targetVersion?: string;
   tag: string;
   runNpm: (args: string[]) => { status: number | null };
+  /** npm cache root the pre-flight resolved and checked; pinned with `--cache` for staging. */
+  cachePath?: string;
   log?: (line: string) => void;
   deps?: UpdateFsDeps;
 }): {

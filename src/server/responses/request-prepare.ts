@@ -194,7 +194,8 @@ export async function prepareResponsesRequest(
   // metadata, never from the model id: Phase 1 shares `gpt-5.6-luna` with the app's title/commit
   // helper calls. Read here, ahead of the shadow intercept below, because the phase decision is the
   // more specific of the two settings and must be the one that survives when both match one request.
-  const memoryModelPhase = options.memoryModelPhase
+  // A JEV decision-model call is the router's own auxiliary turn, never a Codex memory phase.
+  const memoryModelPhase = options.internalDecisionCall ? undefined : options.memoryModelPhase
     ?? ((config.memoryModels?.extract || config.memoryModels?.consolidation)
       && !concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses"
       ? detectMemoryModelPhase(body, req.headers, { transport: options.inboundTransport }) ?? undefined
@@ -273,7 +274,7 @@ export async function prepareResponsesRequest(
   // A spawned sub-agent turn names its model on purpose; gpt-6-luna is both the helper
   // slug and a default sub-agent model, so neither intercept site may rewrite that turn.
   const threadSpawn = isThreadSpawnRequest(req.headers);
-  if (!concreteSelection && !options.compactionRoutingOverride && !threadSpawn && !memoryModelApplies && body && typeof body === "object" && !Array.isArray(body)) {
+  if (!concreteSelection && !options.compactionRoutingOverride && !options.internalDecisionCall && !threadSpawn && !memoryModelApplies && body && typeof body === "object" && !Array.isArray(body)) {
     const shadowIntercept = config.shadowCallIntercept;
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
@@ -292,6 +293,11 @@ export async function prepareResponsesRequest(
     }
   }
   const comboId = !concreteSelection ? comboIdFromRawBody(body, config) : null;
+  // A decision model may be a plain model or a non-JEV combo. A JEV combo here would recurse
+  // into another decision, so the call is refused and the parent decision fails open.
+  if (options.internalDecisionCall && comboId && config.combos?.[comboId]?.strategy === "jev") {
+    return formatErrorResponse(400, "invalid_request_error", "A JEV decision model cannot be a JEV combo");
+  }
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
     return requestDispatchers.handleComboResponses(req, body, comboId, config, logCtx, {
@@ -572,7 +578,7 @@ export async function prepareResponsesRequest(
     }
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !threadSpawn && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.internalDecisionCall && !threadSpawn && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {

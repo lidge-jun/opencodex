@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   executeNativeProcess,
+  isCodexClientProcess,
+  listCodexClientProcesses,
   probeNativeCodexProcesses,
   type NativeProcessExecutor,
 } from "../../src/codex/native-profile-processes";
@@ -23,6 +25,89 @@ async function withTrustedWindowsPowerShell<T>(run: (powershell: string) => Prom
     removeTreeWithRetry(systemDirectory);
   }
 }
+
+describe("Codex client executable identity", () => {
+  const framework = "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Versions/152.0.7977.83/Helpers";
+  const crashpad = `${framework}/browser_crashpad_handler`;
+  const crashpadArgs = `${crashpad} --monitor-self --database=/Users/<user>/Library/Application Support/Codex/Crashpad`;
+
+  test("rejects the unquoted crashpad command reported in #6291", () => {
+    expect(isCodexClientProcess(crashpad, crashpadArgs)).toBe(false);
+  });
+
+  test("does not let argv0 override a full non-client executable", () => {
+    for (const helper of [crashpad, `${framework}/Codex Helper (Renderer).app/Contents/MacOS/Codex Helper (Renderer)`, "/opt/Codex Tools/worker"]) {
+      expect(isCodexClientProcess(helper, `${helper} --type=utility`)).toBe(false);
+      expect(isCodexClientProcess(helper, `"${helper}" --type=renderer`)).toBe(false);
+    }
+    expect(isCodexClientProcess("/usr/bin/vim", "codex notes.txt")).toBe(false);
+  });
+
+  test("a helper basename cannot be overridden by a truncated direct argv0", () => {
+    expect(isCodexClientProcess("browser_crashpad_handler", crashpadArgs)).toBe(false);
+    expect(isCodexClientProcess("Codex Helper (Renderer)", `${framework}/Codex Helper (Renderer) --type=renderer`)).toBe(false);
+    expect(listCodexClientProcesses({
+      pid: -1,
+      listSnapshots: () => [{ pid: 51182, executable: "browser_crashpad_handler", commandLine: crashpadArgs }],
+    })).toEqual({ status: "enumerated", processes: [] });
+  });
+
+  test("preserves aliases and ignores framework paths in later arguments", () => {
+    expect(isCodexClientProcess("worker", "/usr/bin/codex /tmp/worker")).toBe(true);
+    expect(isCodexClientProcess("MainThread", "/usr/bin/codex chat")).toBe(true);
+    expect(isCodexClientProcess("worker", `/usr/bin/codex ${crashpad}`)).toBe(true);
+    expect(isCodexClientProcess("worker", `/usr/bin/codex --cd ${framework}`)).toBe(true);
+    expect(isCodexClientProcess("worker", '/usr/bin/node "/opt/Codex CLI/codex.js" chat')).toBe(true);
+  });
+
+  test("retains direct clients and quoted immediate interpreter entrypoints", () => {
+    expect(isCodexClientProcess("/Applications/CodexCLI.app/Contents/MacOS/codex", "/Applications/CodexCLI.app/Contents/MacOS/codex app-server --listen stdio://")).toBe(true);
+    expect(isCodexClientProcess("/opt/CLI Tools/codex", "/opt/CLI Tools/codex chat")).toBe(true);
+    expect(isCodexClientProcess("/opt/Node Tools/node", '/opt/Node Tools/node "/opt/Codex CLI/codex.js" chat')).toBe(true);
+    expect(isCodexClientProcess("node", 'node "/opt/Codex CLI/codex.js" chat')).toBe(true);
+    expect(isCodexClientProcess("node", 'node server.js "/opt/Codex CLI/codex.js"')).toBe(false);
+    expect(isCodexClientProcess("", '"/opt/CLI Tools/codex" chat')).toBe(true);
+  });
+
+  test("retains literal apostrophes in unquoted interpreter entrypoints", () => {
+    expect(isCodexClientProcess("/usr/bin/node", "/usr/bin/node /opt/O'Brien/codex.js chat")).toBe(true);
+    expect(isCodexClientProcess("MainThread", "/usr/bin/bun /opt/O'Brien/codex.js chat")).toBe(true);
+    expect(isCodexClientProcess("node", "node /opt/O'Brien/server.js codex.js")).toBe(false);
+  });
+
+  test("a failed macOS comm or args read stays unknown", async () => {
+    for (const failedFields of ["pid=,comm=", "pid=,args="]) {
+      const execFile: NativeProcessExecutor = async (_file, args) => {
+        if (args[1] === failedFields) throw new Error("ps failed");
+        return "60000 /usr/local/bin/codex";
+      };
+      await expect(probeNativeCodexProcesses({ platform: "darwin", execFile, pid: 42 }))
+        .resolves.toEqual({ status: "unknown", count: 0 });
+    }
+  });
+
+  test("the macOS busy probe preserves spaces in comm and excludes itself", async () => {
+    const client = "/Applications/Codex CLI.app/Contents/MacOS/codex";
+    const execFile: NativeProcessExecutor = async (_file, args) => {
+      if (args[1] === "pid=,comm=") return `51182 ${crashpad}\n60000 ${client}\n42 ${client}`;
+      if (args[1] === "pid=,args=") return `51182 ${crashpadArgs}\n60000 ${client} app-server\n42 ${client} chat`;
+      return `51182 ${crashpad} ${crashpadArgs}\n60000 ${client} ${client} app-server\n42 ${client} ${client} chat`;
+    };
+    await expect(probeNativeCodexProcesses({ platform: "darwin", execFile, pid: 42 }))
+      .resolves.toEqual({ status: "busy", count: 1 });
+  });
+
+  test("routing adoption excludes helpers without retrying a truncated argv0", () => {
+    expect(listCodexClientProcesses({
+      platform: "darwin", pid: -1,
+      listSnapshots: () => [
+        { pid: 51182, executable: crashpad, commandLine: crashpadArgs },
+        { pid: 51184, executable: crashpad, commandLine: crashpadArgs },
+        { pid: 60000, executable: "/usr/local/bin/codex", commandLine: "codex chat" },
+      ],
+    })).toEqual({ status: "enumerated", processes: [{ pid: 60000, commandLine: "codex chat" }] });
+  });
+});
 
 describe("native profile process probe", () => {
   test("uses the trusted PowerShell path with shell-free bounded execution", async () => {

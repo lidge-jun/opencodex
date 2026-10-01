@@ -5,6 +5,7 @@ import { useI18n } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import type { UsageReadMetadata } from "../usage-summary-resource";
 import { Notice } from "../ui";
+import { JEV_BACKEND_LABEL_KEYS } from "../jev-decision-service";
 import { DataSurfaceSkeleton } from "./data-surface";
 import { UsageIncompleteNotice } from "./usage-incomplete-notice";
 
@@ -37,6 +38,8 @@ interface JevStatsResponse extends UsageReadMetadata {
     averageChosenProbability: number | null;
   };
   gates: Array<{ gate: string; decisions: number }>;
+  /** Absent on servers that predate decision backends. */
+  backends?: Array<{ backend: string; decisions: number; applied: number; averageLatencyMs: number | null }>;
   models: Array<{
     provider: string;
     model: string;
@@ -195,6 +198,31 @@ export function JevStatsPanel({
                   <span className="chip" key={gate.gate}>{gate.gate}: {gate.decisions}</span>
                 ))}
               </div>
+
+              {data.backends && data.backends.length > 0 && (
+                <div className="jev-stats-table-wrap">
+                  <table className="jev-stats-table" aria-label={t("cws.jev.stats.backends")}>
+                    <thead>
+                      <tr>
+                        <th>{t("cws.jev.stats.backend")}</th>
+                        <th className="num">{t("cws.jev.stats.decisions")}</th>
+                        <th className="num">{t("cws.jev.stats.applied")}</th>
+                        <th className="num">{t("cws.jev.stats.latency")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.backends.map(row => (
+                        <tr key={row.backend}>
+                          <td>{t(JEV_BACKEND_LABEL_KEYS[row.backend] ?? "cws.jev.backend.unknown")}</td>
+                          <td className="num mono">{row.decisions.toLocaleString(locale)}</td>
+                          <td className="num mono">{row.applied.toLocaleString(locale)}</td>
+                          <td className="num mono">{formatLatency(row.averageLatencyMs, locale)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               <div className="jev-stats-table-wrap">
                 <table className="jev-stats-table">
