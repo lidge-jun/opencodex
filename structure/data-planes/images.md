@@ -34,10 +34,14 @@ a string item id or a valid non-negative integer output index pass through witho
 allocating display state, so unidentified items cannot collide at a synthetic index.
 
 Full-history assistant messages can replay the display Markdown without their generated
-item ids. At Responses request preparation, exact generated links under the current
-artifact directory become opaque artifact HTTP references before routing and helper
-dispatch. This does not read files and still applies after artifact pruning; unrelated
-paths, user messages and tool payloads retain their original content. Local display
+item ids. At Responses request preparation and at the remote compaction handler
+(`src/server/responses/compact.ts`), exact generated links become opaque artifact HTTP
+references before routing, helper dispatch and the upstream compact request. A link
+matches when its target, as a plain path or `file://` URL with either separator and dot
+segments resolved, names an `img-codex-<uuid>` image directly inside the current
+artifact directory; on macOS and Windows the comparison also ignores letter case. This
+does not read files and still applies after artifact pruning; unrelated paths, nested
+directories, user messages and tool payloads retain their original content. Local display
 uses filesystem links because remote Markdown media has a separate client safety gate;
 HTTP references here are for upstream context, not a claim of desktop HTTP rendering.
 

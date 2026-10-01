@@ -267,3 +267,42 @@ test('replay redaction survives pruning and preserves unrelated paths, roles and
     }
   } finally { rewrite.dispose?.(); }
 });
+
+test('replay redaction recognizes file URLs, either separator and folded case only where the platform folds it', () => {
+  const rewrite = factory();
+  try {
+    const text = JSON.parse(rewrite.json(JSON.stringify({ output: [item] }))).output[0].content[0].text;
+    const path: string = text.match(/<([^>]+)>/)[1];
+    const forward = path.replace(/\\/g, '/');
+    const name = forward.slice(forward.lastIndexOf('/') + 1);
+    const dir = forward.slice(0, forward.lastIndexOf('/'));
+    const link = (value: string) => '![Generated image](<' + value + '>)';
+    const reference = link('/v1/opencodex/artifacts/' + name);
+    const run = (value: string, platform: NodeJS.Platform) => {
+      const body = { input: [{ type: 'message', role: 'assistant', content: link(value) }] };
+      redactHostedImageDisplayPaths(body, platform);
+      return body.input[0]!.content;
+    };
+    const fileUrl = 'file://' + (forward.startsWith('/') ? '' : '/') + encodeURI(forward);
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      for (const value of [path, forward, forward.replace(/\//g, '\\'), fileUrl, 'FILE://localhost' + fileUrl.slice(7),
+        dir + '/./' + name, dir + '/../artifacts/' + name]) {
+        expect(run(value, platform)).toBe(reference);
+      }
+    }
+    for (const platform of ['darwin', 'win32'] as const) expect(run(forward.toUpperCase(), platform)).toBe(reference);
+    const unchanged = [
+      forward.toUpperCase(),
+      dir + '/nested/' + name,
+      dir + '-other/' + name,
+      dir + '/' + name.replace('img-codex-', 'img-other-'),
+      dir + '/' + name + '.txt',
+      'file://' + forward.replace(name, '%E0%A4%A'),
+      name,
+    ];
+    for (const value of unchanged) expect(run(value, 'linux')).toBe(link(value));
+    const user = { input: [{ role: 'user', content: link(fileUrl) }, { type: 'function_call_output', output: link(fileUrl) }] };
+    redactHostedImageDisplayPaths(user, 'darwin');
+    expect(JSON.stringify(user)).toContain(fileUrl);
+  } finally { rewrite.dispose?.(); }
+});

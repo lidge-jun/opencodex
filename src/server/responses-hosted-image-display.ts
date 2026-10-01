@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import {
@@ -12,17 +12,37 @@ import { sseDataPayload, replaceSseDataPayload, type SseBlockRewrite } from "./s
 type Row = Record<string, any>;
 const object = (v: unknown): v is Row => !!v && typeof v === "object" && !Array.isArray(v);
 const originators = new Set(["codex_cli_rs", "Codex Desktop", "codex_app", "codex_work_desktop"]);
+const generatedName = /^img-codex-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(png|jpg|webp|gif)$/;
 
-/** Full client replay can include display-only messages even without their generated ids. */
-export function redactHostedImageDisplayPaths(body: unknown): void {
+/** One spelling per local path: file URL or plain, either separator, dot segments, folded case. */
+function comparablePath(value: string, foldCase: boolean): string | undefined {
+  let path = value;
+  if (/^file:\/\//i.test(path)) {
+    try { path = decodeURIComponent(path.replace(/^file:\/\/(?:localhost)?/i, "")); } catch { return undefined; }
+    if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+  }
+  path = posix.normalize(path.replace(/\\/g, "/"));
+  return foldCase ? path.toLowerCase() : path;
+}
+
+/**
+ * Full client replay can include display-only messages even without their generated ids.
+ * Shared by Responses request preparation and the remote compaction handler.
+ */
+export function redactHostedImageDisplayPaths(body: unknown, platform: NodeJS.Platform = process.platform): void {
   if (!object(body) || !Array.isArray(body.input)) return;
-  const prefix = join(getArtifactsDir(), "img-codex-");
+  // macOS and Windows filesystems fold case by default, so either spelling names the artifact.
+  const foldCase = platform === "darwin" || platform === "win32";
+  const dir = comparablePath(getArtifactsDir(), foldCase);
   const generatedLink = /!\[Generated image\]\(<([^>\r\n]+)>\)/g;
   const redact = (text: string) => text.replace(generatedLink, (link, path: string) => {
-    if (!path.startsWith(prefix)
-      || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(png|jpg|webp|gif)$/.test(path.slice(prefix.length))) return link;
+    const candidate = comparablePath(path, foldCase);
+    const slash = candidate?.lastIndexOf("/") ?? -1;
+    if (!candidate || !dir || slash < 0 || candidate.slice(0, slash) !== dir) return link;
+    const name = candidate.slice(slash + 1);
+    if (!generatedName.test(name)) return link;
     // No file read or existence check: history may outlive artifact retention.
-    return "![Generated image](<" + artifactHttpUrl(path) + ">)";
+    return "![Generated image](<" + artifactHttpUrl(name) + ">)";
   });
   for (const item of body.input) {
     if (!object(item) || item.role !== "assistant"
