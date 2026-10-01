@@ -97,10 +97,11 @@ function sandbox(): Sandbox {
 
 /** The environment a Task Scheduler / launchd / systemd child actually gets: stored, no token. */
 function serviceManagerChildEnvironment(box: Sandbox): NodeJS.ProcessEnv {
+  const home = process.platform === "win32" ? box.home : realHome;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    HOME: box.home,
-    USERPROFILE: box.home,
+    HOME: home,
+    USERPROFILE: home,
     CODEX_HOME: box.codexHome,
     OPENCODEX_HOME: box.ocxHome,
     XDG_RUNTIME_DIR: join(box.root, "runtime"),
