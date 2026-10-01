@@ -55,7 +55,10 @@ The window is created and shown before anything is registered, resolved, probed 
 `desktop/src-tauri/src/startup.rs` runs the whole sequence inside it as named states —
 registering, resolving, probing, attaching or starting, waiting, then ready or failed — under one
 30-second machinery deadline. Waiting for takeover consent suspends that budget; consuming the
-answer extends the shared deadline before clearing the prompt. Calls use the remaining budget.
+answer extends the shared deadline before clearing the prompt. An approved Windows takeover adds
+60 seconds once to the machinery budget (90 seconds total), covering guarded stop, ownership claim,
+and replacement startup. Declined consent and other platforms retain 30 seconds. Calls and the
+deadline guard share the same remaining budget; no phase renews it.
 The failure state carries a retry, the
 child's exit code and a copyable diagnostic naming the state, the endpoint, the configuration home
 and the runtime's last output; `desktop/src-tauri/src/sidecar.rs` consumes the spawn event stream
