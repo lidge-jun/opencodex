@@ -10,6 +10,7 @@ import { redactSecretString } from "../lib/redact";
 import {
   normalizeZedProvider,
   resolveZedModels,
+  scrubZedCredentials,
   zedLlmFetch,
   ZED_HEADERS,
   type ZedCredentials,
@@ -117,11 +118,15 @@ function isNativeTerminalEvent(event: Record<string, unknown>): boolean {
  * an explicit terminal status (or `[DONE]`). The stream fails closed instead of synthesizing a
  * success when that guarantee is broken: a malformed or non-object frame, a frame over
  * `MAX_ZED_FRAME_CHARS`, a partial trailing frame, or an EOF with neither a terminal status nor a
- * native terminal event becomes the provider-native error. Nothing is forwarded after a terminal.
+ * native terminal event becomes the provider-native error. Nothing is forwarded after a terminal
+ * status or `[DONE]`; frames after a native terminal event still pass, because some wires (Chat
+ * with usage) send a usage chunk after `finish_reason`. Upstream failure text goes through
+ * `scrub`, which removes this account's token and user id.
  */
 export function zedEventStream(
   body: ReadableStream<Uint8Array>,
   provider: ZedProvider,
+  scrub: (text: string) => string = redactSecretString,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -189,7 +194,7 @@ export function zedEventStream(
     if (Object.hasOwn(parsed, "status")) {
       const status = normalizedStatus(parsed.status);
       if (status?.type === "failed" || status?.type === "error") {
-        fail(controller, status.message ?? "Zed request failed");
+        fail(controller, status.message ? scrub(status.message) : "Zed request failed");
       } else if (status?.type === "stream_ended" || status?.type === "completed") {
         emit(controller, nativeTerminalPayload(provider));
         finished = true;
@@ -327,7 +332,8 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
       const message = typeof record?.message === "string" ? record.message
         : typeof error?.message === "string" ? error.message
           : "Zed upstream request failed";
-      return `Zed${code ? ` ${redactSecretString(code)}` : ""}: ${redactSecretString(message)} (HTTP ${status})`;
+      const scrub = (text: string) => credentials ? scrubZedCredentials(text, credentials) : redactSecretString(text);
+      return `Zed${code ? ` ${scrub(code)}` : ""}: ${scrub(message)} (HTTP ${status})`;
     },
     buildRequest,
     async fetchResponse(request, ctx) {
@@ -353,7 +359,9 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
         yield { type: "error", message: "Zed response arrived before request translation" };
         return;
       }
-      const translated = new Response(zedEventStream(response.body, delegate.provider), {
+      const requestCredentials = credentials;
+      const scrub = (text: string) => requestCredentials ? scrubZedCredentials(text, requestCredentials) : redactSecretString(text);
+      const translated = new Response(zedEventStream(response.body, delegate.provider, scrub), {
         status: response.status,
         headers: { "Content-Type": "text/event-stream" },
       });

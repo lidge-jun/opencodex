@@ -17,6 +17,7 @@ import {
   normalizeZedProvider,
   parseZedCallbackPayload,
   resolveZedOrganizationId,
+  scrubZedCredentials,
   zedLlmFetch,
 } from "../../src/providers/zed";
 import { parseRequest } from "../../src/responses/parser";
@@ -334,6 +335,21 @@ describe("Zed stream framing", () => {
       .toEqual({ type: "error", error: { type: "api_error", message: "Zed stream ended before completion" } });
     expect((await translate([`${JSON.stringify({ event: { type: "ping" } })}\n{"event":{"type":`])).at(-1))
       .toEqual({ type: "error", error: { type: "api_error", message: "Zed stream ended inside a partial frame" } });
+  });
+
+  test("a failed status never echoes the account token or user id", async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({ status: { type: "failed", message: "quota for zed-user-9 with tok-abc exhausted" } })}\n`));
+        controller.close();
+      },
+    });
+    const credentials = { userId: "zed-user-9", accessToken: "tok-abc" };
+    const text = await new Response(zedEventStream(body, "anthropic", value => scrubZedCredentials(value, credentials))).text();
+    expect(text).not.toContain("zed-user-9");
+    expect(text).not.toContain("tok-abc");
+    expect(text).toContain("[redacted]");
   });
 
   test("a native terminal event still completes at a clean EOF", async () => {

@@ -215,7 +215,7 @@ function systemHeaders(credentials: ZedCredentials): Record<string, string> {
 }
 
 /** Remove the account token and user id from upstream text before it can reach an error or log. */
-function scrubZedCredentials(text: string, credentials: ZedCredentials): string {
+export function scrubZedCredentials(text: string, credentials: ZedCredentials): string {
   let scrubbed = text;
   for (const secret of [credentials.accessToken, credentials.userId]) {
     const value = secret?.trim();
