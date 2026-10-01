@@ -44,22 +44,24 @@ export function createCliCatalogProvider(options: CliCatalogProviderOptions): (r
     return options.loadRoutes();
   }, join(claudeInterceptStateDir(options.configDir), CLI_PICKER_MODELS_FILE), buildCliPickerModels);
   const coldWaitMs = options.coldWaitMs ?? CLI_PICKER_COLD_WAIT_MS;
+  const bounded = async (work: Promise<unknown>): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([work.catch(() => {}), new Promise<void>(resolve => { timer = setTimeout(resolve, coldWaitMs); })]);
+    clearTimeout(timer);
+  };
   return async (req, kind) => {
     if (!cliCatalogEligible(kind, req.headers.get("user-agent"), options.desiredClients())) return null;
     if (snapshot.current() === null) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([snapshot.refresh(), new Promise<void>(resolve => { timer = setTimeout(resolve, coldWaitMs); })]);
-      clearTimeout(timer);
+      await bounded(snapshot.refresh());
     } else {
       snapshot.refreshIfStale(CLI_PICKER_MODELS_MAX_AGE_MS);
     }
     const current = snapshot.current();
     if (!current) return null;
-    // A persisted snapshot can outlive a registry rebuild: re-check before advertising. A cold
-    // registry here (e.g. right after a restart) is warmed for the next request.
-    const routable = routableCliPickerModels(current.models);
-    if (routable.length < current.models.length) void ensureRegistry().catch(() => {});
-    return routable;
+    // A persisted snapshot can outlive the registry it was built against (a restart starts with an
+    // empty one): wait, within the same bound, for the shared build before re-checking, since an
+    // empty answer here is what the CLI would cache for the next hour.
+    if (routableCliPickerModels(current.models).length < current.models.length) await bounded(ensureRegistry());
+    return routableCliPickerModels(current.models);
   };
 }
-

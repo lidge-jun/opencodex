@@ -82,9 +82,31 @@ export function rewriteCliCatalogBody(kind: CliCatalogKind, text: string, models
   return added > 0 ? JSON.stringify(parsed) : null;
 }
 
+/** Read at most `cap` bytes; null (and the stream cancelled) once the body would exceed it. */
+async function readCapped(body: ReadableStream<Uint8Array>, cap: number): Promise<Uint8Array<ArrayBuffer> | null> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
 /**
  * Rewrite a relayed catalog response. Only a 2xx JSON body under the decoded cap is touched; the
- * relay already decoded any content-encoding, so validators and sizes describing the old bytes go.
+ * relay already decoded any content-encoding (and dropped content-length), so the cap is enforced
+ * while streaming; an oversized catalog is answered with a gateway error rather than buffered.
  */
 export async function rewriteCliCatalogResponse(
   response: Response,
@@ -94,9 +116,12 @@ export async function rewriteCliCatalogResponse(
   if (response.status < 200 || response.status >= 300 || models.length === 0) return response;
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > BOOTSTRAP_MAX_DECODED_BYTES) return response;
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!response.body) return response;
+  const bytes = await readCapped(response.body, BOOTSTRAP_MAX_DECODED_BYTES);
+  if (bytes === null) {
+    return Response.json({ type: "error", error: { type: "api_error", message: "model catalog exceeded the intercept size cap" } }, { status: 502 });
+  }
   const original = (): Response => new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
-  if (bytes.byteLength > BOOTSTRAP_MAX_DECODED_BYTES) return original();
   const rewritten = rewriteCliCatalogBody(kind, new TextDecoder().decode(bytes), models);
   if (rewritten === null) return original();
   const headers = new Headers(response.headers);
@@ -123,4 +148,3 @@ export function invalidateClaudeCodeServedCatalog(claudeDir: string): number {
   }
   return removed;
 }
-

@@ -11,6 +11,8 @@ export interface PickerModelEntry {
   contextWindow?: number;
   /** Row description; Desktop entries never carry one, so their rows keep the stripped template. */
   description?: string;
+  /** The route an alias was minted for (CLI rows), so a later registry rebuild can be re-checked. */
+  route?: string;
 }
 
 export const BOOTSTRAP_MAX_ENCODED_BYTES = 4 * 1024 * 1024;

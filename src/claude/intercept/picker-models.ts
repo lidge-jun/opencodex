@@ -81,15 +81,17 @@ export function buildCliPickerModels(input: PickerRouteInput): PickerModelEntry[
     const alias = activeDesktop3pAlias(provider, id);
     if (seen.has(alias) || resolveDesktop3pAlias(alias) !== model.route) continue;
     seen.add(alias);
-    out.push({ id: pickerSelector(alias, model.contextWindow), name: model.label, description: `opencodex · ${model.route}`,
+    out.push({ id: pickerSelector(alias, model.contextWindow), name: model.label,
+      description: `opencodex · ${model.route}`, route: model.route,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) });
   }
   return out;
 }
 
-/** Rows whose alias still decodes: the registry can be rebuilt after a snapshot was taken. */
+/** Rows whose alias still decodes to the route it was minted for: the registry can be rebuilt after a snapshot was taken. */
 export function routableCliPickerModels(models: readonly PickerModelEntry[]): PickerModelEntry[] {
-  return models.filter(model => resolveDesktop3pAlias(stripOneMillionMarker(model.id)) !== null);
+  return models.filter(model => model.route !== undefined
+    && resolveDesktop3pAlias(stripOneMillionMarker(model.id)) === model.route);
 }
 
 export interface PickerModelSnapshot {
@@ -105,7 +107,8 @@ function parseSnapshot(value: unknown): { models: PickerModelEntry[]; builtAt: n
   if (!candidate.models.every(model => model && typeof model === "object"
     && typeof model.id === "string" && typeof model.name === "string"
     && (model.contextWindow === undefined || typeof model.contextWindow === "number")
-    && (model.description === undefined || typeof model.description === "string"))) return null;
+    && (model.description === undefined || typeof model.description === "string")
+    && (model.route === undefined || typeof model.route === "string"))) return null;
   return { models: candidate.models as PickerModelEntry[], builtAt: candidate.builtAt };
 }
 

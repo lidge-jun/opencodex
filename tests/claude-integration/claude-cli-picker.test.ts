@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activeDesktop3pAlias, buildDesktop3pRegistry, resolveDesktop3pAlias } from "../../src/claude/desktop-3p";
+import { DESKTOP_3P_REGISTRY_RETRY_MS, ensureDesktop3pRegistry } from "../../src/claude/desktop-3p-startup";
 import { reconcileClaudeFirstPartySettings } from "../../src/claude/first-party-settings";
 import {
   cliCatalogEligible, cliCatalogKind, invalidateClaudeCodeServedCatalog,
@@ -153,7 +154,7 @@ test("CLI rows carry decodable registry aliases, labels and route descriptions; 
   for (const alias of [sol, grok, k3]) expect(alias).toMatch(/^claude-opus-4-8-[a-z][a-z0-9]{2}$/);
   expect(rows.map(row => row.id)).toEqual([sol, grok, k3 + "[1m]"]);
   expect(rows[0]).toMatchObject({ name: "GPT 6 Sol (native)", description: "opencodex · native/gpt-6-sol" });
-  expect(rows[1]).toEqual({ id: grok, name: "Grok 4.7 (xai)", description: "opencodex · xai/grok-4.7", contextWindow: 128_000 });
+  expect(rows[1]).toEqual({ id: grok, name: "Grok 4.7 (xai)", description: "opencodex · xai/grok-4.7", route: "xai/grok-4.7", contextWindow: 128_000 });
   expect(rows[2]).toMatchObject({ description: "opencodex · kimi/k3", contextWindow: 1_048_576 });
   expect(rows.some(row => row.description?.includes("anthropic/"))).toBe(false);
   expect(resolveDesktop3pAlias(grok)).toBe("xai/grok-4.7");
@@ -332,6 +333,68 @@ test("a hanging discovery on a cold start relays unchanged within the wait bound
   const started = performance.now();
   expect(await provider(catalogRequest(CLI_UA), "model_selector")).toBeNull();
   expect(performance.now() - started).toBeLessThan(2_000);
+});
+
+test("a persisted snapshot waits for the restarted process's registry build before answering", async () => {
+  const configDir = tempDir("ocx-cli-picker-restart-");
+  installRegistry();
+  const first = createCliCatalogProvider({
+    configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: async () => ROUTES,
+  });
+  const rows = await first(catalogRequest(CLI_UA), "model_selector");
+  expect(rows).toHaveLength(3);
+  // A restart begins with an empty registry; the shared build lands a moment later.
+  buildDesktop3pRegistry([], []);
+  let builds = 0;
+  const restarted = createCliCatalogProvider({
+    configDir, desiredClients: () => BOTH,
+    ensureRegistry: async () => { builds++; await Bun.sleep(5); installRegistry(); },
+    loadRoutes: () => new Promise<never>(() => {}),
+  });
+  expect(await restarted(catalogRequest(CLI_UA), "model_selector")).toEqual(rows!);
+  expect(builds).toBe(1);
+});
+
+test("a persisted row is retired when its alias now decodes to a different route", () => {
+  installRegistry();
+  const [sol] = buildCliPickerModels(ROUTES);
+  expect(routableCliPickerModels([sol!])).toEqual([sol!]);
+  expect(routableCliPickerModels([{ ...sol!, route: "xai/grok-4.7" }])).toEqual([]);
+  expect(routableCliPickerModels([{ id: sol!.id, name: sol!.name }])).toEqual([]);
+});
+
+test("an oversized catalog is cut off while streaming instead of being buffered", async () => {
+  const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) { pulled++; controller.enqueue(chunk); },
+    cancel() { cancelled = true; },
+  });
+  const response = await rewriteCliCatalogResponse(new Response(body, { status: 200 }), "model_selector", [ROW]);
+  expect(response.status).toBe(502);
+  expect(cancelled).toBe(true);
+  expect(pulled).toBeLessThanOrEqual(18);
+});
+
+test("a failed on-demand registry build is not retried until the cooldown passes", async () => {
+  buildDesktop3pRegistry([], []);
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    let reads = 0;
+    // Every field access throws, so the build fails inside its own catch.
+    const broken = new Proxy({}, { get() { throw new Error("config unavailable"); } }) as never;
+    const readConfig = () => { reads++; return broken; };
+    await ensureDesktop3pRegistry(readConfig);
+    expect(reads).toBe(1);
+    await ensureDesktop3pRegistry(readConfig);
+    expect(reads).toBe(1);
+    await ensureDesktop3pRegistry(readConfig, () => Date.now() + DESKTOP_3P_REGISTRY_RETRY_MS + 1);
+    expect(reads).toBe(2);
+  } finally {
+    console.warn = warn;
+  }
 });
 
 function seedCatalogCache(claudeDir: string): string {

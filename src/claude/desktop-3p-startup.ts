@@ -11,6 +11,9 @@ import type { OcxConfig } from "../types";
 import { buildDesktop3pRegistry, desktop3pRegistrySize } from "./desktop-3p";
 
 let pending: Promise<boolean> | null = null;
+let lastUnproductiveAt = -Infinity;
+/** After a build fails or installs nothing, on-demand callers wait this long before retrying. */
+export const DESKTOP_3P_REGISTRY_RETRY_MS = 30_000;
 
 /** Build and install the registry; concurrent callers share one build. Resolves false on failure. */
 export function initDesktop3pRegistry(config: OcxConfig): Promise<boolean> {
@@ -29,8 +32,10 @@ export function initDesktop3pRegistry(config: OcxConfig): Promise<boolean> {
         desktopNativeCandidates: desktopVisibleNativeSlugs(config),
       });
       buildDesktop3pRegistry(inputs.nativeSlugs, inputs.routedModels, config.claudeCode?.desktopProfile, inputs.nativeContextCap);
+      if (desktop3pRegistrySize() === 0) lastUnproductiveAt = Date.now();
       return true;
     } catch {
+      lastUnproductiveAt = Date.now();
       // Best-effort; model discovery can rebuild it. Never reflect credential or provider errors.
       console.warn("[opencodex] Claude Desktop model registry could not be initialized.");
       return false;
@@ -41,13 +46,17 @@ export function initDesktop3pRegistry(config: OcxConfig): Promise<boolean> {
   return pending;
 }
 
-/** Resolve once a build has installed the registry, starting one only when none ran or is running. */
-export async function ensureDesktop3pRegistry(readConfig: () => OcxConfig): Promise<void> {
+/**
+ * Resolve once a build has installed the registry, starting one only when none ran or is running.
+ * A failed or empty build is not retried on demand until the cooldown passes, so a broken provider
+ * cannot turn every CLI catalog request into a fresh discovery and entitlement round.
+ */
+export async function ensureDesktop3pRegistry(readConfig: () => OcxConfig, now: () => number = Date.now): Promise<void> {
   if (pending) {
     await pending;
     return;
   }
   if (desktop3pRegistrySize() > 0) return;
+  if (now() - lastUnproductiveAt < DESKTOP_3P_REGISTRY_RETRY_MS) return;
   await initDesktop3pRegistry(readConfig());
 }
-
