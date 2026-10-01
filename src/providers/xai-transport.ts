@@ -28,8 +28,8 @@ export function isXaiResponsesDestination(provider: Pick<OcxProviderConfig, "bas
 }
 
 export const XAI_GROK_COMPATIBILITY = {
-  version: "1.0.25",
-  userAgent: "opencodex-grok/1.0.25",
+  version: "1.0.46",
+  userAgent: "opencodex-grok/1.0.46",
   headers: {
     clientIdentifier: "x-grok-client-identifier",
     clientVersion: "x-grok-client-version",

@@ -533,16 +533,16 @@ async function capture(authMode: "oauth" | "key", calls = 1) {
 }
 
 describe("xAI outbound compatibility headers", () => {
-  test("OAuth snapshot pins Grok CLI compatibility to 1.0.25", async () => {
+  test("OAuth snapshot pins Grok CLI compatibility to 1.0.46", async () => {
     const { effective, seen } = await capture("oauth");
     expect(effective.baseUrl).toBe(XAI_GROK_CLI_BASE_URL);
     expect(lower(seen[0])).toEqual({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
-      "user-agent": "opencodex-grok/1.0.25",
+      "user-agent": "opencodex-grok/1.0.46",
       "x-authenticateresponse": "authenticate-response",
       "x-grok-client-identifier": "opencodex",
-      "x-grok-client-version": "1.0.25",
+      "x-grok-client-version": "1.0.46",
       "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
       "x-grok-req-id": expect.stringMatching(UUID_V4),
       "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
@@ -557,7 +557,7 @@ describe("xAI outbound compatibility headers", () => {
     expect(lower(seen[0])).toEqual({
       authorization: "Bearer xai-api-key",
       "content-type": "application/json",
-      "user-agent": "opencodex-grok/1.0.25",
+      "user-agent": "opencodex-grok/1.0.46",
       "x-grok-conv-id": deriveXaiConvId("codex-session-abc"),
       "x-grok-req-id": expect.stringMatching(UUID_V4),
       "x-grok-session-id": deriveXaiConvId("codex-session-abc"),
