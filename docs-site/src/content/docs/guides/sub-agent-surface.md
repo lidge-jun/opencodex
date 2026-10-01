@@ -88,6 +88,13 @@ The dashboard's **Sub-agent delegation** controls three related settings:
 - `injectionEffort` is the optional `reasoning_effort` to request for that model.
 - `injectionPrompt` replaces the built-in v2 guidance text.
 
+Not sure which model to delegate to? **Suggest** beside the delegation model asks for a short
+description of the work Codex usually hands off, sizes it with one call to your default Codex model,
+and proposes the cheapest sufficient model and an effort from the list the picker offers, with the
+reasoning and the signals that would move it up or down. Nothing changes until you choose
+**Use this**, which saves exactly like picking the model and effort by hand. Tiers come from
+`codexRoleTiers` or price, as in [role auto-assign](/guides/integrations/#auto-assign).
+
 `multiAgentGuidanceEnabled` defaults to on and is the master switch for opencodex-authored guidance
 on both surfaces. Turning it off suppresses both the v2 designation block and v1 proactive text.
 
@@ -243,6 +250,7 @@ Use `ocx agent` for delegation, roster, effort-cap, and fallback settings:
 ```bash
 ocx agent status
 ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
+ocx agent injection suggest "read-only searches across the repo" --apply
 ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
 ocx agent fallback set gpt-5.6-luna,xai/grok-4.5 --poll-ms 60000
 ocx effort set --subagent max

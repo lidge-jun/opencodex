@@ -43,6 +43,7 @@ export interface SubagentsWorkspaceProps {
   onFallbackPollMsChange: (pollMs: number) => void;
   onFallbackSave: () => void;
   delegation: {
+    apiBase: string;
     model: string;
     effort: string;
     efforts: string[];
@@ -223,6 +224,7 @@ export default function SubagentsWorkspace({
             <h2 className="swi-featured-title">{t("sub.settings")}</h2>
           </div>
           <SubagentDelegationSection
+            apiBase={delegation.apiBase}
             model={delegation.model}
             effort={delegation.effort}
             efforts={delegation.efforts}

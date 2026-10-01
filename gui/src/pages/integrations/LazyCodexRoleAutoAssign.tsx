@@ -1,18 +1,16 @@
 import { useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
-import { useT, type TKey } from "../../i18n/shared";
+import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
-
-type Tier = "fast" | "standard" | "frontier";
-type EffortIntent = "glance" | "measured" | "thorough" | "exhaustive";
+import { EFFORT_LABEL, TIER_LABEL, type SizingEffortIntent, type SizingTier } from "./sizing-labels";
 
 export interface RoleProposal {
   role: string;
   model: string | null;
   effort: string | null;
   status: "proposed" | "unassigned" | "unsized";
-  tier?: Tier;
-  effortIntent?: EffortIntent;
+  tier?: SizingTier;
+  effortIntent?: SizingEffortIntent;
   rationale?: string;
   moveUpIf?: string;
   moveDownIf?: string;
@@ -26,19 +24,6 @@ interface Proposals {
   sizingError: string | null;
   proposals: RoleProposal[];
 }
-
-const TIER_LABEL: Record<Tier, TKey> = {
-  fast: "integrations.lazycodexRoles.auto.tierFast",
-  standard: "integrations.lazycodexRoles.auto.tierStandard",
-  frontier: "integrations.lazycodexRoles.auto.tierFrontier",
-};
-
-const EFFORT_LABEL: Record<EffortIntent, TKey> = {
-  glance: "integrations.lazycodexRoles.auto.effortGlance",
-  measured: "integrations.lazycodexRoles.auto.effortMeasured",
-  thorough: "integrations.lazycodexRoles.auto.effortThorough",
-  exhaustive: "integrations.lazycodexRoles.auto.effortExhaustive",
-};
 
 function alreadySet(p: RoleProposal): boolean {
   return p.proposedModel === p.model && (p.proposedEffort == null || p.proposedEffort === p.effort);
