@@ -13,10 +13,17 @@ import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
 import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
-import { clampedNumberInput } from "./combo-workspace-utils";
+import { clampedNumberInput, comboDraftErrorText } from "./combo-workspace-utils";
+import type { JevDecisionRow } from "../jev-decision-service";
+
+/** Stable default so an omitted combo list does not change identity every render. */
+const NO_COMBOS: readonly ComboItem[] = [];
 
 export function AddComboModal({
+  apiBase,
+  combos = NO_COMBOS,
   existingIds,
   existingAliases,
   providerMap,
@@ -27,9 +34,12 @@ export function AddComboModal({
   onClose,
   onSubmit,
 }: {
+  apiBase?: string;
+  /** Existing combos; a JEV decision model may not name the new combo or any JEV combo. */
+  combos?: readonly ComboItem[];
   existingIds: string[];
   existingAliases: string[];
-  providerMap: Readonly<Record<string, { disabled?: boolean }>>;
+  providerMap: Readonly<Record<string, JevDecisionRow>>;
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];
   models: ModelOption[];
@@ -80,11 +90,12 @@ export function AddComboModal({
     const code = validateComboDraft(draft, {
       existingIds,
       existingAliases,
+      combos,
       isCreate: true,
       providers: providerMap,
     });
     if (code) {
-      setError(t(`cws.err.${code}`));
+      setError(comboDraftErrorText(t, code, draft, providerMap));
       return;
     }
     setBusy(true);
@@ -180,6 +191,21 @@ export function AddComboModal({
               {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
             </p>
           </div>
+          {draft.strategy === "jev" && (
+            <ComboJevDecisionSection
+              idPrefix="cwi-new"
+              apiBase={apiBase}
+              combo={draft}
+              combos={combos}
+              providers={providers}
+              models={models}
+              decisionProvider={draft.decisionProvider ?? null}
+              decisionModel={draft.decisionModel ?? null}
+              decisionTimeoutMs={draft.decisionTimeoutMs ?? null}
+              disabled={busy}
+              onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+            />
+          )}
           <div className="cwi-field">
             <label htmlFor="cwi-new-effort">{t("cws.field.defaultEffort")}</label>
             <EffortSelect

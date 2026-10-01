@@ -349,6 +349,11 @@ JEV는 `jev-auto`에서만, 논리적 모델 호출당 한 번만 호출됩니�
 실패하거나 결정이 잘못되면 현재 적격인 첫 대상으로 fail-open하며, 호출자 취소는 여전히 요청을
 취소합니다. 자동 테스트는 모의 TypeSafe 엔드포인트를 쓰며 실제 JEV 계정은 검증하지 않습니다.
 
+JEV Combo는 키가 필요 없는 Ollama `tev1` 같은 자체 호스팅 결정 모델을 대신 쓸 수도 있습니다.
+`baseUrl`이 전체 `/v1/systemone` 엔드포인트인 `jev-decision` 프로바이더를 추가하고 Combo의
+`decisionProvider`에 지정하세요. TypeSafe 자격 증명은 그곳으로 전송되지 않습니다. 자세한 내용은
+[자체 호스팅 결정 모델](https://opencodex.me/ko/guides/combos/)을 보세요.
+
 ## 프로바이더 및 adapter
 
 <!-- sponsors:main-first-mention -->

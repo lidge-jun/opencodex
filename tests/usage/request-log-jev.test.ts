@@ -26,6 +26,7 @@ test("JEV decision telemetry survives finalization, disk persistence and hydrati
       jevDecision: {
         version: 1,
         comboId: "jev-auto",
+        backend: "systemone",
         selected: { provider: "openai", model: "gpt-6-astra", effort: "high" },
         gate: "apply",
         latencyMs: 24,
@@ -39,6 +40,7 @@ test("JEV decision telemetry survives finalization, disk persistence and hydrati
     const expected = {
       version: 1,
       comboId: "jev-auto",
+      backend: "systemone",
       selected: { provider: "openai", model: "gpt-6-astra", effort: "high" },
       gate: "apply",
       latencyMs: 24,
@@ -46,6 +48,7 @@ test("JEV decision telemetry survives finalization, disk persistence and hydrati
       chosenProbability: 0.7,
       usage: { inputTokens: 11, outputTokens: 2, totalTokens: 13 },
     } as const;
+    expect(getRequestLogEntries()[0]?.jevDecision).toEqual(expected);
     expect(readUsageEntries()[0]?.jevDecision).toEqual(expected);
     clearRequestLogsForTests();
     expect(hydrateRequestLogsFromDisk()).toBe(1);

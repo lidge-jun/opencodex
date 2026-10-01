@@ -7,6 +7,9 @@ export type ProviderOption = {
   authMode?: string;
   adapter?: string;
   baseUrl?: string;
+  /** Decision-service rows need a model; see jevDecisionRowIssue. */
+  defaultModel?: string;
+  models?: string[];
 };
 export type ModelOption = {
   provider: string;
@@ -34,6 +37,8 @@ export interface ComboWorkspaceProps {
   onAdd: (intent?: ComboAddIntent) => void;
   adding: boolean;
   addIntent?: ComboAddIntent;
+  /** Decision service a `jev-auto` add pre-fills; null keeps canonical TypeSafe JEV. */
+  addDecisionProvider?: string | null;
   onCloseAdd: () => void;
   onCreated: (id: string) => void;
 }

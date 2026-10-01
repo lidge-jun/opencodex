@@ -47,6 +47,7 @@ import { checkRegistryPackageIntegrity } from "../src/update/registry-integrity.
 import { hasPendingTeardownIn } from "../src/config/pending-teardown-names.mjs";
 import {
   npmCachePreflightFailureMessage,
+  resolveNpmCachePath,
   runNpmCachePreflight,
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
@@ -271,12 +272,21 @@ function runPackageManagerSelfUpdate(manager) {
     console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
   }
 
+  // The cache root is resolved once, with the environment staging uses, then checked and pinned:
+  // the stage installs with exactly the root this pre-flight inspected (#6288).
+  let npmCachePath;
   if (manager === "npm") {
-    const cachePreflight = runNpmCachePreflight();
+    const npmCache = resolveNpmCachePath({ env: unprivilegedOwnershipMutationEnvironment(process.env) });
+    // Windows skipped this gate before #6288: an unresolvable npm cache path keeps that behavior
+    // there (no check, no pin) and only a confirmed broken root aborts the update.
+    const cachePreflight = npmCache.ok
+      ? runNpmCachePreflight({ cachePath: npmCache.path })
+      : process.platform === "win32" ? { ok: true, reason: "windows_skip" } : npmCache;
     if (!cachePreflight.ok) {
       console.error(`opencodex: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
       process.exit(1);
     }
+    npmCachePath = npmCache.path;
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
@@ -737,6 +747,7 @@ function runPackageManagerSelfUpdate(manager) {
           pkgName: PKG,
           targetVersion: latest || undefined,
           tag,
+          cachePath: npmCachePath,
           runNpm: (args) => {
             const invocation = npmInvocation(args);
             if (!invocation) return { status: 1 };
