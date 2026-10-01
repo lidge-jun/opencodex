@@ -9,7 +9,7 @@
  * direct proxy beside a suppressed supervisor.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   existsSync,
@@ -22,6 +22,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
 } from "../../src/service/ownership-mutation-lease.mjs";
@@ -139,6 +140,35 @@ function spawnServiceChild(box: Sandbox, port: number): ChildProcess {
     (child.stderr as ReadableStream).pipeTo(new WritableStream({ write: tee })).catch(() => {}),
   );
   return child as unknown as ChildProcess;
+}
+
+const LEASE_MODULE_URL = pathToFileURL(repoPath("src/service/ownership-mutation-lease.mjs")).href;
+
+/** The authority the wrapper's `serviceStatePaths()` binds its lock to. */
+function authorityPath(box: Sandbox): string {
+  return join(box.home, ".opencodex", "service-state.json");
+}
+
+/** A fresh-process acquire probe with no delegated token — what a foreign claimant faces. */
+function contenderAcquire(box: Sandbox): number | null {
+  const env = { ...process.env, FIXTURE_AUTHORITY: authorityPath(box) };
+  delete env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  return spawnSync(process.execPath, ["-e", `
+    const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
+    try {
+      const lease = acquireOwnershipMutationLease([process.env.FIXTURE_AUTHORITY], { waitMs: 0 });
+      lease.release();
+      process.exit(0);
+    } catch { process.exit(17); }
+  `], { env, timeout: 15_000 }).status;
+}
+
+function fakeChild(): ChildProcess {
+  const fake = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
+  fake.pid = 1;
+  fake.exitCode = null;
+  fake.signalCode = null;
+  return fake as ChildProcess;
 }
 
 function proxyPublished(box: Sandbox, port: number): boolean {
@@ -271,17 +301,13 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
           spawnStart: () => { directStarts += 1; },
           spawnDetachedStartFn: () => {
             directStarts += 1;
-            const fake = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
-            fake.pid = 1;
-            fake.exitCode = null;
-            fake.signalCode = null;
-            return fake as ChildProcess;
+            return fakeChild();
           },
           killProxyFn: () => {},
           preparePortForPinnedStartFn: () => {},
           waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
           releaseForServiceManagerFn: lease?.releaseForServiceManager,
-          restartVetoFn: lease?.vetoAgain,
+          reacquireForDirectStartFn: lease?.reacquireForDirectStart,
         });
         return true;
       },
@@ -299,46 +325,167 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
     expect(directStarts).toBe(0);
   }, watchdogMs(150_000));
 
-  test("a claim landing during the service refresh stops the direct-start fallthrough", async () => {
+  test("a claim landing during the released refresh window vetoes the fallthrough", async () => {
     const box = sandbox();
     const port = await freePort();
     const job = writeJob(box.ocxHome);
+    let claimed = false;
+    let leasedAtRefresh: boolean | undefined;
     let spawned = 0;
     let killed = 0;
-    const notice = "the desktop app owns this runtime (install app-a); it was left running";
-    const result = await restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
-      platform: "win32",
-      serviceInstalledFn: () => false,
-      restartVetoFn: () => notice,
-      waitForPort: async () => true,
-      listListenPidsFn: () => [],
-      scanListenPidsFn: () => ({ ok: true, pids: [] }),
-      isAliveFn: () => false,
-      probeProxy: async () => false,
-      probeProxyIdentity: async () => null,
-      spawnStart: () => { spawned += 1; },
-      spawnDetachedStartFn: () => {
-        spawned += 1;
-        const fake = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
-        fake.pid = 1;
-        fake.exitCode = null;
-        fake.signalCode = null;
-        return fake as ChildProcess;
-      },
-      killProxyFn: () => { killed += 1; },
-      preparePortForPinnedStartFn: () => {},
-      waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
-    });
-    expect(result).toBe(false);
+    const resolve = (): ServiceOwnershipResolution => claimed
+      ? { kind: "owned", ownership: { owner: "desktop", installId: "app-install-a", consentGeneration: 1 }, revision: 2 }
+      : { kind: "none", revision: 0 };
+    const outcome = await runUpdateRestartWithOwnershipLease(resolve, async lease =>
+      restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
+        platform: "win32",
+        serviceInstalledFn: () => true,
+        serviceViableFn: () => true,
+        // The refresh ran (and failed) while the lease was released; a desktop
+        // claim landed inside that window.
+        runService: () => {
+          leasedAtRefresh = existsSync(box.lockDir);
+          claimed = true;
+          return { status: 1, signal: null, timedOut: false };
+        },
+        releaseForServiceManagerFn: lease.releaseForServiceManager,
+        reacquireForDirectStartFn: lease.reacquireForDirectStart,
+        waitForPort: async () => true,
+        listListenPidsFn: () => [],
+        scanListenPidsFn: () => ({ ok: true, pids: [] }),
+        isAliveFn: () => false,
+        probeProxy: async () => false,
+        probeProxyIdentity: async () => null,
+        spawnStart: () => { spawned += 1; },
+        spawnDetachedStartFn: () => {
+          spawned += 1;
+          return fakeChild();
+        },
+        killProxyFn: () => { killed += 1; },
+        preparePortForPinnedStartFn: () => {},
+        waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
+      }));
+    expect(outcome).toEqual({ kind: "ran", value: false });
+    expect(leasedAtRefresh).toBe(false);
     expect(spawned).toBe(0);
     expect(killed).toBe(0);
     const saved = readUpdateJob(job.id);
     expect(saved?.status).toBe("succeeded");
     expect(saved?.restarted).toBe(false);
-    expect(saved?.log.some(line => line.includes("desktop app owns"))).toBe(true);
+    expect(saved?.log.some(line => line.includes("app-install-a"))).toBe(true);
   });
 
-  test("the lease covers the veto, frees on request, and vetoAgain re-reads ownership", async () => {
+  test("the fallthrough re-acquires the lease and holds it through reclaim and the direct start", async () => {
+    const box = sandbox();
+    const port = await freePort();
+    const job = writeJob(box.ocxHome);
+    const lockState: boolean[] = [];
+    const contention: Array<number | null> = [];
+    let leasedAtRefresh: boolean | undefined;
+    let spawnCount = 0;
+    const outcome = await runUpdateRestartWithOwnershipLease(
+      () => ({ kind: "none", revision: 0 }),
+      async lease => {
+        await restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
+          platform: "win32",
+          serviceInstalledFn: () => true,
+          serviceViableFn: () => true,
+          runService: () => {
+            leasedAtRefresh = existsSync(box.lockDir);
+            return { status: 1, signal: null, timedOut: false };
+          },
+          releaseForServiceManagerFn: lease.releaseForServiceManager,
+          reacquireForDirectStartFn: lease.reacquireForDirectStart,
+          // Called twice: the pre-service reclaim under the original lease, then the
+          // direct-start reclaim under the reacquired one.
+          waitForPort: async () => {
+            lockState.push(existsSync(box.lockDir));
+            contention.push(contenderAcquire(box));
+            return true;
+          },
+          listListenPidsFn: () => [],
+          scanListenPidsFn: () => ({ ok: true, pids: [] }),
+          isAliveFn: () => false,
+          probeProxy: async () => true,
+          probeProxyIdentity: async () => null,
+          spawnDetachedStartFn: () => {
+            spawnCount += 1;
+            return fakeChild();
+          },
+          killProxyFn: () => {},
+          preparePortForPinnedStartFn: () => {},
+          waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
+        });
+        return true;
+      },
+    );
+    expect(outcome).toEqual({ kind: "ran", value: true });
+    expect(leasedAtRefresh).toBe(false);
+    expect(lockState).toEqual([true, true]);
+    expect(contention.every(status => status !== 0)).toBe(true);
+    expect(spawnCount).toBe(1);
+    expect(existsSync(box.lockDir)).toBe(false);
+  }, watchdogMs(30_000));
+
+  test("a lease held through the refresh window fails closed before any kill or start", async () => {
+    const box = sandbox();
+    const port = await freePort();
+    const job = writeJob(box.ocxHome);
+    let spawned = 0;
+    let killed = 0;
+    const outcome = await runUpdateRestartWithOwnershipLease(
+      () => ({ kind: "none", revision: 0 }),
+      async lease =>
+        restartAfterUpdateForTests(job, { port, hostname: "127.0.0.1" }, {
+          platform: "win32",
+          serviceInstalledFn: () => true,
+          serviceViableFn: () => true,
+          // A claimant that acquired the freed lease during the refresh window and
+          // keeps holding it past the bounded re-acquire deadline.
+          runService: () => {
+            const holder = Bun.spawn([process.execPath, "-e", `
+              const { acquireOwnershipMutationLease } = await import(${JSON.stringify(LEASE_MODULE_URL)});
+              const lease = acquireOwnershipMutationLease([process.env.FIXTURE_AUTHORITY]);
+              await Bun.sleep(4_000);
+              lease.release();
+            `], {
+              env: { ...process.env, FIXTURE_AUTHORITY: authorityPath(box) },
+              stdout: "ignore",
+              stderr: "ignore",
+            });
+            children.push(holder as unknown as ChildProcess);
+            const deadline = Date.now() + 5_000;
+            while (!existsSync(box.lockDir) && Date.now() < deadline) Bun.sleepSync(20);
+            return { status: 1, signal: null, timedOut: false };
+          },
+          releaseForServiceManagerFn: lease.releaseForServiceManager,
+          reacquireForDirectStartFn: lease.reacquireForDirectStart,
+          waitForPort: async () => true,
+          listListenPidsFn: () => [],
+          scanListenPidsFn: () => ({ ok: true, pids: [] }),
+          isAliveFn: () => false,
+          probeProxy: async () => false,
+          probeProxyIdentity: async () => null,
+          spawnStart: () => { spawned += 1; },
+          spawnDetachedStartFn: () => {
+            spawned += 1;
+            return fakeChild();
+          },
+          killProxyFn: () => { killed += 1; },
+          preparePortForPinnedStartFn: () => {},
+          waitForGhostListenClearFn: async () => ({ ok: true, accessDenied: false }),
+        }),
+    );
+    expect(outcome).toEqual({ kind: "ran", value: false });
+    expect(spawned).toBe(0);
+    expect(killed).toBe(0);
+    const saved = readUpdateJob(job.id);
+    expect(saved?.status).toBe("succeeded");
+    expect(saved?.restarted).toBe(false);
+    expect(saved?.log.some(line => line.includes("stayed claimed"))).toBe(true);
+  }, watchdogMs(30_000));
+
+  test("the lease covers the veto, frees on request, re-acquires, and vetoAgain re-reads ownership", async () => {
     const box = sandbox();
     let claimed = false;
     const resolve = (): ServiceOwnershipResolution => claimed
@@ -353,7 +500,13 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
       expect(process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]).toBeUndefined();
       // Idempotent: the wrapper's own finally must not throw on a released lease.
       lease.releaseForServiceManager();
+      // Re-acquire re-locks and re-arms the delegation token before the veto re-read.
+      expect(lease.reacquireForDirectStart()).toBeNull();
+      expect(existsSync(box.lockDir)).toBe(true);
+      expect(process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]).toBeTruthy();
+      expect(contenderAcquire(box)).not.toBe(0);
       claimed = true;
+      expect(lease.reacquireForDirectStart()).toContain("app-install-a");
       expect(lease.vetoAgain()).toContain("app-install-a");
       return "ok";
     });

@@ -1003,8 +1003,8 @@ export interface RestartIo {
    * cannot join it (#5760); wired by runUpdateRestartWithOwnershipLease.
    */
   releaseForServiceManagerFn?: () => void;
-  /** Re-run the recorded-owner veto once the lease is released; a notice stops the restart. */
-  restartVetoFn?: () => string | null;
+  /** Re-acquire the lease for the direct-start fallthrough, then re-run the veto; a notice stops the restart. */
+  reacquireForDirectStartFn?: () => string | null;
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
@@ -1250,8 +1250,8 @@ async function restartAfterUpdate(
     }
   }
 
-  // The service refresh ran outside the lease; re-run the veto before mutating this port.
-  const restartVeto = io.restartVetoFn?.();
+  // The service refresh ran outside the lease; take it back so the veto and the kills/start below stay serialized.
+  const restartVeto = io.reacquireForDirectStartFn?.();
   if (restartVeto) {
     updateJob(job, { status: "succeeded", restarted: false }, restartVeto);
     return false;
@@ -1975,7 +1975,7 @@ export async function runGuiUpdateWorker(
         return finishGuiUpdateRestart(job!, captured, check.installer, {
           ...io.restartIo,
           releaseForServiceManagerFn: lease.releaseForServiceManager,
-          restartVetoFn: lease.vetoAgain,
+          reacquireForDirectStartFn: lease.reacquireForDirectStart,
           packageLauncherPathFn: () => activeLauncher,
         });
       });

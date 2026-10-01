@@ -45,11 +45,18 @@ export function updateRestartVeto(
  * join the lease held here. Held through the repair's serving wait, the lease keeps
  * that child from ever starting (#5760; the npm lane releases at this boundary). The
  * veto is the decision the lease must cover — the reclaim and kills it authorizes —
- * so the restart re-runs it before mutating once the lease is gone.
+ * so the fallthrough takes the lease back before re-running it: anything between the
+ * service refresh and the direct start would otherwise mutate the port unleased.
  */
 export interface UpdateRestartLeaseControl {
   /** Free the lease before a service-manager-mediated start that cannot join it. Idempotent. */
   releaseForServiceManager(): void;
+  /**
+   * Take the lease back before the fallthrough mutates the port, then re-run the veto
+   * under it. A lease that stays claimed (a live claimant mid-mutation) fails closed:
+   * the returned notice stops the restart before any kill or start.
+   */
+  reacquireForDirectStart(): string | null;
   /** Re-run the recorded-owner veto; a non-null notice must stop the restart there. */
   vetoAgain(): string | null;
 }
@@ -58,16 +65,31 @@ export async function runUpdateRestartWithOwnershipLease<T>(
   resolve: (() => ServiceOwnershipResolution) | undefined,
   restart: (lease: UpdateRestartLeaseControl) => Promise<T>,
 ): Promise<{ readonly kind: "veto"; readonly notice: string } | { readonly kind: "ran"; readonly value: T }> {
-  const lease = acquireOwnershipMutationLease(serviceStatePaths());
+  let lease = acquireOwnershipMutationLease(serviceStatePaths());
   const previous = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
   process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
+  let heldNow = true;
+  const restoreEnv = () => {
     if (previous === undefined) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
     else process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = previous;
+  };
+  const release = () => {
+    if (!heldNow) return;
+    heldNow = false;
+    restoreEnv();
     lease.release();
+  };
+  const reacquireForDirectStart = () => {
+    if (!heldNow) {
+      try {
+        lease = acquireOwnershipMutationLease(serviceStatePaths());
+      } catch {
+        return "The runtime ownership lease stayed claimed; the runtime was left running.";
+      }
+      heldNow = true;
+      process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
+    }
+    return updateRestartVeto(resolve);
   };
   try {
     const veto = updateRestartVeto(resolve);
@@ -77,6 +99,7 @@ export async function runUpdateRestartWithOwnershipLease<T>(
           kind: "ran",
           value: await restart({
             releaseForServiceManager: release,
+            reacquireForDirectStart,
             vetoAgain: () => updateRestartVeto(resolve),
           }),
         };

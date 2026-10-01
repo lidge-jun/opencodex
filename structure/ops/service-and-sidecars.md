@@ -344,8 +344,9 @@ health wait, the lease kept it from starting and recovery fell through to a seco
 started proxy (#5760). The npm launcher in `bin/ocx.mjs` releases the lease before a
 post-failure service recovery, as a successful update does, and makes the recovery decision
 again after the release. The dashboard restart worker in `src/update/job.ts` releases the lease
-immediately before `ocx service repair` and re-runs the recorded-owner veto before the
-direct-start fallthrough mutates the port, because a claim could have landed during the
+immediately before `ocx service repair` and re-acquires it at the direct-start
+fallthrough — a still-claimed lease fails closed — then re-runs the recorded-owner veto
+under it before mutating the port, because a claim could have landed during the
 now-unleased refresh window.
 
 The npm transaction creates each staging directory exclusively and may clean that fresh path
