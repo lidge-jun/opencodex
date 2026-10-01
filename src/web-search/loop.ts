@@ -1,5 +1,5 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import type { AdapterEvent, OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
@@ -282,7 +282,7 @@ export interface WebSearchLoopDeps {
   /** Required for the openai backend; unused (and typically undefined) for the anthropic backend. */
   forwardProvider?: OcxProviderConfig;
   /** Required for the anthropic backend: the stored-OAuth provider that runs web_search_20250305. */
-  anthropicSidecar?: { providerName: string; provider: OcxProviderConfig };
+  anthropicSidecar?: { providerName: string; provider: OcxProviderConfig; config: OcxConfig };
   /** Required for the xai backend: the stored Grok OAuth provider (L7). */
   xaiSidecar?: { providerName: string; provider: OcxProviderConfig };
   /** Required for the gemini backend: the stored Antigravity CCA provider (L8). */
@@ -743,7 +743,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // signal would otherwise look like an ordinary degradable failure).
         try {
           if (backend === "anthropic" && anthropicSidecar) {
-            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal);
+            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, anthropicSidecar.config);
           } else if (backend === "xai") {
             // L7: stored Grok OAuth to the pinned api.x.ai Responses endpoint; same
             // never-throws contract and no Codex/OpenAI pool outcome recording (F5 parity).

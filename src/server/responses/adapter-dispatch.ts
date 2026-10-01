@@ -691,7 +691,8 @@ export async function prepareAdapterExchange(
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
         } catch (err) {
           const failed = transportState.sentOAuthSnapshot;
-          if (route.providerName === "google-antigravity" && err instanceof OAuthLoginRequiredError && failed
+          if (route.providerName === "google-antigravity" && !antigravityAuthRotationAttempted
+            && err instanceof OAuthLoginRequiredError && failed
             && getAccountSet(route.providerName)?.accounts.some(row =>
               row.id === failed.accountId && row.needsReauth === true)) {
             antigravityAuthRotationAttempted = true;

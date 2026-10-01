@@ -25,6 +25,13 @@ A helper recovery's prepaid hop remains part of the full leg attempt allowance. 
 pending hop reconciles the actual target synchronously: a regional endpoint change refunds the old
 reservation and re-reserves the new transition, so the transition cap is enforced without charging
 or sending twice. Diagnostic key changes alone are not transitions; a real destination change is.
+One exception: a rebuild that the caller itself performed mid-flight — Kiro's reset-triggered
+credential rebuild retargeting the request to another region's canonical host — marks its admission
+`rebasedTarget`. The physical destination is still recorded, but the move consumes neither the
+single target transition nor the alternate-target allowance: it was authorized work, not a failover
+decision, and the endpoint fallback keeps ownership of the one transition it may still need.
+Admission, reservation and refund use the same alternate-target charging predicate. A validated
+rebase remains eligible after that allowance is spent, while replay safety and the total-send cap still apply.
 
 The hop pays for a replay that some *other* layer dispatches, so which layer settles the
 reservation follows the dispatcher, not the ladder. A helper-routed replay reports the same

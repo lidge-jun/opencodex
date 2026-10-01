@@ -84,6 +84,8 @@ export interface ManagementApiDeps {
    * Tests stub it to orphan the fixture file mid-fetch (the r7 recheck test).
    */
   fetchAllModels?: (config: OcxConfig) => Promise<CatalogModel[]>;
+  /** Codex role auto-assign's one sizing model call; route tests answer it without a provider. */
+  completeCodexRoleSizing?: import("./codex-role-auto-assign").CompleteRoleSizing;
   /**
    * Writer seam for the Grok toggle: lets a test place the file in any state
    * between the pre-write recheck and the write itself (the r8 post-inspection

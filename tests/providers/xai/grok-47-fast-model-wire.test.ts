@@ -20,6 +20,7 @@ import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
 const LOGICAL_MODEL = "grok-4.7";
 const FAST_MODEL = "grok-4.7-build-fast";
+const SCOPED_KEY = "ocx_data_" + "a".repeat(40);
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
 const BACKUP_BASE_URL = "https://grok47-backup.test/v1";
 type Body = Record<string, unknown>;
@@ -213,6 +214,105 @@ describe("Grok 4.7 Fast serialized upstream model", () => {
     expect(Object.hasOwn(fixture.sends[0]!.body, "service_tier")).toBe(false);
     expect(json.model).toBe(LOGICAL_MODEL);
   });
+
+  test.each([
+    { label: "Fast-only scope with --fast selector", allowed: FAST_MODEL, status: 200, body: responsesBody() },
+    { label: "Fast-only scope with caller priority", allowed: FAST_MODEL, status: 200,
+      body: responsesBody({ model: "xai/grok-4.7", service_tier: "priority" }) },
+    { label: "Fast-only scope with global Fast", allowed: FAST_MODEL, status: 200, fastMode: true,
+      body: responsesBody({ model: "xai/grok-4.7" }) },
+    { label: "logical-only scope with Fast", allowed: LOGICAL_MODEL, status: 403, body: responsesBody() },
+    { label: "unrelated scope with Fast", allowed: "other-model", status: 403, body: responsesBody() },
+    { label: "Fast-only scope with plain request", allowed: FAST_MODEL, status: 403,
+      body: responsesBody({ model: "xai/grok-4.7" }) },
+    { label: "Fast-only scope with Fast disabled", allowed: FAST_MODEL, status: 403,
+      fastMode: false, body: responsesBody() },
+    { label: "Fast-only scope with key auth", allowed: FAST_MODEL, status: 403,
+      keyAuth: true, body: responsesBody() },
+    { label: "logical-only scope with Fast disabled", allowed: LOGICAL_MODEL, status: 200,
+      fastMode: false, body: responsesBody() },
+    { label: "Fast-only scope with an operator tier wire", allowed: FAST_MODEL, status: 403,
+      operatorWire: true, body: responsesBody() },
+    { label: "logical-only scope with an operator tier wire", allowed: LOGICAL_MODEL, status: 200,
+      operatorWire: true, body: responsesBody() },
+  ])("$label authorizes only the actual wire destination", async ({ allowed, status, body, fastMode, keyAuth, operatorWire }) => {
+    const fixture = await launch(xaiConfig(keyAuth ? "key" : "oauth", { hostname: "0.0.0.0", fastMode, apiKeys: [{
+      id: "scoped", name: "scoped", key: SCOPED_KEY, createdAt: "2026-09-30T00:00:00.000Z",
+      allowedModels: [`xai/${allowed}`],
+    }] }, operatorWire ? { fastWire: {
+      kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim",
+    } } : {}));
+    const url = new URL("/v1/responses", fixture.server.url);
+    url.hostname = "127.0.0.1";
+    const response = await originalFetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${SCOPED_KEY}` },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(status);
+    const json = await response.json();
+    if (status === 403) {
+      expect(json).toMatchObject({ error: { type: "model_not_allowed_for_key" } });
+      expect(fixture.sends).toHaveLength(0);
+    } else {
+      expect(fixture.sends).toHaveLength(1);
+      expect(fixture.sends[0]!.body.model).toBe(allowed);
+      expect(json).toMatchObject({ model: allowed });
+    }
+  });
+
+  test.each([
+    { label: "Chat", path: "/v1/chat/completions", content: {
+      messages: [{ role: "user", content: "hello" }],
+    } },
+    { label: "Messages", path: "/v1/messages", content: {
+      messages: [{ role: "user", content: "hello" }], max_tokens: 128,
+    } },
+    { label: "compact", path: "/v1/responses/compact", content: {
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Retain task progress." }] }],
+    } },
+  ].flatMap(surface => [
+    { policy: "Fast-only", allowed: FAST_MODEL, status: 200 },
+    { policy: "logical-only", allowed: LOGICAL_MODEL, status: 403 },
+    { policy: "global Fast-only", allowed: FAST_MODEL, status: 200, fastMode: true, plain: true },
+    { policy: "disabled Fast-only", allowed: FAST_MODEL, status: 403, fastMode: false },
+    { policy: "disabled logical-only", allowed: LOGICAL_MODEL, status: 200, fastMode: false },
+    { policy: "operator wire Fast-only", allowed: FAST_MODEL, status: 403, operatorWire: true },
+    { policy: "operator wire logical-only", allowed: LOGICAL_MODEL, status: 200, operatorWire: true },
+    { policy: "native key Fast-only", allowed: FAST_MODEL, status: 403, keyAuth: true },
+  ].map(policy => ({ ...surface, ...policy }))))(
+    "cross-ingress $label $policy scope checks the actual wire model",
+    async ({ path, content, allowed, status, fastMode, plain, operatorWire, keyAuth }) => {
+      const fixture = await launch(xaiConfig(keyAuth ? "key" : "oauth", {
+        hostname: "0.0.0.0", fastMode, apiKeys: [{
+          id: "scoped", name: "scoped", key: SCOPED_KEY, createdAt: "2026-09-30T00:00:00.000Z",
+          allowedModels: [`xai/${allowed}`],
+        }],
+      }, operatorWire ? { fastWire: {
+        kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim",
+      } } : {}));
+      const url = new URL(path, fixture.server.url);
+      url.hostname = "127.0.0.1";
+      const response = await originalFetch(url, {
+        method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${SCOPED_KEY}` },
+        body: JSON.stringify({ model: plain ? "xai/grok-4.7" : "xai/grok-4.7--fast", stream: false, ...content }),
+      });
+      const json = await response.json();
+      expect(response.status).toBe(status);
+      if (status === 403) {
+        expect(json).toMatchObject({ error: { type: "model_not_allowed_for_key" } });
+        expect(fixture.sends).toHaveLength(0);
+      } else {
+        expect(fixture.sends).toHaveLength(1);
+        expect(fixture.sends[0]!.body.model).toBe(allowed);
+        if (allowed === FAST_MODEL) assertFastSend(fixture.sends[0]!);
+        if (path.endsWith("/compact")) {
+          expect(json.output).toEqual(expect.arrayContaining([expect.objectContaining({ type: "message" })]));
+        }
+      }
+    },
+    30_000,
+  );
 
   test("key-auth --fast keeps grok-4.7 and priority on api.x.ai", async () => {
     const fixture = await launch(xaiConfig("key"));

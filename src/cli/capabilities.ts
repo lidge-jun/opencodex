@@ -1068,6 +1068,51 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["A bare invocation reads and never writes."],
   },
   {
+    command: ["agent", "roles"],
+    summary: "omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.",
+    routes: [
+      { method: "GET", path: "/api/codex-agent-roles" },
+      { method: "PUT", path: "/api/codex-agent-roles/{role}" },
+      { method: "POST", path: "/api/codex-agent-roles/auto-assign" },
+    ],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the role list, the write result or the proposals as JSON." },
+      { name: "--model", value: "string", summary: "suggest: size the roles with this model instead of the Codex default model." },
+      { name: "--apply", value: "boolean", summary: "suggest: write every proposal through the role model write." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.",
+      "set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.",
+      "suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.",
+    ],
+  },
+  {
+    command: ["agent", "injection"],
+    summary: "Show or set the delegation model and effort, or suggest both for a described piece of delegated work.",
+    routes: [
+      { method: "GET", path: "/api/injection-model" },
+      { method: "PUT", path: "/api/injection-model" },
+      { method: "POST", path: "/api/injection-model/suggest" },
+    ],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the delegation settings, the write result or the proposal as JSON." },
+      { name: "--model", value: "string", summary: "set: the delegation model, - clears it. suggest: size the work with this model instead of the Codex default model." },
+      { name: "--effort", value: "string", summary: "set: the delegation reasoning effort, - clears it." },
+      { name: "--prompt", value: "string", summary: "set: a custom guidance prompt, - clears it." },
+      { name: "--guidance", value: "string", summary: "set: on or off for OpenCodex delegation guidance." },
+      { name: "--apply", value: "boolean", summary: "suggest: write the proposed model and effort through the delegation settings write." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "suggest sizes the described work with one model call, picks the cheapest sufficient model the delegation picker offers, and writes nothing unless --apply is given.",
+    ],
+  },
+  {
     command: ["api", "protocols"],
     summary: "Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.",
     routes: [{ method: "GET", path: "/api/protocols" }],

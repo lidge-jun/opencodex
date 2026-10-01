@@ -729,6 +729,15 @@ record `grok-4.7-build-fast` as the wire model. API-key mode is unchanged: build
 public API, so Grok 4.7 Fast there still means priority processing. An explicit
 `xai/grok-4.7-build-fast` selection from an earlier configuration keeps working.
 
+When no explicit provider `fastWire` is configured, an opencodex API key restricted by
+`allowedModels` must permit `xai/grok-4.7-build-fast` (or its bare model id) for OAuth Fast.
+Allowing only `xai/grok-4.7` does not authorize this Fast model variant. A key allowing only
+the Fast wire model can use it; plain requests or disabled Fast still require `xai/grok-4.7`.
+With an explicit provider `fastWire`, permit the actual wire model instead. For example, a
+`service-tier` wire keeps `xai/grok-4.7` and requires permission for that model. Provider
+restrictions continue to apply.
+These rules apply to Responses, Chat Completions, Messages, and routed compaction requests.
+
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium
 only when xAI's response confirms `service_tier: "priority"`. A missing or unparsed response tier is
@@ -874,6 +883,13 @@ rotation may trigger provider restrictions.
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | The cached provider-reported utilization bar used for usage-aware account selection. `five-hour` keeps the original behavior. `weekly` scores the weekly bar and skips accounts whose 5-hour bar is exhausted while another eligible account remains, but falls back to exhausted candidates when none do. `max-utilization` scores the highest known bar, so it can use 5-hour usage before weekly usage is available; if neither is known, the account follows unknown-usage ordering. Known usage ranks before unknown usage under the opt-in `weekly` and `max-utilization` windows only; an omitted or explicit `five-hour` preserves the legacy ordering. If every eligible account is unknown, selection still returns one in eligible order. After the documented lower-5-hour tie-break, exact ties preserve eligible order. A healthy affinity-bound session is not proactively rebalanced. For new-session assignment and routing recovery after an eligible 429 replacement, `quota` ranks eligible candidates directly with this window; `fill-first` advances in stable order using this window's threshold and exhaustion rules; `round-robin` ignores it. Cooldown, failover limits, and reauthentication eligibility remain separate local state. Per-account weekly bars come from usage probes or observed response headers. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection. Range 1–100. |
 | `anthropicAccountPool.routes?` | `{name, match, accounts, fallback?}[]` | — | Ordered model routes for the enabled Anthropic OAuth pool. `match` is a full, case-sensitive model ID glob (`*` and `?`); first match wins. `accounts` contains stored account IDs, not aliases. Eligible accounts are limited to the route for initial selection and 429 retry. Without fallback, an empty route returns a local 401, or 429 with route-scoped `Retry-After` if all its declared accounts are cooling. With `fallback: true`, an all-cooling ordinary pool returns 429 with its earliest usable cooldown, even if a saved route account was removed; the client response never names the route; the proxy log uses `route:#<n>` for the rule’s 1-based position. `fallback: true` widens only when no routed account is eligible; fill-first then uses ordinary pool order. No matching rule retains normal selection; disabling the pool makes saved routes inactive. Invalid rules fail validated writes and prevent routed dispatch until corrected. `null` clears routes through the settings API. |
+
+Anthropic OAuth vision and web-search helpers match these routes using each helper's own model,
+independently of the main request model. Each helper authenticates with its routed account, which
+can differ from the globally active account. If a strict helper route has no eligible account, the
+helper fails locally before any provider request; it does not silently use an account outside the
+route. When the main request works but image description or web search fails, check the helper's
+configured model and the accounts eligible for that model's route.
 
 When enabled, 429 records a cooldown and may rotate within the request. The cooldown length comes
 from a usable `Retry-After`, otherwise from the latest valid reset time among rate-limit windows

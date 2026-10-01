@@ -1194,6 +1194,53 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 
+### `ocx agent roles`
+
+omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-agent-roles` |
+| PUT | `/api/codex-agent-roles/{role}` |
+| POST | `/api/codex-agent-roles/auto-assign` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the role list, the write result or the proposals as JSON. |
+| `--model` | string | suggest: size the roles with this model instead of the Codex default model. |
+| `--apply` | boolean | suggest: write every proposal through the role model write. |
+
+JSON mode: `payload`.
+
+- A bare invocation reads and never writes.
+- Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.
+- set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.
+- suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.
+
+### `ocx agent injection`
+
+Show or set the delegation model and effort, or suggest both for a described piece of delegated work.
+
+| Method | Route |
+|---|---|
+| GET | `/api/injection-model` |
+| PUT | `/api/injection-model` |
+| POST | `/api/injection-model/suggest` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the delegation settings, the write result or the proposal as JSON. |
+| `--model` | string | set: the delegation model, - clears it. suggest: size the work with this model instead of the Codex default model. |
+| `--effort` | string | set: the delegation reasoning effort, - clears it. |
+| `--prompt` | string | set: a custom guidance prompt, - clears it. |
+| `--guidance` | string | set: on or off for OpenCodex delegation guidance. |
+| `--apply` | boolean | suggest: write the proposed model and effort through the delegation settings write. |
+
+JSON mode: `payload`.
+
+- A bare invocation reads and never writes.
+- suggest sizes the described work with one model call, picks the cheapest sufficient model the delegation picker offers, and writes nothing unless --apply is given.
+
 ### `ocx api policy`
 
 Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.
@@ -1217,6 +1264,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 68
-- of those, state-changing: 38
+- declared capabilities: 70
+- of those, state-changing: 40
 - head-resolved invocations: 2
