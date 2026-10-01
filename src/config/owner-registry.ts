@@ -24,12 +24,13 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { atomicWriteFile } from "./atomic-write";
+import { atomicWriteFileNoFollow } from "./atomic-write";
 import { getConfigDir } from "./paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
+import { hardenSecretDir } from "../lib/windows-secret-acl";
 
 const REGISTRY_DIR_NAME = "ocx-homes";
 /**
@@ -83,8 +84,16 @@ export function registerOwnerRegistryHome(home: string): void {
       if (parent === ancestor) break;
       ancestor = parent;
     }
-    mkdirSync(dir, { recursive: true });
-    atomicWriteFile(
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // This locator contains no secret, but its deterministic entry names must not
+    // give another local user a place to plant a destination symlink. Refuse a
+    // directory symlink and fail closed if an existing directory cannot be made
+    // owner-only (for example because another user created it first).
+    const registryStat = lstatSync(dir);
+    if (!registryStat.isDirectory() || registryStat.isSymbolicLink()) return;
+    chmodSync(dir, 0o700);
+    hardenSecretDir(dir, { required: true });
+    atomicWriteFileNoFollow(
       registryEntryPath(dir, home),
       JSON.stringify({ home: resolve(home), v: 1 }) + "\n",
     );
