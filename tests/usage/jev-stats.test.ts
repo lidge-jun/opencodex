@@ -170,6 +170,9 @@ describe("JEV decision telemetry", () => {
       { gate: "apply", decisions: 1 },
       { gate: "timeout", decisions: 1 },
     ]);
+    expect(stats.backends).toEqual([
+      { backend: "unknown", decisions: 2, applied: 1, averageLatencyMs: 2_010 },
+    ]);
     expect(stats.models).toEqual([
       {
         provider: "openai",
@@ -209,6 +212,65 @@ describe("JEV decision telemetry", () => {
         efforts: [],
       },
     ]);
+  });
+
+  test("retains recognized backends and drops invalid values without rejecting legacy rows", () => {
+    const legacy = {
+      version: 1,
+      comboId: "jev-auto",
+      selected: { provider: "openai", model: "gpt-6-astra", effort: null },
+      gate: "apply",
+      latencyMs: 10,
+    };
+    expect(normalizePersistedJevDecision(legacy)).toEqual(legacy);
+    for (const backend of ["typesafe", "systemone", "model"]) {
+      expect(normalizePersistedJevDecision({ ...legacy, backend })).toEqual({ ...legacy, backend });
+    }
+    for (const backend of ["unknown", "invented", " typesafe ", null, 1, {}, []]) {
+      expect(normalizePersistedJevDecision({ ...legacy, backend })).toEqual(legacy);
+    }
+  });
+
+  test("clones backend buckets independently and summarizes them in fixed order", () => {
+    const accumulator = createJevStatsAccumulator({ comboId: "jev-auto" });
+    const add = (
+      target: typeof accumulator,
+      backend: string | undefined,
+      gate: "apply" | "timeout",
+      latencyMs: number,
+    ) => target.add(entry(`${backend}-${gate}-${latencyMs}`, NOW,
+      normalizePersistedJevDecision({
+        version: 1,
+        comboId: "jev-auto",
+        selected: { provider: "openai", model: "gpt-6-astra", effort: null },
+        backend,
+        gate,
+        latencyMs,
+      })!, []));
+    expect(accumulator.summarize("all", NOW).backends).toEqual([]);
+    add(accumulator, "model", "apply", 30);
+    add(accumulator, undefined, "timeout", 90);
+    const cloned = accumulator.clone();
+    add(cloned, "model", "timeout", 10);
+    add(cloned, "typesafe", "apply", 0);
+    add(cloned, "systemone", "timeout", 50);
+    add(cloned, "typesafe", "apply", 40);
+    add(cloned, "invalid", "apply", 30);
+    const expected = [
+      { backend: "typesafe", decisions: 2, applied: 2, averageLatencyMs: 20 },
+      { backend: "systemone", decisions: 1, applied: 0, averageLatencyMs: 50 },
+      { backend: "model", decisions: 2, applied: 1, averageLatencyMs: 20 },
+      { backend: "unknown", decisions: 2, applied: 1, averageLatencyMs: 60 },
+    ];
+    expect(cloned.summarize("all", NOW).backends).toEqual(expected);
+    expect(accumulator.summarize("all", NOW).backends).toEqual([
+      { backend: "model", decisions: 1, applied: 1, averageLatencyMs: 30 },
+      { backend: "unknown", decisions: 1, applied: 0, averageLatencyMs: 90 },
+    ]);
+    add(accumulator, "model", "apply", 90);
+    expect(accumulator.summarize("all", NOW).backends[0])
+      .toEqual({ backend: "model", decisions: 2, applied: 2, averageLatencyMs: 60 });
+    expect(cloned.summarize("all", NOW).backends).toEqual(expected);
   });
 
   test("counts physical sends and ignores unsent fallback rows", () => {

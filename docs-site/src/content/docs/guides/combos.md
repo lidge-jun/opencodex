@@ -207,12 +207,23 @@ order. Weights and `stickyLimit` do not affect this strategy.
 
 This ranking and provider exclusion before dispatch require fresh model-inference limits that apply to the current single API key as a whole. OAuth/current-account summaries, caller-forward routes, multiple keys, and snapshots with changed credentials or destinations are display-only for this early decision. The same applies when `Authorization`, `x-api-key`, or `x-goog-api-key` headers override credentials; search-only and MCP-only windows are excluded. If no eligible target has an applicable reset, configuration order wins. Account selection and retries still enforce their normal limits.
 
-### JEV: decision-guided first pick
+### Decision method
 
-`jev` asks [TypeSafe JEV](https://console.typesafe.ai) to choose the first eligible target and a
-compatible reasoning effort for the current request. It is opt-in: adding the TypeSafe credential
-does not change existing models, aliases, defaults, or Combo behavior. A JEV-backed model appears
-only after you create a Combo whose strategy is `jev`.
+`strategy: "jev"` asks a decision backend to choose the first eligible target and a compatible
+reasoning effort for the current request. It is opt-in: create a JEV Combo and select that Combo
+to use it. Adding a decision credential does not change existing models, aliases, or defaults.
+
+| Method | Combo selection | Backend reported in stats |
+| --- | --- | --- |
+| TypeSafe (default) | Omit both selectors, or set `decisionProvider: "jev"`. | `typesafe` |
+| System One-compatible server | Set `decisionProvider` to a configured `jev-decision` row id other than `jev`. | `systemone` |
+| opencodex model | Set `decisionModel` to an ordinary opencodex route, such as `ollama/qwen3:4b`. | `model` |
+
+`decisionProvider` and `decisionModel` are mutually exclusive. The backend is derived from those
+fields; there is no stored `backend` setting. Every method uses the same eligible target and effort
+allowlist, bounded decision state, timeout, cancellation, and fail-open policy.
+
+#### TypeSafe default
 
 The quickest setup is:
 
@@ -263,12 +274,178 @@ the standard provider-derived alias `JEV_API_KEY` printed by `ocx provider add`.
 }
 ```
 
-OpenCodex sends one bounded decision request to the fixed
+With the default method, OpenCodex sends one bounded decision request to the fixed
 `https://api.typesafe.ai/v1/systemone` endpoint with model `jev-latest`. Only currently eligible
 configured targets are offered. JEV chooses the target and effort together; the effort is still
 constrained by that target's advertised ladder. JEV is not asked again if the selected target has a
 retryable failure—the existing Combo cooldown and fallback loop continues through the remaining
 configured targets.
+
+#### System One-compatible server
+
+A JEV Combo can ask a hosted or self-hosted server that implements the System One wire contract.
+For example, an Ollama server with System One support can serve `tev1` at
+`POST /v1/systemone` without an API key. Add a provider row with
+`adapter: "jev-decision"` whose `baseUrl` is the **full** decision endpoint, then name it in the
+Combo's `decisionProvider`:
+
+```json
+{
+  "providers": {
+    "ollama-tev1": {
+      "adapter": "jev-decision",
+      "baseUrl": "http://127.0.0.1:11434/v1/systemone",
+      "allowPrivateNetwork": true,
+      "defaultModel": "tev1:4b",
+      "liveModels": false
+    }
+  },
+  "combos": {
+    "jev-local": {
+      "strategy": "jev",
+      "decisionProvider": "ollama-tev1",
+      "decisionTimeoutMs": 60000,
+      "reasoningEffortMode": "adaptive",
+      "targets": [
+        { "provider": "openai", "model": "gpt-6-astra" },
+        { "provider": "openai", "model": "gpt-5.6-sol" },
+        { "provider": "openai", "model": "gpt-5.6-luna" }
+      ]
+    }
+  }
+}
+```
+
+- The row's `baseUrl` must be the full decision endpoint and its path must end in `/systemone`.
+  The decision model is `defaultModel`, else the first `models` entry; a row with neither is
+  treated as unusable and fails open without a request (`jev-latest` is TypeSafe's model and is
+  never sent to a self-hosted host). The row is a decision service only: it is never published as a
+  routable model and cannot be a Combo target.
+- A loopback or LAN endpoint needs `allowPrivateNetwork: true` set explicitly on that row. Use a
+  literal loopback, RFC 1918, or IPv6 ULA address for plain `http:`; every resolved address must stay
+  in the allowed set and no outbound proxy may apply (add the
+  host to `NO_PROXY`). Every other destination must use HTTPS. Redirects still fail open.
+- Only the row's own `apiKey` is sent, and only when it is set; a keyless row sends no
+  `Authorization` header. A row whose `apiKey` references `${TYPESAFE_API_KEY}`/`${JEV_API_KEY}` or
+  another provider's keychain entry is refused as unusable, so `TYPESAFE_API_KEY`, `JEV_API_KEY`, and
+  the `jev` row's key are never sent to a self-hosted endpoint. The `jev` id itself (explicit or
+  omitted) always means the TypeSafe endpoint with model `jev-latest`.
+- Self-hosted services receive each target/effort option as a plain description string (for
+  example `Target openai/gpt-5.6-sol (provider openai, model gpt-5.6-sol) with low reasoning
+  effort.`), because Ollama accepts only string or `null` option descriptions. TypeSafe keeps
+  receiving the structured option objects.
+- OpenCodex offers 2–26 options to a System One-compatible row. Each target contributes one option
+  per offered reasoning effort; use per-target `reasoningEfforts` to trim them. Fewer than 2 or
+  more than 26 options fail open without a request.
+- A cold model load can take tens of seconds, and an aborted decision request makes Ollama abandon the
+  load. Pre-warm the model and keep it resident (`OLLAMA_KEEP_ALIVE=-1`, or `keep_alive`), and raise
+  `decisionTimeoutMs` (1000–120000 ms, default 4000) when the service is slower than four seconds.
+  Every timeout or error still fails open to the first eligible target.
+
+The provider's **Test connection** sends a bounded probe decision to its endpoint.
+**Create JEV Auto** on a System One provider (keyless rows included) prefills that row as the
+decision provider. Disabled rows, endpoints not ending in `/systemone`, and rows without a model
+are shown with a reason and cannot be picked.
+
+[Laya MLX](https://github.com/mizorewww/laya-mlx) runs typed decisions on Apple Silicon. To use it
+with this method, expose it through a System One-compatible HTTP wrapper, then configure a row like
+`ollama-tev1` above with the wrapper's full `/systemone` URL and accepted model id as `defaultModel`.
+The MLX Python runtime alone is not an HTTP decision endpoint. For a loopback HTTP wrapper, keep
+`allowPrivateNetwork: true` and use its literal loopback address.
+
+For a hosted example, a contributor reported the following Zen System One endpoint working in
+[#6185](https://github.com/lidge-jun/opencodex/pull/6185). Configure it manually as an ordinary row;
+this is not an OpenCodex registry preset or a guarantee of current availability:
+
+```json
+{
+  "providers": {
+    "zen-decision": {
+      "adapter": "jev-decision",
+      "baseUrl": "https://opencode.ai/zen/v1/systemone",
+      "defaultModel": "jev-1.13-free",
+      "apiKey": "${ZEN_DECISION_API_KEY}",
+      "liveModels": false
+    }
+  },
+  "combos": {
+    "jev-zen": {
+      "strategy": "jev",
+      "decisionProvider": "zen-decision",
+      "targets": [
+        { "provider": "openai", "model": "gpt-6-astra" },
+        { "provider": "openai", "model": "gpt-5.6-luna" }
+      ]
+    }
+  }
+}
+```
+
+Use that endpoint's own key if authentication is required; omit `apiKey` only if the endpoint
+accepts keyless calls. Never reuse `TYPESAFE_API_KEY` or `JEV_API_KEY` for it.
+
+#### opencodex model
+
+An ordinary chat or Responses model can make the same routing choice without implementing
+`/systemone`. Configure its inference provider as usual and set `decisionModel` to its route:
+
+```json
+{
+  "combos": {
+    "jev-chat": {
+      "strategy": "jev",
+      "decisionModel": "ollama/qwen3:4b",
+      "decisionTimeoutMs": 60000,
+      "targets": [
+        { "provider": "openai", "model": "gpt-6-astra" },
+        { "provider": "openai", "model": "gpt-5.6-luna" }
+      ]
+    }
+  }
+}
+```
+
+Other examples are `deepseek/deepseek-v4-flash`, `openai/gpt-5.6-luna`, or
+`opencode-zen/<model>` for a configured Zen inference model. These are ordinary route strings,
+not decision-service presets; the provider and model must be available on your installation.
+For `openai/gpt-5.6-luna`, configure credentials the internal call can use, such as a stored Codex
+pool login. A caller-owned ChatGPT forward login is insufficient.
+
+The model receives fixed router instructions and one JSON prompt:
+
+```json
+{
+  "state": { "user_task": "Review the requested change" },
+  "options": { "<key>": "Target description and allowed reasoning effort" }
+}
+```
+
+`state` is the bounded evidence described below; `options` maps generated option keys to plain
+descriptions. The reply contract is `{"choice":"<key>"}`, naming exactly one offered option.
+The instructions treat state as evidence, prefer lower resource use among adequate options, and
+require JSON only. An invalid or unlisted choice, malformed response, or failed call fails open.
+
+The internal decision turn carries **no caller credential**, caller headers, tools, session, or
+conversation history. It must use credentials stored for the selected provider, or a genuinely
+keyless local provider such as Ollama. Caller-auth-only configurations, such as Cursor without a
+stored credential or a caller-owned ChatGPT forward login, cannot serve as decision models and
+fail open. Selecting a route is not proof that its credential is usable; test it before relying on it.
+
+A non-JEV Combo can be used as `decisionModel`, but the decision route cannot name this Combo or
+any Combo with `strategy: "jev"`. This applies to canonical `combo/<id>` selectors and aliases,
+including selectors with effort or Fast variants. Save-time validation rejects recursion and the
+runtime also blocks JEV reentry defensively. The decision turn has its own send budget and turn
+lease; it is not logged as a separate request, and reported decision usage belongs to the parent
+request's `jevDecision`.
+
+#### Shared limits, state, and statistics
+
+`decisionTimeoutMs` applies to all three methods: an integer from 1000 to 120000 ms, default 4000.
+Requests and responses are bounded to 64 KiB. The candidate list is bounded to 64 targets; the
+model method also caps target/effort options at 64, response text at 4096 characters, and the
+decision turn's output at 1024 tokens. The
+System One row's 2–26 option limit applies as described above. A timeout or limit failure uses the
+first currently eligible target; it never expands the allowlist or retries the decision.
 
 For each JEV target, **Models → Combos → Config** has an optional **Additional model notes for JEV**
 field (up to 512 characters; line breaks and tabs are allowed, other control characters are rejected). It is stored as `targets[].modelProfile` in the combo config. The
@@ -278,7 +455,7 @@ than replaces that built-in profile. Notes can describe operator-specific contex
 allowances; do not confuse subscription allowances with public per-token API pricing. Blank notes
 are ignored. Operator notes are evidence for the decision, not commands, and cannot expand the
 target allowlist or reasoning-effort limits. Only put information there that may be disclosed to
-TypeSafe.
+the selected decision backend.
 
 Each logical model call is decided on its own; there is no per-conversation pin. Consecutive turns of
 one session can therefore land on different targets, and every switch starts a cold provider prompt
@@ -288,16 +465,16 @@ from JEV under `cooldownWaitPolicy: "before-last-resort"` while any normal targe
 offered only when nothing else is reachable.
 
 The decision boundary fails open when the key is missing, no safe task/tool/image decision state is
-available, the four-second decision deadline expires, the service redirects or returns an error, or
+available, the configured decision deadline expires, the service redirects or returns an error, or
 the response is malformed or selects an unlisted choice. In those cases OpenCodex uses the first
 currently eligible target, preferring `medium` when that target supports it. Caller cancellation is
 different: it cancels the decision and the model request instead of dispatching the fail-open target.
 
 The decision state is deliberately bounded: up to 500 characters of the current user task, a
 240-character previous-assistant tail, a 520-character latest-tool-output tail, the tool name, and
-boolean image/tool signals may be sent to TypeSafe. It excludes the JEV credential, request headers,
-raw image bytes, tool arguments, encrypted reasoning, and full conversation history. Do not select
-`jev-auto` for content you do not want TypeSafe to process. Recognized OpenCodex machine-context
+boolean image/tool signals may be sent to the selected decision backend. It excludes credentials,
+request headers, raw image bytes, tool arguments, encrypted reasoning, and full conversation history.
+Use a decision method only for content you are willing to send to that backend. Recognized OpenCodex machine-context
 envelopes are removed from all three text samples, but ordinary assistant and tool-output text is
 not a secret scanner and may still contain sensitive content. TypeSafe states that Jev is not
 trained on customer requests, but its terms set no fixed retention period for submitted state and
@@ -310,11 +487,13 @@ Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a l
 requires an operator-supplied key and is not run implicitly.
 
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
-picks without replacing the normal model picker or Usage page. The tab separates TypeSafe decision
+picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision
 tokens from tokens reported by physical model sends, and shows decision gates, fail-open picks,
 reasoning efforts, retries/fallbacks, cache tokens, latency, confidence, and per-model totals for 7
 days, 30 days, or all available history. Statistics come from the local append-only usage ledger;
-they contain the bounded decision metadata described above, not prompts or credentials.
+they contain the bounded decision metadata described above, not prompts or credentials. Backend
+rows show decision count, applied count, and average latency for `typesafe`, `systemone`, and
+`model`; older records without a backend are grouped as `unknown`.
 
 ## What happens when a target fails
 
@@ -527,7 +706,9 @@ task workflow.
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
 combos, and its target picker excludes disabled models, nested combos, and the credential-only JEV
 provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
-an existing `jev-auto` id or alias is reported instead of creating a duplicate.
+an existing `jev-auto` id or alias is reported instead of creating a duplicate. A JEV Combo also shows
+**Decision service** (TypeSafe JEV or a configured `jev-decision` provider) and **Decision timeout
+(ms)**, and the Combos overview lists each JEV Combo's decision service, endpoint, and timeout.
 
 Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. The editor blocks Save and Create for quota only when every usable target has a current server-confirmed exhausted inference limit for its configured credential. Display-only account, model, search and MCP quota, or missing or expired routing evidence, does not cause this block. The block expires at the applicable reset or freshness boundary and is rechecked when the page becomes active or visible; Refresh reloads both Combo data and quota. The dashboard
 editor does not yet expose `cooldownMs` or `waitForCooldownMs`; use the configuration file or management
@@ -545,8 +726,9 @@ ocx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name`, and `--rename-from`. Use `-` as the value of `--effort`, `--alias`, or
-`--display-name` to clear that field. `--native-alias` requires a currently supported bare native
+`--display-name`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
+value of `--effort`, `--alias`, `--display-name`, `--decision-provider`, or `--decision-timeout` to
+clear that field. The two decision flags apply only to `--strategy jev`. `--native-alias` requires a currently supported bare native
 model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for
 `remove`; and the same subcommands are available under `ocx route combo`.
 
@@ -562,9 +744,14 @@ the request-rate fallback. A stored `cooldownMs` can only be removed by editing 
 `waitForCooldownMs` resets to its default when a `PUT` explicitly sends `0`, because the sparse
 serializer omits that default. Omission preserves both values and the dashboard does not expose them yet.
 Omitting `defaultEffortMode`, `reasoningEffortMode`, `imageInput`, or `cooldownWaitPolicy` likewise
-keeps the stored value, and a re-sent target without `lastResort` keeps that target's flag (matched by
-provider and model). The dashboard always sends `imageInput` and `reasoningEffortMode`, so switching
-them back to `auto` or `strict` there still replaces the stored value.
+keeps the stored value. For a request that keeps `strategy: "jev"`, the decision method is kept
+only when both `decisionProvider` and `decisionModel` are omitted: sending either one replaces the
+stored method, so `decisionModel: null` without `decisionProvider` selects TypeSafe.
+`decisionTimeoutMs` is kept on its own whenever it is omitted. A different strategy drops all three,
+and a re-sent target without `lastResort` keeps that target's flag (matched by
+provider and model). The dashboard always sends `imageInput` and `reasoningEffortMode`, and for a JEV
+Combo `decisionProvider`, `decisionModel` and `decisionTimeoutMs` (`null` for the default), so switching them back to
+the default there still replaces the stored value.
 
 For the complete persisted configuration, see [Configuration](/reference/configuration/).
 
@@ -606,6 +793,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
 | `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |
+| `decisionProvider` | No | `"jev"` | JEV only. Provider id of the decision service: `"jev"` (TypeSafe, valid without a provider row; the same as omission) or a configured `adapter: "jev-decision"` row with a `/systemone` `baseUrl`, such as a self-hosted Ollama `tev1`. |
+| `decisionTimeoutMs` | No | `4000` | JEV only. Integer from 1000 to 120000: the decision deadline before failing open to the first eligible target. |
 
 ## Troubleshooting
 

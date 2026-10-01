@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { OcxProviderConfig } from "../types";
 import {
   assessUrlDestination,
@@ -30,6 +31,73 @@ export interface ProviderOutboundDependencies {
   isCanonicalUrl?: (name: string, url: string) => boolean;
   /** Recheck caller-owned credential authority after DNS and immediately before transport. */
   beforeSend?: () => boolean;
+  /**
+   * Caller opt-in for a cleartext `http:` POST to a self-hosted service. Honoured only when the
+   * URL host is exactly `localhost` or an address literal in the narrow local allowlist
+   * (`localCleartextAddressAllowed`) AND the provider row itself sets `allowPrivateNetwork: true`
+   * (a registry default does not count). Every resolved answer must stay inside the same
+   * allowlist, and a proxied route is refused, so the cleartext body never leaves the host or
+   * LAN. Every other destination keeps the HTTPS-only POST gate. Defaults to refusing.
+   */
+  allowLocalCleartextPost?: boolean;
+}
+
+function ipv4Octets(address: string): number[] | null {
+  return isIP(address) === 4 ? address.split(".").map(Number) : null;
+}
+
+function ipv6Hextets(address: string): number[] | null {
+  if (isIP(address) !== 6 || address.includes("%")) return null;
+  let text = address.toLowerCase();
+  const lastColon = text.lastIndexOf(":");
+  const embedded = ipv4Octets(text.slice(lastColon + 1));
+  if (text.slice(lastColon + 1).includes(".")) {
+    if (!embedded) return null;
+    const [a, b, c, d] = embedded as [number, number, number, number];
+    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head = "", tail] = text.split("::");
+  const headParts = head ? head.split(":") : [];
+  const tailParts = tail ? tail.split(":") : [];
+  const fill = tail === undefined ? 0 : 8 - headParts.length - tailParts.length;
+  const parts = [...headParts, ...Array<string>(Math.max(0, fill)).fill("0"), ...tailParts];
+  return parts.length === 8 ? parts.map(part => Number.parseInt(part, 16)) : null;
+}
+
+/**
+ * The only addresses a cleartext provider POST may reach: IPv4 loopback 127/8, IPv4-mapped
+ * loopback ::ffff:127.0.0.0/104, ::1, RFC 1918 (10/8, 172.16/12, 192.168/16), and IPv6 ULA
+ * fc00::/7. Deliberately narrower than the private-network classification: CGNAT 100.64/10,
+ * NAT64 64:ff9b:1::/48, benchmark, documentation, multicast/broadcast, link-local, metadata and
+ * unspecified addresses never qualify.
+ */
+export function localCleartextAddressAllowed(address: string): boolean {
+  const v4 = ipv4Octets(address);
+  if (v4) {
+    const [a, b] = v4 as [number, number];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  const v6 = ipv6Hextets(address);
+  if (!v6) return false;
+  if (v6.slice(0, 7).every(part => part === 0) && v6[7] === 1) return true;
+  if (v6.slice(0, 5).every(part => part === 0) && v6[5] === 0xffff && (v6[6]! >> 8) === 127) return true;
+  return (v6[0]! & 0xfe00) === 0xfc00;
+}
+
+function unbracketedHostname(url: URL): string {
+  const host = url.hostname;
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+function localCleartextPostAllowed(
+  provider: ProviderOutboundConfig,
+  url: URL,
+  dependencies: ProviderOutboundDependencies,
+): boolean {
+  if (dependencies.allowLocalCleartextPost !== true || url.protocol !== "http:") return false;
+  if (provider.allowPrivateNetwork !== true) return false;
+  const host = unbracketedHostname(url);
+  return host === "localhost" || localCleartextAddressAllowed(host);
 }
 
 export class ProviderOutboundPolicyError extends Error {
@@ -167,14 +235,21 @@ async function providerOutboundRequest(
     if (dependencies.beforeSend?.() === false) throw new ProviderOutboundSendCancelledError("provider credential changed before send");
   };
   const postUrl = method === "POST" ? new URL(url) : undefined;
-  if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
+  if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:"
+    && !localCleartextPostAllowed(provider, postUrl, dependencies)) {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
   }
+  // Only reachable after the narrow opt-in above admitted it.
+  const localCleartextPost = postUrl?.protocol === "http:";
   // A provider entry keeps unknown configuration keys, so `fetch` can arrive as a value the
   // operator wrote into the file rather than an executor a caller attached. Calling that would
   // throw inside discovery and fail the provider for a reason nothing in its configuration
   // explains; the built-in transport is what a configured value means.
   if (typeof provider.fetch === "function") {
+    // An executor resolves names itself, so a cleartext POST through one must name an address.
+    if (localCleartextPost && !isIP(unbracketedHostname(postUrl!))) {
+      throw new ProviderOutboundPolicyError("a cleartext provider POST through a caller-supplied executor must use an address literal");
+    }
     // A caller-owned executor decides its own transport, so a provider egress route cannot be
     // applied to it. Refusing is the only honest answer: running the executor anyway would send
     // the request by whatever route that executor picked while the configuration says otherwise.
@@ -231,6 +306,13 @@ async function providerOutboundRequest(
   const proxyApplies = egress.kind === "inherit"
     ? globalProxy !== null && !noProxyMatches(parsed)
     : providerProxy !== null;
+  // A cleartext body must go straight to the local peer: a proxy (global or provider route, and
+  // the DNS-failure proxy degradation below, which needs one) would carry it off-host unencrypted.
+  if (localCleartextPost && proxyApplies) {
+    throw new ProviderOutboundPolicyError(
+      `a cleartext provider POST cannot use an outbound proxy; add ${normalizeProxyHostname(parsed.hostname)} to NO_PROXY`,
+    );
+  }
   const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
   // The IPv6 fake-IP gate keeps its stricter documented condition — a
   // scheme-matched variable or a SOCKS5 ALL_PROXY, never a non-SOCKS
@@ -305,6 +387,10 @@ async function providerOutboundRequest(
     throw new Error(
       `provider URL resolves to a private-network destination; add ${hostname} to NO_PROXY before using allowPrivateNetwork with an outbound proxy`,
     );
+  }
+  if (localCleartextPost
+    && !resolved.addresses.every(answer => localCleartextAddressAllowed(answer.address))) {
+    throw new ProviderOutboundPolicyError("a cleartext provider POST resolved outside the local address allowlist");
   }
   const requestOptions = {
     headers: init.headers,

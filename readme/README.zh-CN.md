@@ -348,6 +348,10 @@ JEV 只用于 `jev-auto`，且每次逻辑模型调用只咨询一次。缺少�
 （fail-open）到当前第一个可用目标；调用方取消仍会取消请求。自动化测试使用模拟的 TypeSafe 端点，
 不验证真实的 JEV 账户。
 
+JEV Combo 也可以改用自托管的决策模型，例如无需密钥的 Ollama `tev1`：添加一个 `baseUrl` 为完整
+`/v1/systemone` 端点的 `jev-decision` 提供商，并将其设为 Combo 的 `decisionProvider`。TypeSafe 凭据
+绝不会发送到该端点。详见[自托管决策模型](https://opencodex.me/zh-cn/guides/combos/)。
+
 ## 提供商与适配器
 
 <!-- sponsors:main-first-mention -->

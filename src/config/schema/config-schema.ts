@@ -17,6 +17,7 @@ import {
   remoteGuiConfigSchema,
   runtimeRoleSchema,
   spendSchema,
+  chatgptDesktopSchema,
   skillsConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
@@ -53,10 +54,13 @@ import {
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
 import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
-import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
+// The schema boundary uses a string-only stand-in for the ingress grammar: importing the server
+// parser here would cycle back through config loading and run Cursor detection during validation.
+import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
 import { redactSecretString } from "../../lib/redact";
 import { openRouterRoutingConfigError } from "../../providers/openrouter-routing";
 import { vercelGatewayRoutingConfigError } from "../../providers/vercel-gateway-routing";
@@ -69,6 +73,7 @@ import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/inte
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
 export const configSchema = z.object({
+  chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
   port: z.number().int().min(0).max(65535).default(10100),
@@ -476,6 +481,14 @@ export const configSchema = z.object({
         });
       }
     }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
+      });
+    }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
       ctx.addIssue({
@@ -726,6 +739,7 @@ export const configSchema = z.object({
         for (const issue of comboConfigIssues(id, raw, config.providers, {
           combos: combos as Record<string, import("../../types").OcxComboConfig>,
           excludeComboId: id,
+          normalizeDecisionModel: model => lexicalDecisionModelBase(model, config.cursorEffortRows === true),
         })) {
           ctx.addIssue({
             code: "custom",
