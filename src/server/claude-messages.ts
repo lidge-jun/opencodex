@@ -39,6 +39,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { resolveClientRetryAfter } from "../lib/retry-after";
+import { anthropicRateLimitHeaders } from "./anthropic-rate-limit-headers";
 import {
   anthropicErrorBody,
   anthropicErrorResponse,
@@ -626,11 +627,13 @@ async function anthropicNativePassthrough(
   const upstream = result.upstream;
 
   const contentType = upstream.headers.get("content-type") ?? "application/json";
+  const rateLimitHeaders = anthropicRateLimitHeaders(upstream.headers);
   const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   if (upstream.ok && contentType.includes("text/event-stream") && upstream.body) {
     return new Response(tapAnthropicSseForLog(upstream.body, logCtx, finalize, bodyGuard), {
       status: upstream.status,
       headers: {
+        ...rateLimitHeaders,
         "Content-Type": contentType,
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
@@ -675,7 +678,7 @@ async function anthropicNativePassthrough(
   const retryAfter = upstream.headers.get("retry-after");
   return new Response(text, {
     status: upstream.status,
-    headers: { "Content-Type": contentType, ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
+    headers: { ...rateLimitHeaders, "Content-Type": contentType, ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
   });
 }
 

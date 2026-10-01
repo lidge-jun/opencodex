@@ -1157,6 +1157,33 @@ multi-user host. Leave local exec off unless every data-plane caller is trusted 
 accept bypassing Codex approval and sandbox semantics.
 :::
 
+## Zed provider (`adapter: "zed"`)
+
+The Zed Hosted AI bridge is experimental and login-only. Run `ocx login zed` before using it; the
+login stores the Zed account identity with its native-app access token in the normal OAuth store.
+
+```json
+{
+  "providers": {
+    "zed": {
+      "adapter": "zed",
+      "baseUrl": "https://cloud.zed.dev",
+      "authMode": "oauth",
+      "defaultModel": "auto"
+    }
+  }
+}
+```
+
+The bridge obtains a short-lived hosted-inference token and sends `POST /completions`. The live
+`/models` roster is used for account-specific picker metadata only: arbitrary model ids remain
+forwardable, with the backend family inferred from the live provider field or model name.
+
+:::caution[Unofficial — use at your own risk]
+Zed does not provide or endorse this integration, and it may be outside Zed's terms of service.
+Zed may limit or suspend an account that uses it. The provider is never enabled by default.
+:::
+
 ## OpenRouter provider routing
 
 OpenRouter can serve one model through several inference providers. `openRouterRouting` keeps

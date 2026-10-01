@@ -155,6 +155,20 @@ directory entry that is a link -- including one whose target does not exist -- i
 of followed. A separate process may use a separate directory. SQLite crash release permits the
 next owner without stale-PID or TTL reclamation.
 
+Every file check admits a ledger file only when it is a regular file, not a link, with exactly
+one directory entry, owned by the process user. A refusal raises `SpendLedgerFileRefusedError`, a
+`SPEND_LEDGER_OWNER_UNAVAILABLE` owner error. The error carries the file role (`journal`,
+`journal-compaction`, `salt`) and the failed condition (`not-regular-file`, `symbolic-link`,
+`extra-hard-link`, `foreign-owner`, `invalid-salt`), and never the path, salt, alias or request
+content (#6314). Before this, one sentence covered five conditions and two files. A macOS sync
+daemon briefly holding a second link to a journal inside a synced folder could then only be
+diagnosed from an instrumented build. The guard is unchanged.
+`src/lib/synced-state-location.ts` is the advisory half. `acquireSpendLedgerServerLifecycle`
+warns once at startup when the state directory resolves inside iCloud Drive, a File Provider
+folder, or Desktop/Documents with iCloud Desktop & Documents sync detected, and it refuses
+nothing on that basis. `tests/lib/spend-ledger-file-journal.test.ts` pins the refusal shape, and
+`tests/lib/synced-state-location.test.ts` pins the classification.
+
 The journal survives an ordinary process restart once its writes reached the filesystem. It does
 not claim host power-loss durability: the append path does not fsync each record, so power loss can
 drop recently acknowledged filesystem writes. A torn final line remains the only replay corruption

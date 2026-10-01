@@ -376,7 +376,7 @@ destination receives unchanged whenever a caller sends one itself.
 ## Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in
-`src/server/responses/core.ts`:
+`src/server/responses/core.ts`; both apply the client-only [hosted-image projection](../data-planes/images.md#hosted-responses-image-display) after continuation-cache observers:
 
 - **Default outside Windows: tee + background inspection.** `upstreamResponse.body.tee()` sends
   branch[0] through a terminal-aware client relay while branch[1] is
@@ -503,7 +503,7 @@ No pool timer or shutdown registration exists before eligible traffic activates 
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
 the same byte-bounded, discard-and-resynchronize frame policy and ensures the
-request-log, first-output, and terminal observers share one payload parse.
+request-log, first-output, and terminal observers share one payload parse. First-output timing recognizes nonempty text, reasoning, function-argument, and custom-tool-input deltas; empty deltas, tool scaffolding, control/echo frames, and terminal snapshots do not start it.
 The inspector records a structured `response.failed` status before invoking the
 terminal observer. Native Responses, Chat Completions, Claude Messages, and WebSocket
 request logs must therefore finalize through the context-aware terminal mapper; recognized

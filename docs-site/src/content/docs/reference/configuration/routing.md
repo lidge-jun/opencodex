@@ -86,6 +86,11 @@ a caller `Authorization` header addressed to the source route is stripped, as fo
 A disabled destination, a forward destination, or a key/OAuth destination without usable stored
 credentials keeps the source route's legacy behavior. Under a routing policy, every redirect target
 must itself be a declared eligible candidate, even when it keeps the same provider.
+The initial evaluation's eligible provider/model set remains fixed through fallback and subagent
+recovery. Retries use concrete candidates, so a combo alias cannot replace a candidate's destination.
+Different candidates that resolve to a destination already attempted do not send the turn there again.
+An eligible virtual model keeps its normal wire-model mapping without adding that wire id to the
+profile's allowed candidates. If a local replacement is skipped, fallback retains the last upstream failure.
 Malformed redirect maps are ignored with a warning on load and rejected on configuration writes.
 Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
