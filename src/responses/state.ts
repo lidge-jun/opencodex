@@ -19,7 +19,7 @@ import {
   writeResponseSpillDurably,
 } from "./spill-store";
 import { collectReferencedSpillFileNames, snapshotReferencedSpillFileNames } from "./state/spill-inspect";
-import { selectSnapshotEntries } from "./state/snapshot-select";
+import { selectSnapshotEntries, snapshotPayload } from "./state/snapshot-select";
 import { clientCarriedPrefixLength, providerIssuedIdentity } from "./state/replay-fingerprint";
 export type { ResponseStateTempRecoveryResult, ResponseStateTempRecoveryOptions } from "./state/temp-recovery";
 export type { ResponseSpillDirInspection } from "./spill-store";
@@ -705,8 +705,7 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
-      const entries = selectSnapshotEntries(states, snapshotTotalBytes(), SNAPSHOT_ENTRY_MAX_BYTES);
-      const payload = JSON.stringify({ version: 2, states: entries });
+      const payload = snapshotPayload(selectSnapshotEntries(states, snapshotTotalBytes(), SNAPSHOT_ENTRY_MAX_BYTES));
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
       // A mutation does not always change what gets persisted: entries past the
