@@ -395,6 +395,8 @@ function updateFramed(hash: ReturnType<typeof createHash>, value: string): void 
 
 export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
   const hash = createHash("sha256").update("ocx:cursor:sys:");
+  updateFramed(hash, "text-format");
+  updateFramed(hash, JSON.stringify(parsed.options.textFormat ?? null));
   for (const line of parsed.context.systemPrompt ?? []) updateFramed(hash, line);
   for (const message of parsed.context.messages) {
     if (message.role !== "developer") continue;
@@ -517,6 +519,7 @@ export function createCursorRequest(
     options.liveRosterScope,
   );
   const request: CursorRunRequest = {
+    ...(parsed.options.textFormat ? { textFormat: parsed.options.textFormat } : {}),
     modelId: model.modelId,
     ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),

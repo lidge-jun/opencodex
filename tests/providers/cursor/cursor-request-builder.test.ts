@@ -1292,6 +1292,34 @@ describe("Cursor request builder", () => {
     clearCursorCheckpointsForTests();
   });
 
+  test("a changed final-output schema cannot reuse a prior Cursor checkpoint", () => {
+    clearCursorCheckpointsForTests();
+    try {
+      const parsed = { ...base, _cursorIdentityScope: "format-account", context: {
+        messages: [{ role: "user" as const, content: "assess", timestamp: 1 }],
+      }, options: { textFormat: { type: "json_object" as const } } };
+      const ref = commitCursorCheckpoint({
+        conversationId: "format-conversation", identityScope: "format-account", modelId: "default",
+        checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, { pendingToolCalls: ["format-fixture"] })),
+        coveredMessageCount: 1, prefixDigest: cursorCoveredPrefixDigest(parsed, 1),
+        systemDigest: cursorInstructionDigest(parsed),
+      });
+      const continuation = { ...parsed, _cursorConversationId: "format-conversation",
+        _providerContinuation: { cursor: { conversationId: "format-conversation", checkpointUsable: true, checkpointRef: ref } },
+      };
+      expect(createCursorRequest(continuation).continuationMode).toBe("checkpoint");
+      const changed = createCursorRequest({ ...continuation, options: { textFormat: {
+        type: "json_schema", schema: { type: "object", required: ["outcome"] },
+      } } });
+      expect(changed.continuationMode).toBe("full-replay");
+      expect(changed.checkpointInvalidationReason).toBe("lineage_mismatch");
+      const formatAsSystemText = createCursorRequest({ ...continuation, options: {},
+        context: { ...parsed.context, systemPrompt: [JSON.stringify(parsed.options.textFormat)] },
+      });
+      expect(formatAsSystemText.continuationMode).toBe("full-replay");
+    } finally { clearCursorCheckpointsForTests(); }
+  });
+
   test("rejects a divergent branch and a changed system prompt", () => {
     clearCursorCheckpointsForTests();
     const covered = [
