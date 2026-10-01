@@ -326,6 +326,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Alias of ocx models.",
   },
   {
+    name: "advisor",
+    usage: "ocx advisor <status|on|off|consent|set> ...",
+    summary: "Inspect and configure the advisor sidecar (expert consultation for routed workers).",
+    details: [
+      "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
+      "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
+      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it and stops task-context transfer.",
+      "ocx advisor set updates --model, --effort, --policy and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
+      "policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent.",
+    ],
+  },
+  {
     name: "companion",
     usage: "ocx companion <show|set|reset> ...",
     summary: "Inspect and configure menu-bar and widget companion usage settings.",

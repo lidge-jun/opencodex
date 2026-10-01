@@ -697,7 +697,7 @@ export function createAdapterContinuations(
 
   const fetchGuardedEmptyCompletionRetry = (): AsyncIterable<AdapterEvent> => {
     const retryEvents = fetchTerminalGuardContinuation(parsed, "empty-completion", true);
-    return terminalGuardEnabled
+    const terminalGuardedRetry = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
           firstEvents: retryEvents,
@@ -706,6 +706,13 @@ export function createAdapterContinuations(
           continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
         })
       : retryEvents;
+    return parsed._advisorGuard
+      ? parsed._advisorGuard({
+          parsed,
+          firstEvents: terminalGuardedRetry,
+          continuation: fetchTerminalGuardContinuation,
+        })
+      : terminalGuardedRetry;
   };
 
   return {

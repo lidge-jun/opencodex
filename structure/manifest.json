@@ -151,6 +151,16 @@
       ]
     },
     {
+      "path": "advisor.md",
+      "tier": 2,
+      "title": "Advisor Sidecar",
+      "scope": "The OpenCodex-owned expert consultation sidecar: synthetic advisor tool, preflight policy, loopback consultation through the routing authority, and the optional-subsystem seam.",
+      "documents": [
+        "src/advisor/",
+        "src/server/responses/advisor-slot.ts"
+      ]
+    },
+    {
       "path": "transports/byte-accounting.md",
       "tier": 3,
       "title": "Byte Accounting",

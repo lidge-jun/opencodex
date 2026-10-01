@@ -6,6 +6,7 @@ import {
 } from "../../companion/settings";
 import { jsonResponse } from "../auth-cors";
 import { openUrl } from "../../lib/open-url";
+import { handleAdvisorRoutes } from "./advisor-routes";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 
@@ -27,6 +28,12 @@ function response(): Response {
 }
 
 export async function handleCompanionRoutes(ctx: ManagementContext): Promise<Response | null> {
+  // Advisor is the previous slot in the management chain. The call stays in this
+  // already-wired handler so registering it does not edit management-api.ts,
+  // which is a sponsored surface. Advisor paths do not overlap companion paths;
+  // a non-match returns null and the companion handlers below run as before.
+  const advisorResponse = await handleAdvisorRoutes(ctx);
+  if (advisorResponse) return advisorResponse;
   if (ctx.url.pathname === "/api/companion/open-in-browser" && ctx.req.method === "POST") {
     let body: unknown;
     try {

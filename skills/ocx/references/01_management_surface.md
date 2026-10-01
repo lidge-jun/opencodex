@@ -681,6 +681,26 @@ JSON mode: `payload`.
 - `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
 - Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
 
+### `ocx advisor`
+
+Inspect and configure the advisor sidecar (expert consultation for routed workers).
+
+| Method | Route |
+|---|---|
+| GET | `/api/advisor/settings` |
+| PUT | `/api/advisor/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit advisor settings as JSON. |
+
+JSON mode: `payload`.
+
+- `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, or timeout.
+- `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent and stops task-context transfer.
+- The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
+- `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
+
 ### `ocx companion`
 
 Inspect and configure menu-bar and widget companion usage settings.
@@ -1207,6 +1227,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 67
-- of those, state-changing: 37
+- declared capabilities: 68
+- of those, state-changing: 38
 - head-resolved invocations: 2

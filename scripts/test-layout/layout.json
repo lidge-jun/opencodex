@@ -1866,6 +1866,15 @@
     "server-combo-cooldown-recording.test.ts": "server",
     "injection-routing-drift.test.ts": "codex-integration", "injection-routing-healer.test.ts": "codex-integration",
     "injection-routing-heal-apply.test.ts": "codex-integration", "cli-start-routing-heal-wiring.test.ts": "cli",
-    "cli-status-codex-routing-drift.test.ts": "cli"
+    "cli-status-codex-routing-drift.test.ts": "cli",
+    "advisor-settings.test.ts": "advisor",
+    "advisor-context.test.ts": "advisor",
+    "advisor-state.test.ts": "advisor",
+    "advisor-internal-authority.test.ts": "advisor",
+    "advisor-guard.test.ts": "advisor",
+    "advisor-consult.test.ts": "advisor",
+    "advisor-plan.test.ts": "advisor",
+    "advisor-responses-wiring.test.ts": "advisor",
+    "advisor-routes.test.ts": "server"
   }
 }

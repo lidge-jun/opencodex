@@ -31,7 +31,10 @@ Automatic activation retains its existing settings controls; dashboard quota que
 
 The companion settings contract in `src/companion/` persists menu-bar and widget display
 preferences, while `src/server/management/companion-routes.ts` exposes those settings and the
-usage timeline assembled by `src/usage/timeline.ts` to local clients. Query, filter-echo and
+usage timeline assembled by `src/usage/timeline.ts` to local clients. The same handler
+dispatches `src/server/management/advisor-routes.ts` first: advisor paths do not overlap
+companion paths, and the call stays on an already-wired handler so advisor registration does
+not edit `src/server/management-api.ts`. Query, filter-echo and
 missing-measurement behavior follows the [companion usage contract](companion.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
