@@ -526,6 +526,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],
+      ["/api/codex-agent-roles", "ocx agent roles"],
       // #2463: both read and write reach the CLI. `ocx alias list` reads /api/aliases,
       // `ocx alias defaults` writes /api/default-aliases, and the per-provider writes sit
       // under /api/providers/:name/alias, already covered by the /api/providers prefix.
@@ -942,6 +943,21 @@ describe("headless GUI parity CLI", () => {
     expect(runtime.requests.map(row => [row.path, row.body])).toEqual([
       ["/api/effort-caps", { effortCap: "high", subagentEffortCap: "medium" }],
       ["/api/subagent-models", { models: ["a/model", "b/model"] }],
+    ]);
+  });
+
+  test("agent roles reads and sets through the role-model routes, --json in any position", async () => {
+    const runtime = fakeRuntime(req => req.method === "GET" ? { lazycodex: { detected: true }, omoJsonc: { state: "absent" }, roles: [] } : undefined);
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["roles", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["roles", "set", "ocx explorer", "xai/grok-4.5", "--json"], runtime.deps)).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles", method: "GET", body: null },
+      { path: "/api/codex-agent-roles/ocx%20explorer", method: "PUT", body: { model: "xai/grok-4.5" } },
     ]);
   });
 

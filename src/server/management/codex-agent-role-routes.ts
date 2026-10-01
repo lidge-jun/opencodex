@@ -1,0 +1,84 @@
+/**
+ * Per-role model for omo (Codex / LazyCodex): `$CODEX_HOME/agents/<role>.toml` plus LazyCodex's
+ * `codex.agents.<role>.model` mirror in omo.jsonc. Both halves exist only when LazyCodex is
+ * detected; Pi-based and OpenCode-based omo are never read here.
+ *
+ * Loaded on demand from `src/server/management-api.ts`, like the quota-reset handler, so a
+ * dashboard request that never opens the omo tab loads neither writer.
+ */
+import { jsonResponse } from "../auth-cors";
+import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import type { ManagementContext } from "./context";
+
+const ROLE_PATH_PREFIX = "/api/codex-agent-roles/";
+
+export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promise<Response | null> {
+  const { req, url, config } = ctx;
+  const [{ getCodexHome }, roles, omo, { detectLazyCodex }] = await Promise.all([
+    import("../../codex/paths"),
+    import("../../codex/agent-role-models"),
+    import("../../clients/omo-role-models"),
+    import("../../clients/lazycodex"),
+  ]);
+
+  if (url.pathname === "/api/codex-agent-roles" && req.method === "GET") {
+    const codexHome = getCodexHome();
+    const lazycodex = detectLazyCodex(codexHome);
+    if (!lazycodex.detected) return jsonResponse({ lazycodex, omoJsonc: null, roles: [] }, 200, req, config);
+    const omoState = omo.readOmoRoleModels(omo.omoJsoncPath());
+    const omoModels = omoState.state === "present" ? omoState.models : {};
+    return jsonResponse({
+      lazycodex,
+      omoJsonc: { state: omoState.state },
+      roles: roles.listCodexAgentRoleModels(codexHome).map(entry => ({
+        ...entry,
+        omoJsoncModel: omoModels[entry.role] ?? null,
+      })),
+    }, 200, req, config);
+  }
+
+  if (!url.pathname.startsWith(ROLE_PATH_PREFIX) || req.method !== "PUT") return null;
+  const codexHome = getCodexHome();
+  if (!detectLazyCodex(codexHome).detected) {
+    return jsonResponse({
+      error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME",
+      code: "lazycodex_not_detected",
+    }, 409, req, config);
+  }
+  let role: string;
+  try {
+    role = decodeURIComponent(url.pathname.slice(ROLE_PATH_PREFIX.length));
+  } catch {
+    return jsonResponse({ error: "role must be URL-encoded", code: "invalid_role" }, 400, req, config);
+  }
+  let body: { model?: unknown };
+  try {
+    body = await readManagementJsonBody(req);
+  } catch (error) {
+    rethrowManagementBodyTooLarge(error);
+    return jsonResponse({ error: "invalid JSON body" }, 400, req, config);
+  }
+
+  let model: string;
+  let toml: { status: "written" | "unchanged" };
+  try {
+    model = roles.validateAgentRoleModel(body?.model);
+    toml = roles.writeCodexAgentRoleModel(role, model, codexHome);
+  } catch (error) {
+    if (error instanceof roles.AgentRoleModelError) {
+      const status = error.code === "unknown_role" ? 404 : error.code === "invalid_model" ? 400 : 409;
+      return jsonResponse({ error: error.message, code: error.code }, status, req, config);
+    }
+    // Filesystem and ownership errors carry absolute paths and UIDs; keep them out of the response.
+    return jsonResponse({ error: "could not write the role file", code: "write_failed" }, 500, req, config);
+  }
+
+  // The role TOML is what Codex obeys, so its write stands even when the omo mirror cannot follow.
+  let omoStatus: ReturnType<typeof omo.writeOmoRoleModel> | "write_failed";
+  try {
+    omoStatus = omo.writeOmoRoleModel(role, model, omo.omoJsoncPath());
+  } catch {
+    omoStatus = "write_failed";
+  }
+  return jsonResponse({ ok: true, role, model, toml, omoJsonc: { status: omoStatus } }, 200, req, config);
+}

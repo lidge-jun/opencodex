@@ -3,7 +3,7 @@ import { encodeBasicString } from "./encoding";
 import { TABLE_HEADER, ANY_DEV_INSTRUCTIONS, DEV_INSTRUCTIONS_KEY } from "./toml-read";
 
 /** Line editing, not re-serialization: the user's comments and layout survive. */
-function dominantEol(content: string): "\r\n" | "\n" {
+export function dominantEol(content: string): "\r\n" | "\n" {
   const crlf = (content.match(/\r\n/g) ?? []).length;
   if (crlf === 0) return "\n";
   const bareLf = (content.match(/\n/g) ?? []).length - crlf;

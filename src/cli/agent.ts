@@ -28,6 +28,7 @@ const USAGE = `Usage:
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
+  ocx agent roles [status|set <role> <model>] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
       [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>] [--json]
@@ -236,6 +237,50 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, lines);
 }
 
+interface CodexAgentRolesStatus {
+  lazycodex?: { detected?: boolean };
+  omoJsonc?: { state?: string } | null;
+  roles?: Array<{ role: string; model: string | null; omoJsoncModel: string | null }>;
+}
+
+async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const wantsJson = takeFlag(args, "--json");
+  const action = (args.shift() ?? "status").toLowerCase();
+  if (action === "status") {
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest<CodexAgentRolesStatus>("/api/codex-agent-roles", {}, deps);
+    if (result.lazycodex?.detected !== true) {
+      printData(result, wantsJson, ["omo (Codex / LazyCodex) is not installed in this CODEX_HOME; role models are managed only with it."]);
+      return;
+    }
+    const rows = result.roles ?? [];
+    printData(result, wantsJson, [
+      "omo (Codex / LazyCodex): detected",
+      ...(rows.length === 0 ? ["No Codex agent roles found."] : rows.map(row => `${row.role}: ${row.model ?? "(no model pin)"}`)),
+      `omo.jsonc: ${result.omoJsonc?.state ?? "unknown"}`,
+    ]);
+    return;
+  }
+  if (action !== "set") throw new CliUsageError(`unknown roles action ${action}`, USAGE);
+  const role = args.shift();
+  const model = args.shift();
+  if (!role || !model) throw new CliUsageError("a role and a model are required", USAGE);
+  rejectArgs(args, USAGE);
+  const result = await runtimeRequest<{ toml?: { status?: string }; omoJsonc?: { status?: string } }>(
+    `/api/codex-agent-roles/${encodeURIComponent(role)}`,
+    { method: "PUT", body: JSON.stringify({ model }) },
+    deps,
+  );
+  const omo = result.omoJsonc?.status;
+  printData(result, wantsJson, [
+    `${role}: ${model} (role TOML ${result.toml?.status ?? "unknown"})`,
+    omo === "skipped_comments"
+      ? "omo.jsonc: not written, because it contains comments that a rewrite would lose."
+      : `omo.jsonc: ${omo ?? "unknown"}`,
+  ]);
+}
+
 export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const [sub = "status", ...rest] = argv;
@@ -244,6 +289,7 @@ export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = 
     else if (sub === "effort") await effort(rest, deps);
     else if (sub === "subagents" || sub === "roster") await subagents(rest, deps);
     else if (sub === "fallback") await fallback(rest, deps);
+    else if (sub === "roles") await roles(rest, deps);
     else if (sub === "sidecar") await sidecar(rest, deps);
     // Lives here rather than as a top-level verb because it is an agent-behavior feature flag:
     // it controls whether default mode may ask the operator a question mid-task.
