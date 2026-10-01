@@ -510,14 +510,18 @@ export async function prepareResponsesRequest(
   // request rather than a destination it never asked for.
   const inboundSelector = parsed.modelId;
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
-  const captureInboundRoutePolicy = (candidate: RouteResult): RouteResult => {
+  const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
     // shadow-intercept target and both subagent-fallback re-routes. Checking
     // the key's scope at this one point is what stops a rewrite from reaching
     // a destination the front door would have refused.
+    // A shadow-intercept target is probed before interception is decided, so it
+    // skips the request-owned policy capture here; the accepted target is
+    // captured where it becomes the request's route. A declined policy target
+    // must not lend its eligibility or "policy" route kind to the request.
     assertRouteAllowedByScope(admissionScope, inboundSelector, candidate);
-    capturePolicyRequestRoute(policyScope, candidate);
+    if (captureRequestPolicy) capturePolicyRequestRoute(policyScope, candidate);
     candidate.staticPolicy = captureRouteStaticPolicy(
       candidate.providerName,
       candidate.modelId,
@@ -532,11 +536,12 @@ export async function prepareResponsesRequest(
     // no canonical OpenAI route for (#2901). Only the initial compaction route
     // may fall back to the configured default provider; combo attempts and the
     // later fallback/recovery re-routes keep the ordinary reservation.
-    const resolveRoute = (modelId: string) => captureInboundRoutePolicy(concreteSelection
+    const routeInbound = (modelId: string) => concreteSelection
       ? routeConcreteModel(config, modelId)
       : parsed._compactionRequest === true
         ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
-        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody)));
+        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+    const resolveRoute = (modelId: string) => captureInboundRoutePolicy(routeInbound(modelId));
     // The phase's destination. Resolved through the admission-scoped resolver every other route
     // uses, and it fails closed exactly like the shadow target: falling back to the native model
     // would spend the quota the operator routed away from, without their choosing it.
@@ -567,7 +572,7 @@ export async function prepareResponsesRequest(
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
       // A dead target fails this helper call once, before any send; it never falls through to
       // the native source model or to the default provider (#5618).
-      const target = resolveShadowCallTarget(_sci.model, resolveRoute);
+      const target = resolveShadowCallTarget(_sci.model, modelId => captureInboundRoutePolicy(routeInbound(modelId), false));
       if ("unavailable" in target) {
         logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(sourcePrefix);
         logCtx.errorCode = INTERCEPT_TARGET_UNAVAILABLE_CODE;
@@ -591,7 +596,7 @@ export async function prepareResponsesRequest(
         );
         // Helpers must not resume/append into the parent thread's Cursor conversation.
         parsed._cursorIsolateConversation = true;
-        shadowRoute = targetRoute;
+        shadowRoute = capturePolicyRequestRoute(policyScope, targetRoute);
       }
     }
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;

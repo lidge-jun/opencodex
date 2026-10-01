@@ -4,6 +4,8 @@
 eligible provider/model membership and decision throughout Responses preparation and fallback.
 Subagent selection and encrypted-task recovery keep that membership; a replacement outside it is
 refused before dispatch, and policy fallback may continue with another originally eligible candidate.
+A shadow-intercept target is probed without that capture and is captured only once interception is
+accepted, so a declined policy target never scopes the request's own route.
 `src/server/responses/policy-fallback.ts` inspects and executes each retry as a concrete candidate,
 so a public combo or profile alias cannot reselect its destination. Redirects remain inside the
 original evaluation, including eligible destinations omitted from the bounded diagnostic trace.

@@ -189,6 +189,22 @@ describe("policy scope through real request preparation", () => {
     expect(result.log.policyEligibility).toBeUndefined();
   });
 
+  test.each(["model", "model-mini"])("a declined policy shadow target does not scope the %s request", async selector => {
+    const config = configFor(["a", "b"]);
+    config.providers.a!.models = ["model", "model-mini"];
+    // The source prefix resolves on provider a and policy/daily selects a/model, so the targets
+    // intersect and interception is declined. "model-mini" also sits outside the profile's
+    // eligibility, which the probe used to capture and then refuse with a 409.
+    config.shadowCallIntercept = { enabled: true, model: "policy/daily", sourceModels: ["model"] };
+    const result = await execute(config, { selector, failures: 0 });
+    expect(result.response.status).toBe(200);
+    expect(result.destinations).toEqual([`a/${selector}`]);
+    expect(result.routeKinds).toEqual(["explicit-provider"]);
+    expect(result.scopes).toEqual([undefined]);
+    expect(result.log.routeDecision?.routeKind).toBe("explicit-provider");
+    expect(result.log.shadowCallRewrittenFrom).toBeUndefined();
+  });
+
   test("the configured subagent ladder cannot send outside the initial evaluation", async () => {
     const config = configFor(["a", "b"]);
     config.subagentModelFallback = ["outside/model", "b/model"];
