@@ -20,11 +20,15 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { claimOwnedServiceHome } from "../helpers/owned-service-home";
+import { TEST_TEMP_OWNER_FILE } from "../../scripts/test-temp";
+import { assertNotRealLaunchAgentsUnderTest, isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 
 let fixtureRoot = "";
 let codexHome = "";
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let fixturePlist = "";
 const cleanup: string[] = [];
 
 function baseConfig(): OcxConfig {
@@ -84,7 +88,15 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = fixtureRoot;
   process.env.CODEX_HOME = codexHome;
   writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify(baseConfig(), null, 2));
-  writeFileSync(join(fixtureRoot, "service-state.json"), JSON.stringify({
+  if (process.platform === "darwin" && existsSync(join(homedir(), TEST_TEMP_OWNER_FILE))) {
+    expect(isTestHomeGuardArmed()).toBe(true);
+    const launchAgents = join(homedir(), "Library", "LaunchAgents");
+    assertNotRealLaunchAgentsUnderTest(launchAgents);
+    const plist = join(launchAgents, "com.opencodex.proxy.plist");
+    expect(existsSync(plist)).toBe(false);
+    fixturePlist = plist;
+    claimOwnedServiceHome(codexHome, fixtureRoot, homedir());
+  } else writeFileSync(join(fixtureRoot, "service-state.json"), JSON.stringify({
     version: 2,
     codexHome: process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"),
     opencodexHome: fixtureRoot,
@@ -93,6 +105,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (fixturePlist) rmSync(fixturePlist, { force: true });
+  fixturePlist = "";
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
