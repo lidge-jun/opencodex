@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "../../providers/initial-model-selection-runtime";
+import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
+import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -266,17 +268,31 @@ export async function fetchAllModels(
   config: OcxConfig,
   /** Filled with each provider's content revision as of the moment its rows were chosen. */
   providerContentRevisions?: Map<string, string>,
+  /** Management renders disabled rows using this detached state after inventory drift. */
+  publishProjection?: (projection: OcxConfig) => void,
 ): Promise<CatalogModel[]> {
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
-  if (!baseline) return gatherRoutedModels(config, providerContentRevisions ? { providerContentRevisions } : undefined);
+  const discoveryBaseline = captureModelDiscoveryBaseline(config);
+  const revisions = providerContentRevisions ?? new Map<string, string>();
   const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
   const models = await gatherRoutedModels(config, {
     providerModelOutcomes: outcomes,
-    ...(providerContentRevisions ? { providerContentRevisions } : {}),
+    providerContentRevisions: revisions,
   });
   finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models),
     outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
+  let publicationConfig = config;
+  if (!finalizeModelDiscovery(config, discoveryBaseline, models,
+    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider), revisions,
+    projection => { publicationConfig = projection; publishProjection?.(projection); })) {
+    throw new CatalogGatherBusyError();
+  }
+  if (publicationConfig !== config && !publishProjection) {
+    // Other consumers keep their live config, so only return rows visible under the projection.
+    const { filterCatalogVisibleModels } = await import("../../codex/catalog");
+    return filterCatalogVisibleModels(models, publicationConfig);
+  }
   return models;
 }
 

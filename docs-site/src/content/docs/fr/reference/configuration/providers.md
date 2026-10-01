@@ -246,8 +246,7 @@ rotation automatique peut déclencher des restrictions du fournisseur.
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Liaisons de nouvelle session réussies conservées sur une sélection à tour de rôle. Portée 1–100. |
 
 Lorsque cette option est activée, un 429 enregistre une temporisation bornée à partir de `Retry-After` ou d'un délai de repli, puis peut
-faire basculer la requête vers un autre compte. L'affinité est locale au processus et de taille bornée. Un 401/403 lié aux identifiants marque le compte
-comme devant être réauthentifié. Si tous les comptes admissibles sont en temporisation, les clients reçoivent un 429 accompagné de
+faire basculer la requête vers un autre compte. L'affinité est locale au processus et de taille bornée. Les erreurs de renouvellement du jeton suivent les règles de réauthentification existantes. Un 403 confirmé lié à un abonnement ou à la facturation du compte permet un basculement avant la sortie, avec une temporisation selon `Retry-After` ou de dix minutes par défaut. Un refus d’autorisation ordinaire ne déclenche pas de basculement. Si tous les comptes admissibles sont en temporisation, les clients reçoivent un 429 accompagné de
 `Retry-After` lorsqu'il est connu, et non une erreur d'authentification.
 
 :::caution[Expérimental]

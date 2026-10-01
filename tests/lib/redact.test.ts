@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { foldForMatching } from "../../src/lib/redact-folding";
 import { repoPath } from "../helpers/repo-root";
@@ -333,6 +333,70 @@ describe("redactSecretString", () => {
     // A prefixed attribute does not identify a credential either.
     expect(redactSecretString('<field data-name="authorization">public-status</field>'))
       .toBe('<field data-name="authorization">public-status</field>');
+  });
+
+  test("XML delimiter search work scales linearly without a wall-clock deadline", () => {
+    for (const tag of ["<a ", "<a >", '<a title="x>y">', '<a title="x>y" ']) {
+      const work: number[] = [];
+      for (const count of [4_000, 8_000]) {
+        const input = tag.repeat(count);
+        let searched = 0;
+        const original = String.prototype.indexOf;
+        const originalCharAt = String.prototype.charAt;
+        const characters = spyOn(String.prototype, "charAt").mockImplementation(function (this: string, index) {
+          searched += 1;
+          return originalCharAt.call(this, index);
+        });
+        const scan = spyOn(String.prototype, "indexOf").mockImplementation(function (this: string, needle, start) {
+          const found = original.call(this, needle, start);
+          if (needle === "<" || needle === ">") {
+            searched += (found < 0 ? this.length : found + 1) - (start ?? 0);
+          }
+          return found;
+        });
+        try {
+          expect(redactSecretString(input)).toBe(input);
+        } finally {
+          scan.mockRestore();
+          characters.mockRestore();
+        }
+        expect(searched).toBeGreaterThan(0);
+        expect(searched).toBeLessThanOrEqual(4 * input.length);
+        work.push(searched);
+      }
+      expect(work[1]!).toBeLessThanOrEqual(2 * work[0]! + 8);
+    }
+  });
+
+  test("XML attribute scanning keeps credential coverage after malformed and escaped prefixes", () => {
+    const prefix = "π ratio∶1\n";
+    for (const input of [
+      '<a '.repeat(4_000) + 'name="authorization">synthetic-xml-canary',
+      '<a >'.repeat(4_000) + '<field id="x-api-key">synthetic-xml-canary',
+      '<field name="author&#105;zation">synthetic-xml-canary',
+      '<field key="authorization"\n value="synthetic-xml-canary">',
+    ]) {
+      const result = redactSecretString(prefix + input);
+      expect(result.startsWith(prefix)).toBe(true);
+      expect(result).toContain(REDACTED_SECRET);
+      expect(result).not.toContain("synthetic-xml-canary");
+    }
+  });
+
+  test("XML quoted tag delimiters cannot hide a later credential attribute", () => {
+    for (const tag of [
+      '<field title="a>b" name="authorization">',
+      "<field title='a>b' key='x-api-key'>",
+      '<field title="a>b" note=\'c>d\' id="password">',
+      '<field title="a&gt;b" name="author&#105;zation">',
+    ]) {
+      const result = redactSecretString("diagnostic: safe\n" + tag + "synthetic-xml-canary");
+      expect(result).toBe("diagnostic: safe\n<field" + REDACTED_SECRET);
+    }
+    const harmless = '<field title="a>b">public-status</field>';
+    expect(redactSecretString(harmless)).toBe(harmless);
+    expect(redactSecretString(harmless + '<field name="authorization">synthetic-xml-canary'))
+      .toBe(harmless + "<field" + REDACTED_SECRET);
   });
 
   test("a multipart credential part is masked through the rest of the body", () => {

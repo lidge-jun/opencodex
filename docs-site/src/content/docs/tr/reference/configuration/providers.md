@@ -277,8 +277,7 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 
 Etkinleştirildiğinde 429, `Retry-After`'dan veya varsayılan bir geri çekilmeden
 sınırlı soğuma kaydeder ve istek içinde dönebilir. Bağlılık işleme özeldir ve
-boyut sınırlıdır. Kimlik bilgisi 401/403, hesabı yeniden kimlik doğrulama
-gerektiriyor olarak işaretler. Uygun tüm hesaplar soğuyorsa istemciler bir
+boyut sınırlıdır. Token yenileme hataları mevcut yeniden kimlik doğrulama kurallarını korur. Doğrulanmış abonelik veya hesap ödeme 403 hatası çıktı başlamadan hesap değiştirebilir ve `Retry-After` veya varsayılan on dakika soğuma uygular. Genel izin reddi hesap değiştirmez. Uygun tüm hesaplar soğuyorsa istemciler bir
 kimlik doğrulama hatası değil, bilindiğinde `Retry-After` ile 429 alır.
 
 :::caution[Deneysel]

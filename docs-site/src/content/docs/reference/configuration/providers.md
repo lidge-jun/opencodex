@@ -880,7 +880,7 @@ from a usable `Retry-After`, otherwise from the latest valid reset time among ra
 Anthropic reports as `rejected`, including weekly windows. Valid upstream deadlines are not
 shortened to a fixed cooldown ceiling; non-finite or unrepresentable deadlines are ignored.
 A refusal with no usable deadline falls back to a 60-second default backoff. Affinity is process-local
-and size-bounded. Credential 401/403 marks the account as needing reauthentication. If all eligible accounts are cooling, clients receive 429 with
+and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
 
 Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever

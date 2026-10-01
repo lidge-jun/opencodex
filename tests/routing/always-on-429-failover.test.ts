@@ -167,16 +167,18 @@ describe("proactive Anthropic routing stays opt-in", () => {
     // Pin the activation gate in the recorder, which the rotator now calls before
     // choosing a replacement. The rotator may use the flag separately to select its
     // proactive strategy, but must not reject a pool-off request before recording.
+    // #6340 folded the 429 and proven-403 paths into rotateAnthropicAccountOnRefusal and
+    // recordAnthropicAccountRefusal; the 429 entry points delegate to them.
     const source = await Bun.file("src/oauth/anthropic-routing.ts").text();
-    const start = source.indexOf("export function rotateAnthropicAccountOn429");
+    const start = source.indexOf("export function rotateAnthropicAccountOnRefusal");
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf("\n}", start));
-    const recordCall = body.indexOf("if (!recordAnthropicAccount429(");
+    const recordCall = body.indexOf("if (!recordAnthropicAccountRefusal(");
     expect(recordCall, "the rotator no longer uses the recorder's quorum gate").toBeGreaterThan(-1);
     expect(body.slice(0, recordCall), "the rotator added a pool-only gate before recording")
       .not.toContain("isAnthropicAccountPoolEnabled");
 
-    const recordStart = source.indexOf("export function recordAnthropicAccount429");
+    const recordStart = source.indexOf("export function recordAnthropicAccountRefusal");
     expect(recordStart).toBeGreaterThan(-1);
     const recordBody = source.slice(recordStart, source.indexOf("\n}", recordStart));
     const gate = recordBody.split("\n").find(line =>

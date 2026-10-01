@@ -78,7 +78,8 @@ Cursor's `cursor-local` update channel advertises for the host platform and arch
 `x64` and `arm64` on Windows, macOS and Linux map; any other host resolves to `unsupported-platform`
 with no request)
 (`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
-Only a `https://downloads.cursor.com/local-mode/` URL with a version is accepted (a Linux
+The decoded manifest is capped at 64 KiB before JSON parsing. Only a bounded
+`https://downloads.cursor.com/local-mode/` URL with a bounded version is accepted (a Linux
 `.AppImage.zsync` delta-metadata URL is mapped to its sibling `.AppImage`); anything else
 resolves to `available: false` with reason `unreachable` or `unusable-response`, and nothing is
 requested when Private Inference is already installed or no regular install exists. The module never
@@ -131,9 +132,11 @@ writes the provider cache. With no usable snapshot the request is refused, which
 process and equally a snapshot retired because the configuration or the provider cache moved. The
 roster is gathered and projected from a detached copy of the configuration
 (`src/config/admitted-identity.ts`) taken before the gather, so an edit that lands mid-load changes
-neither half of the result; the same admission is revalidated against the resident object and the
-configuration file before anything is retained, so such an edit leaves no snapshot rather than one
-recorded under a state its rows never had. The identity a caller carries between a preview and the
+neither half of the result. `src/server/management/model-rows.ts` revalidates the admission and gathered
+cache revisions before committing the [new-arrival policy](../catalog.md#shared-catalog), then captures
+the resulting configuration for projection and retention. A superseded gather applies policy only
+to its detached projection and retains no snapshot; a failed discovery commit refuses the export.
+The identity a caller carries between a preview and the
 mutation that confirms it is process-local and opaque, and describes nothing about the
 configuration. The
 Integrations collection read populates one when discovery succeeds and the configuration can be

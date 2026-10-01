@@ -171,6 +171,17 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
 
+/* Keep the pointer inside the item while crossing the visual gap to its fixed popover. */
+.quota-summary-popover::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--qs-bridge-left, 0) * 1px - 1px);
+  right: calc(var(--qs-bridge-right, 0) * 1px - 1px);
+  bottom: 100%;
+  /* The containing block starts inside the border; cover it as well as the measured gap. */
+  height: calc((var(--qs-pop-gap, 4) + 1) * 1px);
+}
+
 .quota-summary-popover-head {
   display: flex;
   align-items: center;
@@ -255,6 +266,17 @@
   color: var(--muted);
   font-size: var(--text-caption);
   white-space: nowrap;
+}
+
+.quota-summary-popover-link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.quota-summary-popover-link:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
 }
 
 .quota-summary-updated--stale {

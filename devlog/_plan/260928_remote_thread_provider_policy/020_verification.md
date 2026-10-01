@@ -1,7 +1,7 @@
 # Verification
 
-Current local check: 2026-09-30, Linux, Python 3.12.14 and aiohttp 3.13.5.
-The branch incorporates `dev` at `592c5cfc043cd5b69e8aea0f12b9a0644cc50612`.
+Current local check: 2026-10-01, Windows, Python 3.14.3 and aiohttp 3.14.3.
+The branch incorporates `dev` at `64294638a69e25ca0c7a4e2102e2349973161f71`.
 Probe source is unchanged from `f43e66b395b82b05620bc1bdbf8eb332af16b116`;
 this follow-up corrects verification metadata after integrating current `dev`.
 All inputs, accounts, tokens, thread ids, and database rows are synthetic.
@@ -55,10 +55,11 @@ schema compatibility or actual mobile results.
 
 ## Repository checks
 
-The current Linux checkout supports the repository checks; the earlier DNS/Bun
-availability limitation no longer describes this environment. Typecheck,
+The current isolated Windows checkout uses repository Bun 1.4.0; the earlier
+DNS/Bun availability limitation does not describe this environment. Typecheck,
 structure, privacy and file-size checks are recorded with the current PR
-checkpoint. The full Bun suite was not rerun for this research-only integration:
+checkpoint. Removable-drive I/O required moving validation to a fixed-disk
+temporary worktree. The full Bun suite was not rerun for this research-only integration:
 the complete 63-case probe set is the focused behavioral scope, and wider
 repository coverage remains for CI associated with the current PR head, using
 the normal PR merge ref. No test budget was relaxed.
