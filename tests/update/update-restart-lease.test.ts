@@ -260,6 +260,7 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
       const exit = await Promise.race([
         child.exited,
         Bun.sleep(watchdogMs(10_000)).then(() => {
+          console.log(`[held-lease child output]\n${childLogs.join("")}`);
           throw new Error("service child survived a held lease");
         }),
       ]);
