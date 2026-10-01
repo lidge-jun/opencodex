@@ -526,6 +526,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.codexMainAccountHardLockThresholds !== undefined) {
       const value = body.codexMainAccountHardLockThresholds;
       if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).length === 0
         || Object.keys(value).some(key => key !== "short" && key !== "long")
         || Object.values(value).some(percent => typeof percent !== "number" || !Number.isInteger(percent)
           || percent < MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT || percent > 100)) {

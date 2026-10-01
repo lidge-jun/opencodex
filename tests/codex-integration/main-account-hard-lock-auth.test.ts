@@ -26,6 +26,11 @@ import {
   observeMainQuotaIdentity,
 } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import {
+  getMainAccountExternalUsageWarning,
+  observeMainAccountUsage,
+  resetMainAccountExternalUsageForTests,
+} from "../../src/codex/main-account-external-usage";
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../../src/providers/openai-sidecar";
 import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
@@ -418,6 +423,20 @@ describe("main quota policy at native admission", () => {
     expect(getCodexUpstreamHealth(MAIN)).toBeNull();
     expect(isAccountNeedsReauth(MAIN)).toBe(false);
     expect(isCodexAccountUsable(cfg, MAIN, { nativeMainSelectionOnly: true })).toBe(false);
+  });
+
+  test("a refused main request is not counted as opencodex activity for the outside-usage warning", async () => {
+    resetMainAccountExternalUsageForTests();
+    quota(99);
+    await expect(resolveCodexAuthContext(new Headers(), config(), "pool", { accountId: MAIN }))
+      .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+    const now = Date.now();
+    const resetAtMs = now + 60 * 60_000;
+    observeMainAccountUsage("outside-usage-fixture", [{ kind: "short", percent: 10, resetAtMs }], now);
+    observeMainAccountUsage("outside-usage-fixture", [{ kind: "short", percent: 12, resetAtMs }], now + 1_000);
+    expect(getMainAccountExternalUsageWarning("outside-usage-fixture", now + 1_000))
+      .toEqual({ window: "short", fromPercent: 10, toPercent: 12, observedAt: now + 1_000 });
+    resetMainAccountExternalUsageForTests();
   });
 
   test("eligible added account continues when main is blocked", async () => {

@@ -441,7 +441,8 @@ Only validated fresh percentages with a known normalized reset from the current 
 carried policy windows, credits-only updates, writer-free observations and retired writers cannot
 create warnings. A rise of at least one point in the same reset episode warns only when no main
 activity was noted since 30 minutes before the preceding reading. Main credential admission notes
-activity before policy checks, including refusals. Identity replacement drops all warnings; reset
+activity only after the policy check admits the request; a hard-lock refusal is not opencodex's own
+use, so repeated refusals cannot hide a rise while the lock holds. Identity replacement drops all warnings; reset
 replacement drops that window's warning. Main/all quota cleanup forgets the baseline. Warnings
 expire at reset or six hours after detection. Main-card/settings DTOs and live CLI projections expose
 only window kind, previous/current percentage and observation time; the notice says possible usage

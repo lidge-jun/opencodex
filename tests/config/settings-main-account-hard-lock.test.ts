@@ -124,7 +124,7 @@ describe("main-account hard-lock setting", () => {
     expect(loadConfig().codexMainAccountHardLockThresholds).toEqual({ short: 85, long: 95 });
     expect(await (await request(cfg))!.json()).toMatchObject({ mainAccountHardLock: { thresholds: { short: 85, long: 95 } } });
   });
-  test.each([null, [], 90, { short: 79 }, { long: 101 }, { short: 90.5 }, { long: "95" },
+  test.each([null, [], 90, {}, { short: 79 }, { long: 101 }, { short: 90.5 }, { long: "95" },
     { short: 96, long: 95 }, { short: 99 }, { long: 85 }, { extra: 90 }].map(value => [value]))(
     "invalid thresholds %j reject before any settings mutation", async thresholds => {
       const cfg = config();

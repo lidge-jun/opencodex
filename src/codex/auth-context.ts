@@ -702,10 +702,13 @@ export function unwrapUpstreamRetryEvidenceError(error: unknown): unknown {
 }
 
 function assertMainAccountPolicy(config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds"> | undefined): void {
+  if (config) {
+    const status = getMainAccountHardLockStatus(config);
+    if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
+  }
+  // Only an admitted request is opencodex's own use of the main account. Counting a refused one
+  // would hide outside usage from the warning exactly while the lock is holding.
   noteMainAccountActivity();
-  if (!config) return;
-  const status = getMainAccountHardLockStatus(config);
-  if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
 }
 
 /** No auth-file I/O: an unsigned claim alone never identifies a caller as stored main. */
