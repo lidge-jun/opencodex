@@ -153,6 +153,7 @@ export function observedModelsAuthResolver(
         observed: true,
         oauthAccountId: observation.snapshot.accountId,
         oauthGeneration: observation.snapshot.generation,
+        ...(observation.snapshot.providerUserId ? { oauthProviderUserId: observation.snapshot.providerUserId } : {}),
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
       };
@@ -264,6 +265,7 @@ export async function fetchProviderModelsWithAuth(
           observed: false,
           oauthAccountId: snapshot.accountId,
           oauthGeneration: snapshot.generation,
+          ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
           ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
@@ -344,7 +346,7 @@ export async function fetchProviderModelsWithAuth(
     ), "degraded");
   }
   if (name === "zed" && prov.adapter === "zed") {
-    if (!apiKey || !auth.oauthAccountId) return observed(configured, "degraded");
+    if (!apiKey || !auth.oauthAccountId || !auth.oauthProviderUserId) return observed(configured, "degraded");
     // Zed's roster and short-lived inference token are both account-scoped. Keep the
     // catalog cache bound to the same pair so a multi-account switch cannot reuse a stale
     // roster even when the provider destination is unchanged.
@@ -367,8 +369,9 @@ export async function fetchProviderModelsWithAuth(
     const zedFetch = (prov as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
     try {
       const live = await resolveZedModels(
-        { userId: auth.oauthAccountId, accessToken: apiKey },
-        zedFetch ? { fetchFn: zedFetch } : undefined,
+        // Zed signs with its own user id; the slot id only keys the catalog cache above.
+        { userId: auth.oauthProviderUserId, accessToken: apiKey },
+        { signal: AbortSignal.timeout(8_000), ...(zedFetch ? { fetchFn: zedFetch } : {}) },
       );
       const discovered = live.models.map(model => {
         const reasoningEfforts = sanitizeCodexReasoningEfforts(model.supportedEffortLevels);

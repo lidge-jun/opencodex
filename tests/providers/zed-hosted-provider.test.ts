@@ -1,6 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { constants, createPublicKey, publicEncrypt } from "node:crypto";
-import { createZedAdapter } from "../../src/adapters/zed";
+import { createZedAdapter, zedEventStream, type ZedProvider } from "../../src/adapters/zed";
+import { setIcaclsRunnerForTests, resetHardenedStateForTests } from "../../src/lib/windows-secret-acl";
+import { getValidAccessTokenSnapshot } from "../../src/oauth";
+import { saveCredential } from "../../src/oauth/store";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import {
   buildZedUserAuthHeader,
@@ -78,7 +85,7 @@ describe("Zed Hosted AI provider", () => {
     expect(message).not.toContain("user-secret-42");
     expect(message).not.toContain("zed-account-token-xyz");
   });
-+  describe("credential-bearing rejections", () => {
+  describe("credential-bearing rejections", () => {
     const credentials = { userId: "user-secret-42", accessToken: "zed-account-token-xyz" };
     const leaked = "connect failed for user-secret-42 with zed-account-token-xyz";
 
@@ -287,5 +294,89 @@ describe("Zed Hosted AI provider", () => {
       role: "user",
       content: [{ type: "input_text", text: "hello zed openai" }],
     });
+  });
+});
+
+describe("Zed stream framing", () => {
+  async function translate(chunks: string[], provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+    const text = await new Response(zedEventStream(body, provider)).text();
+    return text.split("\n\n").filter(Boolean).map(frame => JSON.parse(frame.replace(/^data: /, "")) as Record<string, unknown>);
+  }
+
+  test("forwards events and stops at the explicit stream-ended status", async () => {
+    const frames = await translate([
+      `${JSON.stringify({ event: { type: "content_block_delta", delta: { text: "hi" } } })}\n`,
+      `${JSON.stringify({ status: "stream_ended" })}\n${JSON.stringify({ event: { type: "content_block_delta", delta: { text: "late" } } })}\n`,
+    ]);
+    expect(frames).toEqual([
+      { type: "content_block_delta", delta: { text: "hi" } },
+      { type: "message_stop" },
+    ]);
+  });
+
+  test("a malformed frame fails the stream instead of being skipped", async () => {
+    const frames = await translate([`${JSON.stringify({ event: { type: "ping" } })}\n{not json\n${JSON.stringify({ status: "stream_ended" })}\n`]);
+    expect(frames).toEqual([
+      { type: "ping" },
+      { type: "error", error: { type: "api_error", message: "Zed stream sent a malformed frame" } },
+    ]);
+  });
+
+  test("an EOF without a terminal or inside a partial frame is an error, not a success", async () => {
+    expect((await translate([`${JSON.stringify({ event: { type: "ping" } })}\n`])).at(-1))
+      .toEqual({ type: "error", error: { type: "api_error", message: "Zed stream ended before completion" } });
+    expect((await translate([`${JSON.stringify({ event: { type: "ping" } })}\n{"event":{"type":`])).at(-1))
+      .toEqual({ type: "error", error: { type: "api_error", message: "Zed stream ended inside a partial frame" } });
+  });
+
+  test("a native terminal event still completes at a clean EOF", async () => {
+    const frames = await translate([`${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n`], "open_ai");
+    expect(frames.at(-1)).toEqual({ type: "response.completed", response: { output: [] } });
+    expect(frames.some(frame => "error" in frame)).toBe(false);
+  });
+
+  test("an unterminated frame over the size limit fails instead of growing the buffer", async () => {
+    const frames = await translate(["x".repeat(1024 * 1024 + 1)]);
+    expect(frames).toEqual([{ type: "error", error: { type: "api_error", message: "Zed stream frame exceeded the size limit" } }]);
+  });
+});
+
+describe("Zed OAuth identity", () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-zed-identity-"));
+  let previousHome: string | undefined;
+  beforeAll(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    resetHardenedStateForTests();
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+  });
+  afterAll(() => {
+    setIcaclsRunnerForTests(null);
+    resetHardenedStateForTests();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(home);
+  });
+
+  test("the access snapshot carries Zed's user id apart from the hashed account slot", async () => {
+    await saveCredential("zed", {
+      access: "zed-access-token",
+      refresh: "zed-access-token",
+      expires: Number.MAX_SAFE_INTEGER,
+      accountId: "zed-user-7",
+      source: "oauth",
+    });
+    const snapshot = await getValidAccessTokenSnapshot("zed");
+    expect(snapshot.providerUserId).toBe("zed-user-7");
+    expect(snapshot.accountId).not.toBe("zed-user-7");
+    expect(buildZedUserAuthHeader({ userId: snapshot.providerUserId!, accessToken: snapshot.accessToken }))
+      .toBe("zed-user-7 zed-access-token");
   });
 });

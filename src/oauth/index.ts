@@ -101,6 +101,11 @@ export interface OAuthAccessSnapshot {
    * concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
+  /**
+   * The upstream's own user id for providers that sign requests with it (Zed's `user_id`).
+   * `accountId` is the local store slot key, a hash, and must never stand in for it.
+   */
+  providerUserId?: string;
 }
 
 export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
@@ -519,6 +524,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accessToken: cred.access,
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
     ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
+    ...(oauthProvider === "zed" && cred.accountId ? { providerUserId: cred.accountId } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"

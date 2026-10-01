@@ -15,7 +15,7 @@ import {
   type ZedCredentials,
 } from "../providers/zed";
 
-type ZedProvider = "anthropic" | "open_ai" | "google" | "x_ai";
+export type ZedProvider = "anthropic" | "open_ai" | "google" | "x_ai";
 
 interface ZedDelegate {
   provider: ZedProvider;
@@ -99,7 +99,27 @@ function normalizedStatus(value: unknown): { type: string; message?: string } | 
   return { type };
 }
 
-function zedEventStream(
+/** One Zed frame larger than this without a newline is treated as a broken stream, not buffered forever. */
+const MAX_ZED_FRAME_CHARS = 1024 * 1024;
+
+/** Whether a delegated native event is itself that protocol's terminal event. */
+function isNativeTerminalEvent(event: Record<string, unknown>): boolean {
+  if (event.type === "message_stop") return true;
+  if (event.type === "response.completed" || event.type === "response.incomplete" || event.type === "response.failed") return true;
+  if (Array.isArray(event.choices) && event.choices.some(choice => isRecord(choice) && choice.finish_reason != null)) return true;
+  return Array.isArray(event.candidates) && event.candidates.some(candidate => isRecord(candidate) && candidate.finishReason != null);
+}
+
+/**
+ * Translate Zed's NDJSON/SSE completion frames into the delegated provider's native SSE.
+ *
+ * The request declares support for the stream-ended status, so a well-formed response ends with
+ * an explicit terminal status (or `[DONE]`). The stream fails closed instead of synthesizing a
+ * success when that guarantee is broken: a malformed or non-object frame, a frame over
+ * `MAX_ZED_FRAME_CHARS`, a partial trailing frame, or an EOF with neither a terminal status nor a
+ * native terminal event becomes the provider-native error. Nothing is forwarded after a terminal.
+ */
+export function zedEventStream(
   body: ReadableStream<Uint8Array>,
   provider: ZedProvider,
 ): ReadableStream<Uint8Array> {
@@ -107,22 +127,34 @@ function zedEventStream(
   const encoder = new TextEncoder();
   let buffer = "";
   let finished = false;
+  let sawNativeTerminal = false;
   const output = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
+      if (finished) return;
       buffer += decoder.decode(chunk, { stream: true });
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        processLine(line, controller);
-        if (finished) return;
-        newline = buffer.indexOf("\n");
+      let start = 0;
+      let newline = buffer.indexOf("\n", start);
+      while (newline >= 0 && !finished) {
+        processLine(buffer.slice(start, newline), controller);
+        start = newline + 1;
+        newline = buffer.indexOf("\n", start);
+      }
+      buffer = finished ? "" : buffer.slice(start);
+      if (!finished && buffer.length > MAX_ZED_FRAME_CHARS) {
+        buffer = "";
+        fail(controller, "Zed stream frame exceeded the size limit");
       }
     },
     flush(controller) {
+      if (finished) return;
       buffer += decoder.decode();
-      if (buffer) processLine(buffer, controller);
-      if (!finished) emit(controller, nativeTerminalPayload(provider));
+      if (buffer.trim()) {
+        buffer = "";
+        fail(controller, "Zed stream ended inside a partial frame");
+        return;
+      }
+      if (sawNativeTerminal) emit(controller, nativeTerminalPayload(provider));
+      else fail(controller, "Zed stream ended before completion");
     },
   });
 
@@ -130,23 +162,34 @@ function zedEventStream(
     controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
   }
 
+  function fail(controller: TransformStreamDefaultController<Uint8Array>, message: string): void {
+    emit(controller, nativeErrorPayload(provider, message));
+    finished = true;
+  }
+
   function processLine(line: string, controller: TransformStreamDefaultController<Uint8Array>): void {
     let text = line.replace(/\r$/, "").trim();
     if (!text) return;
     if (text.startsWith("data:")) text = text.slice(5).trimStart();
+    if (!text || text.startsWith(":") || text.startsWith("event:")) return;
     if (text === "[DONE]") {
       emit(controller, nativeTerminalPayload(provider));
       finished = true;
       return;
     }
     let parsed: unknown;
-    try { parsed = JSON.parse(text) as unknown; } catch { return; }
-    if (!isRecord(parsed)) return;
+    try { parsed = JSON.parse(text) as unknown; } catch {
+      fail(controller, "Zed stream sent a malformed frame");
+      return;
+    }
+    if (!isRecord(parsed)) {
+      fail(controller, "Zed stream sent a malformed frame");
+      return;
+    }
     if (Object.hasOwn(parsed, "status")) {
       const status = normalizedStatus(parsed.status);
       if (status?.type === "failed" || status?.type === "error") {
-        emit(controller, nativeErrorPayload(provider, status.message ?? "Zed request failed"));
-        finished = true;
+        fail(controller, status.message ?? "Zed request failed");
       } else if (status?.type === "stream_ended" || status?.type === "completed") {
         emit(controller, nativeTerminalPayload(provider));
         finished = true;
@@ -154,7 +197,11 @@ function zedEventStream(
       return;
     }
     const event = Object.hasOwn(parsed, "event") ? parsed.event : parsed;
-    if (!isRecord(event)) return;
+    if (!isRecord(event)) {
+      fail(controller, "Zed stream sent a malformed frame");
+      return;
+    }
+    if (isNativeTerminalEvent(event)) sawNativeTerminal = true;
     emit(controller, event);
   }
 
@@ -179,9 +226,11 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
     const promptId = randomUUID();
     let catalog: Awaited<ReturnType<typeof resolveZedModels>> | undefined;
     try {
+      const catalogTimeout = AbortSignal.timeout(8_000);
+      const catalogSignal = incoming?.abortSignal ? AbortSignal.any([incoming.abortSignal, catalogTimeout]) : catalogTimeout;
       catalog = await resolveZedModels(
         credentials,
-        incoming?.providerFetch ? { fetchFn: incoming.providerFetch } : undefined,
+        { signal: catalogSignal, ...(incoming?.providerFetch ? { fetchFn: incoming.providerFetch } : {}) },
       );
     } catch {
       /* Model inference fallback below; a transient catalog outage must not block passthrough. */

@@ -307,7 +307,8 @@ export async function prepareResponsesTransport(
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
     }
     if (route.providerName === "zed") {
-      const zedContext = { userId: snapshot.accountId };
+      // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
+      const zedContext = { userId: snapshot.providerUserId ?? "" };
       parsed._zedAuthContext = zedContext;
       if (retryParsed !== parsed) retryParsed._zedAuthContext = { ...zedContext };
     }
@@ -737,7 +738,7 @@ export async function prepareResponsesTransport(
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
         if (route.providerName === "zed") {
-          parsed._zedAuthContext = { userId: resolved.accountId };
+          parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
         // Project identity belongs to the admitted account on EVERY request, including
         // the request after a pool transition made that account the persisted active one.

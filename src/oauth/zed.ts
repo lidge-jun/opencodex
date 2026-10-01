@@ -53,6 +53,12 @@ export async function loginZed(ctrl: OAuthController): Promise<OAuthCredentials>
 
   let privateKeyVerifier: string | undefined;
   let server: ZedServer | undefined;
+  // Ends the manual-paste branch once the race settles, so a late paste can neither re-prompt
+  // nor keep the private key alive after the callback (or cancellation) already won.
+  const manualStop = new AbortController();
+  const manualStopped = new Promise<undefined>(resolve => {
+    manualStop.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+  });
   try {
     server = Bun.serve({
       hostname: "127.0.0.1",
@@ -90,17 +96,26 @@ export async function loginZed(ctrl: OAuthController): Promise<OAuthCredentials>
     });
     const manual = ctrl.onManualCodeInput
       ? (async (): Promise<OAuthCredentials> => {
-          while (true) {
-            const input = await ctrl.onManualCodeInput?.();
-            if (!input) continue;
-            try { return await parseManualCallback(input, authData.privateKeyVerifier); } catch { /* keep waiting */ }
+          let verifier: string | undefined = authData.privateKeyVerifier;
+          while (!manualStop.signal.aborted && !signal.aborted) {
+            const input = await Promise.race([ctrl.onManualCodeInput?.(), manualStopped]);
+            if (manualStop.signal.aborted || signal.aborted) break;
+            if (!input) {
+              await new Promise(resolve => setTimeout(resolve, 0));
+              continue;
+            }
+            try { return await parseManualCallback(input, verifier); } catch { /* keep waiting */ }
           }
+          verifier = undefined;
+          // Never settles: the race already has its answer, and this branch must not override it.
+          return new Promise<never>(() => {});
         })()
       : undefined;
     return await Promise.race([callback, cancelled, ...(manual ? [manual] : [])]);
   } catch (error) {
     throw error;
   } finally {
+    manualStop.abort();
     server?.stop(true);
   }
 }

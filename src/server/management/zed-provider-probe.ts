@@ -14,17 +14,17 @@ import { jsonResponse } from "../auth-cors";
 export async function probeZedProvider(
   prov: OcxProviderConfig,
   apiKey: string | undefined,
-  accountId: string | undefined,
+  zedUserId: string | undefined,
 ): Promise<Response> {
   const started = Date.now();
-  if (!accountId) {
+  if (!zedUserId) {
     return jsonResponse({ ok: false, latencyMs: 0, error: "Zed account identity is unavailable — re-run `ocx login zed`" });
   }
   try {
     const zedFetch = (prov as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
     const live = await resolveZedModels(
-      { userId: accountId, accessToken: apiKey ?? "" },
-      { forceRefresh: true, ...(zedFetch ? { fetchFn: zedFetch } : {}) },
+      { userId: zedUserId, accessToken: apiKey ?? "" },
+      { forceRefresh: true, signal: AbortSignal.timeout(8_000), ...(zedFetch ? { fetchFn: zedFetch } : {}) },
     );
     return jsonResponse({
       ok: true,

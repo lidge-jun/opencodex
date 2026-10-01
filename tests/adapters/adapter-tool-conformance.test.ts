@@ -428,6 +428,9 @@ describe("registry-derived routed tool conformance", () => {
     }
   });
 
+  // Zed is not tool-less: it forwards client tools through the Anthropic, Google, Responses and
+  // Chat builders, which this suite covers under their own ids. It is skipped because its
+  // envelope needs a live account catalog, so read its entry as "not covered here".
   const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli", "zed"]);
   // The Devin adapter is runTurn-only: it streams Connect-RPC from runTurn, so
   // buildRequest returns a placeholder and tools never travel the wire path.
