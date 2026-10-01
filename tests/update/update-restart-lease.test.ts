@@ -20,12 +20,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
 } from "../../src/service/ownership-mutation-lease.mjs";
+import { protectedHomeForTests } from "../../src/lib/test-home-guard";
 import {
   readUpdateJob,
   restartAfterUpdateForTests,
@@ -66,7 +67,7 @@ let childLogs: string[] = [];
 let childDrains: Promise<unknown>[] = [];
 
 /** The real home this process was started under, for the spawned child's guard. */
-const realHome = process.env.OCX_REAL_HOME ?? process.env.USERPROFILE ?? process.env.HOME ?? "";
+const realHome = dirname(protectedHomeForTests());
 
 function sandbox(): Sandbox {
   const root = mkdtempSync(join(tmpdir(), "ocx-restart-lease-"));
@@ -146,6 +147,27 @@ function spawnServiceChild(box: Sandbox, port: number): ChildProcess {
 }
 
 const LEASE_MODULE_URL = pathToFileURL(repoPath("src/service/ownership-mutation-lease.mjs")).href;
+const SERVICE_STATE_MODULE_URL = pathToFileURL(repoPath("src/service/state.ts")).href;
+
+async function serviceManagerChildAuthority(box: Sandbox): Promise<string> {
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { serviceStatePaths } = await import(${JSON.stringify(SERVICE_STATE_MODULE_URL)});
+    process.stdout.write(serviceStatePaths().at(-1) ?? "");
+  `], {
+    cwd: box.root,
+    env: serviceManagerChildEnvironment(box),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  children.push(child as unknown as ChildProcess);
+  const [exitCode, authority, error] = await Promise.all([
+    child.exited,
+    new Response(child.stdout as ReadableStream<Uint8Array>).text(),
+    new Response(child.stderr as ReadableStream<Uint8Array>).text(),
+  ]);
+  if (exitCode !== 0) throw new Error(`service-state authority probe failed (${exitCode}): ${error.trim()}`);
+  return authority.trim();
+}
 
 /** Mirrors leasePath() in src/service/ownership-mutation-lease.mjs. */
 function leasePathFor(authority: string): string {
@@ -251,31 +273,35 @@ afterEach(async () => {
 describe("the restart veto lease frees a service-manager child (#5760)", () => {
   test("a supervised `ocx start` outside the process tree dies at a held lease — the mechanic the release exists for", async () => {
     const box = sandbox();
+    expect(await serviceManagerChildAuthority(box)).toBe(box.authority);
     const port = await freePort();
     const { acquireOwnershipMutationLease } = await import("../../src/service/ownership-mutation-lease.mjs");
     const { serviceStatePaths } = await import("../../src/service/state");
     const lease = acquireOwnershipMutationLease(serviceStatePaths());
     const child = spawnServiceChild(box, port);
+    let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
     try {
+      const awaitingChildDrains = Promise.all(childDrains);
       const exit = await Promise.race([
-        child.exited,
-        Bun.sleep(watchdogMs(10_000)).then(() => {
-          console.log(`[held-lease child output]\n${childLogs.join("")}`);
-          console.log(`[diag] authority=${box.authority} lockHeld=${existsSync(box.lockDir)} `
-            + `homedir=${homedir()} realHome=${realHome} envReal=${process.env.OCX_REAL_HOME} `
-            + `osLock=${existsSync(join(homedir(), ".opencodex", "service-state.json.mutation.lock"))} `
-            + `statePaths=${JSON.stringify(serviceStatePaths())}`);
-          throw new Error("service child survived a held lease");
+        child.exited.then(async code => {
+          await awaitingChildDrains;
+          return code;
+        }),
+        new Promise<never>((_, reject) => {
+          watchdogTimer = setTimeout(
+            () => reject(new Error("service child survived a held lease")),
+            watchdogMs(10_000),
+          );
         }),
       ]);
-      await Promise.all(childDrains);
       const output = childLogs.join("");
       expect(exit, output).not.toBe(0);
       expect(output).toContain("another process owns the runtime mutation lease");
     } finally {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       lease.release();
     }
-  }, watchdogMs(30_000));
+  }, watchdogMs(10_000) + 10_000);
 
   test("a GUI restart releases the lease before the service refresh so the managed child binds", async () => {
     const box = sandbox();
@@ -334,10 +360,6 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
     expect(child, "the service refresh should spawn the managed child").toBeDefined();
     expect(child!.exitCode).toBeNull();
     expect(childLogs.join("")).not.toContain("mutation lease");
-    if (!proxyPublished(box, port)) {
-      // Diagnose a child that survived the lease but never served.
-      console.log(`[child output]\n${childLogs.join("")}`);
-    }
     expect(proxyPublished(box, port)).toBe(true);
     expect(directStarts).toBe(0);
   }, watchdogMs(150_000));
