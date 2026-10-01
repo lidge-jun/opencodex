@@ -1,5 +1,6 @@
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { npmInvocation } from "./npm-invocation.mjs";
@@ -166,9 +167,14 @@ export function inspectNpmCacheDirectory(cachePath, options = {}) {
   return { ok: true, reason: "cache_accessible" };
 }
 
-function validCachePath(value) {
+// cmd.exe re-parses npm.cmd's %* after our quoting, so on Windows a pinned path must not carry
+// characters that quoting cannot neutralize there. Such a path is refused, never escaped.
+const WINDOWS_CMD_METACHARACTERS = /["%!^&|<>]/;
+
+function validCachePath(value, platform = process.platform) {
   return typeof value === "string" && value.length > 0 && value.length <= 4096
-    && !value.includes("\0") && !/[\r\n]/.test(value) && isAbsolute(value);
+    && !value.includes("\0") && !/[\r\n]/.test(value) && isAbsolute(value)
+    && !(platform === "win32" && WINDOWS_CMD_METACHARACTERS.test(value));
 }
 
 /**
@@ -179,18 +185,23 @@ function validCachePath(value) {
  */
 export function resolveNpmCachePath(options = {}) {
   const env = options.env ?? process.env;
-  const invocation = (options.invocationFn ?? npmInvocation)(["config", "get", "cache"], options.platform ?? process.platform, env);
+  const platform = options.platform ?? process.platform;
+  // Global mode, from the home directory: the staged install is `npm install -g`, which never
+  // reads a project .npmrc, so a repository the user happens to run `ocx update` in must not be
+  // able to choose the cache that install is pinned to.
+  const invocation = (options.invocationFn ?? npmInvocation)(["config", "get", "cache", "--global"], platform, env);
   if (!invocation) return { ok: false, reason: "npm_unavailable" };
   const npm = (options.spawnSyncFn ?? spawnSync)(invocation.file, invocation.args, {
     encoding: "utf8",
     timeout: options.timeoutMs ?? NPM_CONFIG_TIMEOUT_MS,
     windowsHide: true,
+    cwd: options.cwd ?? homedir(),
     ...invocation.options,
     env: invocation.options?.env ?? env,
   });
   if (npm?.status !== 0) return { ok: false, reason: "npm_config_failed" };
   const output = typeof npm.stdout === "string" ? npm.stdout.trim() : "";
-  if (!validCachePath(output)) return { ok: false, reason: "cache_path_malformed" };
+  if (!validCachePath(output, platform)) return { ok: false, reason: "cache_path_malformed" };
   return { ok: true, path: output };
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   inspectNpmCacheDirectory,
@@ -348,8 +348,12 @@ describe("npm cache root usability (#6288)", () => {
   test("resolveNpmCachePath returns npm's configured cache with the caller's environment", () => {
     const invocation = (args: string[]) => ({ file: "npm", args, options: {} });
     let seenEnv: NodeJS.ProcessEnv | undefined;
-    const answer = (stdout: string, status = 0) => ((_file: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
+    let seenArgs: string[] = [];
+    let seenCwd: string | undefined;
+    const answer = (stdout: string, status = 0) => ((_file: string, args: string[], options: { env: NodeJS.ProcessEnv; cwd?: string }) => {
       seenEnv = options.env;
+      seenArgs = args;
+      seenCwd = options.cwd;
       return { status, signal: null, stdout, stderr: "" };
     }) as never;
     const env = { FIXTURE_ENV: "1" };
@@ -360,9 +364,28 @@ describe("npm cache root usability (#6288)", () => {
       path: configured,
     });
     expect(seenEnv).toBe(env);
+    // Global mode from the home directory: a project .npmrc in the caller's cwd cannot pick the
+    // cache that the global staging install is pinned to.
+    expect(seenArgs).toEqual(["config", "get", "cache", "--global"]);
+    expect(seenCwd).toBe(homedir());
     expect(resolveNpmCachePath({ invocationFn: invocation, spawnSyncFn: answer("", 1) })).toEqual({ ok: false, reason: "npm_config_failed" });
     expect(resolveNpmCachePath({ invocationFn: invocation, spawnSyncFn: answer("a\nb") })).toEqual({ ok: false, reason: "cache_path_malformed" });
     expect(resolveNpmCachePath({ invocationFn: () => null })).toEqual({ ok: false, reason: "npm_unavailable" });
+  });
+
+  test("Windows refuses to pin a cache path carrying cmd.exe metacharacters", () => {
+    const invocation = (args: string[]) => ({ file: "npm", args, options: {} });
+    const answer = (stdout: string) => (() => ({ status: 0, signal: null, stdout, stderr: "" })) as never;
+    const absolute = join(tmpdir(), "npm-cache");
+    for (const unsafe of ['" & calc & "', "%PATH%", "a!b", "a^b", "a|b", "a<b", "a>b"]) {
+      expect(resolveNpmCachePath({ platform: "win32", invocationFn: invocation, spawnSyncFn: answer(absolute + unsafe) }))
+        .toEqual({ ok: false, reason: "cache_path_malformed" });
+    }
+    expect(resolveNpmCachePath({ platform: "win32", invocationFn: invocation, spawnSyncFn: answer(absolute) }))
+      .toEqual({ ok: true, path: absolute });
+    // POSIX passes argv without a shell, so the same characters stay a literal path there.
+    expect(resolveNpmCachePath({ platform: "linux", invocationFn: invocation, spawnSyncFn: answer(absolute + "&x") }))
+      .toEqual({ ok: true, path: absolute + "&x" });
   });
 
   test("root failures carry fixed, path-free guidance", () => {

@@ -50,6 +50,8 @@ export type NpmCachePathResolution =
   | { ok: false; reason: "npm_unavailable" | "npm_config_failed" | "cache_path_malformed" };
 
 export interface NpmCachePathOptions {
+  /** Working directory for `npm config get`; defaults to the home directory. */
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   invocationFn?: (
     args: string[],
