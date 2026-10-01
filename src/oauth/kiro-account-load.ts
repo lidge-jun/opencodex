@@ -21,6 +21,15 @@ interface AccountState { records: Map<number, LeaseRecord>; waiters: Waiter[] }
 const accounts = new Map<string, AccountState>();
 let nextLeaseId = 0;
 const keyOf = (provider: string, accountId: string) => `${provider}\u0000${accountId}`;
+type QueuedHook = (provider: string, accountId: string) => void;
+let queuedHookForTests: QueuedHook | undefined;
+
+/** Observe capacity admission without replacing the real lease handoff. */
+export function observeQueuedAccountLeaseForTests(hook: QueuedHook): () => void {
+  const previous = queuedHookForTests;
+  queuedHookForTests = hook;
+  return () => { queuedHookForTests = previous; };
+}
 
 function handoff(state: AccountState, now: number): void {
   while (state.waiters.length > 0) {
@@ -103,5 +112,6 @@ export async function acquireAccountLease(
     const timer = setTimeout(() => finish(null), remaining);
     opts.signal?.addEventListener("abort", abort, { once: true });
     if (opts.signal?.aborted) finish(null);
+    if (!settled) queuedHookForTests?.(provider, accountId);
   });
 }

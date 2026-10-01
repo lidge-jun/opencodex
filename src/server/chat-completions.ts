@@ -53,6 +53,7 @@ import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import { previewXaiOauthWireModel } from "./responses/core-normalize";
 import { providerConsumesCallerAuthorization } from "../providers/caller-authorization";
 import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../providers/caller-authorization";
@@ -177,16 +178,20 @@ async function handleChatCompletionsWithBudget(
   let nativeDecline: ProtocolReasonCode | undefined = "unknown-model";
   try {
     const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
-    // The native Chat lane sends without re-entering the Responses path, so it
-    // has to apply the key's scope itself. Translated traffic is checked where
-    // every rewrite converges instead.
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, logIds?.admission), requestedModel, route);
     // Preserve the routed destination for Go recognition, then settle the wire before
     // deriving protocol-scoped affinity. Recognition must not inspect the flipped adapter.
     const routedProvider = route.provider;
     route.staticPolicy = captureRouteStaticPolicy(
       route.providerName, route.modelId, routedProvider, route.staticPolicy.effectiveAlias, "chat",
     );
+    // Native Chat must check its own destination; translated xAI OAuth turns
+    // preview the billed Fast lane before their final Responses scope check.
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, logIds?.admission), requestedModel, {
+      providerName: route.providerName,
+      modelId: previewXaiOauthWireModel({ options: {
+        serviceTier: typeof chatBody.service_tier === "string" ? chatBody.service_tier : undefined,
+      } }, route, config, "chat"),
+    });
     const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, "chat", route.staticPolicy);
     route.provider = resolveOpenCodeGoTransport(
       wireProvider,

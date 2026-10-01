@@ -206,6 +206,20 @@ export function setGrokApplyFlightTestHooks(
 }
 import type { ManagementContext } from "./context";
 
+async function injectionModelOptions(config: OcxConfig, models: readonly CatalogModel[]) {
+  const disabled = new Set(config.disabledModels ?? []);
+  const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+  const nativeModels = listCatalogNativeSlugs()
+    .filter(slug => !disabled.has(slug))
+    .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
+  const routedModels = uniqueCatalogModelsForPublicList([...models])
+    .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
+    .filter(m => ![...disabled].some(stored => (
+      stored === m.namespaced || slugEquals(stored, m.provider, m.model)
+    )));
+  return [...nativeModels, ...routedModels];
+}
+
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -547,18 +561,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // effort the prompt tells the agent to pass to spawn_agent. GET returns the current
   // picks + available models/efforts; PUT sets or clears them.
   if (url.pathname === "/api/injection-model" && req.method === "GET") {
-    const models = await fetchAllModels(config);
-    const disabled = new Set(config.disabledModels ?? []);
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
-    const nativeModels = listCatalogNativeSlugs()
-      .filter(slug => !disabled.has(slug))
-      .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
-    const routedModels = uniqueCatalogModelsForPublicList(models)
-      .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
-      .filter(m => ![...disabled].some(stored => (
-        stored === m.namespaced || slugEquals(stored, m.provider, m.model)
-      )));
     return jsonResponse({
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
       syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
@@ -566,8 +569,40 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
       efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
-      available: [...nativeModels, ...routedModels],
+      available: await injectionModelOptions(config, await fetchAllModels(config)),
     });
+  }
+  // Read-only: sizes the described delegated work and proposes a model and effort from the
+  // same options GET offers. The page applies an accepted proposal through the PUT below.
+  if (url.pathname === "/api/injection-model/suggest" && req.method === "POST") {
+    let body: unknown;
+    try { body = await readManagementJsonBody(req); } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    const { work, model } = (body ?? {}) as { work?: unknown; model?: unknown };
+    const { ROLE_INSTRUCTIONS_EXCERPT_CHARS } = await import("../../codex/role-sizing");
+    if (typeof work !== "string" || work.trim() === "" || work.length > ROLE_INSTRUCTIONS_EXCERPT_CHARS) {
+      return jsonResponse({ error: `work must be a nonblank string of at most ${ROLE_INSTRUCTIONS_EXCERPT_CHARS} characters`, code: "invalid_work" }, 400);
+    }
+    if (model !== undefined && typeof model !== "string") {
+      return jsonResponse({ error: "model must be a string", code: "invalid_model" }, 400);
+    }
+    const { proposeDelegationModel, NoSizingModelError } = await import("./codex-role-auto-assign");
+    const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
+    try {
+      return jsonResponse(await proposeDelegationModel({
+        config,
+        work: work.trim(),
+        offered: (await injectionModelOptions(config, models)).map(option => option.namespaced),
+        ...(typeof model === "string" ? { sizingModel: model } : {}),
+        models,
+        ...(deps.completeCodexRoleSizing ? { completeRoleSizing: deps.completeCodexRoleSizing } : {}),
+      }));
+    } catch (error) {
+      if (error instanceof NoSizingModelError) return jsonResponse({ error: error.message, code: "no_sizing_model" }, 409);
+      throw error;
+    }
   }
   if (url.pathname === "/api/injection-model" && req.method === "PUT") {
     let parsedBody: unknown;
@@ -729,20 +764,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // the first five eligible visible rows by display priority; OCX guidance uses natural ranks.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
-    const disabled = new Set(config.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
-    const visibleRouted = [...new Set(models
-      .filter(m => ![...disabled].some(stored =>
-        stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)
-      ))
-      .map(catalogModelSlug))];
+    const [{ listCatalogNativeSlugs }, { subagentSelectableModels }] = await Promise.all([
+      import("../../codex/catalog"),
+      import("../../codex/subagent-selectable-models"),
+    ]);
     const chosen = config.subagentModels ?? [];
-    const selectable = [
-      ...listCatalogNativeSlugs().filter(ns => !disabled.has(ns)),
-      ...visibleRouted,
-    ];
     // A saved roster slot must stay representable even after its model is disabled
     // elsewhere (Models page, provider allowlist, a provider row going away). The
     // dashboard treats `available` as the set of rows it can render, so a chosen id
@@ -751,11 +779,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // deliberate 5-model roster to an unrelated visibility toggle is data loss, not a
     // filter. Same reasoning as `fetchGrokCandidateModels`, which deliberately lists a
     // model the user already excluded so its switch remains reachable.
-    const selectableSet = new Set(selectable);
-    const available = [
-      ...selectable,
-      ...[...new Set(chosen)].filter(model => !selectableSet.has(model)),
-    ];
+    const available = subagentSelectableModels(config, models, listCatalogNativeSlugs());
     // #857: let CLI/GUI show when a running Codex app-server keeps an older
     // in-memory catalog than the one on disk. Bounded request-path read: the synchronous
     // collector blocked the event loop for the whole Windows CIM walk (4-7s measured).

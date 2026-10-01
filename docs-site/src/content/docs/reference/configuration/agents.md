@@ -56,6 +56,7 @@ still depends on upstream support for your account.
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
 | `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Per-primary-model fallback chains, keyed by the requested primary model id. This is the supported home for per-role fallback metadata; `model_fallback` inside Codex agent TOML makes Codex 0.146+ skip the role (#1190). |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
+| `codexRoleTiers?` | `{ fast?, standard?, frontier?: string[] }` | — | Capability tier of named models for [role auto-assign](/guides/integrations/#auto-assign). Listed models take that tier; other models are tiered by price, and unpriced unlisted models are never proposed. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
 | `plaintextV2AgentMessages?` | `boolean` | — (unset) | Experimental opt-in. It runs only when explicitly set to `true` and asks eligible native ChatGPT v2 parents to emit `spawn_agent`, `send_message`, and `followup_task` message arguments as plaintext. See [Plaintext v2 agent messages](#plaintext-v2-agent-messages). |

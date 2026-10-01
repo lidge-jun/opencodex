@@ -1282,3 +1282,135 @@ test("a client that leaves while a non-stream body is pending logs the cancel as
     upstream.stop();
   }
 });
+
+// --- A stalled or over-cap stream is a visible incomplete turn, in the row and in usage.jsonl ---
+
+async function stalledStreamRow(upstream: { url: URL }, extraClaude: Record<string, unknown>) {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify(claudeBody()),
+    });
+    const text = await res.text();
+    const logs = logsFromApiBody<{ status?: number; terminalStatus?: string; closeReason?: string; upstreamError?: string }>(
+      await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
+    );
+    expect(logs).toHaveLength(1);
+    return { res, text, row: logs[0]!, usage: readRecentUsageEntries(1)[0] };
+  } finally {
+    await server.stop(true);
+  }
+}
+
+test("a stalled native stream logs a 502 incomplete row and keeps its diagnostics in usage.jsonl", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE)); /* then silence */ },
+  }), { headers: { "content-type": "text/event-stream" } }) });
+  try {
+    const { res, text, row, usage } = await stalledStreamRow(upstream, { bodyStallSec: 1 });
+    expect(res.status).toBe(200);
+    expect(text).toContain('"type":"timeout_error"');
+    // Same row the Responses relay writes for a stall-timeout incomplete (httpStatusForRequestLogTerminal).
+    expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_stall" });
+    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
+    // usage.jsonl keeps failure diagnostics only for failed or non-completed rows; a 200 row dropped them.
+    expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_stall" });
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a native stream over the byte cap logs a 502 incomplete row and keeps its diagnostics in usage.jsonl", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response(PARTIAL_TURN_SSE, { headers: { "content-type": "text/event-stream" } }) });
+  try {
+    const { text, row, usage } = await stalledStreamRow(upstream, { bodyMaxBytes: 64 });
+    expect(text).toContain("exceeded 64 bytes");
+    expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
+    expect(row.upstreamError).toBe("anthropic passthrough body exceeded 64 bytes");
+    expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a turn that sent message_stop and then stalls is finished: 200 terminal, no error frame", async () => {
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(COMPLETE_TURN_SSE)); /* never closes */ },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 30, maxBytes: 0 });
+  const text = await new Response(tapped).text();
+  expect(text).toBe(COMPLETE_TURN_SSE);
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.upstreamError).toBeUndefined();
+});
+
+test("bytes past the cap after message_stop do not turn a finished turn into a failure", async () => {
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(COMPLETE_TURN_SSE)); return; }
+      controller.enqueue(new TextEncoder().encode(": keepalive padding ".repeat(64)));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const cap = new TextEncoder().encode(COMPLETE_TURN_SSE).byteLength + 16;
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 0, maxBytes: cap });
+  const text = await new Response(tapped).text();
+  expect(text).toStartWith(COMPLETE_TURN_SSE);
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+});
+
+// SSE lines may end in CRLF, LF or CR. The tap forwards bytes untouched but must still see the frames.
+function tapWithChunks(chunks: string[], guard: { stallMs: number; maxBytes: number }) {
+  let index = 0;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index < chunks.length) controller.enqueue(new TextEncoder().encode(chunks[index++]!));
+      // then silence (stall) or more bytes, per the test
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), guard);
+  return { tapped, calls, logCtx };
+}
+
+for (const [label, eol] of [["CRLF", "\r\n"], ["CR", "\r"]] as const) {
+  test(`a ${label}-delimited turn that then stalls is finished, and its usage is read`, async () => {
+    const turn = COMPLETE_TURN_SSE.replace(/\n/g, eol);
+    const { tapped, calls, logCtx } = tapWithChunks([turn], { stallMs: 30, maxBytes: 0 });
+    const text = await new Response(tapped).text();
+    expect(text).toBe(turn);
+    expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+    expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
+  });
+}
+
+test("a CRLF delimiter split across chunks is one delimiter, not a frame boundary", async () => {
+  const turn = COMPLETE_TURN_SSE.replace(/\n/g, "\r\n");
+  // Cut every frame between its CR and LF so each chunk ends in a lone CR.
+  const chunks = turn.split("\r\n").map((part, i, all) => (i < all.length - 1 ? `${part}\r` : part)).map((part, i) => (i === 0 ? part : `\n${part}`));
+  expect(chunks.join("")).toBe(turn);
+  const { tapped, calls, logCtx } = tapWithChunks(chunks, { stallMs: 30, maxBytes: 0 });
+  await new Response(tapped).text();
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
+});
+
+test("a CRLF turn followed by bytes past the cap is finished, not a failure", async () => {
+  const turn = COMPLETE_TURN_SSE.replace(/\n/g, "\r\n");
+  const cap = new TextEncoder().encode(turn).byteLength + 16;
+  const { tapped, calls } = tapWithChunks([turn, ": padding ".repeat(64)], { stallMs: 0, maxBytes: cap });
+  const text = await new Response(tapped).text();
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+});

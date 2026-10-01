@@ -165,6 +165,8 @@ async function fetchWithResetRecovery(
   notePhysicalSend: (reset: boolean) => void,
 ): Promise<Response> {
   let lastError: unknown;
+  let destination = url;
+  let destinationRebased = false;
   for (let attempt = 0; attempt < RESET_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     const executor = (ctx.executor ?? globalThis.fetch) as typeof globalThis.fetch & {
@@ -177,18 +179,22 @@ async function fetchWithResetRecovery(
       // Every physical send is admitted, not just the adapter entry. Kiro nests a throttle loop
       // over this ladder and can run the ladder twice per throttle round, so counting one entry
       // as one send hid up to eighteen upstream requests from the per-request cap (#4546).
-      const decision = ctx.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: url });
+      const decision = ctx.sendBudget?.reserveDispatch({
+        sendClass: "transient", targetKey: destination, rebasedTarget: destinationRebased,
+      });
+      destinationRebased = false;
       if (decision && (!decision.allowed || !decision.permit.use())) {
-        throw new SendBudgetExhaustedError(url);
+        throw new SendBudgetExhaustedError(destination);
       }
       // Reported after admission and before dispatch, so a refused send is never counted and an
       // admitted one is counted exactly once whichever way the fetch below settles.
       notePhysicalSend(attempt > 0);
+      const requestUrl = request.url;
       try {
         const headers = new Headers(request.headers);
         const recovered = attempt > 0;
         if (recovered) headers.set("connection", "close");
-        return await sendTrackingRequestSlot(slot, () => fetchWithAttemptDeadline(url, {
+        return await sendTrackingRequestSlot(slot, () => fetchWithAttemptDeadline(destination, {
           method: request.method,
           headers,
           body: request.body,
@@ -208,6 +214,12 @@ async function fetchWithResetRecovery(
       } catch (error) {
         if (ctx.abortSignal?.aborted || !isConnectionResetError(error) || attempt === RESET_ATTEMPTS - 1) throw error;
         lastError = error;
+        if (request.url !== requestUrl) {
+          destination = request.url;
+          // The rebuild retargeted this request; that move is authorized work, not a
+          // failover transition, so the endpoint fallback still owns the budget's one hop.
+          destinationRebased = true;
+        }
         await sleepWithAbort(retryBackoffDelayMs(attempt, {
           baseDelayMs: RESET_RETRY_BASE_MS,
           maxDelayMs: RESET_RETRY_MAX_MS,
@@ -283,13 +295,15 @@ async function fetchKiroAttempt(
   notePhysicalSend: (reset: boolean) => void,
 ): Promise<Response> {
   const plannedUrl = request.url;
-  const legacy = legacyUrl(plannedUrl);
   let response: Response;
   try {
     response = await fetchWithResetRecovery(request, plannedUrl, ctx, timeoutMs, notePhysicalSend);
   } catch (error) {
-    if (!legacy || !endpointConnectFailure(error)) throw error;
-    return fetchWithResetRecovery(request, legacy, ctx, timeoutMs, notePhysicalSend);
+    // The legacy host must mirror the CURRENT destination: a reset rebuild retargets the
+    // request, and falling back to the original region would send its new credentials there.
+    const currentLegacy = legacyUrl(request.url);
+    if (!currentLegacy || !endpointConnectFailure(error)) throw error;
+    return fetchWithResetRecovery(request, currentLegacy, ctx, timeoutMs, notePhysicalSend);
   }
 
   if (!response.ok && (response.status === 502 || response.status === 503 || response.status === 504)) {
@@ -300,12 +314,13 @@ async function fetchKiroAttempt(
       return fetchWithResetRecovery(request, alternate, ctx, timeoutMs, notePhysicalSend);
     }
   }
-  if (legacy && !response.ok) {
+  const currentLegacy = legacyUrl(request.url);
+  if (currentLegacy && !response.ok) {
     const inspected = await inspectEndpointHttpFailure(response, ctx.abortSignal);
     response = inspected.response;
     if (inspected.fallback) {
       cancelResponseBodyBestEffort(response);
-      response = await fetchWithResetRecovery(request, legacy, ctx, timeoutMs, notePhysicalSend);
+      response = await fetchWithResetRecovery(request, currentLegacy, ctx, timeoutMs, notePhysicalSend);
     }
   }
   return response;

@@ -32,10 +32,9 @@ type Schema = Record<string, unknown>;
 const isSchema = (value: unknown): value is Schema => !!value && typeof value === 'object' && !Array.isArray(value);
 
 /**
- * `{type: [T, "null"], ...rest}` becomes `{anyOf: [{...rest, type: T}, {type: "null"}]}`,
- * so type-specific keywords (items, properties, ...) stay attached to their type.
- * An existing anyOf is folded in branch by branch when no branch contradicts an
- * outer keyword, and kept beside the split under allOf when one does.
+ * Replace a type array with an equivalent type-only union. Constraints remain on
+ * the surrounding node so nested schemas are represented exactly once rather
+ * than copied into every branch.
  */
 function splitTypeArray(node: Schema, types: unknown[]): Schema {
   const annotations: Schema = {};
@@ -49,51 +48,16 @@ function splitTypeArray(node: Schema, types: unknown[]): Schema {
   const allowsNull = concrete.length < types.length
     && (!Array.isArray(rest.enum) || rest.enum.includes(null))
     && (!Object.hasOwn(rest, 'const') || rest.const === null);
+  const branches = concrete.map((type) => ({ type }));
+  if (allowsNull || branches.length === 0) branches.push({ type: 'null' });
+  const typeConstraint: Schema = branches.length === 1 ? branches[0]! : { anyOf: branches };
   const existing = Array.isArray(node.anyOf) ? node.anyOf : undefined;
-  // Boolean constraints apply to every type, including null. A bare null branch
-  // would bypass them, so keep the type split and the outer schema conjunctive.
-  if (allowsNull && ['not', 'allOf', 'oneOf', 'if', 'then', 'else'].some((key) => key in rest)) {
-    return {
-      ...annotations,
-      allOf: [splitTypeArray({ type: types }, types), existing ? { ...rest, anyOf: existing } : rest],
-    };
-  }
-  // Folding merges each branch into the outer keywords, which is only exact when
-  // they never disagree: `{maxLength: 5, anyOf: [{maxLength: 50}]}` folded would
-  // loosen the outer limit. On a disagreement keep both constraints under allOf,
-  // which this backend accepts (live: gemini-3-8-flash-medium).
-  if (existing?.some((branch) => isSchema(branch) && (
-    Object.keys(branch).some((key) => key !== 'type' && key in rest && JSON.stringify(branch[key]) !== JSON.stringify(rest[key]))
-    // Keep an existing null branch's own constraints; folding it to {type:"null"}
-    // would admit values that its enum, const, or nested schema rejects.
-    || (allowsNull && branch.type === 'null' && Object.keys(branch).some((key) => key !== 'type'))
-    || (allowsNull && branch.type === undefined && ['enum', 'const', 'not', 'allOf', 'oneOf'].some((key) => key in branch))
-  ))) {
-    return { ...annotations, allOf: [splitTypeArray({ ...rest, type: types }, types), { anyOf: existing }] };
-  }
-  const branches: unknown[] = [];
-  let nullReachable = allowsNull && !existing;
-  if (!existing) {
-    for (const type of concrete) branches.push({ ...rest, type });
-  } else {
-    for (const branch of existing) {
-      if (!isSchema(branch)) continue;
-      if (branch.type === undefined) {
-        for (const type of concrete) branches.push({ ...rest, ...branch, type });
-        if (allowsNull) nullReachable = true;
-      } else if (branch.type === 'null') {
-        if (allowsNull) nullReachable = true;
-      } else if (concrete.includes(branch.type)) {
-        branches.push({ ...rest, ...branch });
-      }
-    }
-  }
-  if (nullReachable) branches.push({ type: 'null' });
-  // The two unions are disjoint. Keep both constraints rather than drop the type union,
-  // which would let the anyOf branches admit types the node never allowed.
-  if (branches.length === 0) return { ...annotations, allOf: [splitTypeArray({ ...rest, type: types }, types), { anyOf: existing }] };
-  if (branches.length === 1 && isSchema(branches[0])) return { ...annotations, ...branches[0] };
-  return { ...annotations, anyOf: branches };
+  if (!existing) return { ...annotations, ...rest, ...typeConstraint };
+  // Keep existing applicators and constraints at their original JSON Pointer
+  // locations. Appending only the type constraint also preserves allOf indices,
+  // resource scopes, and the sibling annotations read by unevaluated* keywords.
+  const allOf = Array.isArray(rest.allOf) ? rest.allOf : [];
+  return { ...annotations, ...rest, anyOf: existing, allOf: [...allOf, typeConstraint] };
 }
 
 function rewrite(node: unknown): unknown {
