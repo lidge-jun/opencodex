@@ -52,6 +52,9 @@ export function inspectNpmCacheRoot(cachePath, options = {}) {
       entry = lstat(current);
       break;
     } catch (error) {
+      // A file somewhere above the root: POSIX reports ENOTDIR here, which is exactly the
+      // ENOTDIR npm's own mkdir would hit. Windows reports ENOENT and the walk reaches the file.
+      if (error?.code === "ENOTDIR") return { ok: false, reason: "cache_root_not_directory" };
       if (error?.code !== "ENOENT") return { ok: false, reason: "cache_entry_inaccessible" };
       const parent = dirname(current);
       // Nothing on the path exists at all (a missing drive root); npm cannot mkdir there either.
