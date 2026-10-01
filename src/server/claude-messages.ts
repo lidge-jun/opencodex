@@ -60,6 +60,7 @@ import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext } from "./request-log";
+import { recordGenerationEvent } from "./request-log-generation-window";
 import { createFinalRequestLog } from "./inference/final-log";
 import {
   conversationIdFromClaudeMetadata,
@@ -332,6 +333,7 @@ export function tapAnthropicSseForLog(
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { return; }
     if (!isRec(data)) return;
+    recordGenerationEvent(logCtx, data.type);
     if (data.type === "message_start" && isRec(data.message) && isRec(data.message.usage)) {
       usageAcc = { ...usageAcc, ...data.message.usage };
     } else if (data.type === "message_delta" && isRec(data.usage)) {
