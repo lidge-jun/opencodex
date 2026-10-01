@@ -173,17 +173,27 @@ export function schtasksErrorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** True when a schtasks CSV listing line refers to the given task name. */
+/**
+ * True when a schtasks CSV listing line refers to the given task name.
+ * "Given task name" means the task of that name in the ROOT folder — the only
+ * one every `/tn` operation here can address; a same-named task inside a task
+ * folder is a different registration and must not count.
+ */
 export function windowsSchedulerCsvIncludesTask(csv: string, taskName: string): boolean {
   const needle = taskName.toLowerCase();
   for (const line of csv.split(/\r?\n/)) {
     const lower = line.toLowerCase();
     if (!lower.includes(needle)) continue;
-    // Prefer exact CSV field matches ("\TaskName" / "TaskName") before a substring hit.
+    // Prefer exact CSV field matches ("\TaskName" / "TaskName") before a looser
+    // boundary hit. A bare backslash is NOT a boundary: `folder\name` is a path
+    // separator, not the root task — every /tn operation here resolves a bare
+    // name in the root folder only, so `,\Tools\opencodex-proxy,` is a different
+    // registration this probe can neither read nor stop. The optional `\\?`
+    // covers the unquoted root form `,\opencodex-proxy,` only.
     if (
       lower.includes(`"\\${needle}"`)
       || lower.includes(`"${needle}"`)
-      || new RegExp(`(^|[,\\\\])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,"]|$)`).test(lower)
+      || new RegExp(`(^|,)\\\\?${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([,"]|$)`).test(lower)
     ) {
       return true;
     }
