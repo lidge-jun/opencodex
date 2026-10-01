@@ -198,7 +198,7 @@ describe("provider TLS profile", () => {
     setProviderTlsRuntimeForTest({
       env: {},
       fetch: async () => {
-        throw new Error("proxy connect failed: http://alice:hunter2@proxy.example:8080");
+        throw new Error("proxy connect failed: http://alice:hunter2@127.0.0.1:8080");
       },
     });
     const provider = {
@@ -215,7 +215,7 @@ describe("provider TLS profile", () => {
       caught = err;
     }
     expect(String((caught as Error).message)).not.toContain("hunter2");
-    expect(String((caught as Error).message)).toContain("//<redacted>@proxy.example:8080");
+    expect(String((caught as Error).message)).toContain("//<redacted>@127.0.0.1:8080");
   });
 
   const canonical = {
