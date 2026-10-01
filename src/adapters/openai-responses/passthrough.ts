@@ -33,6 +33,7 @@ import {
 } from "../xai-tool-schema";
 import {
   createAdapterTierMetadata,
+  emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
 import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripRejectedSamplingParams } from "./request-strips";
@@ -531,14 +532,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const hint = routingHeaders.get(CODEX_ROUTING_HINT_HEADER);
         if (hint !== null) headers[CODEX_ROUTING_HINT_HEADER] = hint;
       }
-      const actualServiceTier = isPlainObject(finalBody) && typeof finalBody.service_tier === "string"
-        ? finalBody.service_tier
-        : null;
       const tierLog = createAdapterTierMetadata(
         parsed.options?.tierObservation,
         parsed.options?.tierDecision,
-        actualServiceTier === null ? null : "service-tier",
-        actualServiceTier,
+        ...emittedFastWire(parsed, finalBody),
       );
       // The Responses adapter is passthrough: it forwards `parsed._rawBody` rather than
       // rebuilding the body from `parsed.modelId`, and the router writes the routed id into

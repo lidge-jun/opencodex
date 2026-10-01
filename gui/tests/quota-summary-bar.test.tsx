@@ -74,7 +74,56 @@ test("every chip is a link to its provider's Accounts tab, and a click follows i
   expect(view.chip("xAI Grok").getAttribute("href")).toBe("#providers?provider=xai&tab=accounts");
   await click(view.chip("xAI Grok"));
   expect(testWindow.location.hash).toBe("#providers?provider=xai&tab=accounts");
-  expect(view.container.querySelector("[role=tooltip]")).toBeNull();
+  expect(view.container.querySelector(".quota-summary-popover")).toBeNull();
+  await view.unmount();
+});
+
+test("popover placement shares the rounded gap with its hover bridge and updates on scroll", async () => {
+  const view = await mount();
+  const chip = view.chip("xAI Grok");
+  let bottom = 28.25;
+  Object.defineProperty(chip, "getBoundingClientRect", {
+    configurable: true,
+    value: () => new testWindow.DOMRect(10, bottom - 27, 150, 27),
+  });
+  await act(async () => {
+    chip.dispatchEvent(new testWindow.PointerEvent("pointerover", {
+      bubbles: true, pointerType: "mouse", relatedTarget: document.body,
+    } as never) as unknown as Event);
+  });
+  const popover = view.container.querySelector<HTMLElement>(".quota-summary-popover")!;
+  expect(popover.style.getPropertyValue("--qs-pop-top")).toBe("35");
+  expect(popover.style.getPropertyValue("--qs-pop-gap")).toBe("6.75");
+  bottom = 28.75;
+  await act(async () => { window.dispatchEvent(new testWindow.Event("scroll") as unknown as Event); });
+  expect(popover.style.getPropertyValue("--qs-pop-top")).toBe("36");
+  expect(popover.style.getPropertyValue("--qs-pop-gap")).toBe("7.25");
+  await view.unmount();
+});
+
+test("the hover bridge spans chip edges beyond a narrower popover and follows resize", async () => {
+  const view = await mount();
+  const chip = view.chip("xAI Grok");
+  Object.defineProperty(chip, "getBoundingClientRect", {
+    configurable: true, value: () => new testWindow.DOMRect(10, 1, 400, 27),
+  });
+  await act(async () => {
+    chip.dispatchEvent(new testWindow.PointerEvent("pointerover", {
+      bubbles: true, pointerType: "mouse", relatedTarget: document.body,
+    } as never) as unknown as Event);
+  });
+  const popover = view.container.querySelector<HTMLElement>(".quota-summary-popover")!;
+  let left = 20;
+  Object.defineProperty(popover, "getBoundingClientRect", {
+    configurable: true, value: () => new testWindow.DOMRect(left, 35, 260, 100),
+  });
+  await act(async () => { window.dispatchEvent(new testWindow.Event("scroll") as unknown as Event); });
+  expect(popover.style.getPropertyValue("--qs-bridge-left")).toBe("-10");
+  expect(popover.style.getPropertyValue("--qs-bridge-right")).toBe("-130");
+  left = 30;
+  await act(async () => { window.dispatchEvent(new testWindow.Event("resize") as unknown as Event); });
+  expect(popover.style.getPropertyValue("--qs-bridge-left")).toBe("-20");
+  expect(popover.style.getPropertyValue("--qs-bridge-right")).toBe("-120");
   await view.unmount();
 });
 
@@ -89,6 +138,71 @@ test("following the link that is already current re-announces it", async () => {
   await click(view.chip("Kimi"));
   expect(testWindow.location.hash).toBe("#providers?provider=kimi&tab=accounts");
   expect(announced).toBe(1);
+  await view.unmount();
+});
+
+test("the popover account link navigates and preserves modified clicks", async () => {
+  const view = await mount();
+  await act(async () => {
+    view.chip("Kimi").dispatchEvent(new testWindow.PointerEvent("pointerover", {
+      bubbles: true, pointerType: "mouse", relatedTarget: document.body,
+    } as never) as unknown as Event);
+  });
+  const popover = view.container.querySelector(".quota-summary-popover")!;
+  expect(popover.getAttribute("role")).toBe("group");
+  expect(popover.getAttribute("aria-label")).toBe("Kimi");
+  const link = popover.querySelector("a")!;
+  expect(link.getAttribute("href")).toBe("#providers?provider=kimi&tab=accounts");
+  await act(async () => {
+    const modified = new testWindow.MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true });
+    link.dispatchEvent(modified as unknown as Event);
+    expect(modified.defaultPrevented).toBe(false);
+  });
+  expect(view.container.querySelector(".quota-summary-popover")).not.toBeNull();
+  await click(link);
+  expect(testWindow.location.hash).toBe("#providers?provider=kimi&tab=accounts");
+  expect(view.container.querySelector(".quota-summary-popover")).toBeNull();
+  await view.unmount();
+});
+
+test("keyboard focus reaches the account link, Escape restores the chip, and outside blur dismisses", async () => {
+  const view = await mount();
+  const chip = view.chip("Kimi");
+  // happy-dom has no input modality: emulate :focus-visible for keyboard focus only.
+  Object.defineProperty(chip, "matches", { configurable: true, value: () => true });
+  await act(async () => { chip.focus(); });
+  const link = view.container.querySelector<HTMLAnchorElement>(".quota-summary-popover-link")!;
+  Object.defineProperty(link, "matches", { configurable: true, value: () => true });
+  await act(async () => { link.focus(); });
+  expect(document.activeElement).toBe(link);
+  expect(view.container.querySelector(".quota-summary-popover")).not.toBeNull();
+  await act(async () => {
+    document.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event);
+  });
+  expect(document.activeElement).toBe(chip);
+  expect(chip.getAttribute("aria-expanded")).toBe("false");
+  expect(view.container.querySelector(".quota-summary-popover")).toBeNull();
+  await act(async () => { chip.blur(); chip.focus(); });
+  expect(view.container.querySelector(".quota-summary-popover")).not.toBeNull();
+  await act(async () => { chip.blur(); });
+  expect(view.container.querySelector(".quota-summary-popover")).toBeNull();
+  await view.unmount();
+});
+
+test("a touch user can follow the popover account link with one tap", async () => {
+  const view = await mount();
+  const chip = view.chip("Kimi");
+  await act(async () => {
+    chip.dispatchEvent(new testWindow.PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" } as never) as unknown as Event);
+  });
+  await click(chip);
+  const link = view.container.querySelector(".quota-summary-popover-link")!;
+  await act(async () => {
+    link.dispatchEvent(new testWindow.PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" } as never) as unknown as Event);
+  });
+  await click(link);
+  expect(testWindow.location.hash).toBe("#providers?provider=kimi&tab=accounts");
+  expect(view.container.querySelector(".quota-summary-popover")).toBeNull();
   await view.unmount();
 });
 
@@ -135,7 +249,7 @@ test("on touch the first tap shows the detail, the second follows the link, and 
     });
     await click(chip);
   };
-  const tooltip = () => view.container.querySelector("[role=tooltip]");
+  const tooltip = () => view.container.querySelector(".quota-summary-popover");
 
   await tap("Kimi");
   expect(tooltip()?.textContent).toContain("Kimi");
@@ -173,11 +287,16 @@ test("a clicked chip keeps its detail closed under the resting pointer until the
       item.dispatchEvent(new testWindow.PointerEvent(type, { bubbles: true, pointerType: "mouse", relatedTarget } as never) as unknown as Event);
     });
   };
-  const tooltip = () => view.container.querySelector("[role=tooltip]");
+  const tooltip = () => view.container.querySelector(".quota-summary-popover");
 
   await pointer("pointerover", document.body);
   expect(tooltip()?.textContent).toContain("xAI Grok");
-  expect(view.chip("xAI Grok").getAttribute("aria-describedby")).toBe(tooltip()?.id ?? "missing");
+  expect(view.chip("xAI Grok").getAttribute("aria-controls")).toBe(tooltip()?.id ?? "missing");
+  const table = tooltip()?.querySelector("table");
+  expect(table?.id).toBe(`${tooltip()?.id}-table`);
+  expect(view.chip("xAI Grok").getAttribute("aria-describedby")).toBe(table?.id ?? "missing");
+  expect(table?.getAttribute("aria-label")).toBeNull();
+  expect(table?.textContent).toContain("74%");
 
   await click(view.chip("xAI Grok"));
   expect(tooltip()).toBeNull();

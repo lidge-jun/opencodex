@@ -455,6 +455,14 @@ function dropCodexSafetyBufferingError(value: unknown): string | null {
   return "schema_invalid: dropCodexSafetyBuffering: must be a boolean or omitted";
 }
 
+function showCodexCreditsError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "showCodexCredits")) return null;
+  const enabled = raw.showCodexCredits;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: showCodexCredits: must be a boolean or omitted";
+}
+
 function oauthOpenBrowserError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "oauthOpenBrowser")) return null;
@@ -645,6 +653,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? emptyCompletionRetryError(value)
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
+    ?? showCodexCreditsError(value)
     ?? runtimeRoleError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)

@@ -1,3 +1,4 @@
+import { parseCodexCredits, rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { loadConfig } from "../../config";
@@ -351,6 +352,7 @@ export async function fetchMainAccountInfoWhileOwned(
       // Tag the count with the identity it was read from, so a later response that omits the
       // summary can restore the badge without ever crossing an account boundary.
       rememberMainResetCredits(requestAccountId, freshResetCredits);
+      if (requestAccountId !== null) rememberCodexCredits(MAIN_CODEX_ACCOUNT_ID, requestAccountId, parseCodexCredits(data.credits));
       setMainAccountInfoCache(result);
       // Only an explicit refresh may retract a reauth quarantine. A 200 from
       // /wham/usage proves the token authenticates to the usage endpoint; it does not

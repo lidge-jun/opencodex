@@ -719,6 +719,16 @@ is excluded: the gateway answers `service_tier: "default"` when sent `priority`,
 unclassified and its caller tier is not forwarded. Unlisted models stay unclassified on both
 transports.
 
+On the OAuth gateway, Grok 4.7's Fast works differently. The gateway also lists
+`grok-4.7-build-fast`, which is the same model on faster serving hardware, and it measured about 1.6×
+faster than `grok-4.7`. Priority processing on `grok-4.7` measured no faster and consumed about 6× the
+subscription usage per output token. The Models list therefore shows one Grok 4.7 row. Selecting its
+Fast row (`xai/grok-4.7--fast`), sending `service_tier: "priority"`, or turning on Fast mode sends the
+request as `grok-4.7-build-fast` without a service tier. Request logs keep the model as `grok-4.7` and
+record `grok-4.7-build-fast` as the wire model. API-key mode is unchanged: build-fast is not on xAI's
+public API, so Grok 4.7 Fast there still means priority processing. An explicit
+`xai/grok-4.7-build-fast` selection from an earlier configuration keeps working.
+
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium
 only when xAI's response confirms `service_tier: "priority"`. A missing or unparsed response tier is
@@ -870,7 +880,7 @@ from a usable `Retry-After`, otherwise from the latest valid reset time among ra
 Anthropic reports as `rejected`, including weekly windows. Valid upstream deadlines are not
 shortened to a fixed cooldown ceiling; non-finite or unrepresentable deadlines are ignored.
 A refusal with no usable deadline falls back to a 60-second default backoff. Affinity is process-local
-and size-bounded. Credential 401/403 marks the account as needing reauthentication. If all eligible accounts are cooling, clients receive 429 with
+and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
 
 Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever

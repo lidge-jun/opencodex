@@ -110,7 +110,7 @@ export async function deliverAdapterResponse(
           firstEvents: initialEventStream,
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
-          continuation: fetchTerminalGuardContinuation,
+          continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
         })
       : initialEventStream;
     // The empty-completion guard sits OUTSIDE the terminal guard: a completed
@@ -235,7 +235,7 @@ export async function deliverAdapterResponse(
           firstEvents: (async function* () { yield* initialEvents; })(),
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
-          continuation: fetchTerminalGuardContinuation,
+          continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
         })) guardedEvents.push(event);
       } else {
         guardedEvents = initialEvents;

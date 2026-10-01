@@ -940,6 +940,8 @@ threshold. The Desktop/main account keeps its separate 98% hard lock.
 Set `codexPool.lowQuotaProtection` in configuration to pause accounts, record a log-and-API
 alert, or both; see [routing configuration](/reference/configuration/routing/#codex-pool-low-quota-protection).
 A pause takes effect for the next selection immediately, while saving it to disk is deferred.
+Pool quota responses can authorize a pause only with valid usage and a captured credential
+that is still current. A response without that proof may refresh displayed usage without pausing an account.
 Check this server’s authenticated `GET /api/codex-auth/low-quota-events` history for `logged`
 alerts or save failures. Manual resume remains in force for the current quota episode. The
 default alert reaches only the log and API; it does not produce a desktop or OS notification.
@@ -999,6 +1001,8 @@ An HTTP 429 from an attempted warmup is reported as `codex_warmup_rate_limited`.
 If the new OAuth credential's authenticated usage lookup confirms an exhausted 5-hour, weekly, or monthly quota, the account is saved without this model request and shows **Validation pending**. It cannot serve pool requests, even after a restart or token refresh. Once quota recovers, **Refresh quotas** finishes validation: a fresh, complete usage reading with headroom permits one small model request, and only a completed response enables the account. Failed or incomplete readings and failed validation preserve the restriction. Passive account polling does not trigger deferred validation. Unknown usage during initial registration retains the normal warmup gate.
 
 `ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
+
+In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits directly below Week. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported; the bar indicates availability, not a percentage, because no total credit limit is supplied. Hiding credits changes display only, and a new login waits for its own observation.
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 

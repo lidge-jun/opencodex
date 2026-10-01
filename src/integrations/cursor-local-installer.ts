@@ -17,6 +17,9 @@
 const DEFAULT_UPDATE_HOST = "https://api2.cursor.sh";
 
 const UPDATE_MANIFEST_TIMEOUT_MS = 4_000;
+const UPDATE_MANIFEST_MAX_BYTES = 64 * 1024;
+const UPDATE_MANIFEST_MAX_VERSION_LENGTH = 256;
+const UPDATE_MANIFEST_MAX_URL_LENGTH = 4 * 1024;
 const CACHE_TTL_OK_MS = 30 * 60_000;
 const CACHE_TTL_FAILED_MS = 5 * 60_000;
 
@@ -63,7 +66,29 @@ export function realCursorLocalHintDeps(): CursorLocalHintDeps {
     fetchJson: async (url, timeoutMs) => {
       const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
+      if (!response.body) throw new Error("Missing response body");
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > UPDATE_MANIFEST_MAX_BYTES) {
+          // Best-effort discard: awaiting cancel() could hang on a stalled source
+          // even though AbortSignal.timeout already bounds the request itself.
+          void reader.cancel().catch(() => {});
+          throw new Error("Update manifest exceeds byte limit");
+        }
+        chunks.push(value);
+      }
+      const body = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return JSON.parse(new TextDecoder().decode(body));
     },
   };
 }
@@ -86,7 +111,8 @@ export function platformForHost(os: string, arch: string): CursorLocalPlatform |
 function parseManifest(raw: unknown): { version: string; url: string } | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as CursorLocalManifest;
-  if (typeof record.url !== "string" || !/^https:\/\/downloads\.cursor\.com\/local-mode\//.test(record.url)) {
+  if (typeof record.url !== "string" || record.url.length > UPDATE_MANIFEST_MAX_URL_LENGTH
+    || !/^https:\/\/downloads\.cursor\.com\/local-mode\//.test(record.url)) {
     return null;
   }
   // Windows and Linux manifests carry `version`/`productVersion`; the Darwin ones return only
@@ -94,6 +120,7 @@ function parseManifest(raw: unknown): { version: string; url: string } | null {
   const candidate = typeof record.version === "string" ? record.version
     : typeof record.productVersion === "string" ? record.productVersion
       : typeof record.name === "string" ? record.name : "";
+  if (candidate.length > UPDATE_MANIFEST_MAX_VERSION_LENGTH) return null;
   const version = candidate.trim();
   if (version === "") return null;
   // The Linux channel advertises the AppImage's zsync delta metadata (what the in-app updater

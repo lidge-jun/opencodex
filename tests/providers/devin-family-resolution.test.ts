@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { resolveWireModelUidForTests } from "../../src/adapters/devin";
-import { fetchDevinUsableModels } from "../../src/adapters/devin/live-models";
+import { fetchDevinUsableModels, selectDevinFamilyMember } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer, setCachedCatalogForTests, type CacheEntry } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
 
@@ -258,6 +258,85 @@ describe("family-based wire model resolution", () => {
     ];
     expect(await resolve(catalogOf(rows), "devin-test-think", "none")).toBe("think-off");
     expect(await resolve(catalogOf(rows), "devin-test-think", "high")).toBe("think-high");
+  });
+
+  test("scores distinct family axes without a members-by-axes cross-product", () => {
+    // The anchor row carries the wide axis set: the mismatch baseline scans `targets`,
+    // which the anchor fills. With per-member baseline recomputation this case is
+    // members x axes (~144M iterations); hoisted, it is anchor axes + member axes.
+    const wideAxes = Object.fromEntries(
+      Array.from({ length: 12_000 }, (_, index) => [`Anchor ${index}`, { order: 1 }]),
+    );
+    const members = [
+      {
+        modelUid: "wide-anchor",
+        displayName: "wide-anchor",
+        familyUid: "wide",
+        familyAxes: wideAxes,
+        isFamilyDefault: true,
+      },
+      ...Array.from({ length: 12_000 }, (_, index) => ({
+        modelUid: `wide-${index}`,
+        displayName: `wide-${index}`,
+        familyUid: "wide",
+        familyAxes: { [`Axis ${index}`]: { order: 1 } },
+      })),
+    ];
+    const started = performance.now();
+    expect(selectDevinFamilyMember(members, {})?.modelUid).toBe("wide-anchor");
+    // Wall-clock bound, generous on purpose: the hoist makes this ~36k axis touches
+    // (ms even on a contended runner), while the per-member rescan needs ~144M — the
+    // bound only has to distinguish those two orders, not measure fast hardware.
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  test.each(["toString", "constructor", "__proto__"])("counts an extra own %s axis instead of inheriting a target", axis => {
+    const member = (modelUid: string, familyAxes: Record<string, { order: number }>) => ({
+      modelUid, displayName: modelUid, familyUid: "own-axes", familyAxes,
+    });
+    const anchor = member("anchor", { A: { order: 1 } });
+    const exact = member("exact", { A: { order: 1 } });
+    const extra = member("extra", Object.fromEntries([["A", { order: 1 }], [axis, { order: 1 }]]));
+    expect(selectDevinFamilyMember([extra, exact], {}, anchor)?.modelUid).toBe("exact");
+    const namedAnchor = member("named-anchor", Object.fromEntries([[axis, { order: 2 }]]));
+    const namedExact = member("named-exact", Object.fromEntries([[axis, { order: 2 }]]));
+    expect(selectDevinFamilyMember([member("missing", {}), namedExact], {}, namedAnchor)?.modelUid).toBe("named-exact");
+  });
+
+  test("ranks an exact axis match ahead of missing and extra axes", () => {
+    const anchor = {
+      modelUid: "axis-anchor",
+      displayName: "axis-anchor",
+      familyUid: "wide",
+      familyAxes: { A: { order: 1 }, B: { order: 2 } },
+      isFamilyDefault: true,
+    };
+    const exact = {
+      modelUid: "axis-exact",
+      displayName: "axis-exact",
+      familyUid: "wide",
+      familyAxes: { A: { order: 1 }, B: { order: 2 } },
+    };
+    const missing = {
+      modelUid: "axis-missing",
+      displayName: "axis-missing",
+      familyUid: "wide",
+      familyAxes: { A: { order: 1 } },
+    };
+    const extra = {
+      modelUid: "axis-extra",
+      displayName: "axis-extra",
+      familyUid: "wide",
+      familyAxes: { A: { order: 1 }, B: { order: 2 }, C: { order: 1 }, D: { order: 3 } },
+    };
+    // The anchor itself always wins while listed: the ranking claim is about the
+    // members it cannot see, so exclude it and pass it explicitly.
+    const members = [missing, extra, exact];
+    expect(selectDevinFamilyMember(members, {}, anchor)?.modelUid).toBe("axis-exact");
+    // Without the exact row, a member missing one target axis scores baseline - 1,
+    // while a member matching every target but exposing two extra axes scores
+    // 0 + 2 — unequal mismatch counts, so the ordering is proven rather than a tie.
+    expect(selectDevinFamilyMember([missing, extra], {}, anchor)?.modelUid).toBe("axis-missing");
   });
 });
 

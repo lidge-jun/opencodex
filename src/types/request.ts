@@ -50,6 +50,8 @@ export interface OcxParsedRequest {
   _responseModelId?: string;
   /** Selected OpenAI API virtual-model id retained after it rewrites the upstream wire model. */
   _openAiVirtualSelectedModelId?: string;
+  /** Serialized-only model id (xAI OAuth Fast lane); policy keeps reading `modelId`. */
+  _wireModelOverride?: string;
   previousResponseId?: string;
   context: OcxContext;
   stream: boolean;

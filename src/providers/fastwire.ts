@@ -18,6 +18,8 @@ const FAST_WIRE_ADAPTERS: Readonly<Record<FastWire["kind"], ReadonlySet<string>>
   // Cursor expresses Fast as a variant dimension of the picked model, resolved in the
   // request builder, so the adapter set is exactly the cursor adapter.
   "cursor-variant": new Set(["cursor"]),
+  // Internal xAI OAuth lane switch (xai-fast-model.ts): the OpenAI-family adapters serialize the id.
+  "model-variant": SERVICE_TIER_ADAPTERS,
 };
 
 const DEFAULT_SERVICE_TIER_FAST_WIRE: FastWire = Object.freeze({
@@ -435,6 +437,26 @@ export function createAdapterTierMetadata(
       outcome.confirmation = "unknown";
     },
   };
+}
+
+/**
+ * The Fast wire an OpenAI-family adapter actually serialized, as `createAdapterTierMetadata`'s last two
+ * arguments. A model-variant lane counts only when the observation declares it and the body really carries
+ * that id; otherwise the historical service_tier reading applies unchanged.
+ */
+export function emittedFastWire(
+  parsed: { _wireModelOverride?: string; options?: { tierObservation?: TierObservationContext } },
+  body: unknown,
+): [FastWire["kind"] | null, string | null] {
+  const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : undefined;
+  const variant = parsed._wireModelOverride;
+  if (variant !== undefined
+    && parsed.options?.tierObservation?.fastWire?.kind === "model-variant"
+    && record?.model === variant) {
+    return ["model-variant", variant];
+  }
+  const tier = typeof record?.service_tier === "string" ? record.service_tier : null;
+  return [tier === null ? null : "service-tier", tier];
 }
 
 /** Pure tier state machine. B1 normalizes canonical Fast on classified inherit routes. */

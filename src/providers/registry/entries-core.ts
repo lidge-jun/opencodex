@@ -20,6 +20,7 @@ import {
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+  ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
   ZAI_GLM_52_REASONING_EFFORTS,
   ZAI_GLM_53_REASONING_EFFORTS,
@@ -267,12 +268,14 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
-    // grok-4.7-build-fast arrives only through OAuth discovery. We read it as the Grok Build id of
-    // what xAI documents as Grok 4.7 Fast: "the same model served on faster infrastructure",
-    // offered in Cursor and Grok Build only, not on the public xAI API (docs.x.ai/developers/grok-4-7,
-    // fetched 2026-09-24). It therefore inherits grok-4.7's documented facts in the lists below.
-    // Its wire pin and service tier stay unclaimed until probed, which is why it is absent from
-    // XAI_MODELS, modelWireDefaults and modelSupportsServiceTier.
+    // grok-4.7-build-fast arrives only through OAuth discovery: xAI's Grok 4.7 Fast, "the same model
+    // served on faster infrastructure" (docs.x.ai/developers/grok-4-7). Probed 2026-09-30
+    // (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
+    // input, 500k limit and advertised defaults, 1.5-1.7x faster, ~2x the ticks per output token. It is
+    // not a second model row: shouldExposeProviderModel hides it, and grok-4.7's Fast selection on OAuth
+    // serializes it (src/providers/xai-fast-model.ts). It keeps grok-4.7's facts in the lists below so an
+    // explicit legacy request still works, plus the probed OAuth Responses wire. No service-tier claim:
+    // priority multiplied its ticks ~5.9x for no measured gain.
     // Live 2026-09-20: Chat Completions rejects `stop` on grok-4.6
     // (`400 invalid-argument "Model grok-4.6 does not support parameter stop."`).
     // xAI documents `stop` as unsupported for reasoning models. Claude Code
@@ -325,6 +328,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // "default", so forwarding a caller tier would advertise a tier it does not get.
     modelWireDefaults: {
       "grok-4.7": {
+        wire: "openai-responses",
+        inbound: ["responses"],
+        authModes: ["oauth"],
+      },
+      "grok-4.7-build-fast": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
@@ -482,6 +490,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
     // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
@@ -509,6 +518,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     fastWire: ANTHROPIC_FAST_WIRE,
     modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },

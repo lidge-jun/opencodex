@@ -5,6 +5,7 @@ import type { QuotaFailureCode } from "../../../../src/providers/quota-types";
  */
 import type { ProviderSortMode, WorkspaceItem } from "../../provider-workspace/catalog";
 import type { AccountQuota } from "../../codex-quota-utils";
+import type { BrowserLaunch } from "../../oauth-browser-launch";
 
 export type { ProviderSortMode, WorkspaceItem };
 
@@ -82,6 +83,7 @@ export type LoginHint = {
   url?: string;
   instructions?: string;
   deviceCode?: string;
+  browserLaunch?: BrowserLaunch;
 };
 
 export type AccountLoadState = "idle" | "loading" | "ready" | "error";

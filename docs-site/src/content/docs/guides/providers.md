@@ -289,6 +289,12 @@ paste the redirect URL or authorization code back. During device approval that f
 enter the displayed code on the provider's verification page instead. If the provider switches
 to manual input, the dashboard replaces the old code and instructions on its next status poll.
 
+If the proxy tries to open a browser and cannot, the login says so above the URL and keeps
+going: open the sign-in page from the link or copy it. A device login never opens a browser by
+itself; **Copy code & open** copies the code and opens the verification page in one click, and
+the dashboard keeps waiting for as long as the provider's code stays valid. In the desktop app
+these links open in your default browser.
+
 To stop the proxy from opening a browser at all, tick **Don't open a browser on the proxy machine**
 beside the login button, or set it permanently:
 
@@ -563,6 +569,8 @@ OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
 operated by TOKENLAB AI INC.
 Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
 `ocx provider add tokenlab` or select **TokenLab** in the dashboard's **Add provider** picker.
+TokenLab maintains a step-by-step [OpenCodex integration guide](https://docs.tokenlab.sh/integrations/opencodex)
+([한국어](https://docs.tokenlab.sh/ko/integrations/opencodex)) covering setup and per-model routing.
 The preset uses [Chat Completions](https://docs.tokenlab.sh/quickstart) and discovers models at
 `GET /v1/models?category=chat`, keeping only entries that declare `tool-use` capability.
 Image, video, audio, embedding and decision models are excluded from this chat preset.

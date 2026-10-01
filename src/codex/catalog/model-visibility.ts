@@ -1,4 +1,5 @@
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
+import { XAI_OAUTH_FAST_VARIANT_IDS } from "../../providers/xai-fast-model";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
@@ -191,6 +192,9 @@ export function shouldExposeProviderModel(providerName: string, modelId: string)
   // xAI /models advertises both the dated deployment and this floating alias.
   // Keep only grok-4.20-multi-agent-0309; the alias is the same server-side id.
   if (providerName === "xai" && modelId === "grok-4.20-multi-agent-beta-latest") return false;
+  // grok-4.7-build-fast is grok-4.7 on a faster serving lane; it is reached through grok-4.7's Fast
+  // selection on OAuth (xai-fast-model.ts), so the lane id is not published as a second model.
+  if (providerName === "xai" && XAI_OAUTH_FAST_VARIANT_IDS.has(modelId)) return false;
   return true;
 }
 

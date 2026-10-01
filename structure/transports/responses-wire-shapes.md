@@ -70,8 +70,8 @@ existing wire and tier policy. The OAuth lane is service-tier classified per mod
 `devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
-routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either
-wire (`chatServiceTier: true`). grok-4.20-multi-agent-0309 stays unclassified with its
+routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either wire (`chatServiceTier: true`) — except OAuth grok-4.7, whose Fast serializes `grok-4.7-build-fast` with no tier ([xAI Grok](../providers/xai-grok.md#oauth-fast-tier-priority-processing)).
+grok-4.20-multi-agent-0309 stays unclassified with its
 caller-tier pin: the gateway accepts the field but answers `service_tier: "default"`, a live
 downgrade rather than a fast tier.
 

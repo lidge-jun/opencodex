@@ -376,7 +376,7 @@ describe("sidecar on429 wiring", () => {
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429
     // inside a web-search/image turn is terminal while the same 429 on the main path rotates.
-    const anthropic = body.indexOf("rotateAnthropicAccountOn429(");
+    const anthropic = body.indexOf("rotateAnthropicAccountOnResponse(");
     expect(anthropic).toBeGreaterThan(oauth);
 
     // REACHABILITY, not mention. The first draft of this arm sat behind an unconditional early
@@ -463,7 +463,7 @@ describe("sidecar on429 wiring", () => {
     // identical limit recovers one loop over.
     const rotators = {
       key: /hasKeyPoolFailover\(/g,
-      anthropic: /rotateAnthropicAccountOn429\(/g,
+      anthropic: /rotateAnthropicAccountOnResponse\(/g,
       generic: /rotateGenericOAuthAccountOn429\(/g,
     };
     const counts = Object.fromEntries(
