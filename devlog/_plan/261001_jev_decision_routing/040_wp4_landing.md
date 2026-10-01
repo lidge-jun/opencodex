@@ -7,4 +7,3 @@
 4. Wait for required CI on the exact head SHA; fix and repush on failure.
 5. After green: comment+close #6185, #6275, #6302 with link and thanks; comment on #6348 (already closed) asking for a rebase of level/quota mode onto the new PR; comment on #6268 linking the PR.
 6. Report PR URL, head SHA, CI run URL, closed PRs, residual risks.
-

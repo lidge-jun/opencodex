@@ -44,4 +44,3 @@ describe("TypeSafe decision request golden", () => {
     }
   });
 });
-
