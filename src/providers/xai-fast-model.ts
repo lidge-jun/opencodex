@@ -1,4 +1,4 @@
-import type { FastWire, OcxParsedRequest, OcxProviderConfig } from "../types";
+import type { FastWire, OcxParsedRequest, OcxProviderConfig, TierDecision } from "../types";
 
 /**
  * Grok OAuth Fast is a serving lane, not a tier.
@@ -35,6 +35,16 @@ function modelVariantFastWire(variant: string): FastWire {
   return { kind: "model-variant", canonicalToWire: { priority: variant }, foreignCallerTiers: "drop" };
 }
 
+/** Shared by admission preview and final serialization; explicit operator wires stay authoritative. */
+export function xaiOauthFastModelForDecision(
+  route: { providerName: string; provider: Pick<OcxProviderConfig, "authMode" | "fastWire">; modelId: string },
+  decision: TierDecision | undefined,
+): string | undefined {
+  return decision?.kind === "set" && route.provider.fastWire === undefined
+    ? xaiOauthFastModel(route.providerName, route.provider, route.modelId)
+    : undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -58,9 +68,7 @@ export function applyXaiOauthFastModel(
   // The lane switch replaces the registry's service-tier Fast only. The xai registry entry declares no
   // FastWire, so a provider-level `fastWire` is always the operator's own (service-tier.ts reads it
   // first): that decision carries a wire value they verified, and it is sent unchanged.
-  const variant = parsed.options.tierDecision?.kind === "set" && route.provider.fastWire === undefined
-    ? xaiOauthFastModel(route.providerName, route.provider, route.modelId)
-    : undefined;
+  const variant = xaiOauthFastModelForDecision(route, parsed.options.tierDecision);
   if (!variant) {
     if (previous === undefined) return;
     delete parsed._wireModelOverride;

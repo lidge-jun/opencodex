@@ -262,7 +262,7 @@ export async function* runTurnWebSearchLoop(
       switch (plan.backend) {
         case "anthropic":
           return plan.anthropicSidecar
-            ? await runAnthropicWebSearch(query, plan.anthropicSidecar.providerName, plan.anthropicSidecar.provider, plan.settings, signal)
+            ? await runAnthropicWebSearch(query, plan.anthropicSidecar.providerName, plan.anthropicSidecar.provider, plan.settings, signal, plan.anthropicSidecar.config)
             : { text: "", sources: [], error: "anthropic backend selected without a resolved sidecar provider" };
         case "xai":
           return plan.xaiSidecar

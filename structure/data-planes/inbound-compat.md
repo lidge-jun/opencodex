@@ -10,6 +10,9 @@ Native steering follows [the shared WebSocket contract](../transports/streaming-
 Compatibility callers retain the public Responses ingress described by the
 [core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
 
+Chat and Messages admission previews the [xAI OAuth Fast wire destination](../providers/xai-grok.md#grok-47-fast-lane-oauth)
+using the same policy as final Responses serialization. Native dispatch retains its own destination scope check.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 

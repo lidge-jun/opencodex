@@ -108,3 +108,16 @@ export function canonicalizeJsonc(text: string): string {
 export function parseJsonc(text: string): unknown {
   return JSON.parse(canonicalizeJsonc(text));
 }
+
+/**
+ * True when the text carries a `//` or block comment outside a string. A writer that
+ * re-serializes the document would drop those, so it checks this before writing.
+ * An unterminated block comment counts as a comment.
+ */
+export function hasJsoncComments(text: string): boolean {
+  try {
+    return stripJsonComments(text) !== text;
+  } catch {
+    return true;
+  }
+}

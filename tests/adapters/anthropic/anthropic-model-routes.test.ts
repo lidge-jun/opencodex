@@ -6,14 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
-import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicAccountHealthSnapshot, getAnthropicPoolAccessSnapshot, getAnthropicPoolRetryAfterSeconds, promoteAnthropicActiveAccount, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
+import { clearAnthropicAccountPoolState, bindAnthropicSessionAffinity, getAnthropicAccountHealthSnapshot, getAnthropicSidecarAccessToken, getAnthropicPoolAccessSnapshot, getAnthropicPoolRetryAfterSeconds, promoteAnthropicActiveAccount, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
 import { parseAnthropicModelRoutes, resolveAnthropicModelRoute } from "../../../src/oauth/anthropic-model-routes";
 import { captureOAuthAccountSelection, getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../../src/oauth/store";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey } from "../../../src/codex/upstream-host-health";
 import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../../src/providers/request-pacing";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
 import { clearResponseStateForTests } from "../../../src/responses/state";
+import { parseRequest } from "../../../src/responses/parser";
 import { handleResponses } from "../../../src/server/responses";
+import { describeImagesInPlace, planVisionSidecar, resetVisionDescriptionCache } from "../../../src/vision";
+import { runAnthropicWebSearch } from "../../../src/web-search/anthropic-executor";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -313,6 +316,96 @@ test("matched route excludes active outsider before an upstream send", async () 
   expect(sends).toHaveLength(1);
   expect(sends[0]).not.toContain("synthetic-access-0");
   expect(["synthetic-access-1", "synthetic-access-2"].some(token => sends[0]!.includes(token))).toBe(true);
+});
+
+test("sidecar helpers use the routed account and refuse an empty strict route", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.routes![0]!.accounts = [ids[1]!];
+  expect(await getAnthropicSidecarAccessToken("anthropic", "claude-sonnet-4-5", cfg))
+    .toBe("synthetic-access-1");
+
+  cfg.anthropicAccountPool!.routes![0]!.accounts = ["removed-account"];
+  await expect(getAnthropicSidecarAccessToken("anthropic", "claude-sonnet-4-5", cfg))
+    .rejects.toThrow("No permitted Anthropic account");
+});
+
+test("a web-search sidecar send carries the routed account's credential", async () => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  cfg.anthropicAccountPool!.routes![0]!.accounts = [ids[1]!];
+
+  let sentAuth = "";
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sentAuth = new Headers(init?.headers).get("authorization") ?? "";
+    const frame = {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "done" },
+    };
+    return new Response(`event: content_block_delta\ndata: ${JSON.stringify(frame)}\n\n`, { status: 200 });
+  }) as typeof fetch;
+
+  const out = await runAnthropicWebSearch(
+    "bun release",
+    "anthropic",
+    cfg.providers.anthropic as OcxProviderConfig,
+    { model: "claude-sonnet-4-5", reasoning: "low", timeoutMs: 5_000 },
+    undefined,
+    cfg,
+  );
+  expect(out.error).toBeUndefined();
+  expect(out.text).toBe("done");
+  expect(sentAuth).toBe("Bearer synthetic-access-1");
+});
+
+test.each([false, true])("vision plan enforces its helper-model account route (empty strict route=%s)", async emptyRoute => {
+  const ids = await seed();
+  const cfg = config(ids, () => answer());
+  const mainModel = "text-only-model";
+  const helperModel = "claude-haiku-4-5";
+  cfg.providers.anthropic!.noVisionModels = [mainModel];
+  cfg.visionSidecar = { enabled: true, backend: "anthropic", model: helperModel, timeoutMs: 5_000 };
+  cfg.anthropicAccountPool!.routes = [
+    { name: "main", match: mainModel, accounts: [ids[0]!] },
+    { name: "vision-helper", match: helperModel, accounts: [emptyRoute ? "removed-account" : ids[1]!] },
+  ];
+  const parsed = parseRequest({
+    model: `anthropic/${mainModel}`,
+    input: [{ type: "message", role: "user", content: [
+      { type: "input_text", text: "Describe this synthetic image." },
+      { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+    ] }],
+  });
+  const visionSends: Array<{ authorization: string | null; model: string }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    visionSends.push({ authorization: new Headers(init?.headers).get("authorization"),
+      model: (JSON.parse(String(init?.body)) as { model: string }).model });
+    expect(String(input)).toBe("https://anthropic-routes.test/v1/messages");
+    const frame = { type: "content_block_delta", index: 0,
+      delta: { type: "text_delta", text: "A synthetic routed vision description." } };
+    return new Response(`event: content_block_delta\ndata: ${JSON.stringify(frame)}\n\n`);
+  }) as typeof fetch;
+  resetVisionDescriptionCache();
+  try {
+    const plan = planVisionSidecar(cfg, cfg.providers.anthropic!, mainModel, parsed,
+      undefined, { providerName: "anthropic" });
+    expect(plan?.backend).toBe("anthropic");
+    await describeImagesInPlace(parsed, plan!, new Headers());
+    const content = JSON.stringify(parsed.context.messages);
+    if (emptyRoute) {
+      expect(visionSends).toEqual([]);
+      expect(content).toContain("anthropic vision sidecar auth failed");
+      expect(content).not.toContain("A synthetic routed vision description.");
+    } else {
+      expect(visionSends).toEqual([{ authorization: "Bearer synthetic-access-1", model: helperModel }]);
+      expect(content).toContain("A synthetic routed vision description.");
+      expect(content).not.toContain("could not be processed");
+    }
+    expect(sends).toEqual([]);
+  } finally {
+    resetVisionDescriptionCache();
+  }
 });
 
 // An operator may name a route after an account ID; the data-plane client must never see it.
