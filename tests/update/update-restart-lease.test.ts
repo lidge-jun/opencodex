@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -261,6 +261,10 @@ describe("the restart veto lease frees a service-manager child (#5760)", () => {
         child.exited,
         Bun.sleep(watchdogMs(10_000)).then(() => {
           console.log(`[held-lease child output]\n${childLogs.join("")}`);
+          console.log(`[diag] authority=${box.authority} lockHeld=${existsSync(box.lockDir)} `
+            + `homedir=${homedir()} realHome=${realHome} envReal=${process.env.OCX_REAL_HOME} `
+            + `osLock=${existsSync(join(homedir(), ".opencodex", "service-state.json.mutation.lock"))} `
+            + `statePaths=${JSON.stringify(serviceStatePaths())}`);
           throw new Error("service child survived a held lease");
         }),
       ]);
