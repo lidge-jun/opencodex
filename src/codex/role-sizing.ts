@@ -31,6 +31,10 @@
  *   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import { ROLE_INSTRUCTIONS_EXCERPT_CHARS } from "./role-sizing-limits";
+
+export { ROLE_INSTRUCTIONS_EXCERPT_CHARS };
+
 /** Capability tiers, cheapest first. */
 export const SIZING_TIERS = ["fast", "standard", "frontier"] as const;
 export type SizingTier = typeof SIZING_TIERS[number];
@@ -38,8 +42,6 @@ export type SizingTier = typeof SIZING_TIERS[number];
 /** Reasoning effort intents, least deliberation first. Positions on a ladder, never level names. */
 export const SIZING_EFFORTS = ["glance", "measured", "thorough", "exhaustive"] as const;
 export type SizingEffort = typeof SIZING_EFFORTS[number];
-
-export const ROLE_INSTRUCTIONS_EXCERPT_CHARS = 1500;
 
 const MAX_FIELD_CHARS = 400;
 
@@ -86,6 +88,18 @@ export const ROLE_SIZING_SYSTEM_PROMPT = [
   "Answer with one JSON object and nothing else, no prose and no code fence:",
   '{"roles":{"<role name>":{"tier":"fast|standard|frontier","effort":"glance|measured|thorough|exhaustive","rationale":"<one sentence covering both dials>","move_up_if":"<signals that would justify a stronger tier or higher effort>","move_down_if":"<signals that would justify a cheaper tier or lower effort>"}}}',
   "Include every role you were given, keyed by its exact name, with exactly those five fields.",
+].join("\n");
+
+/**
+ * The rubric for sizing one described piece of delegated work instead of a standing role. The role
+ * rubric is kept whole so both surfaces share one scale; the addendum only changes what is sized.
+ */
+export const DELEGATED_WORK_SIZING_SYSTEM_PROMPT = [
+  ROLE_SIZING_SYSTEM_PROMPT,
+  "",
+  "This request sizes one-shot delegated work rather than a standing role. The single entry's instructions",
+  "describe the work a parent hands off; size that work itself, as described, rather than every task a",
+  "role with that description might later receive. Answer in the same shape, keyed by the entry's exact name.",
 ].join("\n");
 
 export interface RoleSizing {

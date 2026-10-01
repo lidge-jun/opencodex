@@ -28,6 +28,11 @@ for the exact model and recovery scope.
 
 ## Claude OAuth account pool (experimental)
 
+Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
+response headers on streaming, JSON and upstream-error responses, so compatible Claude Code
+statusLine consumers can read the provider's quota observations. Missing observations are
+not filled with invented values. This relay does not change account selection or retry behavior.
+
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
 

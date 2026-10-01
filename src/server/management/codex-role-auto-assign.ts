@@ -51,10 +51,9 @@ async function completeThroughProxy(call: RoleSizingCall, config: OcxConfig) {
   });
 }
 
-async function roleModelCandidates(config: OcxConfig, models: readonly CatalogModel[]): Promise<RoleModelCandidate[]> {
-  const [catalog, { subagentSelectableModels }, { resolveMatchedPrice }] = await Promise.all([
+async function modelCandidates(slugs: readonly string[], models: readonly CatalogModel[]): Promise<RoleModelCandidate[]> {
+  const [catalog, { resolveMatchedPrice }] = await Promise.all([
     import("../../codex/catalog"),
-    import("../../codex/subagent-selectable-models"),
     import("../../usage/cost"),
   ]);
   const nativeSlugs = catalog.listCatalogNativeSlugs();
@@ -63,7 +62,7 @@ async function roleModelCandidates(config: OcxConfig, models: readonly CatalogMo
     const cost = resolveMatchedPrice(provider, modelId)?.cost4;
     return cost ? cost.input + cost.output : null;
   };
-  return subagentSelectableModels(config, models, nativeSlugs).map(slug => {
+  return slugs.map(slug => {
     const row = routed.get(slug);
     if (row) {
       return {
@@ -86,7 +85,21 @@ async function roleModelCandidates(config: OcxConfig, models: readonly CatalogMo
   });
 }
 
+async function roleModelCandidates(config: OcxConfig, models: readonly CatalogModel[]): Promise<RoleModelCandidate[]> {
+  const [{ listCatalogNativeSlugs }, { subagentSelectableModels }] = await Promise.all([
+    import("../../codex/catalog"),
+    import("../../codex/subagent-selectable-models"),
+  ]);
+  return modelCandidates(subagentSelectableModels(config, models, listCatalogNativeSlugs()), models);
+}
+
 export class NoSizingModelError extends Error {}
+
+function resolveSizingModel(sizingModel: string | undefined, readConfiguredDefaultModel: () => string | null): string {
+  const model = sizingModel?.trim() || readConfiguredDefaultModel();
+  if (!model) throw new NoSizingModelError("no default model is set in Codex config.toml; pass a sizing model");
+  return model;
+}
 
 export async function proposeCodexRoleModels(options: {
   config: OcxConfig;
@@ -101,8 +114,7 @@ export async function proposeCodexRoleModels(options: {
     import("../../codex/role-auto-assign"),
     import("../../codex/catalog/parsing"),
   ]);
-  const sizingModel = options.sizingModel?.trim() || readConfiguredDefaultModel();
-  if (!sizingModel) throw new NoSizingModelError("no default model is set in Codex config.toml; pass a sizing model");
+  const sizingModel = resolveSizingModel(options.sizingModel, readConfiguredDefaultModel);
 
   const roleRows = roles.listCodexAgentRoleModels(options.codexHome).map(row => ({
     role: row.role,
@@ -144,6 +156,53 @@ export async function proposeCodexRoleModels(options: {
     sizingModel,
     sizingError,
     proposals: assign.buildRoleProposals(roleRows, outcomes, classified),
+    candidates: classified.map(({ model, tier, tierSource, unitPrice }) => ({ model, tier, tierSource, unitPrice })),
+  };
+}
+
+export const DELEGATED_WORK_ROLE = "delegated-work";
+
+/**
+ * The same sizing for the Subagents page's delegation default: the work a parent hands its
+ * preferred subagent is sized as one standing role, and the pick comes from the models that page
+ * offers. Effort is always proposed, restricted to the Codex levels the page can save.
+ */
+export async function proposeDelegationModel(options: {
+  config: OcxConfig;
+  work: string;
+  offered: readonly string[];
+  sizingModel?: string;
+  models: readonly CatalogModel[];
+  completeRoleSizing?: CompleteRoleSizing;
+}) {
+  const [sizing, assign, { readConfiguredDefaultModel }, { isCodexReasoningEffort }] = await Promise.all([
+    import("../../codex/role-sizing"),
+    import("../../codex/role-auto-assign"),
+    import("../../codex/catalog/parsing"),
+    import("../../reasoning-effort"),
+  ]);
+  const sizingModel = resolveSizingModel(options.sizingModel, readConfiguredDefaultModel);
+  const answer = await (options.completeRoleSizing ?? completeThroughProxy)({
+    model: sizingModel,
+    system: sizing.DELEGATED_WORK_SIZING_SYSTEM_PROMPT,
+    user: sizing.buildRoleSizingUserMessage([{ role: DELEGATED_WORK_ROLE, instructions: options.work }]),
+  }, options.config);
+  const sizingError = answer.error ? publicSizingError(answer.error) : null;
+  const outcomes = sizingError
+    ? new Map([[DELEGATED_WORK_ROLE, { unsized: `the sizing call failed: ${sizingError}` }]])
+    : sizing.parseRoleSizingResponse(answer.text, [DELEGATED_WORK_ROLE]);
+  const candidates = (await modelCandidates(options.offered, options.models))
+    .map(candidate => ({ ...candidate, efforts: candidate.efforts.filter(isCodexReasoningEffort) }));
+  const classified = assign.classifyRoleModelCandidates(candidates, options.config.codexRoleTiers);
+  const [proposal] = assign.buildRoleProposals([{
+    role: DELEGATED_WORK_ROLE,
+    model: options.config.injectionModel ?? null,
+    effort: options.config.injectionEffort ?? null,
+  }], outcomes, classified, { alwaysProposeEffort: true });
+  return {
+    sizingModel,
+    sizingError,
+    proposal: proposal!,
     candidates: classified.map(({ model, tier, tierSource, unitPrice }) => ({ model, tier, tierSource, unitPrice })),
   };
 }

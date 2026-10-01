@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findCrossHomeOwner, findCrossHomeOwnerDetailed, markCrossHomeSibling, markLiveHomeSibling } from "../../src/cli/cross-home-owner";
@@ -519,6 +519,28 @@ test("an attested sibling record defers to the owner port it names", async () =>
 test("publishing a runtime record registers the home for cross-home discovery", () => {
   const fx = fixture();
   writeRuntimePort({ pid: process.pid, port: 0 });
+  expect(readOwnerRegistry().homes).toContain(fx.ocx);
+});
+
+test("registry publication hardens its directory and replaces entry symlinks without following", () => {
+  if (process.platform === "win32") return;
+  const fx = fixture();
+  const registryDir = ownerRegistryDir();
+  mkdirSync(registryDir, { recursive: true });
+  chmodSync(registryDir, 0o777);
+  writeFileSync(join(fx.ocx, "runtime-port.json"), "{}\n");
+  registerOwnerRegistryHome(fx.ocx);
+  expect(lstatSync(registryDir).mode & 0o777).toBe(0o700);
+
+  const entry = join(registryDir, readdirSync(registryDir)[0]!);
+  const canary = join(fx.ocx, "credential-canary");
+  writeFileSync(canary, "private bytes\n", { mode: 0o600 });
+  unlinkSync(entry);
+  symlinkSync(canary, entry);
+  registerOwnerRegistryHome(fx.ocx);
+
+  expect(readFileSync(canary, "utf8")).toBe("private bytes\n");
+  expect(lstatSync(entry).isSymbolicLink()).toBe(false);
   expect(readOwnerRegistry().homes).toContain(fx.ocx);
 });
 

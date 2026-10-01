@@ -61,17 +61,36 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(firstOutputs).toBe(1);
   });
 
-  test("first-output callback ignores tool-only streams", async () => {
+  test("first-output callback observes tool-only streams once", async () => {
     let firstOutputs = 0;
     await collectSse(bridgeToResponsesSSE(replay([
       { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "" },
       { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_delta", arguments: " " },
       { type: "tool_call_end", id: "call_1" },
       { type: "done" },
     ]), "routed/model", undefined, undefined, undefined, undefined, undefined, {
       onFirstOutput: () => { firstOutputs += 1; },
     }));
-    expect(firstOutputs).toBe(0);
+    expect(firstOutputs).toBe(1);
+  });
+
+  test("first-output callback observes custom tool input but not empty tool scaffolding", async () => {
+    for (const input of ["", "synthetic input"]) {
+      let firstOutputs = 0;
+      const frames = await collectSse(bridgeToResponsesSSE(replay([
+        { type: "tool_call_start", id: "custom_1", name: "probe_tool" },
+        { type: "tool_call_delta", arguments: input },
+        { type: "tool_call_end", id: "custom_1" },
+        { type: "done" },
+      ]), "routed/model", undefined, new Set(["probe_tool"]), undefined, undefined, undefined, {
+        onFirstOutput: () => { firstOutputs += 1; },
+      }));
+      expect(firstOutputs).toBe(input.length ? 1 : 0);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+      if (input) expect(frames.some(frame => frame.event === "response.custom_tool_call_input.delta")).toBe(true);
+    }
   });
 
   test("first-output callback still fires for hidden reasoning", async () => {
