@@ -313,6 +313,24 @@ describe("anthropic extended-thinking gate", () => {
     expect((await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-opus-4-6"), bare)).max_tokens).toBe(32_000);
   });
 
+  // `defaultMaxOutputTokens` is a fallback budget for omitted requests, not a statement that the
+  // model cannot emit more. Reading it as a capability ceiling would let a deliberately cheap
+  // budget clamp an explicit request BELOW what this path sent before, squeezing the thinking
+  // budget with it, so the configured value may only ever raise the ceiling.
+  test("a low fallback budget never lowers the ceiling for a larger explicit request", async () => {
+    const cheap = { ...provider, defaultMaxOutputTokens: 8192 } as unknown as OcxProviderConfig;
+    const b = await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-opus-4-6"), cheap);
+    // Regression: this returned max_tokens 8192 / budget 4096, worse than the 32000/16384 the
+    // flat ceiling produced, because the fallback budget was treated as a capability.
+    expect(b.max_tokens as number).toBe(32_000);
+    expect((b.thinking as { budget_tokens: number }).budget_tokens).toBe(16_384);
+    // The budget still decides an OMITTED request, which is what it is actually for.
+    expect((await bodyOf(parsed("none", {}, "claude-opus-4-6"), cheap)).max_tokens).toBe(8192);
+    // A model whose stated maximum really is higher still gets it.
+    const seeded = { ...cheap, modelMaxOutputTokens: { "claude-opus-4-6": 128_000 } } as unknown as OcxProviderConfig;
+    expect((await bodyOf(parsed("high", { maxOutputTokens: 128_000 }, "claude-opus-4-6"), seeded)).max_tokens).toBe(128_000);
+  });
+
   test("configured provider output budget replaces the 8192 default when the caller omits max_output_tokens", async () => {
     const budgeted = { ...provider, defaultMaxOutputTokens: 64_000, modelMaxOutputTokens: { "claude-fable-5": 32_000 } };
     // No reasoning: the configured budget is the wire max_tokens.

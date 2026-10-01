@@ -1052,15 +1052,22 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           const wantBudget = reasoningBudget(effectiveReasoning);
           // Clamp to what the TARGET can emit, not to a flat 32k. REASONING_MAX_TOKENS_CEILING
           // dates from Claude 4.x models that really stopped near 32k; Opus 4.6 and Sonnet 4.6
-          // document 128K and Haiku 4.5 64K, so the flat ceiling silently cut an explicit
-          // caller `max_tokens` to a quarter of what the model supports — the adaptive branch
-          // above honours the caller's figure, and this one did not. A provider that states the
-          // model's real maximum is more authoritative than the constant; it stays the fallback
-          // for a target whose ceiling is unknown.
-          const modelCeiling = typeof configuredMaxOut === "number" && configuredMaxOut > 0
-            ? configuredMaxOut
+          // document 128K and Haiku 4.5 64K, so the flat ceiling cut an explicit caller
+          // `max_tokens` to a quarter of what the model supports — the adaptive branch above
+          // honours the caller's figure, and this one did not.
+          //
+          // `configuredMaxOut` only ever RAISES this ceiling. It is two different things at once:
+          // a capability statement on the canonical Anthropic entries (documented Messages maxima)
+          // and a plain fallback budget for omitted requests anywhere else. Letting it lower the
+          // ceiling would read an operator's cheap `defaultMaxOutputTokens: 8192` as "this model
+          // cannot emit more" and clamp an explicit 128000 request to 8192 — below what this path
+          // sent before and with the thinking budget squeezed to 4096. Taking the larger of the two
+          // keeps the historical ceiling as a floor, so a low fallback budget cannot regress a
+          // caller who asked for more.
+          const statedCeiling = typeof configuredMaxOut === "number" && configuredMaxOut > 0
+            ? Math.max(configuredMaxOut, REASONING_MAX_TOKENS_CEILING)
             : REASONING_MAX_TOKENS_CEILING;
-          const maxTokens = Math.min(modelCeiling, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
+          const maxTokens = Math.min(statedCeiling, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
           const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
           body.max_tokens = maxTokens;
           body.thinking = { type: "enabled", budget_tokens: budget };
