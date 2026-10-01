@@ -10,9 +10,9 @@ export interface CliCommandEntry {
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "chatgpt",
-    usage: "ocx chatgpt <launch|restore|status>",
-    summary: "Experimental ChatGPT app-server shim (macOS only, default off).",
-    details: ["Experimental launch requires chatgptDesktop.appServerShim: true; restore removes its launcher."],
+    usage: "ocx chatgpt <launch|restore|status|install-watcher|uninstall-watcher>",
+    summary: "Experimental ChatGPT app-server shim and TLS intercept (macOS only, default off).",
+    details: ["Launch requires appServerShim or unblockSend; intercept needs a running proxy and manual CA trust. install-watcher [--yes] manages intercept only; uninstall-watcher removes it. Restore removes the shim launcher."],
   },
   {
     name: "init",

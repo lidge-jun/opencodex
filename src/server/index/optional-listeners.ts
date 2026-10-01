@@ -1,3 +1,4 @@
+import { createChatgptUnblockLifecycle } from "./chatgpt-unblock-lifecycle";
 import { serviceApiTokenFingerprint } from "../../lib/service-secrets";
 import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
@@ -45,6 +46,7 @@ export interface OptionalListenerSet<T> {
 
 export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
+  const chatgptUnblock = createChatgptUnblockLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
   let activeConfig: OcxConfig | undefined;
   const supervisor = createLinkSupervisor({
@@ -104,6 +106,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
         maxRequestBodySize: ctx.maxRequestBodySize,
         dispatch: ctx.dispatch,
       });
+      chatgptUnblock.start({ config: ctx.config, publicPort: ctx.publicPort });
     },
     ensureStarted: () => linkListener.ensureStarted(),
     close: () => linkListener.close(),
@@ -120,6 +123,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       }
       try { await linkListener.stop(); } catch (error) { failure ??= error; }
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
+      try { await chatgptUnblock.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
       if (failure) throw failure;

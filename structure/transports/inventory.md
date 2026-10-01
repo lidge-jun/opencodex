@@ -27,6 +27,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
+| Shared SOCKS5 handshake | `src/lib/socks5-handshake.ts`, `src/lib/socks5-fetch.ts`, `src/chatgpt/desktop-unblock/ws-upstream.ts` | Fetch tunnels and the optional ChatGPT intercept WebSocket relay share method negotiation, bounded URL-credential decoding, RFC 1929 authentication and CONNECT framing. Callers own socket disposal, deadlines and bytes after CONNECT; the handshake imports no optional integration. |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
 | Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts`, `src/responses/freeform-wrapper-scan.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder over one bounded JSON classification of the prefix, so property order and escaped key spellings preview as the wrapper completion unwraps them. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
 | Meta Muse Responses tool names | `src/responses/muse-tool-name-alias.ts`, `src/adapters/openai-responses.ts` | `api.meta.ai` only: function names over 64 characters or containing characters outside `[a-zA-Z0-9_-]` become collision-safe wire aliases and are restored before the client sees them. |
@@ -299,7 +300,9 @@ admission or account-snapshot pairing. The forwarding contract is covered in
 the compatibility config facade does not own a second activation path.
 `src/server/responses/fetch-helpers.ts` routes the built-in HTTP executor through
 configured outbound fetch, preserving physical-send admission and dispatch override.
-Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
+Native provider WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
+The optional ChatGPT intercept has a separate raw upgrade relay whose SOCKS5 CONNECT
+shares `src/lib/socks5-handshake.ts` with fetch; see [ChatGPT Desktop](../clients/chatgpt-desktop.md#optional-local-ca-send-unblock-intercept).
 Proxy-selected discovery peers remain unpinnable, and private destinations still
 require explicit private-network permission plus NO_PROXY before direct transport.
 

@@ -44,7 +44,11 @@ import { getConfigDir } from "../paths";
 import { COMPACTION_TRIGGERS } from "./compaction-triggers";
 
 /** Experimental macOS ChatGPT app-server shim; only a strict optional boolean is accepted. */
-export const chatgptDesktopSchema = z.object({ appServerShim: z.boolean().optional() }).strict();
+export const chatgptDesktopSchema = z.object({
+  appServerShim: z.boolean().optional(),
+  unblockSend: z.boolean().optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+}).strict();
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {

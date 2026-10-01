@@ -443,9 +443,12 @@
       "path": "clients/chatgpt-desktop.md",
       "tier": 5,
       "title": "ChatGPT Desktop",
-      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "scope": "Experimental macOS app-server stdout shim and local-CA TLS intercept, opt-in launch/watcher, restore and failure boundaries.",
       "documents": [
-        "src/chatgpt/"
+        "src/chatgpt/",
+        "src/cli/chatgpt-command.ts",
+        "src/server/index/chatgpt-unblock-lifecycle.ts",
+        "src/lib/socks5-handshake.ts"
       ]
     },
     {

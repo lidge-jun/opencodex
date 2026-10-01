@@ -106,6 +106,9 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
   }
+  if (normalized.chatgptDesktop?.unblockSend === true && process.platform !== "darwin") {
+    warnings.push("chatgptDesktop.unblockSend is experimental and macOS only; ignored on this platform");
+  }
   warnings.push(...inheritedFastWireConflictProviderNames(normalized).map(inheritedFastWireConflictWarning));
   warnings.push(...degradedCodexAccountPriorityWarnings(rawParsed, normalized));
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
@@ -624,8 +627,13 @@ function skillsConfigError(value: unknown): string | null {
 
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const chatgptDesktop = rawConfigRecord(value)?.chatgptDesktop;
-  if (chatgptDesktop !== undefined && !chatgptDesktopSchema.safeParse(chatgptDesktop).success) {
-    return { ok: false, error: "schema_invalid: chatgptDesktop: requires an optional boolean appServerShim and no other fields" };
+  if (chatgptDesktop !== undefined) {
+    const parsed = chatgptDesktopSchema.safeParse(chatgptDesktop);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const field = issue?.path.map(String).join(".");
+      return { ok: false, error: `schema_invalid: chatgptDesktop${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}` };
+    }
   }
   const compactionRouting = rawConfigRecord(value)?.compactionRouting;
   if (compactionRouting !== undefined && !compactionRoutingSchema.safeParse(compactionRouting).success) {
