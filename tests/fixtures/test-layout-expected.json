@@ -287,6 +287,7 @@
   "chatgpt-device-auth.test.ts": "oauth",
   "chatgpt-oauth.test.ts": "oauth",
   "chatgpt-token-expiry.test.ts": "oauth",
+  "cheaperinference-provider.test.ts": "providers",
   "chutes-provider.test.ts": "providers",
   "ci-bun-crash-classifier.test.ts": "ci-workflows",
   "ci-crash-disposition.test.ts": "ci-workflows",
