@@ -140,4 +140,31 @@ describe("/api/codex-agent-roles", () => {
       spy.mockRestore();
     }
   });
+
+  test("refuses an invalid role file with 409 and keeps it unchanged", async () => {
+    const rolePath = join(root, "codex", "agents", "explorer.toml");
+    const broken = 'name = "explorer"\nmodel = "old\\q"\n';
+    writeFileSync(rolePath, broken);
+    const refused = await put("explorer", "m4");
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("invalid_role_file");
+    expect(readFileSync(rolePath, "utf8")).toBe(broken);
+  });
+
+  test("a filesystem failure is reported without its path", async () => {
+    const rolePath = join(root, "codex", "agents", "explorer.toml");
+    const nativeRead = fs.readFileSync;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (path === rolePath) throw Object.assign(new Error(`EACCES: permission denied, open '${rolePath}'`), { code: "EACCES" });
+      return nativeRead(path, options as BufferEncoding);
+    }) as never);
+    try {
+      const failed = await put("explorer", "m5");
+      expect(failed.status).toBe(500);
+      expect(failed.body).toEqual({ error: "could not write the role file", code: "write_failed" });
+      expect(JSON.stringify(failed.body)).not.toContain(root);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

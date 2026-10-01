@@ -69,7 +69,8 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
       const status = error.code === "unknown_role" ? 404 : error.code === "invalid_model" ? 400 : 409;
       return jsonResponse({ error: error.message, code: error.code }, status, req, config);
     }
-    return jsonResponse({ error: error instanceof Error ? error.message : String(error), code: "write_failed" }, 500, req, config);
+    // Filesystem and ownership errors carry absolute paths and UIDs; keep them out of the response.
+    return jsonResponse({ error: "could not write the role file", code: "write_failed" }, 500, req, config);
   }
 
   // The role TOML is what Codex obeys, so its write stands even when the omo mirror cannot follow.

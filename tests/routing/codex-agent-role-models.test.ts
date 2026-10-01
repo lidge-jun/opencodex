@@ -111,4 +111,19 @@ describe("writeCodexAgentRoleModel", () => {
     }
     expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(IMPORTED_ROLE);
   });
+
+  test("refuses a role file that is not valid TOML and leaves its bytes alone", () => {
+    const dir = codexHome();
+    const broken = 'name = "explorer"\nmodel = "old\\q"\n';
+    writeFileSync(join(dir, "agents", "explorer.toml"), broken);
+    let caught: unknown;
+    try {
+      writeCodexAgentRoleModel("explorer", "new", dir);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AgentRoleModelError);
+    expect((caught as AgentRoleModelError).code).toBe("invalid_role_file");
+    expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(broken);
+  });
 });

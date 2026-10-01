@@ -15,7 +15,12 @@ import { encodeBasicString, findInvalidCharacter } from "./prompt-layers/encodin
 import { dominantEol } from "./prompt-layers/toml-edit";
 import { listCodexAgentRoles, locateTomlModelKey } from "./subagent-model-fallback";
 
-export type AgentRoleModelErrorCode = "unknown_role" | "invalid_model" | "unsupported_model_value" | "unsafe_target";
+export type AgentRoleModelErrorCode =
+  | "unknown_role"
+  | "invalid_model"
+  | "unsupported_model_value"
+  | "unsafe_target"
+  | "invalid_role_file";
 
 export class AgentRoleModelError extends Error {
   constructor(readonly code: AgentRoleModelErrorCode, message: string) {
@@ -89,8 +94,25 @@ export function listCodexAgentRoleModels(codexHome: string): CodexAgentRoleModel
       const location = locateTomlModelKey(readFileSync(roleFile(role, codexHome), "utf8"));
       model = location?.inRootTable ? location.value : null;
     } catch { /* an unreadable role reports no pin */ }
-    return { role, model };
+  return { role, model };
   });
+}
+
+/**
+ * Codex refuses a role file that is not valid TOML. Editing one anyway could turn a role that
+ * Codex rejects into one it loads, so both the original and the edited document must parse.
+ */
+function assertValidRoleToml(role: string, text: string, stage: "before" | "after"): void {
+  try {
+    Bun.TOML.parse(text);
+  } catch {
+    throw new AgentRoleModelError(
+      "invalid_role_file",
+      stage === "before"
+        ? `${role}.toml is not valid TOML; fix it before setting a model`
+        : `setting the model would leave ${role}.toml invalid; the file was not changed`,
+    );
+  }
 }
 
 export function writeCodexAgentRoleModel(
@@ -104,8 +126,10 @@ export function writeCodexAgentRoleModel(
     throw new AgentRoleModelError("unsafe_target", `${role}.toml is not a regular file; edit it where it points`);
   }
   const before = readFileSync(path, "utf8");
+  assertValidRoleToml(role, before, "before");
   const after = setTomlRootModel(before, validateAgentRoleModel(model));
   if (after === before) return { status: "unchanged" };
+  assertValidRoleToml(role, after, "after");
   assertIntegrationWriteOwnership(path);
   atomicWriteFileNoFollowUnclaimed(path, after);
   return { status: "written" };
