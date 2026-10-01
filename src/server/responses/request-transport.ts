@@ -217,8 +217,11 @@ export async function prepareResponsesTransport(
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
     if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
-      const replayLease = await acquireAccountLease("kiro", admitted.accountId, { maxConcurrentPerAccount: kiroCap });
-      if (!replayLease || !options.accountLoad) {
+      const signal = options.abortSignal ?? req.signal;
+      const replayLease = await acquireAccountLease("kiro", admitted.accountId, {
+        maxConcurrentPerAccount: kiroCap, signal,
+      });
+      if (!replayLease || !options.accountLoad || options.accountLoad.cancelled || signal.aborted) {
         replayLease?.release();
         throw new Error("Kiro replay account capacity is full");
       }
@@ -263,16 +266,20 @@ export async function prepareResponsesTransport(
     retryParsed: OcxParsedRequest = parsed,
   ): Promise<OAuthAccessSnapshot | null> => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return null;
+    const signal = options.abortSignal ?? req.signal;
     let speculative = kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId
-      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap }) : null;
+      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap, signal }) : null;
+    if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
     if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId && !speculative) return null;
     let committed: OAuthAccessSnapshot | null;
     try { committed = await commitResolvedOAuthSelection(snapshot); }
     catch (error) { speculative?.release(); throw error; }
     if (!committed) { speculative?.release(); return null; }
+    if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
     if (kiroLoadEnabled && committed.accountId !== (speculative?.accountId ?? options.accountLoad?.lease?.accountId)) {
       speculative?.release();
-      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap });
+      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap, signal });
+      if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
       if (!speculative) return null;
     }
     if (speculative && options.accountLoad) {
@@ -298,6 +305,12 @@ export async function prepareResponsesTransport(
       // the retry. Keep both owners synchronized; for ordinary paths they are identical.
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
+    }
+    if (route.providerName === "zed") {
+      // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
+      const zedContext = { userId: snapshot.providerUserId ?? "" };
+      parsed._zedAuthContext = zedContext;
+      if (retryParsed !== parsed) retryParsed._zedAuthContext = { ...zedContext };
     }
     // Re-stamp: a request that rotated accounts must be attributed to the account that actually
     // served it. All three rotation sites funnel through here, so this is the only re-stamp
@@ -667,11 +680,18 @@ export async function prepareResponsesTransport(
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
           return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (kiroLoadEnabled) {
+          const transportSignal = options.abortSignal ?? req.signal;
           const lease = await acquireAccountLease("kiro", admitted.accountId, {
-            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: options.abortSignal ?? req.signal,
+            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: transportSignal,
           });
-          if (!lease) return (options.abortSignal ?? req.signal).aborted
+          if (!lease) return transportSignal.aborted
             ? clientCancelledResponse() : capacityResponse();
+          // The lease may be granted between the holder's cleanup and this install;
+          // re-check cancellation before the holder can no longer reach it.
+          if (options.accountLoad?.cancelled || transportSignal.aborted) {
+            lease.release();
+            return clientCancelledResponse();
+          }
           if (options.accountLoad) options.accountLoad.lease = lease;
           else lease.release();
         }
@@ -716,6 +736,9 @@ export async function prepareResponsesTransport(
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
+        }
+        if (route.providerName === "zed") {
+          parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
         // Project identity belongs to the admitted account on EVERY request, including
         // the request after a pool transition made that account the persisted active one.

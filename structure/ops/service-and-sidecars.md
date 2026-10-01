@@ -32,7 +32,13 @@ wrapper-protocol marker. Legacy WinSW definitions carrying only `OCX_SERVICE=1` 
 delegate until `ocx service repair` rewrites the XML. The census update uses the shared
 cross-process config mutation lock; recorded paths must resolve to files owned
 by the current user without group/world write permission on POSIX. Candidate
-probes are newest-recorded first, capped at four three-second attempts; a failed probe
+execution additionally requires a live service-manager registration whose generated
+definition names the current homes; environment markers alone never authorize a census
+probe because Bun can load them from a project dotenv file. For WinSW, whose SCM
+registration is machine-wide, the gate also requires trusted `sc.exe qc` to report that
+definition's own executable as the registered `BINARY_PATH_NAME`, and refuses on any query
+failure or mismatch. Candidate probes are
+newest-recorded first, capped at four three-second attempts; a failed probe
 falls through within that cap, and a failed launch or any pre-bind child exit (0 and the
 stay-out code included) leaves this install serving: its own lease-held bind fence then
 re-applies every stay-out condition, so a deliberate stand-down is still honored. A one-hop
@@ -76,6 +82,17 @@ two naming different homes, and on macOS a logged-out user can have the plist on
 domain to query. The probe returns what it saw and does not decide ownership; callers such as
 `src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
 read-only and time-bounded, so it is safe while the proxy runs under that same manager.
+Systemd home parsing in `src/service/systemd-env.ts` decodes the generated quoted escapes and
+doubled percent signs, with legacy simple bare assignments retained. Unknown escapes, unresolved
+specifiers, malformed quotes, resets and duplicate home assignments make the whole definition
+unknown in both online and offline probes; they never become omitted homes for ownership comparison.
+Non-comment physical line continuations also make the definition unknown before directive matching;
+the generated format uses single physical lines, while systemd otherwise folds continuations first.
+Directive names are matched literally like systemd's parser: only an exact `Environment` is
+decoded, while env-bearing siblings (`EnvironmentFile=`, `PassEnvironment=`, `UnsetEnvironment=`),
+escaped or malformed directive names, and `.include` all invalidate the definition instead of
+being skipped, because a directive the parser ignored could still change the environment the
+unit applies.
 On Windows, the generated-wrapper check accepts package installs that invoke the source CLI.
 A standalone wrapper that invokes `start` directly must carry the generated protocol and runtime
 markers, one quoted `OCX_BUN` assignment, and no `OCX_CLI` assignment in either quoting form.

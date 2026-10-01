@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -18,7 +18,8 @@ function restore(name: keyof typeof saved): void {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-agent-role-routes-"));
+  // Match getCodexHome(), which resolves aliases before filesystem access (for example macOS /var).
+  root = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-agent-role-routes-")));
   mkdirSync(join(root, "codex", "agents"), { recursive: true });
   mkdirSync(join(root, "home", ".omo"), { recursive: true });
   writeFileSync(join(root, "codex", "agents", "explorer.toml"), ROLE);
@@ -152,17 +153,27 @@ describe("/api/codex-agent-roles", () => {
   });
 
   test("a filesystem failure is reported without its path", async () => {
-    const rolePath = join(root, "codex", "agents", "explorer.toml");
+    // getCodexHome() canonicalizes CODEX_HOME, so the route reads the real path. On macOS the
+    // temp root sits under /var, a symlink to /private/var: matching the spelled path would never
+    // fire, the write would succeed, and the test would prove nothing about the failure branch.
+    const canonicalRoot = realpathSync.native(root);
+    const rolePath = join(canonicalRoot, "codex", "agents", "explorer.toml");
     const nativeRead = fs.readFileSync;
+    let denied = 0;
     const spy = spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) => {
-      if (path === rolePath) throw Object.assign(new Error(`EACCES: permission denied, open '${rolePath}'`), { code: "EACCES" });
+      if (path === rolePath) {
+        denied += 1;
+        throw Object.assign(new Error(`EACCES: permission denied, open '${rolePath}'`), { code: "EACCES" });
+      }
       return nativeRead(path, options as BufferEncoding);
     }) as never);
     try {
       const failed = await put("explorer", "m5");
+      expect(denied).toBeGreaterThan(0);
       expect(failed.status).toBe(500);
       expect(failed.body).toEqual({ error: "could not write the role file", code: "write_failed" });
       expect(JSON.stringify(failed.body)).not.toContain(root);
+      expect(JSON.stringify(failed.body)).not.toContain(canonicalRoot);
     } finally {
       spy.mockRestore();
     }

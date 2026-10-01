@@ -779,7 +779,9 @@ export function firstOutputFromParsed(parsed: unknown): boolean {
   const event = parsed as { type?: unknown; delta?: unknown };
   return (event.type === "response.output_text.delta"
     || event.type === "response.reasoning_summary_text.delta"
-    || event.type === "response.reasoning_text.delta")
+    || event.type === "response.reasoning_text.delta"
+    || event.type === "response.function_call_arguments.delta"
+    || event.type === "response.custom_tool_call_input.delta")
     && typeof event.delta === "string"
     && event.delta.length > 0;
 }

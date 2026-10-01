@@ -232,7 +232,7 @@ export function resolveOllamaWebSearchEndpoint(
 /** Credentials that may run a non-Ollama passthrough-bridge search. The key never rides the plan. */
 export interface PassthroughWebSearchBridgeAuth {
   openAiSidecar?: ResolvedOpenAiForwardSidecar;
-  anthropic?: { providerName: string; provider: OcxProviderConfig };
+  anthropic?: { providerName: string; provider: OcxProviderConfig; config: OcxConfig };
   xai?: { providerName: string; provider: OcxProviderConfig };
   gemini?: { providerName: string; provider: OcxProviderConfig };
   exaApiKey?: string;
@@ -967,6 +967,7 @@ export function createPassthroughWebSearchBridgeExecutor(
           anthropic.provider,
           settings,
           querySignal,
+          anthropic.config,
         );
       }
       case "xai": {

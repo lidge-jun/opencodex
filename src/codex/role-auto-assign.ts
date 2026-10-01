@@ -123,7 +123,7 @@ export type RoleProposal = RoleProposalInput & (
     readonly moveUpIf: string;
     readonly moveDownIf: string;
     readonly proposedModel: string | null;
-    /** Only when the role file already sets model_reasoning_effort. */
+    /** Only when the role already carries an effort, unless the caller asks for one always. */
     readonly proposedEffort: string | null;
     readonly reason: string | null;
   }
@@ -134,6 +134,7 @@ export function buildRoleProposals(
   roles: readonly RoleProposalInput[],
   sizing: ReadonlyMap<string, RoleSizingOutcome>,
   classified: readonly ClassifiedCandidate[],
+  options: { readonly alwaysProposeEffort?: boolean } = {},
 ): RoleProposal[] {
   return roles.map(role => {
     const outcome = sizing.get(role.role) ?? { unsized: "the role was not sized" };
@@ -150,7 +151,9 @@ export function buildRoleProposals(
         reason: `no available model is classified ${tier} or above`,
       };
     }
-    const proposedEffort = role.effort === null ? null : mapEffortToLevel(effort, pick.efforts, pick.defaultEffort);
+    const proposedEffort = role.effort === null && !options.alwaysProposeEffort
+      ? null
+      : mapEffortToLevel(effort, pick.efforts, pick.defaultEffort);
     return { ...sized, status: "proposed", proposedModel: pick.model, proposedEffort, reason: null };
   });
 }

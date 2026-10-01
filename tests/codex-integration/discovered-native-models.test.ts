@@ -116,8 +116,12 @@ describe("authenticated native discovery", () => {
       row("openai/gpt-9-test"), row(FUTURE, { visibility: "hide" }), row(FUTURE, { supported_in_api: false }),
       row(FUTURE, { display_name: 9 }), row(FUTURE, { supported_reasoning_levels: null }),
       row(FUTURE, { supported_reasoning_levels: [null] }), row(FUTURE, { supported_reasoning_levels: ["high"] }),
+      row(FUTURE, { description: "invalid \uD800 surrogate" }),
+      row(FUTURE, { model_messages: { "invalid\uDC00key": "nested metadata" } }),
+      row(FUTURE, { available_access_programs: { cyber: ["invalid\uD800value"] } }),
       row(FUTURE, { context_window: -1 }), row(FUTURE, { description: "x".repeat(DISCOVERED_NATIVE_MAX_ROW_BYTES) }), null];
     expect(validateDiscoveredNativeRows(invalid)).toEqual([]);
+    expect(validateDiscoveredNativeRows([row(FUTURE, { description: "valid pair \uD83D\uDE80" })])).toHaveLength(1);
     expect(validateDiscoveredNativeRows({ models: [row()] })).toEqual([]);
     recordDiscoveredNativeModels(invalid, "0.160.0");
     expect(discoveredNativeOpenAiModels()).toEqual([]);
