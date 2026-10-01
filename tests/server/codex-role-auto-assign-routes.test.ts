@@ -112,14 +112,14 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
 
   test("a failed sizing call never echoes upstream text or exception messages", async () => {
     const leaks = [
-      "role sizing HTTP 500: /Users/someone/.codex/auth.json account=acct_123 key=sk-live-abc",
-      "connect ECONNREFUSED while opening /Users/someone/secret.sock for acct_123",
+      "role sizing HTTP 500: /Users/example/.codex/auth.json account=acct_123 key=sk-live-abc",
+      "connect ECONNREFUSED while opening /Users/example/secret.sock for acct_123",
     ];
     for (const error of leaks) {
       answer = { text: "", error };
       const result = await call("/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" });
       const serialized = JSON.stringify(result.body);
-      expect(serialized).not.toContain("/Users/someone");
+      expect(serialized).not.toContain("/Users/example");
       expect(serialized).not.toContain("acct_123");
       expect(serialized).not.toContain("sk-live-abc");
     }
