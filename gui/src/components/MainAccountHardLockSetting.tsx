@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
 import { useT } from "../i18n/shared";
-import type { MainAccountHardLockStatus } from "../hooks/useCodexAccountPool";
+import { hardLockThresholds, type MainAccountHardLockStatus } from "../hooks/useCodexAccountPool";
 
 type Props = { apiBase: string; onSaved: () => Promise<boolean> };
 type Snapshot = { codexMainAccountHardLock: boolean; mainAccountHardLock: MainAccountHardLockStatus };
@@ -200,7 +200,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     if (mountedRef.current) setSaving(false);
   };
   const enabled = snapshot?.codexMainAccountHardLock;
-  const thresholds = snapshot?.mainAccountHardLock.thresholds ?? { short: 90, long: 98 };
+  const thresholds = hardLockThresholds(snapshot?.mainAccountHardLock.thresholds);
   return (
     <section ref={sectionRef} id="codex-main-hard-lock-setting" tabIndex={-1}
       className="card card-row codex-main-hard-lock-setting" aria-labelledby={`${id}-title`}
