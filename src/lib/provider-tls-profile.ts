@@ -96,9 +96,11 @@ export function setProviderTlsRuntimeForTest(
 }
 
 function preserveTransportError(error: unknown): Error {
+  // A configured proxy URL can carry user:pass@, and the native transport may echo it. The
+  // shared redactor does not mask URL userinfo, so strip it here before the message travels.
   const message = redactSecretString(
     error instanceof Error ? error.message : "provider TLS transport failed",
-  );
+  ).replace(/\/\/[^/@\s]+@/g, "//<redacted>@");
   const name = error instanceof Error ? error.name : "Error";
   if (name === "AbortError" || name === "TimeoutError")
     return new DOMException(message, name);
@@ -208,10 +210,11 @@ export function providerTlsFetch(
       status.set(name, "active");
       return response;
     } catch (error) {
-      status.set(name, "failed");
       if (init?.signal?.aborted && error === init.signal.reason) {
+        // A caller cancellation says nothing about the profile's health.
         throw error;
       }
+      status.set(name, "failed");
       throw preserveTransportError(error);
     }
   }) as typeof globalThis.fetch);

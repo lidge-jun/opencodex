@@ -191,7 +191,31 @@ describe("provider TLS profile", () => {
       caught = err;
     }
     expect(caught).toBe(customReason);
-    expect(getProviderTlsProfileStatus("google-antigravity")).toBe("failed");
+    expect(getProviderTlsProfileStatus("google-antigravity")).not.toBe("failed");
+  });
+
+  test("strips proxy userinfo from transport errors", async () => {
+    setProviderTlsRuntimeForTest({
+      env: {},
+      fetch: async () => {
+        throw new Error("proxy connect failed: http://alice:hunter2@proxy.example:8080");
+      },
+    });
+    const provider = {
+      adapter: "google",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      tlsProfile: "antigravity-browser" as const,
+    };
+    let caught: unknown;
+    try {
+      await providerTlsFetch("google-antigravity", provider, fetch)("https://cloudcode-pa.googleapis.com/v1");
+    } catch (err) {
+      caught = err;
+    }
+    expect(String((caught as Error).message)).not.toContain("hunter2");
+    expect(String((caught as Error).message)).toContain("//<redacted>@proxy.example:8080");
   });
 
   const canonical = {
