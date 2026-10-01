@@ -198,6 +198,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
   { method: "GET", path: "/api/combos", module: "server/management/combo-routes", mutates: false },
   { method: "PUT", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
+  // server/management/decision-routes
+  { method: "GET", path: "/api/combos/decision-discovery", module: "server/management/decision-routes", mutates: false },
+  { method: "POST", path: "/api/combos/decision-test", module: "server/management/decision-routes", mutates: true },
   // server/management/config-routes
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },

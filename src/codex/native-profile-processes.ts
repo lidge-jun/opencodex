@@ -81,14 +81,31 @@ export interface ListCodexClientProcessesOptions {
  */
 export function isCodexClientProcess(command: string, args: string): boolean {
   const comm = basename(command).toLowerCase();
-  const [rawArgv0 = "", rawEntrypoint = ""] = args.trim().split(/\s+/, 2);
-  const argv0 = basename(rawArgv0).toLowerCase();
-  const entrypoint = basename(rawEntrypoint).toLowerCase();
-  const isDirectCodex = DIRECT_CODEX_BASENAMES.has(comm)
-    || DIRECT_CODEX_BASENAMES.has(argv0);
-  const isInterpreterWrappedCodex = CODEX_INTERPRETER_BASENAMES.has(argv0)
-    && CODEX_ENTRYPOINT_BASENAMES.has(entrypoint);
-  return isDirectCodex || isInterpreterWrappedCodex;
+  if (DIRECT_CODEX_BASENAMES.has(comm)) return true;
+  // A full executable path is stronger evidence than ps's unquoted args.
+  // Splitting ".../Codex Framework.framework/.../browser_crashpad_handler"
+  // at its first space would otherwise manufacture an argv0 named Codex.
+  if (command.includes("/") && !CODEX_INTERPRETER_BASENAMES.has(comm)) return false;
+  const trimmedArgs = args.trim();
+  const hasExecutablePrefix = command && trimmedArgs.startsWith(command)
+    && /^(?:\s|$)/.test(trimmedArgs.slice(command.length));
+  const remainingArgs = hasExecutablePrefix ? trimmedArgs.slice(command.length).trim() : trimmedArgs;
+  const rawTokens = remainingArgs.split(/\s+/, 2);
+  // Even with only a comm basename, this initial token pair is the split
+  // Codex.app framework path, not a CLI executable plus an argument. Only
+  // inspect the executable or immediate script, never a later argument.
+  if (rawTokens[0]?.endsWith("/Codex.app/Contents/Frameworks/Codex")
+    && rawTokens[1]?.startsWith("Framework.framework/")) return false;
+  const quotedTokens = tokenizeCommandLine(remainingArgs);
+  // ps/procfs also leave literal apostrophes unescaped. Preserve a matching
+  // immediate raw entrypoint before interpreting shell-like quotes.
+  return [rawTokens, quotedTokens].some(tokens => {
+    const [rawArgv0 = "", rawEntrypoint = ""] = hasExecutablePrefix ? [command, ...tokens] : tokens;
+    const argv0 = basename(rawArgv0).toLowerCase();
+    const entrypoint = basename(rawEntrypoint).toLowerCase();
+    return DIRECT_CODEX_BASENAMES.has(argv0)
+      || (CODEX_INTERPRETER_BASENAMES.has(argv0) && CODEX_ENTRYPOINT_BASENAMES.has(entrypoint));
+  });
 }
 
 function parseUnixPsLine(line: string): { pid: number; command: string; args: string } | null {
@@ -147,9 +164,7 @@ export function listCodexClientProcesses({
 }
 
 function snapshotIsCodexClient(snapshot: ProcessSnapshot): boolean {
-  if (isCodexClientProcess(snapshot.executable ?? "", snapshot.commandLine)) return true;
-  const argv0 = tokenizeCommandLine(snapshot.commandLine)[0] ?? "";
-  return argv0 !== "" && isCodexClientProcess(argv0, snapshot.commandLine);
+  return isCodexClientProcess(snapshot.executable ?? "", snapshot.commandLine);
 }
 
 /** Async, shell-free child execution with runtime-enforced timeout and output bounds. */
@@ -192,15 +207,37 @@ async function windowsProcessCount(run: NativeProcessExecutor): Promise<number> 
   return count;
 }
 
-async function unixProcessCount(run: NativeProcessExecutor, pid: number): Promise<number> {
-  const output = await run("ps", ["-eo", "pid=,comm=,args="], {
+async function unixProcessCount(run: NativeProcessExecutor, pid: number, platform: NodeJS.Platform): Promise<number> {
+  const options: NativeProcessExecOptions = {
     encoding: "utf8",
     timeout: 5_000,
     maxBuffer: PROCESS_LIST_MAX_BUFFER,
     shell: false,
     killSignal: "SIGKILL",
-  });
-  return unixCodexClientsFromPs(output, pid).length;
+  };
+  if (platform !== "darwin") {
+    const output = await run("ps", ["-eo", "pid=,comm=,args="], options);
+    return unixCodexClientsFromPs(output, pid).length;
+  }
+  // macOS comm is a full path and may contain spaces. Read the two fields
+  // separately, as the routing-adoption snapshot collector does, then join by PID.
+  const commands = new Map<number, string>();
+  const commOutput = await run("ps", ["-eo", "pid=,comm="], options);
+  for (const line of commOutput.split("\n")) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (match) commands.set(Number(match[1]), match[2]!.trim());
+  }
+  const argsOutput = await run("ps", ["-eo", "pid=,args="], options);
+  let count = 0;
+  for (const line of argsOutput.split("\n")) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const candidatePid = Number(match[1]);
+    const command = commands.get(candidatePid);
+    if (Number.isSafeInteger(candidatePid) && candidatePid !== pid && command
+      && isCodexClientProcess(command, match[2]!)) count++;
+  }
+  return count;
 }
 
 /** Best-effort, read-only process probe. It never terminates a user process. */
@@ -212,7 +249,7 @@ export async function probeNativeCodexProcesses({
   try {
     const count = await (platform === "win32"
       ? windowsProcessCount(run)
-      : unixProcessCount(run, pid));
+      : unixProcessCount(run, pid, platform));
     return count > 0 ? { status: "busy", count } : { status: "clear", count: 0 };
   } catch {
     return { status: "unknown", count: 0 };

@@ -161,7 +161,8 @@ by transports that can preserve that request-local decision:
 | OAuth-backed quota probes in `src/providers/quota/vendor-probes-oauth.ts` and `src/providers/quota/devin.ts` | Not honoured | `fetchXaiQuota`, `fetchAnthropicQuota`, `fetchCursorQuota`, `fetchDevinQuota` and their neighbours receive a provider name and a token rather than a provider config. |
 | API-key validation probes in `src/oauth/key-providers.ts` | Not honoured | `validateApiKey` receives a `KeyLoginProvider` derived preset, which carries no egress fields, and its caller builds the real provider record afterwards. |
 | Responses WebSocket upstream in `src/server/responses/ws-upstream.ts` | Not directly | The WebSocket dial selects its proxy from the process environment. An explicit provider route therefore serves that provider's turns over HTTP/SSE instead and emits one warning per provider per process. |
-| Caller-supplied `provider.fetch` executor | Not honoured | The caller owns that executor's transport. An explicit provider route is refused instead of being ignored. |
+| Caller-supplied `provider.fetch` executor | Not honoured | The caller owns that executor's transport. An explicit provider route is refused instead of being ignored. When the Antigravity TLS profile is enabled on the same provider, the profile owns the physical send and the caller-supplied executor is not used. |
+| Opt-in Antigravity TLS profile in `src/lib/provider-tls-profile.ts` (`providers.google-antigravity.tlsProfile`) | Honoured or refused | Selected inside `providerFetch` only for the canonical Antigravity OAuth provider and destination, and marked egress-transparent. A decided HTTP(S) or SOCKS5(H) route is passed to the native `wreq-js` transport; an inherited route is resolved from the environment. The native transport reads proxy variables itself and has no per-request direct switch, so a direct route (`"direct"`, `noProxy`, or a global `NO_PROXY` match) is refused while any outbound proxy variable is set. |
 | Cursor's default HTTP/2 transport in `src/adapters/cursor/live-transport.ts` | Not honoured | The native HTTP/2 dial does not consume the provider route. |
 | Coding-agent subprocess providers in `src/adapters/coding-agent/turn.ts` | Not honoured | Their scoped child environment omits proxy variables, so a provider route is not projected into the subprocess. |
 | Compatibility Lab pinned sender in `src/lib/lab-live-pinned-sender.ts` | Not honoured | The sender uses the approved pinned address and does not resolve a provider route. |
@@ -186,6 +187,14 @@ requests use the explicit tunnel fetch. Both retain NO_PROXY semantics. The wrap
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
+`providerOutboundPost` refuses every non-HTTPS URL before any executor or DNS work. The one exception
+is the caller opt-in `allowLocalCleartextPost`, used only by the self-hosted JEV decision client in
+`src/combos/jev.ts`: it admits `http:` solely when the row sets `allowPrivateNetwork: true` itself
+(a registry default does not count) and the host is exactly `localhost` or an address literal in the
+narrow `localCleartextAddressAllowed` set (127/8, ::1, ::ffff:127.0.0.0/104, 10/8, 172.16/12,
+192.168/16, fc00::/7). Every resolved answer must stay in that set, any applicable proxy (including
+the DNS-failure proxy degradation) is refused, and an injected executor must receive an address
+literal. Every other destination keeps the HTTPS-only gate.
 
 Every request through this wrapper is proxy-originated, so it fills a default
 `User-Agent: opencodex` when the request headers name no User-Agent of their own; registry
