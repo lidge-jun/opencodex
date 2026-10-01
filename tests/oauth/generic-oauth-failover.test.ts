@@ -474,6 +474,26 @@ describe("sidecar on429 wiring", () => {
     );
   });
 
+  test("generic OAuth 429 rotation rebinds continuation ownership before replay", () => {
+    // The non-Kiro arm rotates through the same applyFailoverSnapshot; without a rebind the
+    // replay would carry the 429'd account's continuation and encrypted reasoning.
+    const refusalStart = coreSource.indexOf("// Generic OAuth account failover (#2568)");
+    const kiroArm = coreSource.indexOf('if (route.providerName === "kiro")', refusalStart);
+    const armStart = coreSource.indexOf("} else {", kiroArm);
+    const armEnd = coreSource.indexOf('rebuildAndRefetch("oauth-account-429"', armStart);
+    const arm = coreSource.slice(armStart, armEnd);
+    const applied = arm.indexOf("applyFailoverSnapshot(snapshot)");
+    const rebound = arm.indexOf("bindRouteReasoningReplayScope({", applied);
+
+    expect(armStart).toBeGreaterThan(kiroArm);
+    expect(armEnd).toBeGreaterThan(armStart);
+    expect(applied).toBeGreaterThan(-1);
+    expect(rebound).toBeGreaterThan(applied);
+    expect(arm.slice(rebound)).toContain(
+      "oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot",
+    );
+  });
+
   test("a failover rebind discards the previous account's continuation scope", () => {
     // The source-order test above proves the arm binds before replay; this one proves the bind
     // itself retires the old account's replay state. The arm hands the NEW snapshot to
