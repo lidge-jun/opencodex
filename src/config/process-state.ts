@@ -144,7 +144,10 @@ export function isOcxCommandLine(commandLine: string): boolean {
     || normalized.includes("src/cli/index.ts")
     || normalized.includes("@bitkyc08/opencodex")
     || /@bitkyc08\/\.opencodex-/.test(normalized)
-    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd|\.exe)?(?:$|[\s"'])/.test(normalized);
+    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd|\.exe)?(?:$|[\s"'])/.test(normalized)
+    // Bundled desktop sidecars are named `ocx-<target triple>[.exe]` — the runtimes
+    // they spawn are ours even though the triple suffix breaks the bare-name boundary.
+    || /(?:^|[\s/"'])ocx-(?:x86_64|aarch64|arm64|armv7|i686|riscv64gc|riscv64|powerpc64(?:le)?|s390x|loongarch64)[a-z0-9_-]*(?:\.exe)?(?:$|[\s"'])/.test(normalized);
 }
 
 export function isOcxStartCommandLine(commandLine: string): boolean {
@@ -328,14 +331,23 @@ export function readProcessCommandLine(pid: number): string | undefined {
       } catch {
         /* WMIC missing or failed — fall through */
       }
-      const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-      return output.trim() || undefined;
+      // One bounded retry: a transient CIM timeout answers "unreadable" for an
+      // unchanged process and turns a guarded stop into a false approval-changed.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
+            "-NoProfile",
+            "-NoLogo",
+            "-NonInteractive",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
+          ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
+          return output.trim() || undefined;
+        } catch {
+          /* timed out or CIM unavailable — try once more, then unreadable */
+        }
+      }
+      return undefined;
     }
     for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
       try {

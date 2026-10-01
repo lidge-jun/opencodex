@@ -109,11 +109,42 @@ describe("proxy process-state ownership", () => {
     expect(isOcxCommandLine("ocx.exe")).toBe(true);
     expect(isOcxCommandLine("opencodex.exe status")).toBe(true);
     expect(isOcxStartCommandLine('"C:/Program Files/OpenCodex/bin/ocx.exe" start')).toBe(true);
+    // The bundled sidecar keeps its target triple in the name; a proxy spawned by it
+    // carries `ocx-<triple>[.exe]` in its command line, and an identity check that
+    // misses it calls every desktop-started runtime foreign at approval time.
+    expect(isOcxCommandLine('"C:/Program Files/OpenCodex/bin/ocx-x86_64-pc-windows-msvc.exe" start --port 10100')).toBe(true);
+    expect(isOcxStartCommandLine("C:/tools/ocx-x86_64-pc-windows-msvc.exe start")).toBe(true);
+    expect(isOcxStartCommandLine("ocx-aarch64-apple-darwin start")).toBe(true);
+    expect(isOcxStartCommandLine("ocx-x86_64-unknown-linux-gnu start")).toBe(true);
     // Lookalikes stay foreign: the token boundary around the executable name is the whole
     // defence, and widening it for .exe must not widen it for neighbours.
     expect(isOcxCommandLine("not-ocx.exe start")).toBe(false);
     expect(isOcxCommandLine("myocx.exe")).toBe(false);
     expect(isOcxCommandLine("ocx.exes start")).toBe(false);
+    expect(isOcxCommandLine("ocx-tools start")).toBe(false);
+    expect(isOcxCommandLine("ocx-evil.exe start")).toBe(false);
+  });
+
+  test("a transient Windows command-line probe failure is retried once", () => {
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedWmic = join(trustedSystem32, "wbem", "WMIC.exe");
+    const trustedPowerShell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    const calls: string[] = [];
+    mkdirSync(dirname(trustedPowerShell), { recursive: true });
+    writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+    setProcessCommandLinePlatformForTests("win32");
+    setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+    // WMIC absent, the first CIM read times out, the retry answers — an unchanged
+    // process must not read as foreign because one probe flaked.
+    setProcessCommandLineExecForTests(executable => {
+      calls.push(executable);
+      if (executable === trustedPowerShell && calls.filter(entry => entry === trustedPowerShell).length === 2) {
+        return "C:\\tools\\ocx-x86_64-pc-windows-msvc.exe start\n";
+      }
+      throw new Error("probe unavailable");
+    });
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+    expect(calls).toEqual([trustedWmic, trustedPowerShell, trustedPowerShell]);
   });
 
   test("the ownership probe distinguishes a real owner from a reused PID", () => {
