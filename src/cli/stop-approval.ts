@@ -183,9 +183,14 @@ export async function runGuardedManagerStep(
 ): Promise<{ service: StopServiceOutcome; effect: "stopped" | "approval-changed" | "manager-still-active" | "failed";
   proxy: "stopped" | "unknown"; handledByProxy: boolean; detail?: string }> {
   try {
-    if (!sameGuardedManager(snapshot.manager, io.revalidateManager())) {
-      return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false,
-        detail: "the service manager changed between approval and stop" };
+    const current = io.revalidateManager();
+    if (!sameGuardedManager(snapshot.manager, current)) {
+      // An unprovable manager is not a proven change: name the observation failure,
+      // not a swap, or the stop log loses why the revalidation could not answer.
+      const detail = current.kind === "unknown"
+        ? `the service manager could not be re-verified (${current.reason})`
+        : "the service manager changed between approval and stop";
+      return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false, detail };
     }
   } catch {
     return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false,

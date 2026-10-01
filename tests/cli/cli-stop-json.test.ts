@@ -390,6 +390,23 @@ describe("approval-bound stop", () => {
       });
     expect(swapped.effect).toBe("approval-changed");
     expect(swapped.detail).toBe("the service manager changed between approval and stop");
+
+    // An unprovable manager is not a proven swap: the refusal names the observation
+    // failure and its reason, and no stop or signal runs against an unknown target.
+    let managerStops = 0, signals = 0;
+    const unprovable = await runGuardedManagerStep(
+      { approval: STOP_APPROVAL, manager: BOUND_STOP_MANAGER() },
+      {
+        revalidateManager: () => ({ kind: "unknown" as const, reason: "the process table could not be read" }),
+        stopManager: () => { managerStops += 1; return "stopped"; },
+        signalApproved: async () => { signals += 1; return false; },
+        settle: async () => true,
+        managerState: async () => "inactive",
+      });
+    expect(unprovable.effect).toBe("approval-changed");
+    expect(unprovable.detail).toBe("the service manager could not be re-verified (the process table could not be read)");
+    expect(managerStops).toBe(0);
+    expect(signals).toBe(0);
   });
 
   test("an asynchronous manager stop settles before status decides success", async () => {
