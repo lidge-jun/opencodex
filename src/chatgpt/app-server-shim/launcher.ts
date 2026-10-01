@@ -1,4 +1,5 @@
-import { accessSync, chmodSync, constants, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
@@ -56,6 +57,10 @@ export function buildChatgptShimLauncher(argv: readonly string[], real = CHATGPT
 # opencodex (experimental): ChatGPT app-server stdout passes through the quota-gate filter.
 REAL=${shellQuote(real)}
 FILTER=(${argv.map(shellQuote).join(" ")})
+if [ ! -x "$REAL" ]; then
+  echo "opencodex (experimental): the bundled app-server is no longer at $REAL; run 'ocx chatgpt launch' again or 'ocx chatgpt restore'." >&2
+  exit 127
+fi
 if [ "$(uname -s)" = "Darwin" ] && [ -x "\${FILTER[0]}" ] \\
    && "\${FILTER[@]}" --self-test >/dev/null 2>&1; then
   exec "$REAL" "$@" > >(exec "\${FILTER[@]}")
@@ -64,11 +69,23 @@ exec "$REAL" "$@"
 `;
 }
 
+/**
+ * Written to a fresh temp file (exclusive create, never through a link) and renamed over the
+ * launcher, so an existing symbolic link is replaced rather than followed and a respawn during
+ * the write never runs a half-written script.
+ */
 export function writeChatgptShimLauncher(configDir = getConfigDir(), real = CHATGPT_APP_CODEX_BINARY): string {
   mkdirSync(configDir, { recursive: true });
   const path = chatgptShimLauncherPath(configDir);
   const argv = [process.execPath, ...selfLaunchArgv(["internal", "chatgpt-app-server-filter"])];
-  writeFileSync(path, buildChatgptShimLauncher(argv, real), { mode: 0o755 });
-  chmodSync(path, 0o755);
+  const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temp, buildChatgptShimLauncher(argv, real), { mode: 0o755, flag: "wx" });
+    chmodSync(temp, 0o755);
+    renameSync(temp, path);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* the temp file was never created */ }
+    throw error;
+  }
   return path;
 }

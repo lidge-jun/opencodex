@@ -34,12 +34,21 @@ machinery preserves buffered bytes and switches the rest of the stream to raw
 passthrough. Output-write failures propagate; they are not rewrite failures.
 A partial line is held as a list of chunks and joined once at its newline, so a long
 line split across many pipe reads costs linear copying.
+A line longer than `MAX_FILTERED_LINE_BYTES` (8 MiB) is never buffered or parsed: the
+held bytes and the rest of that line stream through raw, and filtering resumes after
+its newline.
 
 The app is discovered and confirmed by bundle identifier through
 `darwinDesktopAppAdapter.discover` (`src/codex/desktop-app/darwin.ts`). Launch derives
 the bundled app-server binary from that root (`resolveChatgptCodexBinary`) and refuses
-when none exists, writes a mode-0755 executable, quits the bundle by id, waits for it
-to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH. Restore relaunches without
+when none exists or when `untrustedChatgptBundleReason`
+(`src/chatgpt/app-server-shim/bundle-trust.ts`) reports the bundle or binary as owned
+by another user, group/other-writable, unsigned, or signed by a team other than
+OpenAI's. It writes the mode-0755 executable through an exclusive temp file and a
+rename (never through a symbolic link), quits the bundle by id, waits for this user's
+instance to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH.
+The launcher itself exits 127 with a stderr hint when the recorded binary is gone.
+Restore relaunches without
 that override and removes the launcher only after open succeeds. Status reports
 the experimental flag, launcher presence, and the verified bundle process's override
 without printing its environment. Other platforms reject all three operations.

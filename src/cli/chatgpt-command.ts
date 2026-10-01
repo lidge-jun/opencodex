@@ -7,6 +7,7 @@ import {
   resolveChatgptCodexBinary,
   writeChatgptShimLauncher,
 } from "../chatgpt/app-server-shim/launcher";
+import { untrustedChatgptBundleReason } from "../chatgpt/app-server-shim/bundle-trust";
 import { darwinDefaultExec, darwinDesktopAppAdapter } from "../codex/desktop-app/darwin";
 import type { DesktopAppInstall } from "../codex/desktop-app/types";
 
@@ -40,7 +41,9 @@ function discoverApp(): DesktopAppInstall | null {
  */
 function appState(install: DesktopAppInstall, launcher: string): { running: boolean; shim: boolean } {
   const shell = join(install.root, "Contents", "MacOS", "ChatGPT");
-  const pids = run("pgrep", ["-a", "-x", "ChatGPT"]);
+  // Only this user's processes: another account's ChatGPT can neither be quit nor relaunched here.
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const pids = run("pgrep", [...(uid === undefined ? [] : ["-U", String(uid)]), "-a", "-x", "ChatGPT"]);
   if (!pids.ok) return { running: false, shim: false };
   for (const pid of pids.output.split(/\s+/).filter(value => /^\d+$/.test(value))) {
     const command = run("ps", ["eww", "-o", "command=", "-p", pid]);
@@ -106,6 +109,11 @@ CODEX_CLI_PATH launcher: ${app.shim ? "yes" : "no"}`);
       const binary = resolveChatgptCodexBinary(install.root);
       if (!binary) {
         console.error(`No bundled app-server binary was found in ${install.root}; the shim cannot launch this build.`);
+        return 1;
+      }
+      const untrusted = untrustedChatgptBundleReason(install.root, binary);
+      if (untrusted) {
+        console.error(`Refusing to launch the shim: ${untrusted}.`);
         return 1;
       }
       writeChatgptShimLauncher(undefined, binary);

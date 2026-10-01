@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { OPENAI_TEAM_ID, untrustedChatgptBundleReason, type BundleTrustDeps } from "../../src/chatgpt/app-server-shim/bundle-trust";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -67,6 +68,26 @@ describe("experimental app-server launcher", () => {
     expect(readFileSync(path, "utf8")).toContain(`REAL='${real}'`);
   }));
 
+  const linkTest = process.platform === "win32" ? test.skip : test;
+  linkTest("the writer replaces a symbolic link at the launcher path instead of following it", () => withDir(dir => {
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "keep", { mode: 0o600 });
+    symlinkSync(victim, chatgptShimLauncherPath(dir));
+    const path = writeChatgptShimLauncher(dir);
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(readFileSync(victim, "utf8")).toBe("keep");
+    expect(statSync(victim).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  }));
+
+  test("a launcher whose bundled binary disappeared says so and exits", () => withDir(dir => {
+    if (!bashAvailable) return;
+    const launcher = executable(dir, "launcher.sh", buildChatgptShimLauncher([join(dir, "filter")], join(dir, "gone")));
+    const out = spawnSync("/bin/bash", [launcher], { encoding: "utf8", timeout: 5000 });
+    expect(out.status).toBe(127);
+    expect(out.stderr).toContain("ocx chatgpt restore");
+  }));
+
   // Stub uname activates the macOS precondition on Linux without requiring the actual app.
   const environment = (dir: string) => {
     executable(dir, "uname", 'echo Darwin');
@@ -109,4 +130,35 @@ describe("experimental app-server launcher", () => {
     expect(out.error).toBeUndefined();
     expect(out.status).toBe(23);
   }));
+});
+
+describe("bundle trust before the launcher is written", () => {
+  const root = "/Applications/ChatGPT.app";
+  const binary = `${root}/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`;
+  const deps = (over: Partial<{ owner: number; mode: number; team: string; verify: number }> = {}): BundleTrustDeps => ({
+    uid: 501,
+    stat: path => ({
+      uid: over.owner ?? 501,
+      mode: over.mode ?? 0o755,
+      isFile: path === binary,
+      isDirectory: path !== binary,
+      isSymbolicLink: false,
+    }),
+    codesign: args => args[0] === "--verify"
+      ? { status: over.verify ?? 0, output: "" }
+      : { status: 0, output: `Identifier=codex\nTeamIdentifier=${over.team ?? OPENAI_TEAM_ID}\n` },
+  });
+
+  test("an OpenAI-signed bundle owned by this user is trusted", () => {
+    expect(untrustedChatgptBundleReason(root, binary, deps())).toBeNull();
+    expect(untrustedChatgptBundleReason(root, binary, deps({ owner: 0 }))).toBeNull();
+  });
+
+  test("another user's, writable, unsigned or foreign-signed bundles are refused", () => {
+    expect(untrustedChatgptBundleReason(root, binary, deps({ owner: 502 }))).toContain("another user");
+    expect(untrustedChatgptBundleReason(root, binary, deps({ mode: 0o777 }))).toContain("writable");
+    expect(untrustedChatgptBundleReason(root, binary, deps({ verify: 1 }))).toContain("code-signature");
+    expect(untrustedChatgptBundleReason(root, binary, deps({ team: "ABCDE12345" }))).toContain("not signed by OpenAI");
+    expect(untrustedChatgptBundleReason(root, "/tmp/codex", deps())).toContain("outside the bundle");
+  });
 });

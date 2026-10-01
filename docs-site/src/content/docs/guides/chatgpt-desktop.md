@@ -68,6 +68,14 @@ these executable paths changes code the app runs. The launcher still `exec`s the
 bundled binary of the discovered bundle; if that bundle has no app-server binary,
 `launch` refuses instead of writing a launcher.
 
+Before writing the launcher, `launch` also checks that the bundle and its
+app-server binary are owned by you or root, are not writable by group or others,
+and pass strict code-signature verification under OpenAI's team ID
+(`2DC432GLL2`). A bundle that fails any of these is refused, so a copy placed by
+another account cannot be made to run inside your session. The launcher file is
+written to a temporary file and renamed into place; an existing symbolic link at
+that path is replaced, not followed.
+
 This integration installs no certificate, network listener, PAC, or background
 watcher. It does not log the app's messages or environment. Status reports whether
 the running ChatGPT bundle process carries the expected launcher override.
@@ -85,6 +93,11 @@ The experiment depends on the bundled binary path, the app honoring
 `CODEX_CLI_PATH`, and current RPC field shapes. Updates may change these. A moved
 or removed OpenCodex installation fails the launcher preflight and runs the
 original binary. Run `ocx chatgpt launch` again after relocating the installation.
+If an app update moves or removes the bundled app-server binary itself, the
+launcher cannot start it: it prints a message naming `ocx chatgpt launch` and
+`ocx chatgpt restore` on stderr and exits, and Desktop cannot start its
+app-server until you run one of them. A single output line longer than 8 MiB is
+passed through unparsed rather than buffered.
 
 This standalone shim does not rewrite conversation metadata or route model calls.
 Other app gates or upstream refusals can still prevent sending. Evidence reported
