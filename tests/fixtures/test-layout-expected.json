@@ -1,6 +1,7 @@
 {
   "jev-decision-model-config.test.ts": "routing",
   "cli-combo-partial-update.test.ts": "cli",
+  "owner-registry-acl.test.ts": "config",
   "claude-devin-output-order.test.ts": "claude-integration",
   "codex-config-preservation.test.ts": "codex-integration",
     "codex-credits.test.ts": "codex-integration",
