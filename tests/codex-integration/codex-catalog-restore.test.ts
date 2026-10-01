@@ -1,11 +1,14 @@
 // Holds INV-RESTORE-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { restoreCodexCatalog } from "../../src/codex/catalog";
+import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
@@ -29,15 +32,39 @@ function runScript(codexHome: string, opencodexHome: string, script: string): { 
 describe("Codex catalog restore", () => {
   let codexHome: string;
   let opencodexHome: string;
+  let previousCodexHome: string | undefined;
+  let previousOpencodexHome: string | undefined;
+  let catalogDatabasePath: string;
 
   beforeEach(() => {
+    previousCodexHome = process.env.CODEX_HOME;
+    previousOpencodexHome = process.env.OPENCODEX_HOME;
     codexHome = mkdtempSync(join(tmpdir(), "ocx-catalog-home-"));
     opencodexHome = mkdtempSync(join(tmpdir(), "ocx-catalog-ocx-"));
-  });
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = opencodexHome;
+    // Cold Windows namespace discovery has two bounded 30s PowerShell lookups.
+    // Leave 5s for filesystem work beyond the two lookup envelopes.
+    catalogDatabasePath = resolveCodexCatalogSerializationDatabasePath(
+      resolveEffectiveUserIdentity(), realpathSync.native(codexHome),
+    );
+  }, 65_000);
 
-  afterEach(() => {
-    if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
-    if (existsSync(opencodexHome)) removeTreeWithRetry(opencodexHome);
+  afterEach(async () => {
+    try {
+      await flushWindowsSecretAclReapsBeforeRemoval(codexHome);
+      await flushWindowsSecretAclReapsBeforeRemoval(opencodexHome);
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+        rmSync(`${catalogDatabasePath}${suffix}`, { force: true });
+      }
+      if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+      if (existsSync(opencodexHome)) removeTreeWithRetry(opencodexHome);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    }
   });
 
   test("version-1 process journals with injected hashes restore, while matching client ownership is durable", () => {
@@ -84,8 +111,8 @@ describe("Codex catalog restore", () => {
     expect(existsSync(journalPath)).toBe(true);
   });
 
-  // spawnSync(bun --eval) under `bun test --isolate` on Windows can exceed the
-  // default 5s case budget when the runner is under load (seen at ~5.4s on GHA).
+  // Restore is a filesystem contract: reuse this process's Windows identity cache
+  // instead of cold-starting Bun, PowerShell and ACL setup for every case.
   test("drops routed entries without overwriting user-added native entries", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
@@ -97,14 +124,8 @@ describe("Codex catalog restore", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      const result = restoreCodexCatalog();
-      console.log(JSON.stringify(result));
-    `);
-
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 2 });
+    const result = restoreCodexCatalog();
+    expect(result).toMatchObject({ removed: 1, kept: 2 });
     const slugs = JSON.parse(readFileSync(catalogPath, "utf8")).models.map((m: { slug: string }) => m.slug);
     expect(slugs).toEqual(["gpt-5.5", "user-native"]);
   }, { timeout: 15_000 });
@@ -128,14 +149,8 @@ describe("Codex catalog restore", () => {
     writeFileSync(catalogPath, JSON.stringify({ models: [
       ...bare, { ...native, slug: "gpt-future-native" }, ...qualified,
     ] }));
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      const first = restoreCodexCatalog();
-      const second = restoreCodexCatalog();
-      console.log(JSON.stringify({ first, second }));
-    `);
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ first: { removed: 6, kept: 2 }, second: { removed: 0, kept: 2 } });
+    const result = { first: restoreCodexCatalog(), second: restoreCodexCatalog() };
+    expect(result).toMatchObject({ first: { removed: 6, kept: 2 }, second: { removed: 0, kept: 2 } });
     const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models;
     expect(rows).toEqual([native, { ...native, slug: "gpt-future-native" }]);
   }, { timeout: 15_000 });
@@ -171,16 +186,9 @@ describe("Codex catalog restore", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      const first = restoreCodexCatalog();
-      const second = restoreCodexCatalog();
-      console.log(JSON.stringify({ first, second }));
-    `);
-
-    expect(r.status).toBe(0);
+    const result = { first: restoreCodexCatalog(), second: restoreCodexCatalog() };
     const resolvedCatalogPath = join(realpathSync.native(codexHome), "catalog.json");
-    expect(JSON.parse(r.stdout)).toEqual({
+    expect(result).toEqual({
       first: { removed: 4, kept: 4, path: resolvedCatalogPath },
       second: { removed: 0, kept: 4, path: resolvedCatalogPath },
     });
@@ -211,13 +219,8 @@ describe("Codex catalog restore", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      console.log(JSON.stringify(restoreCodexCatalog()));
-    `);
-
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 1 });
+    const result = restoreCodexCatalog();
+    expect(result).toMatchObject({ removed: 1, kept: 1 });
     expect(JSON.parse(readFileSync(catalogPath, "utf8")).models).toEqual([
       { slug: "gpt-5.5", visibility: "hide" },
     ]);
@@ -259,13 +262,8 @@ describe("Codex catalog restore", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      console.log(JSON.stringify(restoreCodexCatalog()));
-    `);
-
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 4, kept: 3 });
+    const result = restoreCodexCatalog();
+    expect(result).toMatchObject({ removed: 4, kept: 3 });
     const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(restored).toEqual([
       { slug: "gpt-5.6-luna", visibility: "hide", priority: 50 },
@@ -293,14 +291,8 @@ describe("Codex catalog restore", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      const result = restoreCodexCatalog();
-      console.log(JSON.stringify(result));
-    `);
-
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 3 });
+    const result = restoreCodexCatalog();
+    expect(result).toMatchObject({ removed: 1, kept: 3 });
     const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(restored).toEqual([
       { slug: "gpt-5.5", priority: 50 },
@@ -323,14 +315,8 @@ describe("Codex catalog restore", () => {
       ],
     }, null, 2) + "\n");
 
-    const r = runScript(codexHome, opencodexHome, `
-      const { restoreCodexCatalog } = require("./src/codex/catalog");
-      const result = restoreCodexCatalog();
-      console.log(JSON.stringify(result));
-    `);
-
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 2 });
+    const result = restoreCodexCatalog();
+    expect(result).toMatchObject({ removed: 1, kept: 2 });
     const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(restored.map(m => m.slug)).toEqual(["gpt-5.5", "user-native"]);
   }, { timeout: 15_000 });

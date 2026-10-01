@@ -127,7 +127,8 @@ export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxPro
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;
   return headers => {
     if (credentialGeneration !== undefined && !isCodexAccountGenerationLive(accountId, credentialGeneration)) return;
-    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined });
+    applyCapturedCodexQuota(accountId, headers, writerGeneration, mainWriter, { modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined,
+      poolResponse: authCtx.kind === "pool" });
   };
 }
 
@@ -395,6 +396,8 @@ export interface CodexPoolAccountRetryArgs {
   connectMs: number;
   passthroughEstimate?: number;
   stream: boolean;
+  /** Keep a buffered canonical client on HTTP/SSE after moving to another Pool account. */
+  httpOnly?: boolean;
   onResponse?: (
     response: Response,
     authCtx: CodexAuthContext,
@@ -535,7 +538,7 @@ export async function retryCodexPoolOnAlternateAccount(
 ): Promise<CodexPoolAccountRetryResult> {
   const {
     callerAuthHeaders, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
-    outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+    outcomeStatus, upstream, connectMs, passthroughEstimate, stream, httpOnly,
   } = args;
   const inboundWire = options.inboundWire ?? "responses";
   const entitlementResolver = options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements;
@@ -715,7 +718,8 @@ export async function retryCodexPoolOnAlternateAccount(
       firstResponse.headers,
       firstAuthCtx.writerGeneration,
       firstAuthCtx.kind === "main-pool" ? firstAuthCtx.mainQuotaWriter : undefined,
-      { modelId: route.modelId, poolWriter: firstAuthCtx.kind === "pool" ? firstAuthCtx.poolQuotaWriter : undefined },
+      { modelId: route.modelId, poolWriter: firstAuthCtx.kind === "pool" ? firstAuthCtx.poolQuotaWriter : undefined,
+        poolResponse: firstAuthCtx.kind === "pool" },
     );
   }
   const deferFirstOutcome = shouldDeferCodexResetDerivedCooldown(
@@ -877,6 +881,7 @@ export async function retryCodexPoolOnAlternateAccount(
           connectMs,
           stream,
           providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+            httpOnly,
             providerName: route.providerName,
             modelId: route.modelId,
             onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),

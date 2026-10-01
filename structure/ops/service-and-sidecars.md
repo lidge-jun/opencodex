@@ -76,6 +76,20 @@ two naming different homes, and on macOS a logged-out user can have the plist on
 domain to query. The probe returns what it saw and does not decide ownership; callers such as
 `src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
 read-only and time-bounded, so it is safe while the proxy runs under that same manager.
+On Windows, the generated-wrapper check accepts package installs that invoke the source CLI.
+A standalone wrapper that invokes `start` directly must carry the generated protocol and runtime
+markers, one quoted `OCX_BUN` assignment, and no `OCX_CLI` assignment in either quoting form.
+Its executable lines and control-flow order must match the standalone script emitted by
+`src/service/windows-taskxml.ts`; added jumps, exits, calls, labels, or commands make the probe unknown.
+When Task Scheduler reports a registered task, the probe also requires its action to contain exactly
+one Exec with the generated `wscript.exe` command and exact `/b /nologo` launcher arguments.
+A foreign command or additional action makes ownership unknown even if the wrapper and homes agree.
+Its executable must be absolute, end in `.exe`, and agree with `bunPath` in every readable service
+state record for the scheduler backend with `cliPath: null`. Missing, malformed, or contradictory
+state leaves the probe unknown; it cannot authorize unattended native Codex writes.
+The state records a lexical executable path, not an install-time file identity or digest. A
+retargeted junction or replacement at the same path is therefore outside this probe's evidence;
+resolving the path only at probe time cannot establish which file the installer recorded.
 
 ## Stable service launcher (launchd and systemd)
 
@@ -404,5 +418,7 @@ src/update/refresh-scheduler.ts owns the package cache timer and per-channel sin
 src/update/async-check.ts uses the existing owner-bound registry target with a bounded asynchronous child; pnpm owner discovery runs in src/update/pnpm-owner-worker.ts off the request loop. Read-only pnpm owner and registry probes — in the scheduler, the synchronous updater, and the `bin/ocx.mjs` package-manager self-update — run from the installed update module directory via `src/update/pnpm-read-policy.mjs` with project pnpmfiles disabled, never from the caller's workspace. pnpm mutations (`add -g`, rollback) instead run in unique private temporary workspaces outside the package, with an explicit empty workspace boundary to stop parent-project discovery. Both npm_config_ and pnpm_config_ ignore-pnpmfile controls are set case-insensitively for pnpm 10/11. Cleanup removes only known files and an empty unchanged directory; unexpected contents remain for inspection. On Windows, this also avoids pinning the replaced package as cwd. `src/update/notify.ts` writes successful results atomically and preserves a dismissal only for the same channel and version. The interactive pre-bind prompt reads the cache and does not launch a second detached refresh. `src/update/badge.ts` only reads the cache and reports unknown at 40 hours.
 
 The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.
+
+MacOS desktop startup diagnostics use `src/service/desktop-startup.ts` to read the ownership record, launchd login registration and exact parent/child executable paths without mutating them. A durable desktop claim survives a failed identity or supervision check; only fresh matching identity, enabled login registration, and live supervision grant protection. Ownership and PID are re-read before crediting the result. The startup-health subprocess uses `selfLaunchArgv` to support both source and compiled entrypoints.
 
 On Linux, a dashboard update worker started from the systemd user service is launched through an executable regular file at a trusted absolute path — `/usr/bin/systemd-run`, `/bin/systemd-run`, `/usr/local/bin/systemd-run` (local installs), or `/run/current-system/sw/bin/systemd-run` (the NixOS layout) — with `--user --scope --quiet --collect` (`src/update/worker-launch.ts`), so it leaves the service cgroup before the updater stops `opencodex-proxy.service`; the default `KillMode=control-group` otherwise kills it with the proxy (#5750). The inherited `PATH` is never searched, and each candidate's resolved target — plus every ancestor directory able to substitute it — must be root-owned and not group/world-writable: a trusted-path symlink into a user-replaceable directory is skipped, as is a group-writable `/usr/local/bin`, rather than exec'd under the service account. Candidates are tried in order and a path whose no-op scope probe fails falls through to the next trusted path; the probe applies only when `INVOCATION_ID` is set, and every other case keeps the plain detached spawn. The management route resolves the launcher with `resolveSystemdRunAsync` before spawning, so first-request probing overlaps other work instead of blocking the event loop for up to twenty seconds. `--scope` moves `systemd-run` itself into the scope and then execs the worker, so the recorded PID is the worker's (`tests/update/update-worker-launch.test.ts`).

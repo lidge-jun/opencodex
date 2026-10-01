@@ -16,6 +16,9 @@ import {
 } from "../../src/codex/catalog-auto-refresh";
 import { lastCatalogAutoRefreshOutcome, resetCatalogAutoRefreshStatusForTests } from "../../src/codex/catalog-refresh-status";
 import type { CatalogOnlyOutcome } from "../../src/codex/convergence-types";
+import * as bundled from "../../src/codex/catalog/bundled";
+import * as entitlements from "../../src/codex/model-entitlements";
+import * as appServerProcesses from "../../src/codex/app-server-processes";
 import * as managementConvergence from "../../src/codex/management-convergence";
 import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import {
@@ -44,6 +47,7 @@ let openCodexHome = "";
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let convergeFactoryCalls = 0;
 let convergeImpl: (config: OcxConfig) => Promise<CatalogOnlyOutcome> = async () => COMMITTED_CATALOG_ONLY;
+let sourceSpies: Array<{ mockRestore(): void }> = [];
 let convergeSpy: { mockRestore(): void } | null = null;
 let releaseHanging: ((outcome: CatalogOnlyOutcome) => void) | null = null;
 let pendingTick: Promise<unknown> | null = null;
@@ -71,6 +75,14 @@ beforeEach(() => {
   writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify({ models: [] }), "utf8");
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
+  sourceSpies = [
+    spyOn(bundled, "loadBundledCodexCatalog").mockReturnValue(null),
+    spyOn(entitlements, "ensureCodexEntitlementFreshness").mockResolvedValue(undefined),
+    spyOn(entitlements, "discoverCodexNativeRoster").mockResolvedValue("unavailable"),
+    spyOn(appServerProcesses, "listCodexAppServerProcesses").mockReturnValue([]),
+    spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin")
+      .mockResolvedValue({ state: "not_running", processes: [], catalogMtimeMs: null }),
+  ];
   convergeFactoryCalls = 0;
   convergeImpl = async () => COMMITTED_CATALOG_ONLY;
   releaseHanging = null;
@@ -93,6 +105,8 @@ afterEach(async () => {
   stopCatalogAutoRefresh();
   resetCatalogAutoRefreshForTests();
   resetCatalogAutoRefreshStatusForTests();
+  for (const spy of sourceSpies) spy.mockRestore();
+  sourceSpies = [];
   convergeSpy?.mockRestore();
   convergeSpy = null;
   isolatedCodexHome?.restore();
@@ -153,17 +167,157 @@ describe("catalog auto-refresh scheduler", () => {
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
   });
 
-  test("a tick with catalogAutoRefresh absent or enabled:false performs no converge", async () => {
+  test("the unref'd startup tick fires once, survives cadence changes, and stop cancels it", async () => {
+    writeCatalogAutoRefreshConfig({ intervalMinutes: 30 });
+    const delayed: Array<{ callback: () => unknown; unrefs: number }> = [];
+    const original = globalThis.setTimeout;
+    const set = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => unknown, delay?: number) => {
+      if (delay !== 3 * 60_000) return original(callback, delay);
+      const handle = { callback, unrefs: 0, unref() { this.unrefs += 1; return this; } };
+      delayed.push(handle);
+      return handle;
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      startCatalogAutoRefresh();
+      startCatalogAutoRefresh();
+      expect(delayed).toHaveLength(1);
+      expect(delayed[0]!.unrefs).toBe(1);
+      await delayed[0]!.callback();
+      expect(convergeFactoryCalls).toBe(1);
+      expect(catalogAutoRefreshIntervalForTests()).toBe(30 * 60_000);
+      expect(delayed).toHaveLength(1);
+      stopCatalogAutoRefresh();
+      startCatalogAutoRefresh();
+      stopCatalogAutoRefresh();
+      expect(clear).toHaveBeenCalledWith(delayed[1]);
+      // Even an already queued callback loses publication authority after stop.
+      await delayed[1]!.callback();
+      expect(convergeFactoryCalls).toBe(1);
+    } finally {
+      stopCatalogAutoRefresh();
+      set.mockRestore();
+      clear.mockRestore();
+    }
+  });
+
+  test.each(["none", "bundled", "roster", "discovery"])("sources settle before converge despite %s failure", async failure => {
     writeCatalogAutoRefreshConfig();
+    const steps: string[] = [];
+    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+      steps.push("bundled");
+      if (failure === "bundled") throw new Error("private source failure");
+      return null;
+    });
+    spyOn(entitlements, "ensureCodexEntitlementFreshness").mockImplementation(async (_config, options) => {
+      steps.push("roster");
+      expect(options?.waitMs).toBe(15_000);
+      if (failure === "roster") throw new Error("private roster failure");
+    });
+    spyOn(entitlements, "discoverCodexNativeRoster").mockImplementation(async () => {
+      steps.push("discovery");
+      if (failure === "discovery") throw new Error("private discovery failure");
+      return "recorded";
+    });
+    convergeImpl = async () => { steps.push("converge"); return COMMITTED_CATALOG_ONLY; };
     await runCatalogAutoRefreshTickForTests();
-    expect(catalogAutoRefreshTickCountForTests()).toBe(0);
+    expect(steps).toEqual(["bundled", "roster", "discovery", "converge"]);
+    expect(lastCatalogAutoRefreshOutcome()?.disposition.status).toBe("committed");
+  });
+
+  test("stopping during source refresh prevents roster warm and convergence", async () => {
+    writeCatalogAutoRefreshConfig();
+    spyOn(bundled, "loadBundledCodexCatalog").mockImplementation(() => {
+      stopCatalogAutoRefresh();
+      return null;
+    });
+    await runCatalogAutoRefreshTickForTests();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
     expect(convergeFactoryCalls).toBe(0);
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
+  });
 
+  test("a roster wait that exceeds its bound still allows convergence", async () => {
+    writeCatalogAutoRefreshConfig();
+    let entered!: () => void;
+    const rosterEntered = new Promise<void>(resolve => { entered = resolve; });
+    spyOn(entitlements, "ensureCodexEntitlementFreshness").mockImplementation(() => {
+      entered();
+      return new Promise<void>(() => {});
+    });
+    const deadlines: Array<() => void> = [];
+    const original = globalThis.setTimeout;
+    const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+      if (delay !== 15_000) return original(callback, delay);
+      deadlines.push(callback);
+      return { unref() { return this; } };
+    }) as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      const pending = runCatalogAutoRefreshTickForTests();
+      await rosterEntered;
+      expect(deadlines).toHaveLength(2);
+      deadlines[1]!();
+      await pending;
+      expect(convergeFactoryCalls).toBe(1);
+    } finally {
+      timeout.mockRestore();
+      clear.mockRestore();
+    }
+  });
+
+  test("a changed set records reloadRequired and logs one safe restart hint", async () => {
+    writeCatalogAutoRefreshConfig();
+    spyOn(appServerProcesses, "listCodexAppServerProcesses").mockReturnValue([{ pid: 123, commandLine: "private fixture" }]);
+    spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin").mockResolvedValue({
+      state: "stale", processes: [{ pid: 123, startedAtMs: 1 }],
+      catalogMtimeMs: 2,
+    });
+    convergeImpl = async () => ({
+      kind: "catalog-only", changed: true,
+      catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] },
+    });
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+      expect(info.mock.calls).toEqual([[
+        "[catalog-auto-refresh] served model set changed; running Codex sessions keep the old list until restarted (ocx sync --restart-codex)",
+      ]]);
+      convergeImpl = async () => COMMITTED_CATALOG_ONLY;
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+      expect(info).toHaveBeenCalledTimes(1);
+      spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin").mockResolvedValue({
+        state: "unknown", processes: [], catalogMtimeMs: null,
+      });
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(true);
+      spyOn(appServerProcesses, "collectCodexAppServerCatalogStateWithin").mockResolvedValue({
+        state: "fresh", processes: [{ pid: 124, startedAtMs: 3 }],
+        catalogMtimeMs: 2,
+      });
+      await runCatalogAutoRefreshTickForTests();
+      expect(lastCatalogAutoRefreshOutcome()?.reloadRequired).toBe(false);
+    } finally { info.mockRestore(); }
+  });
+
+  test("a tick with catalogAutoRefresh absent performs a converge", async () => {
+    writeCatalogAutoRefreshConfig();
+    await runCatalogAutoRefreshTickForTests();
+    expect(catalogAutoRefreshTickCountForTests()).toBe(1);
+    expect(convergeFactoryCalls).toBe(1);
+    expect(lastCatalogAutoRefreshOutcome()?.disposition.status).toBe("committed");
+  });
+
+  test("explicit enabled:false performs no converge", async () => {
     writeCatalogAutoRefreshConfig({ enabled: false, intervalMinutes: 60 });
     await runCatalogAutoRefreshTickForTests();
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
     expect(convergeFactoryCalls).toBe(0);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
   });
 
@@ -554,6 +708,8 @@ describe("catalog auto-refresh drift heal", () => {
       const fs = require("node:fs");
       const path = require("node:path");
       const configModule = require(${JSON.stringify(configPath)});
+      const sources = require(${JSON.stringify(fileURLToPath(new URL("../../src/codex/catalog-auto-refresh-sources.ts", import.meta.url)))});
+      spyOn(sources, "refreshCatalogAutoRefreshSources").mockResolvedValue(undefined);
       const scheduler = require(${JSON.stringify(schedulerPath)});
       const drift = require(${JSON.stringify(driftPath)});
       const desired = require(${JSON.stringify(desiredPath)});
@@ -606,6 +762,8 @@ describe("catalog auto-refresh drift heal", () => {
       const fs = require("node:fs");
       const path = require("node:path");
       const config = require(${JSON.stringify(source("config.ts"))});
+      const sources = require(${JSON.stringify(fileURLToPath(new URL("../../src/codex/catalog-auto-refresh-sources.ts", import.meta.url)))});
+      spyOn(sources, "refreshCatalogAutoRefreshSources").mockResolvedValue(undefined);
       const scheduler = require(${JSON.stringify(source("codex/catalog-auto-refresh.ts"))});
       const drift = require(${JSON.stringify(source("codex/config-drift-heal.ts"))});
       const desired = require(${JSON.stringify(source("codex/desired-state.ts"))});
@@ -667,5 +825,37 @@ describe("catalog auto-refresh drift heal", () => {
     expect(selectDriftHealCatalogPath(journalPath, defaultPath, path => join(openCodexHome, path))).toBe(defaultPath);
     writeFileSync(defaultPath, "not a catalog");
     expect(selectDriftHealCatalogPath(journalPath, defaultPath, path => join(openCodexHome, path))).toBeNull();
+  });
+});
+
+describe("catalog auto-refresh without a managed Codex client", () => {
+  function writeIntegrationOffConfig(catalogAutoRefresh?: unknown): void {
+    const config = {
+      ...getDefaultConfig(),
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" } },
+      clientIntegrations: { codex: false },
+      ...(catalogAutoRefresh === undefined ? {} : { catalogAutoRefresh }),
+    };
+    writeFileSync(getConfigPath(), JSON.stringify(config), "utf8");
+  }
+
+  test("an absent section stays dormant: no Codex sources and no converge", async () => {
+    writeIntegrationOffConfig();
+    await runCatalogAutoRefreshTickForTests();
+    expect(convergeFactoryCalls).toBe(0);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
+    expect(catalogAutoRefreshTickCountForTests()).toBe(0);
+  });
+
+  test("an explicit enabled:true still converges but never reads Codex sources", async () => {
+    writeIntegrationOffConfig({ enabled: true, intervalMinutes: 60 });
+    await runCatalogAutoRefreshTickForTests();
+    expect(convergeFactoryCalls).toBe(1);
+    expect(bundled.loadBundledCodexCatalog).not.toHaveBeenCalled();
+    expect(entitlements.ensureCodexEntitlementFreshness).not.toHaveBeenCalled();
+    expect(entitlements.discoverCodexNativeRoster).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,8 @@
+import { codexCreditsDtoField, hasCodexCreditsObservation, pruneCodexCredits } from "../credits";
+import type { CodexCredits } from "../credits";
+import { getMainChatgptAccountId } from "../auth-collision";
 import { codexAccountLogLabel } from "../account-label";
-import { getCodexAccountCredential, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
+import { poolQuotaHistoryIdentity, getCodexAccountCredential, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
 import { getAccountQuota, isCodexQuotaExhausted, setAccountQuotaFromParsed, withoutRetiredCodexQuota } from "../quota";
 import type { StoredAccountQuota } from "../quota";
 import { ConfigMutationLockError, mutatePersistedConfig } from "../../config";
@@ -137,6 +140,7 @@ export function poolAccountDto(
     priority,
     autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(config, account.id),
     quota: quota ? { ...quota } : null,
+    ...codexCreditsDtoField(config, account.id, poolQuotaHistoryIdentity(account.id) ?? null),
     needsReauth: needsReauth || health.status === "reauth_required",
     ...(reauthReason !== undefined ? { reauthReason } : {}),
     ...(isCodexAccountPlanExcluded(config, account.id) ? {
@@ -162,6 +166,7 @@ export interface CodexAuthAccountDto {
   /** Null inherits the global usage-switch threshold; 0 disables it for this account. */
   autoSwitchThresholdOverride: number | null;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
+  credits?: CodexCredits;
   needsReauth?: boolean;
   /**
    * Which of the independent causes behind `needsReauth` fired. Present only when the account
@@ -254,6 +259,7 @@ export async function listCodexAuthAccountsSnapshot(
 ): Promise<CodexAuthAccountsSnapshot> {
   const runtimeConfig = getRuntimeConfig(config);
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
+  pruneCodexCredits([MAIN_CODEX_ACCOUNT_ID, ...poolAccounts.map(account => account.id)]);
   // One redaction decision for the whole snapshot, read once from the operator's config (#3859).
   const maskEmails = emailMaskingEnabled(runtimeConfig);
   const mainResult = await fetchMainAccountInfoAttempt(forceRefresh, 1, undefined, false,
@@ -265,7 +271,12 @@ export async function listCodexAuthAccountsSnapshot(
       quotaResult = { quota: null, needsReauth: true };
     } else {
       try {
-        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh, account.plan, getValidCodexToken, options.validatePending === true);
+        // Credits are process-local while pool quota is hydrated from disk, so right after a
+        // restart the cache would hide credits for up to POOL_CACHE_TTL. Bypass it once per
+        // identity when the switch is on and nothing has been observed yet.
+        const creditsIdentity = runtimeConfig.showCodexCredits === true ? poolQuotaHistoryIdentity(account.id) ?? null : null;
+        const creditsUnobserved = creditsIdentity !== null && !hasCodexCreditsObservation(account.id, creditsIdentity);
+        quotaResult = await fetchPoolAccountQuota(account.id, forceRefresh || creditsUnobserved, account.plan, getValidCodexToken, options.validatePending === true);
       } catch (error) {
         if (!(error instanceof PoolQuotaProbeBusyError)) throw error;
         quotaResult = {
@@ -369,6 +380,7 @@ export async function listCodexAuthAccountsSnapshot(
     quota: mainInfo.quota
       ? quotaForPlan(mainQuotaWithCarriedResetCredits(mainInfo.quota), mainInfo.plan)
       : null,
+    ...codexCreditsDtoField(runtimeConfig, MAIN_CODEX_ACCOUNT_ID, getMainChatgptAccountId()),
     ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
   };
   return {

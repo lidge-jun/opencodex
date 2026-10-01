@@ -1258,6 +1258,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // The GUI's browser-open toggle reads and writes this; absent means the
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
+    showCodexCredits: config.showCodexCredits === true,
     providers,
   };
 }

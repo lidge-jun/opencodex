@@ -34,7 +34,7 @@ may fill an absent static one only inside that call-local projection — the fro
 unchanged and never widened — max input never exceeds the resolved context window, and the
 projection mutates neither input. Gather admission freezes an enriched provider
 snapshot before discovery; per-model hint projection resolves from that snapshot, so no post-admission
-registry read can change a running gather flight.
+registry read can change a running gather flight. Anthropic OAuth discovery in `src/codex/catalog/provider-models.ts` rechecks the live pause, selection, and bearer generation at dispatch and after outbound DNS; a superseded flight degrades to configured models without sending.
 
 Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
 diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
@@ -51,8 +51,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
-  verbatim authenticated-roster rows for models codex-rs has not bundled yet (`gpt-6-sol`,
-  `gpt-6-luna`, captured 2026-09-23 at `client_version=0.155.0`), so a wholesale snapshot re-pin
+  verbatim rows the codex-rs snapshot lacks (`gpt-6-sol`/`gpt-6-luna` from the 2026-09-23 roster,
+  `gpt-6.1-sol` from openai/codex `models.json` after #49318), so a wholesale snapshot re-pin
   never erases them and a snapshot row for the same slug always wins;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
@@ -60,11 +60,11 @@ provider-wide fallback. Exact model output limits precede the provider default o
   explicitly configured canonical `openai/gpt-daybreak-blue-latest` Codex-forward row from the
   pinned Sol capability metadata while preserving its selector and Daybreak wire identity;
   this never expands the bare/API-key model lists or rewrites the wire model to `gpt-5.6-sol`;
-- clones a native template for routed `provider/model` entries without its `comp_hash`, and resets
-  that value on opencodex rows kept from disk while their provider's discovery is degraded, so these
-  rows carry the fixed `"opencodex"` marker instead of whichever native row a rebuild found first;
-  Codex compacts a thread whenever that value changes (#5796). Codex-forward aliases keep their
-  native value and rows written by other tools keep theirs;
+- clones a native template for routed `provider/model` entries without its `comp_hash`, and clears
+  copied or synthetic hashes on opencodex rows kept during degraded discovery (#5796). Unknown
+  compatibility is `null`: Codex's hash-change trigger requires two non-null, unequal hashes, so
+  native/routed switches do not compact merely because of a synthetic marker. Native rows and
+  Codex-forward aliases keep upstream hashes; foreign rows keep valid hashes. Token limits are unchanged;
 - forces strict Codex catalog fields required by the current parser;
 - hides `disabledModels` without blocking direct routing (routed provider ids are excluded;
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row
@@ -91,7 +91,7 @@ this rule, and uninstall keeps the [manifest validation and residual reporting c
 
 Cache invalidation reports an unchanged derived cache separately from a failed rewrite. `ocx sync-cache` treats identical bytes as a successful no-op, preserving the cache mtime and avoiding a needless app-server restart; malformed catalogs and write failures remain errors.
 
-`src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.
+`src/codex/catalog/model-visibility.ts` excludes disabled providers, including custom rows; `src/codex/catalog/routed-gather.ts` does not inherit their configuration into custom rows. HTTP discovery, startup/explicit sync (`src/codex/catalog/retained-sync.ts`), and client exports (`src/server/management/model-rows.ts`) apply new-model policy before publication. `src/providers/new-model-policy-runtime.ts` commits authoritative arrivals and automatic disables together under the config mutation lock, without rewriting an unchanged roster. It rechecks provider inventory and cache revisions and refuses publication on failed persistence. Retained sync reconciles after catalog evidence revalidation, preserving K-to-C lock order. Exports recapture their snapshot after committing discovery; superseded gathers only project policy onto a detached copy and retain no preview. Supplied rosters and read-only previews do not reconcile. Synthetic configurations only project their own state. File-backed configs retain their load provenance when their inventory diverges from disk. Read callers can opt into a detached policy projection when drift predates discovery: management renders its disabled rows, while other shared-fetch consumers receive only its visible rows. The projection copies discovery state and disables, leaving live config, disk, and the live merge baseline untouched. Writer callers still refuse stale publication; reload or explicit adoption is required before retained sync can commit. Inventory changes during discovery, superseded cache revisions, changed config homes, and failed persistence still refuse publication. Discovery absorbs arrivals/reappearances without advancing removal grace; convergence retains removal accounting. Bootstrap, custom rows, explicit selections, and degraded discovery retain the pure policy rules. Coverage: `tests/server/server-new-model-policy-arrival.test.ts` (HTTP), `tests/codex-integration/codex-sync-new-model-policy.test.ts` (startup/sync), `tests/server/model-export-new-model-policy.test.ts` (exports/previews), and `tests/providers/new-model-policy-runtime.test.ts` (persistence/concurrency), and `tests/codex-integration/model-visibility-management-api.test.ts` (drifted read projection).
 
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
@@ -102,7 +102,7 @@ explicit observed-state merge policy and restore native priorities from the once
 backup rather than from a catalog whose priorities may already have been rewritten. A configured
 custom catalog remains the native metadata/template authority even when a bundled-catalog memo is
 warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
-evidence to remove unsupported reasoning efforts; convergence never probes Codex itself.
+evidence to remove unsupported reasoning efforts; convergence never probes Codex itself. The default-on scheduler in `src/codex/catalog-auto-refresh.ts` settles bundled runtime and authenticated Codex roster observations before admission, using dynamic imports, a 15-second source wait and the loader's bounded synchronous probes. Source failure uses existing evidence, while a stopped generation cannot start the next source or converge. A changed set records `reloadRequired` through `src/codex/catalog-refresh-status.ts` for observed running app-servers and logs one content-free restart hint; a no-op keeps it while processes remain stale or the restart observation is unknown and clears it when they are fresh or gone. Automatic refresh never restarts processes. `tests/codex-integration/catalog-auto-refresh-scheduler.test.ts` covers these boundaries.
 
 Custom Astra and Daybreak rows acquire native identity -- Responses Lite, multi-agent, context
 windows, display names -- only through the canonical `openai` forward destination and explicit
@@ -143,19 +143,15 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
-Configured natives are the operator's way to widen that bare list without a release. A bare
-`gpt-*` id under `providers.openai.models` on the canonical Codex forward provider joins
-`NATIVE_OPENAI_MODELS` / `SUPPORTED_NATIVE_OPENAI_SLUGS` in place (`src/codex/catalog/native-models.ts`),
-and `metadata.ts` keeps its pinned-capability, upstream-entry and context tables in step through
-a subscription. Each borrows the pinned `gpt-6-sol` row under a name generated from its slug, takes
-the GPT-6 272,000 / 872,000 context pair (`NATIVE_GPT6_CONTEXT`, also used by the built-in GPT-6
-rows), and is never account-gated. Built-in, retired and reserve ids never register. The filter
-lives in `src/config/derived-registries.ts`, whose `refreshConfigDerivedRegistries` runs on every
-load, persist and reconcile path, so every process that loads config sees the same set; removing
-the id unregisters it and the next canonical write drops the row. Configured natives are not in
-`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS` or `NATIVE_MAIN_DRAIN_SENTINEL_MODELS` (they behave
-like `gpt-5.5` there), and a combo `nativeAlias` cannot target one because schema validation runs
-before registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+Configured natives widen the bare list without a release: eligible bare `gpt-*` ids under `providers.openai.models` on the canonical Codex forward provider join the shared registry in place (`src/codex/catalog/native-models.ts`). Each borrows the pinned `gpt-6.1-sol` row under its generated name, takes `NATIVE_GPT6_CONTEXT` (272,000 / 872,000), and is ungated. Built-in, retired and reserve ids never register. `src/config/derived-registries.ts` filters the config and refreshes registration on load, persist and reconcile; removing a configured id unregisters it unless it is also discovered. Configured natives have no entitlement routing preference or main-drain sentinel and cannot be combo `nativeAlias` targets because schema validation precedes registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+
+Authenticated discovery also widens the set: after a successful nonempty roster fetch, `src/codex/model-entitlements.ts` passes full eligible rows to `src/codex/catalog/discovered-natives.ts`. Rows require a visible, API-supported bare `gpt-*` slug, display name and sane reasoning-level array; built-in, retired, reserve, malformed and oversized rows are rejected. Existing discoveries and configured natives remain eligible for refresh, so an already-supported slug does not freeze its metadata or keep borrowing a template.
+
+The store keeps version-1 `discovered-native-models.json` under the resolved OpenCodex home using the private atomic writer (0600 on POSIX). It merges by slug with first/last observation times and client version, expires entries unseen for 14 days, and bounds rows to 32, each to 256 KiB (a live row carries its instructions twice; GPT-6.1 Sol's was 87 KB), plus a file-size bound. Each record re-reads the file and merges onto it, so another process's discovery survives (the replace is atomic, not locked), and an unchanged row renews its last-seen time on disk at most hourly so request-time roster fetches rarely write. The discovery ETag is sent only within 24 hours of the full fetch that earned it, because a 304 cannot renew retention. Missing/corrupt files read as empty; persistence failures never fail entitlement. Config activation loads the file through derived registries; observations register immediately. A process-local monotonic generation changes for metadata or membership changes, independently of timestamp refreshes.
+
+The entitlement roster asks under the installed client version, and upstream's rollout gate can hide a new model from it regardless of the row's `minimal_client_version` (GPT-6.1 Sol reported 0.153.0 but was served only from 0.159.0 while the installed Codex was 0.158). So each scheduler tick also runs `discoverCodexNativeRoster` in `src/codex/model-entitlements.ts`, which asks as `CODEX_ROSTER_DISCOVERY_CLIENT_VERSION` with `If-None-Match`, feeds only the discovery store, and never writes or satisfies the entitlement cache.
+
+The import-free registry unions configured and discovered membership in place; removing either retains the other. Discoveries join the self-described set, use their own label and exact reasoning ladder, and derive context from their row with `NATIVE_GPT6_CONTEXT` for omitted values. Real metadata outranks a configured template; later built-in registration makes old discoveries inert. They are ungated under the flagship owner policy, without granting account entitlement or routing preference. Shared capability projection omits access programs and availability prompts, which remain scoped entitlement evidence. The next catalog merge replaces a discovered row with its latest metadata. Covered by `tests/codex-integration/discovered-native-models.test.ts`.
 
 Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied model ids still follow generic routing. User-selected config and historical usage remain stored.
 
@@ -319,7 +315,7 @@ templates clear the native multi-agent effort; canonical Astra-forward custom ro
 the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
 preserving custom descriptions and other stored row fields.
 
-GPT-6 Sol and Luna (announced 2026-09-22) are self-described the same way, from their roster-pinned
+GPT-6 Sol and Luna (2026-09-22) and GPT-6.1 Sol (2026-09-29, `low` default effort) are self-described the same way, from their roster-pinned
 rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt-in ceiling,
 `medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
 it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so

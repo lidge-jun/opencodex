@@ -72,6 +72,13 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 当 `stream: false` 或未提供 `stream` 时，同样的适配器事件会被收集为一个 Responses JSON
 对象。两种形式都会保留所选模型、输出项、终止状态和 usage。
 
+canonical ChatGPT Codex 路由的上游只接受 SSE，因此仅对上游请求使用 `stream: true`。
+OpenCodex 会在有界限制内验证终止流，再将其折叠为客户端请求的 JSON 形式；显式 `store` 值不会
+改变。验证失败时会返回错误，而不会以 HTTP 200 返回部分 JSON。限制为：每帧 4 MiB、transcript
+和重建源各 32 MiB、100,000 个 SSE 帧，以及 10,000 个重建输出项。`stallTimeoutSec` 同时控制
+首个 body byte 和后续静默间隔；当其为 `0`，或因本地上游默认禁用时，不会立即超时，只保留独立的
+15 分钟整轮上限。流式客户端的行为不变。
+
 面向客户端的 Responses SSE 帧按 SSE 块分隔符之前的原始字节计算，每帧限制为 4 MiB。对于 HTTP，未终止的上游帧一旦超过该限制，会以合成的 `response.failed` 事件并随后发送 `data: [DONE]` 的方式 fail closed。对于 Responses WebSocket 桥，相同情况会发送 502 `websocket_protocol_error` 并取消上游 reader。已经完整到达的 Responses 终止帧具有优先权；其后的超大或格式错误字节会被丢弃，而不会把已经完成的轮次替换为传输失败。
 
 :::note

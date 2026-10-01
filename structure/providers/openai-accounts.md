@@ -65,10 +65,11 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol` and `gpt-6-luna` (Sol and Luna added 2026-09-23 from a live roster
-  probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/). None of them is gated, and all
-  six are native-main drain sentinels. The confirmed-denial ordering below is still scoped to the
-  first four (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); Sol and Luna do not feed it yet.
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol` (Sol and Luna added 2026-09-23 from a
+  live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
+  2026-09-30 from openai/codex models.json). None of them is gated, and all seven are native-main
+  drain sentinels. The confirmed-denial ordering below is still scoped to the first four
+  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 Sol rows and Luna do not feed it yet.
 
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
@@ -276,6 +277,12 @@ Context relay dispatch rechecks the native experimental opt-in after body and cr
 A disabled gate prevents upstream dispatch even when the request entered while enabled. Final
 materialized headers pass the proxy-credential exclusion check before owner matching.
 
+## Display-only Codex credits
+
+The credits module beside `src/codex/quota-types.ts` retains validated WHAM credits only in process memory. Main publication uses the current credential and physical ChatGPT account identity; pool publication uses the captured writer's `quotaHistoryIdentity` and a live credential generation, including credits-only responses. Omitted credits retain the observation; null or unusable credits clear it. Identity mismatch or removal retires it, without a TTL or disk hydration.
+
+`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings; boolean flags and approximate local/cloud message ranges are allowlisted. Credits never enter persisted quota, routing, reset-credit recovery, or `/api/provider-quotas`, and are never logged. The [config surface](../config.md#config-surface) owns the display switch.
+
 ## Quota history publication identity
 
 `src/codex/account-store.ts` assigns each explicit pool credential publication a private random `quotaHistoryIdentity`. Same-account token refresh preserves it, including each alias record's own identity; replacement or deletion retires it. A refresh CAS with a changed upstream account identity rotates the tag and does not propagate that changed identity to old aliases. Credential-only projections omit this metadata.
@@ -284,7 +291,7 @@ materialized headers pass the proxy-credential exclusion check before owner matc
 
 ## Low-quota protection
 
-`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection, and pool WHAM/header observations reach the policy only after raw percentages pass validation; clamped display bars cannot authorize a pause. The pool-account-only [configuration policy](../config.md#codex-pool-low-quota-protection) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected across every qualifying window already active for that account until recovery or a new reset episode. Native main keeps its separate 98% hard lock. Each server registration owns a bounded status ledger; its authenticated management route exposes only its own account ids. The default alert is a log line plus a `logged` event, with no OS notification.
+`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection, and pool WHAM/header observations reach the policy only after raw percentages pass validation and the captured credential writer is still live; clamped display bars and responses from retired credentials cannot authorize a pause. The pool-account-only [configuration policy](../config.md#codex-pool-low-quota-protection) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected across every qualifying window already active for that account until recovery or a new reset episode. Native main keeps its separate 98% hard lock. Each server registration owns a bounded status ledger; its authenticated management route exposes only its own account ids. The default alert is a log line plus a `logged` event, with no OS notification. A pool response that could not capture a writer at dispatch (credential already replaced, or the store unreadable) fails closed the same way: its snapshot still refreshes the display cache, but it never authorizes a policy pause. Writer-free legacy and login paths are explicitly distinct from that pool contract and keep their existing observation behavior.
 
 ## Bounded pool quota observations
 

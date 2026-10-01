@@ -98,7 +98,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("rewriteBlocks: clientBlockRewrite");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
     expect(sseBranch).toMatch(
-      /relaySseWithFailedTail\(\s*rewrittenBody,\s*upstream,\s*reason\s*=>\s*\{\s*responseEffects\.responseCompletionCancelled\s*=\s*true;\s*clientGone\.abort\(reason\);\s*\},\s*\{\s*upstreamError:\s*logCtx\.upstreamError,\s*terminalBoundary:\s*codexSafetyBufferingOptions\s*\},\s*\)/,
+      /relaySseWithFailedTail\(\s*rewrittenBody,\s*upstream,\s*reason\s*=>\s*\{\s*responseEffects\.responseCompletionCancelled\s*=\s*true;\s*clientGone\.abort\(reason\);\s*\},\s*\{\s*upstreamError:\s*logCtx\.upstreamError,\s*terminalBoundary:\s*codexSafetyBufferingOptions,\s*maskCredential\s*\},\s*\)/,
     );
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");

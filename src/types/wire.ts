@@ -87,6 +87,13 @@ const WIRE_ADAPTER_PIN_PREFIXES: Readonly<Record<string, WirePinPrefixRule>> = O
     endpoint: "https://api.commandcode.ai/provider/v1",
     prefixes: Object.freeze({ "claude-": "anthropic" }),
   }),
+  // TokenLab declares Claude ids as Chat + Anthropic Messages, never Responses
+  // (`tokenlab.accepted_request_formats` on GET /v1/models/{id}, all 11 live claude-* ids on
+  // 2026-09-30). Messages is their native wire; POST /v1/messages accepts x-api-key.
+  tokenlab: Object.freeze({
+    endpoint: "https://api.tokenlab.sh/v1",
+    prefixes: Object.freeze({ "claude-": "anthropic" }),
+  }),
 });
 
 /** Just enough of a provider config to tell whether it still points at the pinned endpoint. */

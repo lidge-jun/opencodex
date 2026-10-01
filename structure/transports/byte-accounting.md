@@ -104,6 +104,14 @@ Canonical Responses identity sanitation and narrowly scoped pre-output combo rec
 
 ## Response-log inspection
 
+`src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
+searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,
+so `>` inside a single- or double-quoted attribute cannot hide later credential attributes.
+The decoded and raw passes
+retain the original-offset mapping and mask a credential-bearing element through the rest
+of the input. `tests/lib/redact.test.ts` counts delimiter searches and scanned characters across doubled inputs
+without a machine-speed deadline, as well as malformed and escaped credential coverage.
+
 `src/server/response-log-body.ts` forwards raw response chunks on downstream demand.
 Diagnostic retention is limited to 32 MiB for JSON and an 8 KiB prefix for other
 HTTP error bodies. Fixed 64 KiB blocks also bound per-chunk bookkeeping. These

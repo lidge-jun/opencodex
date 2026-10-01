@@ -41,6 +41,24 @@ const claudeCodeBaseline = new WeakMap<OcxConfig, unknown>();
  * reconciliation paths below.
  */
 const liveConfigBaseline = new WeakMap<OcxConfig, OcxConfig>();
+
+/**
+ * Adopt a committed discovery decision and its merge baseline as one synchronous step.
+ * Visibility writers assign and save synchronously; any future writer yielding between
+ * those steps must preserve pending edits through a three-way merge here.
+ */
+export function adoptPersistedModelDiscovery(
+  config: OcxConfig,
+  persisted: Pick<OcxConfig, "modelDiscovery" | "disabledModels">,
+): void {
+  config.modelDiscovery = structuredClone(persisted.modelDiscovery);
+  config.disabledModels = structuredClone(persisted.disabledModels);
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) {
+    baseline.modelDiscovery = structuredClone(persisted.modelDiscovery);
+    baseline.disabledModels = structuredClone(persisted.disabledModels);
+  }
+}
 /**
  * The live config retains the address of the socket Bun actually opened, while
  * this map retains the operator's desired address for the next process start.

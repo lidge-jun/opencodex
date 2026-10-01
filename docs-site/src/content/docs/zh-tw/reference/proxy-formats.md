@@ -63,6 +63,13 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 在 `stream: false` 或無 `stream` 時，相同的 adapter 事件被收集為一個 Responses JSON 物件。兩種形式都保留所選模型、輸出項目、終端狀態與 usage。
 
+canonical ChatGPT Codex 路由的上游只接受 SSE，因此僅對上游請求使用 `stream: true`。OpenCodex
+會在有界限制內驗證終端串流，再將其折疊成客戶端要求的 JSON 形式；明確的 `store` 值不會改變。
+驗證失敗時會傳回錯誤，而不會以 HTTP 200 傳回部分 JSON。限制為每個 frame 4 MiB、transcript
+與重建來源各 32 MiB、100,000 個 SSE frame，以及 10,000 個重建 output item。
+`stallTimeoutSec` 同時控制第一個 body byte 與後續靜默間隔；當它是 `0`，或因本機 upstream
+預設停用時，不會立即逾時，只保留獨立的 15 分鐘整體上限。串流客戶端的行為不變。
+
 每個終端 Responses usage 物件都包含兩個 detail 物件，即使供應商未回報那些細節：
 
 ```json

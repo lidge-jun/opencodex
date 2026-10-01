@@ -135,9 +135,21 @@ when your installed Codex catalog predates them.
 | `gpt-6-sol` | 272,000 | 872,000 | `medium` | `low` through `ultra` |
 | `gpt-6-luna` | 272,000 | 872,000 | `medium` | `low` through `max` (no `ultra`) |
 
+[GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (announced September 29, 2026)
+is the upgrade to GPT-6 Sol; Astra and Luna did not get a 6.1 release. It is listed as
+`gpt-6.1-sol` (**GPT-6.1-Sol**), ungated like Sol, and its row comes from the Codex catalog, where
+it needs `client_version` **0.153.0 or later** and is the Codex default. GPT-6 Sol stays listed.
+
+| Model | Default context | Opt-in ceiling | Default effort | Reasoning ladder |
+| --- | ---: | ---: | --- | --- |
+| `gpt-6.1-sol` | 272,000 | 872,000 | `low` | `low` through `ultra` |
+
 The same `providerContextCaps.openai`, `modelContextWindows` and `modelAutoCompactTokenLimits`
-levers apply as for Astra. There are no `openai-apikey/` rows or built-in price estimates for Sol
-or Luna yet.
+levers apply as for Astra. On the OpenAI API (`openai-apikey`), `gpt-6.1-sol` has 1,050,000
+context, 922,000 maximum input, 128,000 maximum output and efforts `low` through `max`, priced
+at $2 input, $0.10 cached input and $10 output per 1M tokens (prompts over 272K bill at the
+long-context rate). GitHub Copilot, OpenRouter, Vercel AI Gateway, Kilo and OpenCode Zen also
+list it.
 
 When OpenAI ships a GPT model that this release does not know yet, add it through config instead of
 waiting for an update, the same way a new Claude id goes under `providers.anthropic.models`:
@@ -156,7 +168,7 @@ waiting for an update, the same way a new Claude id goes under `providers.anthro
 ```
 
 Each bare `gpt-*` id listed there on the Codex-login provider appears as a native model (here
-**GPT-6-Nova**) with GPT-6 Sol's reasoning ladder and modalities, a 272,000-token default context
+**GPT-6-Nova**) with GPT-6.1 Sol's reasoning ladder, default effort and modalities, a 272,000-token default context
 and an 872,000-token opt-in ceiling. Raise or narrow it with `modelContextWindows`, for example
 `"modelContextWindows": { "gpt-6-nova": 872000 }`. It is never account-gated: if your account
 cannot use the model, the request still goes out and you see the upstream error. Ids that are
@@ -706,6 +718,16 @@ grok-4.20-0309-non-reasoning, grok-build-0.1, and grok-composer-2.5-fast accept
 is excluded: the gateway answers `service_tier: "default"` when sent `priority`, so it stays
 unclassified and its caller tier is not forwarded. Unlisted models stay unclassified on both
 transports.
+
+On the OAuth gateway, Grok 4.7's Fast works differently. The gateway also lists
+`grok-4.7-build-fast`, which is the same model on faster serving hardware, and it measured about 1.6×
+faster than `grok-4.7`. Priority processing on `grok-4.7` measured no faster and consumed about 6× the
+subscription usage per output token. The Models list therefore shows one Grok 4.7 row. Selecting its
+Fast row (`xai/grok-4.7--fast`), sending `service_tier: "priority"`, or turning on Fast mode sends the
+request as `grok-4.7-build-fast` without a service tier. Request logs keep the model as `grok-4.7` and
+record `grok-4.7-build-fast` as the wire model. API-key mode is unchanged: build-fast is not on xAI's
+public API, so Grok 4.7 Fast there still means priority processing. An explicit
+`xai/grok-4.7-build-fast` selection from an earlier configuration keeps working.
 
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium

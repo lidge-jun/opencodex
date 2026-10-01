@@ -143,7 +143,7 @@ describe("active registry admission", () => {
     } finally {
       settle?.();
       await server.stop(true);
-      upstream.stop(true);
+      await upstream.stop(true);
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);

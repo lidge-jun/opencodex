@@ -212,6 +212,18 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
+The canonical ChatGPT Codex route still uses `stream: true` on its upstream-only request because that
+destination is SSE-only; OpenCodex boundedly validates and folds the terminal stream back into the
+JSON shape the client requested. This transport coercion does not alter an explicit `store` value.
+The first terminal must be valid; a later terminal cannot replace an invalid first one. Output indices
+must be contiguous and covered by a completed item or the terminal output, so a text/tool delta left
+open by a sparse terminal fails closed rather than becoming partial JSON. The path caps each frame at
+4 MiB, each transcript and reconstruction source at 32 MiB, the stream at 100,000 frames, and
+reconstructed output at 10,000 items. The configured `stallTimeoutSec` governs both the first upstream
+body byte and later silent gaps. When that stall clock is disabled (`0`, including the default for a
+local upstream), it does not expire immediately; only the independent 15-minute buffered-turn ceiling
+remains. An EOF, malformed or oversized frame, read error, stall, cancellation, or missing terminal
+returns an error instead of partial JSON with HTTP 200. Streaming callers are unchanged.
 
 When a provider filters or truncates a response, an unfinished tool call remains `incomplete`
 in both JSON and SSE. Partial output is preserved, and the bridge does not emit an argument

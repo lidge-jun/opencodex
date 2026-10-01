@@ -1,5 +1,17 @@
 import type { OcxConfig } from "../types";
 
+// Object provenance survives disk drift without adding serializable config fields.
+const fileBackedConfigs = new WeakMap<OcxConfig, string>();
+
+export function recordFileBackedConfig(config: OcxConfig, path: string): OcxConfig {
+  fileBackedConfigs.set(config, path);
+  return config;
+}
+
+export function fileBackedConfigPath(config: OcxConfig): string | undefined {
+  return fileBackedConfigs.get(config);
+}
+
 const pendingTopLevelDeletions = new WeakMap<OcxConfig, Set<string>>();
 const pendingObjectChildDeletions = new WeakMap<OcxConfig, Map<string, Set<string>>>();
 export const CONFIG_REBASE_PROVENANCE_KEY = "configRebaseProvenance";

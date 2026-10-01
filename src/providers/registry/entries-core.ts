@@ -20,6 +20,7 @@ import {
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+  ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
   ZAI_GLM_52_REASONING_EFFORTS,
   ZAI_GLM_53_REASONING_EFFORTS,
@@ -190,7 +191,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // (it is the current catalog, so its default ordering wins), then the ids
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
@@ -267,12 +268,14 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
-    // grok-4.7-build-fast arrives only through OAuth discovery. We read it as the Grok Build id of
-    // what xAI documents as Grok 4.7 Fast: "the same model served on faster infrastructure",
-    // offered in Cursor and Grok Build only, not on the public xAI API (docs.x.ai/developers/grok-4-7,
-    // fetched 2026-09-24). It therefore inherits grok-4.7's documented facts in the lists below.
-    // Its wire pin and service tier stay unclaimed until probed, which is why it is absent from
-    // XAI_MODELS, modelWireDefaults and modelSupportsServiceTier.
+    // grok-4.7-build-fast arrives only through OAuth discovery: xAI's Grok 4.7 Fast, "the same model
+    // served on faster infrastructure" (docs.x.ai/developers/grok-4-7). Probed 2026-09-30
+    // (devlog/_plan/260930_grok47_build_unify/010_probe-evidence.md): identical effort ladder, image
+    // input, 500k limit and advertised defaults, 1.5-1.7x faster, ~2x the ticks per output token. It is
+    // not a second model row: shouldExposeProviderModel hides it, and grok-4.7's Fast selection on OAuth
+    // serializes it (src/providers/xai-fast-model.ts). It keeps grok-4.7's facts in the lists below so an
+    // explicit legacy request still works, plus the probed OAuth Responses wire. No service-tier claim:
+    // priority multiplied its ticks ~5.9x for no measured gain.
     // Live 2026-09-20: Chat Completions rejects `stop` on grok-4.6
     // (`400 invalid-argument "Model grok-4.6 does not support parameter stop."`).
     // xAI documents `stop` as unsupported for reasoning models. Claude Code
@@ -325,6 +328,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // "default", so forwarding a caller tier would advertise a tier it does not get.
     modelWireDefaults: {
       "grok-4.7": {
+        wire: "openai-responses",
+        inbound: ["responses"],
+        authModes: ["oauth"],
+      },
+      "grok-4.7-build-fast": {
         wire: "openai-responses",
         inbound: ["responses"],
         authModes: ["oauth"],
@@ -482,6 +490,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
     // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
@@ -509,6 +518,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     fastWire: ANTHROPIC_FAST_WIRE,
     modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
@@ -1025,6 +1035,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // 260923 preemptive: GPT-6 Sol/Luna are OpenAI-backed routes like the GPT-5.6 rows above.
       "openai/gpt-6-sol": true,
       "openai/gpt-6-luna": true,
+      // Listed 2026-09-29 as an OpenAI-backed route like GPT-6 Sol.
+      "openai/gpt-6.1-sol": true,
     },
     // Deliberately no OpenRouter route pin: it bills the endpoint actually used and reports the
     // actual service_tier. B0 confirmation therefore owns downgrade safety. Forcing `only` plus

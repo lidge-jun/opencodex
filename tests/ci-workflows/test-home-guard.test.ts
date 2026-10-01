@@ -10,7 +10,7 @@
  * Incident: devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
  */
 import { describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -690,6 +690,64 @@ const canSymlink = (() => {
     `, { OCX_REAL_HOME: realHome, OCX_TEST_HOME_GUARD: "1" });
 
     expect(JSON.parse(probe.stdout.trim())).toEqual({ alias: true, plain: true });
+  });
+
+  test.skipIf(!canSymlink)("content of a checkout inside the Codex home may be removed; the checkout and its neighbours may not", async () => {
+    // A Codex-app worktree is a checkout under ~/.codex/worktrees/. The sentinel's .codex points
+    // at this checkout's parent, which puts the running checkout inside the protected tree the
+    // same way. Only repository content is lifted; a link inside the checkout that resolves out
+    // of it is still judged by its canonical form.
+    const probeId = beginProbe("14-checkout-content");
+    const realHome = mkdtempSync(join(tmpdir(), "ocx-sentinel-home-"));
+    const codexLink = join(realHome, ".codex");
+    symlinkSync(dirname(REPO_ROOT), codexLink);
+    mkdirSync(join(realHome, ".opencodex"), { recursive: true });
+    try {
+      const probe = await runProbe(probeId, `
+        import { mkdirSync, symlinkSync, unlinkSync } from "node:fs";
+        import { dirname, join } from "node:path";
+        import { protectedRemovalReason } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+        const root = ${JSON.stringify(REPO_ROOT)};
+        const linkDir = join(root, ".tmp");
+        mkdirSync(linkDir, { recursive: true });
+        const link = join(linkDir, "guard-link-" + process.pid);
+        symlinkSync(dirname(root), link);
+        try {
+          console.log(JSON.stringify({
+            fixture: protectedRemovalReason(join(root, "tests", ".tmp-guard-fixture")) === null,
+            checkout: protectedRemovalReason(root) !== null,
+            parent: protectedRemovalReason(dirname(root)) !== null,
+            sibling: protectedRemovalReason(join(dirname(root), "another-worktree")) !== null,
+            link: protectedRemovalReason(link) !== null,
+          }));
+        } finally {
+          unlinkSync(link);
+        }
+      `, { OCX_REAL_HOME: realHome, OCX_TEST_HOME_GUARD: "1" });
+
+      expect(JSON.parse(probe.stdout.trim())).toEqual({
+        fixture: true, checkout: true, parent: true, sibling: true, link: true,
+      });
+    } finally {
+      unlinkSync(codexLink);
+    }
+  });
+
+  test("a checkout that contains a protected tree gains no exemption", async () => {
+    // The lift requires the checkout to sit INSIDE the tree. A checkout at the home directory, or
+    // the virtual root a compiled build reports, contains ~/.codex instead and must stay guarded.
+    const probeId = beginProbe("15-checkout-contains-tree");
+    const probe = await runProbe(probeId, `
+      import { join } from "node:path";
+      import { protectedRemovalReason } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      const root = ${JSON.stringify(REPO_ROOT)};
+      console.log(JSON.stringify({
+        codex: protectedRemovalReason(join(root, ".codex", "sessions")) !== null,
+        opencodex: protectedRemovalReason(join(root, ".opencodex", "config.json")) !== null,
+      }));
+    `, { OCX_REAL_HOME: REPO_ROOT, OCX_TEST_HOME_GUARD: "1" });
+
+    expect(JSON.parse(probe.stdout.trim())).toEqual({ codex: true, opencodex: true });
   });
 
   test("removeTreeWithRetry refuses a protected tree before it calls through", () => {

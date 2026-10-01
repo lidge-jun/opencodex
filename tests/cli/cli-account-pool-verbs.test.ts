@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky, cmdRoutes } from "../../src/cli/account-extended";
+import { cmdClearCooldown, cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky, cmdRoutes } from "../../src/cli/account-extended";
 import type { AccountDeps } from "../../src/cli/account-api";
 
 /**
@@ -57,6 +57,37 @@ function capture(): { lines: string[]; errors: string[]; restore: () => void } {
 }
 
 describe("ocx account pause / resume", () => {
+  test("Anthropic ambiguous aliases fail without a write; exact ids still win", async () => {
+    const out = capture();
+    const writes: unknown[] = [];
+    const d: AccountDeps = {
+      baseUrl: "http://127.0.0.1:10100",
+      loadConfigImpl: () => ({ providers: { anthropic: { adapter: "anthropic", authMode: "oauth" } } }) as never,
+      fetchImpl: (async (_url, init) => {
+        if (init?.method === "PUT") { writes.push(JSON.parse(String(init.body))); return Response.json({ ok: true }); }
+        return Response.json({ accounts: [{ id: "a", alias: "reserve" }, { id: "b", alias: "reserve" }] });
+      }) as typeof fetch,
+    };
+    try {
+      expect(await cmdPause(["anthropic", "reserve"], d, true)).toBe(1);
+      expect(writes).toEqual([]);
+      expect(await cmdPause(["anthropic", "a"], d, true)).toBe(0);
+      expect(writes).toEqual([{ provider: "anthropic", accountId: "a", paused: true }]);
+    } finally { out.restore(); }
+  });
+
+  test.each([true, false])("Anthropic pause=%s resolves a unique alias and preserves the JSON contract", async paused => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const d = deps(() => ({ json: { ok: true, activeAccountId: "acct_2" } }), calls);
+    d.loadConfigImpl = () => ({ providers: { anthropic: { adapter: "anthropic", authMode: "oauth" } } }) as never;
+    try {
+      expect(await cmdPause(["anthropic", "GEM-PRO", "--json"], d, paused)).toBe(0);
+      expect(calls.find(call => call.method === "PUT")?.body).toEqual({ provider: "anthropic", accountId: "acct_1", paused });
+      expect(JSON.parse(out.lines.join("\n"))).toEqual({ ok: true, provider: "anthropic", id: "acct_1", paused, activeAccountId: "acct_2" });
+    } finally { out.restore(); }
+  });
+
   test("generic OAuth pause resolves aliases and uses the OAuth account route", async () => {
     const calls: Captured[] = [];
     const out = capture();
@@ -150,6 +181,71 @@ describe("ocx account pause / resume", () => {
     } finally { out.restore(); }
     expect(code).not.toBe(0);
     expect(out.errors.join("\n")).toContain("Account not found");
+  });
+});
+
+describe("ocx account clear-cooldown", () => {
+  test("Codex keeps its dedicated route and body", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdClearCooldown(["openai", "acct_1"], deps(() => ({ json: { ok: true, cleared: true } }), calls))).toBe(0);
+    } finally { out.restore(); }
+    expect(calls.at(-1)).toEqual({
+      method: "POST",
+      path: "/api/codex-auth/accounts/clear-cooldown",
+      body: { id: "acct_1" },
+    });
+  });
+
+  test("Anthropic resolves an alias and posts to the OAuth cooldown owner", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    const anthropicDeps: AccountDeps = {
+      baseUrl: "http://127.0.0.1:10100",
+      loadConfigImpl: () => ({ providers: { anthropic: {} } }) as never,
+      fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+        const parsed = new URL(String(url));
+        const call: Captured = {
+          method: init?.method ?? "GET",
+          path: parsed.pathname + parsed.search,
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        };
+        calls.push(call);
+        const json = call.method === "GET"
+          ? { accounts: [{ id: "anthropic_1", alias: "work" }] }
+          : { ok: true, cleared: true };
+        return Response.json(json);
+      }) as typeof fetch,
+    };
+    try {
+      expect(await cmdClearCooldown(["anthropic", "work"], anthropicDeps)).toBe(0);
+    } finally { out.restore(); }
+    expect(calls).toEqual([
+      { method: "GET", path: "/api/oauth/accounts?provider=anthropic", body: undefined },
+      {
+        method: "POST",
+        path: "/api/oauth/accounts/clear-cooldown",
+        body: { provider: "anthropic", accountId: "anthropic_1" },
+      },
+    ]);
+    expect(out.lines.join("\n")).toContain("anthropic: cooldown lifted for work");
+  });
+
+  test("unrelated OAuth providers are rejected before any management request", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    let code: number;
+    try {
+      code = await cmdClearCooldown(["google-antigravity", "acct_1"], {
+        baseUrl: "http://127.0.0.1:10100",
+        loadConfigImpl: () => ({ providers: { "google-antigravity": { authMode: "oauth" } } }) as never,
+        fetchImpl: (async () => { calls.push({ method: "GET", path: "unexpected", body: undefined }); return Response.json({}); }) as typeof fetch,
+      });
+    } finally { out.restore(); }
+    expect(code).toBe(1);
+    expect(calls).toHaveLength(0);
+    expect(out.errors.join("\n")).toContain("no operator-clearable account cooldown");
   });
 });
 

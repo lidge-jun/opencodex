@@ -1,6 +1,6 @@
 {
   "name": "@bitkyc08/opencodex",
-  "version": "2.71.0",
+  "version": "2.75.0",
   "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
   "type": "module",
   "main": "./bin/package-main.mjs",
@@ -25,6 +25,8 @@
     "assets/codex-app-picker.png",
     "assets/sponsors/orcarouter.png",
     "assets/sponsors/packycode.png",
+    "assets/sponsors/tokenlab-light.png",
+    "assets/sponsors/tokenlab-dark.png",
     "README.md",
     "SPONSORS.md",
     "AGENTS_INSTALL.md",

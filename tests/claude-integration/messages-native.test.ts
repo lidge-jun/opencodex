@@ -14,8 +14,10 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { estimateClaudeRequestTokens, handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import type { AdmissionLease } from "../../src/lib/admission";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { startTruncatedSseUpstream } from "../helpers/truncated-sse-upstream";
 
 interface Seen {
   path: string;
@@ -158,6 +160,36 @@ async function send(config: OcxConfig, body: Record<string, unknown>, headers?: 
   return { requestId, response, text };
 }
 
+/** Streams the first frames of a turn, then stays open until the request is aborted. */
+function hangingAfterPartialTurn(): Response {
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(sseText(SSE_FRAMES.slice(0, 3))));
+    },
+  }), { headers: { "content-type": "text/event-stream" } });
+}
+
+async function drain(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    return text;
+  }
+}
+
+async function settledRowFor(requestId: string) {
+  for (let i = 0; i < 100 && !getRequestLogEntries().some(entry => entry.requestId === requestId); i++) {
+    await Bun.sleep(10);
+  }
+  return rowFor(requestId);
+}
+
 describe("managed native Messages", () => {
   test("sends exactly the allowlisted source body with the provider key and no caller credential", async () => {
     const config = fixtureConfig(startUpstream());
@@ -252,6 +284,102 @@ describe("managed native Messages", () => {
     expect(seen).toHaveLength(0);
     expect(callerForwardSeen).toHaveLength(1);
     expect(callerForwardSeen[0]!.headers.get("x-api-key")).toBe("sk-ant-fixture-caller");
+  });
+
+  test("a mid-stream upstream reset ends the relayed stream with an Anthropic error event and a failed row", async () => {
+    const truncated = startTruncatedSseUpstream(sseText(SSE_FRAMES.slice(0, 3)));
+    try {
+      const config = fixtureConfig(truncated.port);
+      const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
+      expect(response.status).toBe(200);
+      expect(text).toContain("streamed");
+      expect(text).toContain("\n\nevent: error\ndata: ");
+      expect(text).toContain('"type":"api_error"');
+      expect(text).toContain("anthropic passthrough upstream stream failed: ");
+      expect(truncated.requests()).toBe(1);
+      const row = rowFor(requestId);
+      expect(row.status).toBe(502);
+      expect(row.terminalStatus).toBe("failed");
+      expect(row.closeReason).toBe("terminal");
+      expect(row.transportPhase).toBe("mid_stream");
+      expect(row.terminalSource).toBe("synthetic");
+      expect(row.failureCause).toBe("transport-ambiguous");
+      expect(row.attempts?.at(-1)?.streamAborted).toBe(true);
+      expect(row.upstreamError).toContain("anthropic passthrough upstream stream failed: ");
+      expect(JSON.stringify(row)).not.toContain("fixture-key-alpha");
+    } finally {
+      truncated.stop();
+    }
+  });
+
+  test("a non-streaming caller whose upstream stream resets still gets an Anthropic 502", async () => {
+    const truncated = startTruncatedSseUpstream(sseText(SSE_FRAMES.slice(0, 3)));
+    try {
+      const config = fixtureConfig(truncated.port);
+      const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false });
+      expect(response.status).toBe(502);
+      expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "api_error" } });
+      expect(text).toContain("anthropic passthrough upstream stream failed: ");
+      const row = rowFor(requestId);
+      // Same row as the streaming lane for the same reset.
+      expect(row.status).toBe(502);
+      expect(row.terminalStatus).toBe("failed");
+      expect(row.closeReason).toBe("terminal");
+      expect(row.transportPhase).toBe("mid_stream");
+      expect(row.failureCause).toBe("transport-ambiguous");
+    } finally {
+      truncated.stop();
+    }
+  });
+
+  test("a non-streaming fold that hits the body byte cap keeps the tap's close reason", async () => {
+    const config = fixtureConfig(startUpstream(() => new Response(SSE_TEXT, { headers: { "content-type": "text/event-stream" } })),
+      { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
+    const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false });
+    expect(response.status).toBe(502);
+    expect(text).toContain("exceeded 64 bytes");
+    const row = rowFor(requestId);
+    expect(row.status).toBe(502);
+    expect(row.closeReason).toBe("body_overflow");
+  });
+
+  test("a client that disconnects mid-stream is logged as a cancel, not an upstream failure", async () => {
+    const config = fixtureConfig(startUpstream(hangingAfterPartialTurn));
+    const client = new AbortController();
+    const requestId = `pf08-${crypto.randomUUID()}`;
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...SOURCE_BODY, stream: true }),
+      signal: client.signal,
+    }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    client.abort(new DOMException("client went away", "AbortError"));
+    await drain(reader);
+    const row = await settledRowFor(requestId);
+    expect(row.status).toBe(499);
+    expect(row.closeReason).toBe("client_cancel");
+    expect(row.transportPhase).toBeUndefined();
+  });
+
+  test("the lane aborting its own upstream (shutdown, turn release) is logged as a cancel", async () => {
+    const config = fixtureConfig(startUpstream(hangingAfterPartialTurn));
+    let turn: AbortController | undefined;
+    const lease = { bindAbortController(controller: AbortController) { turn = controller; }, release() {} };
+    const requestId = `pf08-${crypto.randomUUID()}`;
+    const response = await handleClaudeMessages(messagesRequest({ ...SOURCE_BODY, stream: true }), config,
+      { model: "", provider: "" }, { requestId, start: Date.now(), turnAdmissionLease: lease as unknown as AdmissionLease });
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    expect(turn).toBeDefined();
+    turn!.abort(new Error("server shutdown"));
+    const text = await drain(reader);
+    expect(text).not.toContain("event: error");
+    const row = await settledRowFor(requestId);
+    expect(row.status).toBe(499);
+    expect(row.closeReason).toBe("client_cancel");
+    expect(row.upstreamError).toBeUndefined();
   });
 
   test("count_tokens counts the body the native lane sends", async () => {

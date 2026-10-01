@@ -146,9 +146,12 @@ function finishAfterStderr(status) {
 }
 
 try {
+  // BUN_BE_BUN selects the supervisor's interpreter mode, not the saved launcher.
+  const launcherEnv = { ...process.env };
+  delete launcherEnv.BUN_BE_BUN;
   launcher = spawn(launcherShellPath, [wrapperPath, "--version"], {
     detached: true,
-    env: process.env,
+    env: launcherEnv,
     stdio: ["ignore", "ignore", "pipe", "pipe"],
   });
   if (!launcher.pid) throw new Error("Codex shim probe launcher has no pid");
@@ -252,6 +255,7 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   const stderrPath = join(probeDir, "stderr");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    BUN_BE_BUN: "1",
     OCX_SHIM_BYPASS: "1",
     OCX_SHIM_PROBE: "1",
     OCX_SHIM_PROBE_REENTRY_PATH: reentryPath,

@@ -205,6 +205,7 @@ fn ensure(app: &AppHandle, endpoint: ProxyEndpoint) -> tauri::Result<WebviewWind
     .user_agent(&window::webview_user_agent())
     .initialization_script(initialization_script())
     .on_navigation(popup_navigation_allowed(endpoint, app_handle.clone()))
+    .on_new_window(window::open_new_windows_in_default_browser())
     .on_page_load(|popup, payload| {
         if matches!(payload.event(), PageLoadEvent::Finished) {
             set_visibility(&popup, popup.is_visible().unwrap_or(false));
@@ -247,6 +248,9 @@ fn popup_navigation_allowed(
 ) -> impl Fn(&Url) -> bool + Send + 'static {
     move |url| {
         if !same_origin(url, endpoint) {
+            // WKWebView asks this policy before it would create a window for a `_blank` link, so
+            // refusing here without opening is what left the popup's external links dead on macOS.
+            window::open_in_default_browser(url);
             return false;
         }
         if is_close_url(url, endpoint) {

@@ -110,9 +110,9 @@ Provider Overview consumes the existing shared `add-provider-presets` resource f
 presentation. `matchingWorkspacePreset` requires the configured id, adapter and normalized
 endpoint to match; a custom endpoint or absent sponsor metadata suppresses the introduction.
 `ProviderSponsor` keeps localized promotional copy and outbound HTTP(S) links separate from
-operator notes. Notes remain complete and editable once in the main column; stats and current
-account quota remain in the side column. This presentation does not write provider configuration
-or participate in routing.
+operator notes; its brand table maps each sponsor preset id (OrcaRouter, PackyCode, TokenLab) to a
+name and i18n copy, and a sponsor preset without a row renders nothing. Notes stay editable once in
+the main column; stats and account quota stay in the side column. Nothing here writes config or routes.
 
 Provider marks remain a name-to-asset projection in `gui/src/provider-icons.ts`. The Crusoe preset
 maps to the self-hosted multicolor `gui/public/provider-icons/crusoe.svg`; the gradient is rendered

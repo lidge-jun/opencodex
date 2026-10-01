@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { applyNewModelPolicy, reconcileSuccessfulModelDiscoveries } from "../../src/providers/new-model-policy";
+import {
+  applyNewModelPolicy,
+  effectiveNewModelPolicy,
+  MODEL_REMOVAL_GRACE_FETCHES,
+  reconcileSuccessfulModelDiscoveries,
+} from "../../src/providers/new-model-policy";
 
 const now = "2026-08-24T02:11:00Z";
 
@@ -78,5 +83,152 @@ describe("new-model policy", () => {
     expect(changed).toBe(true);
     expect(config.disabledModels).toEqual(["vendor/b"]);
     expect(config.modelDiscovery!.knownModels!.vendor!.updatedAt).toBe(now);
+  });
+
+  /**
+   * GET /v1/models is polled far more often than convergence runs, so the read side reconciles
+   * from the same roster repeatedly. Advancing the removal grace once per poll would retire a
+   * transiently absent id after three polls and write config.json each time. Only convergence may
+   * move an id toward `removed`.
+   */
+  describe("removal grace is advanced by convergence only", () => {
+    const seedBaseline = { ids: ["a", "b", "c"], removed: [] as string[], updatedAt: "2026-01-01T00:00:00Z" };
+    const roster = [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "b" }];
+
+    test("read-side reconciliation never retires an id that disappears from the roster", () => {
+      let baseline = seedBaseline;
+      for (let poll = 0; poll < MODEL_REMOVAL_GRACE_FETCHES * 4; poll++) {
+        const result = applyNewModelPolicy({
+          provider: "vendor", discoveredIds: ["a", "b"], baseline, policy: "off", now, mode: "discovery",
+        });
+        expect(result.newIds).toEqual([]);
+        expect(result.nextBaseline.ids).toEqual(["a", "b", "c"]);
+        expect(result.nextBaseline.removed).toEqual([]);
+        expect(result.nextBaseline.missing).toBeUndefined();
+        baseline = result.nextBaseline;
+      }
+    });
+
+    test("convergence still retires the same id after the grace fetches (control)", () => {
+      let baseline = seedBaseline;
+      for (let cycle = 0; cycle < MODEL_REMOVAL_GRACE_FETCHES; cycle++) {
+        baseline = applyNewModelPolicy({
+          provider: "vendor", discoveredIds: ["a", "b"], baseline, policy: "off", now, mode: "converge",
+        }).nextBaseline;
+      }
+      expect(baseline.ids).toEqual(["a", "b"]);
+      expect(baseline.removed).toEqual(["c"]);
+    });
+
+    test("read-side reconciliation still hides a genuine arrival but a reappearance clears its pending removal", () => {
+      const arrival = applyNewModelPolicy({
+        provider: "vendor", discoveredIds: ["a", "b"], baseline: { ids: ["a"], removed: [], updatedAt: now },
+        policy: "off", now, mode: "discovery",
+      });
+      expect(arrival.newIds).toEqual(["b"]);
+      expect(arrival.slugsToDisable).toEqual(["vendor/b"]);
+
+      const resumed = applyNewModelPolicy({
+        provider: "vendor", discoveredIds: ["a", "c"],
+        baseline: { ids: ["a", "c"], removed: [], missing: { c: MODEL_REMOVAL_GRACE_FETCHES - 1 }, updatedAt: now },
+        policy: "off", now, mode: "discovery",
+      });
+      expect(resumed.nextBaseline.missing).toBeUndefined();
+      expect(resumed.nextBaseline.removed).toEqual([]);
+    });
+
+    test("repeated read-side reconciliation of the same roster never shrinks the baseline or reports a change", () => {
+      const config = {
+        port: 10100, defaultProvider: "vendor", providers: { vendor: {} },
+        modelDiscovery: { newModelPolicy: "off" as const, knownModels: { vendor: structuredClone(seedBaseline) } },
+      } as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"];
+      for (let poll = 0; poll < MODEL_REMOVAL_GRACE_FETCHES * 3; poll++) {
+        const changed = reconcileSuccessfulModelDiscoveries({
+          config, models: roster, authoritativeProviders: ["vendor"], now, mode: "discovery",
+        });
+        expect(changed).toBe(false);
+      }
+      const known = config.modelDiscovery!.knownModels!.vendor!;
+      expect(known.ids).toEqual(["a", "b", "c"]);
+      expect(known.removed).toEqual([]);
+      expect(known.missing).toBeUndefined();
+    });
+
+    test("repeated convergence of the same shrinking roster retires the id (control)", () => {
+      const config = {
+        port: 10100, defaultProvider: "vendor", providers: { vendor: {} },
+        modelDiscovery: { newModelPolicy: "off" as const, knownModels: { vendor: structuredClone(seedBaseline) } },
+      } as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"];
+      for (let cycle = 0; cycle < MODEL_REMOVAL_GRACE_FETCHES; cycle++) {
+        reconcileSuccessfulModelDiscoveries({
+          config, models: roster, authoritativeProviders: ["vendor"], now,
+        });
+      }
+      expect(config.modelDiscovery!.knownModels!.vendor!.removed).toEqual(["c"]);
+    });
+  });
+
+  describe("effective per-provider policy override", () => {
+    /** Minimal convergence config: one known id, an optional provider-level override. */
+    const convergenceConfig = (global: "on" | "off", local?: "on" | "off") => ({
+      port: 10100, defaultProvider: "vendor",
+      providers: { vendor: local ? { newModelPolicy: local } : {} },
+      modelDiscovery: {
+        newModelPolicy: global,
+        knownModels: { vendor: { ids: ["a"], removed: [], updatedAt: "2026-01-01T00:00:00Z" } },
+      },
+    } as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"]);
+
+    test("the provider value wins, and an inherited/absent value falls back to the global flag", () => {
+      const config = {
+        port: 10100, defaultProvider: "alpha",
+        providers: {
+          alpha: { newModelPolicy: "off" as const }, beta: { newModelPolicy: "on" as const },
+          gamma: { newModelPolicy: "inherit" as const }, delta: {},
+        },
+        modelDiscovery: { newModelPolicy: "on" as const },
+      } as Parameters<typeof effectiveNewModelPolicy>[0];
+      expect(effectiveNewModelPolicy(config, "alpha")).toBe("off");
+      expect(effectiveNewModelPolicy(config, "beta")).toBe("on");
+      expect(effectiveNewModelPolicy(config, "gamma")).toBe("on");
+      expect(effectiveNewModelPolicy(config, "delta")).toBe("on");
+      const globalOff = { ...config, modelDiscovery: { newModelPolicy: "off" as const } } as typeof config;
+      expect(effectiveNewModelPolicy(globalOff, "delta")).toBe("off");
+      expect(effectiveNewModelPolicy(globalOff, "beta")).toBe("on");
+    });
+
+    test("a provider off override hides a genuine arrival under a global on", () => {
+      const config = convergenceConfig("on", "off");
+      const changed = reconcileSuccessfulModelDiscoveries({
+        config,
+        models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "b" }],
+        authoritativeProviders: ["vendor"], now,
+      });
+      expect(changed).toBe(true);
+      expect(config.disabledModels).toEqual(["vendor/b"]);
+    });
+
+    test("a provider on override lets a genuine arrival through under a global off", () => {
+      const config = convergenceConfig("off", "on");
+      const changed = reconcileSuccessfulModelDiscoveries({
+        config,
+        models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "b" }],
+        authoritativeProviders: ["vendor"], now,
+      });
+      expect(changed).toBe(true);
+      expect(config.disabledModels).toBeUndefined();
+      expect(config.modelDiscovery!.recentArrivals!.vendor).toEqual([{ id: "b", at: now }]);
+    });
+
+    test("an explicit disabled choice survives a provider on override", () => {
+      const config = convergenceConfig("off", "on");
+      config.disabledModels = ["vendor/b"];
+      reconcileSuccessfulModelDiscoveries({
+        config,
+        models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "b" }],
+        authoritativeProviders: ["vendor"], now,
+      });
+      expect(config.disabledModels).toEqual(["vendor/b"]);
+    });
   });
 });

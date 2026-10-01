@@ -73,6 +73,7 @@ export default function AddCodexAccountModal({
             authUrl={ui.authUrl}
             deviceCode={ui.deviceCode}
             instructions={ui.instructions}
+            browserLaunch={ui.browserLaunch}
             manualCode={ui.manualCode}
             manualCodeBusy={manualCodeBusy}
             manualCodeWaiting={manualCodeWaiting}

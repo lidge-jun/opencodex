@@ -12,6 +12,7 @@ import type { CatalogModel } from "../../codex/catalog";
 import { observeModelCacheRevision } from "../../codex/model-cache";
 import {
   captureExportConfigAdmission,
+  detachedConfigSnapshot,
   isExportConfigAdmissionCurrent,
   type ExportConfigAdmission,
 } from "../../config/admitted-identity";
@@ -37,6 +38,9 @@ import type { OcxConfig } from "../../types";
 import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
+import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
+import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
+import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-policy";
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
@@ -275,7 +279,7 @@ export async function listManagementModelRows(
    */
   const models = options.models === undefined
     ? (await Promise.all([
-      fetchAllModels(config, options.providerContentRevisions),
+      fetchAllModels(config, options.providerContentRevisions, projection => { config = projection; }),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,
       }),
@@ -471,8 +475,10 @@ export async function loadExportModels(
   // The configuration this pass will use from beginning to end, proved to be the one on disk.
   // Without it there is nothing that may be retained, and the caller still gets its rows: only the
   // preview authority is withheld.
-  const admission = captureExportConfigAdmission(config);
-  const admitted = admission?.config ?? config;
+  let admission = captureExportConfigAdmission(config);
+  let admitted = admission?.config ?? config;
+  const discoveryBaseline = models === undefined ? captureModelDiscoveryBaseline(admitted) : null;
+  const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
   // The gather stamps each provider as it chooses its rows, so the roster and the revisions that
   // vouch for it come from the same moment. Sampling afterwards would let a concurrent flight's
   // publication be recorded against rows it never produced.
@@ -483,10 +489,34 @@ export async function loadExportModels(
   // had, and runs alongside as it did inside the projection.
   const roster = models === undefined
     ? (await Promise.all([
-      (await import("../../codex/catalog")).gatherRoutedModels(admitted, { providerContentRevisions: gathered }),
+      (await import("../../codex/catalog")).gatherRoutedModels(admitted, {
+        providerContentRevisions: gathered, providerModelOutcomes: outcomes,
+      }),
       ensureCodexEntitlementFreshness(admitted, { waitMs: 3_000 }),
     ]))[0]
     : models;
+  if (discoveryBaseline !== null) {
+    const authoritative = outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider);
+    if (admission !== null && isExportConfigAdmissionCurrent(admission, config)
+      && [...gathered].every(([provider, revision]) => observeModelCacheRevision(provider) === revision)) {
+      if (!finalizeModelDiscovery(config, discoveryBaseline, roster, authoritative, gathered)) {
+        lastExportSnapshot = null;
+        throw new CatalogGatherBusyError();
+      }
+      // Only our scoped discovery decision moved: bind the projection to the committed state.
+      admission = captureExportConfigAdmission(config);
+      admitted = admission?.config ?? config;
+    } else {
+      // Preserve the old-response contract after a race, without persisting stale evidence or
+      // retaining it as a current preview. Apply visibility policy only to a detached projection.
+      const projection = detachedConfigSnapshot(admitted);
+      if (projection === null) throw new CatalogGatherBusyError();
+      reconcileSuccessfulModelDiscoveries({ config: projection, models: roster,
+        authoritativeProviders: authoritative, now: new Date().toISOString(), mode: "discovery" });
+      admitted = projection;
+      admission = null;
+    }
+  }
   const rows = await listManagementModelRows(admitted, { models: roster });
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.

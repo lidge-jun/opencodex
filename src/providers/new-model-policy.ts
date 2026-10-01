@@ -8,6 +8,17 @@ export const MAX_RECENT_ARRIVALS_PER_PROVIDER = 50;
 export type KnownModelBaseline = NonNullable<NonNullable<OcxConfig["modelDiscovery"]>["knownModels"]>[string];
 export type NewModelPolicy = "on" | "off";
 
+/**
+ * Which side of the reconciliation is running.
+ *
+ * `converge` (the default) is the catalog convergence cycle: it advances the removal grace and
+ * retires ids missing for {@link MODEL_REMOVAL_GRACE_FETCHES} cycles. `discovery` is the HTTP read
+ * side (GET /v1/models), which is polled far more often than convergence runs; it absorbs genuine
+ * arrivals and reappearances but never advances removal accounting, so a transiently absent id
+ * cannot be retired by repeated polls.
+ */
+export type NewModelPolicyMode = "converge" | "discovery";
+
 export interface NewModelPolicyResult {
   newIds: string[];
   nextBaseline: KnownModelBaseline;
@@ -44,6 +55,8 @@ export function applyNewModelPolicy(options: {
   policy: NewModelPolicy;
   hasSelectedModels?: boolean;
   now: string;
+  /** See {@link NewModelPolicyMode}; defaults to `converge`. */
+  mode?: NewModelPolicyMode;
 }): NewModelPolicyResult {
   const discovered = [...new Set(options.discoveredIds)].sort();
   const prior = options.baseline;
@@ -60,8 +73,17 @@ export function applyNewModelPolicy(options: {
   const seen = new Set(discovered);
   const newIds = discovered.filter(id => !active.has(id) && !removed.has(id));
   const missing: Record<string, number> = {};
+  // Read-side discovery must not advance the removal grace: a per-poll increment would retire a
+  // transiently absent id after three polls. Absence keeps its recorded count (and a reappearance
+  // clears it) instead of moving toward `removed`.
+  const discovery = options.mode === "discovery";
   for (const id of active) {
     if (seen.has(id)) continue;
+    if (discovery) {
+      const priorCount = prior.missing?.[id];
+      if (priorCount !== undefined) missing[id] = priorCount;
+      continue;
+    }
     const count = (prior.missing?.[id] ?? 0) + 1;
     if (count >= MODEL_REMOVAL_GRACE_FETCHES) {
       active.delete(id);
@@ -99,6 +121,8 @@ export function reconcileSuccessfulModelDiscoveries(options: {
   models: Iterable<{ provider: string; id: string; custom?: boolean }>;
   authoritativeProviders: Iterable<string>;
   now: string;
+  /** See {@link NewModelPolicyMode}; defaults to `converge`. */
+  mode?: NewModelPolicyMode;
 }): boolean {
   const byProvider = new Map<string, string[]>();
   for (const model of options.models) {
@@ -118,6 +142,7 @@ export function reconcileSuccessfulModelDiscoveries(options: {
       policy: effectiveNewModelPolicy(options.config, provider),
       hasSelectedModels: (configured.selectedModels?.length ?? 0) > 0,
       now: options.now,
+      mode: options.mode,
     });
     if (result.overflow) continue;
     const priorBaseline = known[provider];

@@ -1259,7 +1259,8 @@ export async function handleResponsesCompact(
             upstream.headers,
             authCtx.writerGeneration,
             authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined,
-            { modelId: route.modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined },
+            { modelId: route.modelId, poolWriter: authCtx.kind === "pool" ? authCtx.poolQuotaWriter : undefined,
+              poolResponse: authCtx.kind === "pool" },
           );
         }
         recordCompactPoolOutcome(authCtx, upstream.status, {
@@ -1328,7 +1329,7 @@ export async function handleResponsesCompact(
     if (outcomeCtx.kind === "pool") {
       const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/quota");
       applyAccountQuotaFromUpstreamHeaders(outcomeCtx.accountId, upstream.headers, outcomeCtx.writerGeneration,
-        undefined, { modelId: route.modelId, poolWriter: outcomeCtx.poolQuotaWriter });
+        undefined, { modelId: route.modelId, poolWriter: outcomeCtx.poolQuotaWriter, poolResponse: true });
     }
     const retryAfter = upstream.headers.get("retry-after");
     const resetAt = [

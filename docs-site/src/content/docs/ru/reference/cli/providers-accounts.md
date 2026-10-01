@@ -107,7 +107,7 @@ alias <provider> <id|alias> <display-name|->  Set or clear an account's display 
 pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
-clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -190,9 +190,28 @@ credential'а, это состояние тоже печатается, но к�
 { ok: true, provider, type, activeId }
 ```
 
+### `ocx account pause|resume anthropic <id|alias> [--json]`
+
+Команда CLI приостанавливает или возобновляет аккаунт Anthropic OAuth по id или уникальному alias: сначала точное совпадение, затем без учёта регистра. CLI и дашборд используют `PUT /api/oauth/accounts/pause` с `{ provider: "anthropic", accountId, paused }`. Поле `paused` сохраняется в аккаунте и возвращается через `GET /api/oauth/accounts`. Пауза действует и при отключённом проактивном пуле: аккаунт исключается из выбора, привязок сессий и кандидатов после 429. Если приостановлены все аккаунты, запросы получают 403 до возобновления одного из них. Уже отправленные запросы продолжаются; учётные данные и состояние здоровья сохраняются. Пауза переживает перезапуск и повторный вход, но удаляется вместе с аккаунтом. Индивидуальные пороги в эту операцию не входят.
+
 ### `ocx account clear <provider> [--json]`
 
 Снимает ручной выбор аккаунта Codex без разрешения id, поэтому работает, даже когда аккаунт буквально называется `auto`. Только для пулов Codex; у других типов провайдеров нет автоматического выбора для восстановления.
+
+### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
+
+Снимает локальный для процесса cooldown после сбоя, не меняя сохранённые учётные данные. Используйте
+`openai` для аккаунта пула Codex или `anthropic` для OAuth-аккаунта Anthropic; другие провайдеры
+отклоняются. Обе формы принимают id аккаунта или уникальный псевдоним, а `main` относится только к
+пулу Codex.
+
+```bash
+ocx account clear-cooldown anthropic <id-or-alias>
+```
+
+Команда завершается успешно и без активного cooldown, возвращая `cleared: false` в JSON. При снятии
+cooldown Anthropic также увеличивается поколение аккаунта, поэтому старый quota probe не сможет
+восстановить снятое состояние или опубликовать устаревшую доступность.
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -211,7 +230,11 @@ quota-bar'ов дашборда.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Управляет порогом пула Codex `openai` или сохраняет порог общего пула OAuth. `on` сохраняет 80 %, `off` — 0 %, а `threshold <n>` принимает 0–100. Порог общего пула влияет на выбор только при включённом `pool.kernel` и `strategy: "fill-first"`; при выключенном флаге сохранение не включает переключение по порогу. В обоих случаях оно не меняет настройку включения провайдера и не отключает ротацию после ошибки 429. Для общего пула результат чтения и изменения берётся из подтверждённого ответа сервера. Для общего пула `poolEnabled` — сохранённая настройка провайдера (`null` означает отсутствие настройки), а не итоговое унаследованное состояние. `inert: true` означает, что порог сохранён, но не применяется, а `inert: false` — что пул его применяет. Отсутствие `inert` означает неизвестную возможность, которая также не даёт `enabled: true`. Провайдеры с ключом API, Anthropic и неверные значения отклоняются.
+Управляет порогом пула Codex `openai` или сохраняет порог общего пула OAuth. `on` сохраняет 80 %, `off` — 0 %, а `threshold <n>` принимает 0–100. Порог общего пула влияет на выбор только при включённом `pool.kernel` и `strategy: "fill-first"`; при выключенном флаге сохранение не включает переключение по порогу. В обоих случаях оно не меняет настройку включения провайдера и не отключает ротацию после ошибки 429. Для общего пула результат чтения и изменения берётся из подтверждённого ответа сервера. Для общего пула `poolEnabled` — сохранённая настройка провайдера (`null` означает отсутствие настройки), а не итоговое унаследованное состояние. `inert: true` означает, что порог сохранён, но не применяется, а `inert: false` — что пул его применяет. Отсутствие `inert` означает неизвестную возможность, которая также не даёт `enabled: true`. Провайдеры с ключом API и неверные значения отклоняются.
+
+### `ocx account auto-switch anthropic … --account <id>`
+
+Для Anthropic OAuth команда `ocx account auto-switch anthropic threshold 90 --account <id>` сохраняет целое число 0–100. `off --account <id>` задаёт 0, `on --account <id>` — 80, `inherit --account <id>` восстанавливает наследование, а `status --account <id>` только читает; доступен `--json`. Карточка аккаунта предлагает тот же контроль. Отсутствующее/null значение наследует `anthropicAccountPool.autoSwitchThreshold` (по умолчанию 80); 0 отключает только переключение по использованию этого аккаунта. Настройка переживает перезапуск и повторный вход, удаляется вместе с аккаунтом. Ручной выбор, affinity, резервный выбор при неизвестных или исчерпанных квотах и ограничения маршрутов не меняются. При выключенном пуле пороги не действуют; пауза и восстановление после 429 сохраняются.
 
 ```text
 openai: { provider, autoSwitchThreshold: number, enabled: boolean }

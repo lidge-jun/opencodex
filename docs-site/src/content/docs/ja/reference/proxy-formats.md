@@ -63,6 +63,8 @@ provider events → internal adapter events → client dialect
 
 `stream: false` を指定するか、`stream` を指定しないと、同じアダプター イベントが 1 つの Responses JSON オブジェクトに収集されます。どちらの形式でも、選択したモデル、出力項目、端末の状態、使用状況が保存されます。
 
+canonical ChatGPT Codex ルートではアップストリームが SSE のみを受け付けるため、アップストリームへのリクエストだけを `stream: true` にします。OpenCodex は終端ストリームを制限内で検証し、クライアントが要求した JSON 形式へまとめます。明示された `store` は変更せず、検証に失敗した場合は不完全な JSON を HTTP 200 で返さずエラーにします。上限は 1 フレーム 4 MiB、transcript と再構築入力がそれぞれ 32 MiB、SSE フレーム 100,000 件、再構築される output item 10,000 件です。`stallTimeoutSec` は最初の body byte と以後の無通信時間の両方に適用されます。値が `0`、またはローカル upstream の既定値として無効な場合も即時には失効せず、独立した 15 分の全体上限だけが残ります。ストリーミング クライアントの動作は変わりません。
+
 クライアント向け Responses SSE フレームは、SSE ブロック区切りの前の生バイトで測って 1 フレームあたり 4 MiB に制限されます。HTTP では、区切りなしでこの上限を超えたアップストリーム フレームは、合成 `response.failed` イベントと続く `data: [DONE]` でフェイルクローズします。Responses WebSocket ブリッジでは、同じ条件で 502 `websocket_protocol_error` を送信し、アップストリーム リーダーをキャンセルします。完全な Responses 終端フレームがすでに到着している場合はそれが優先され、その後のサイズ超過または不正なバイトは、完了したターンをトランスポート障害に置き換えず破棄されます。
 
 :::note

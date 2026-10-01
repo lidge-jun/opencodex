@@ -21,6 +21,7 @@ import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../ba
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
 import { AddProviderFormPane } from "./add-provider-form-pane";
 import { useAddProviderOAuth } from "./use-add-provider-oauth";
+import type { BrowserLaunch } from "../oauth-browser-launch";
 import {
   addProviderModalReducer,
   createInitialAddProviderState,
@@ -108,7 +109,7 @@ export default function AddProviderModal({
   const usageRank = Object.fromEntries((usagePoll.data?.providers ?? []).map(row => [row.provider, row.requests]));
   const {
     preset, form, saving, error, oauthBusy, oauthMsg, oauthMsgTone, oauthUrl, oauthUrlProvider,
-    oauthDeviceCode, oauthInstructions,
+    oauthDeviceCode, oauthInstructions, oauthBrowserLaunch,
     manualCode, manualCodeBusy, manualCodeMsg, manualCodeOk, endpointChoice, oauthTosPending,
   } = state;
 
@@ -227,8 +228,8 @@ export default function AddProviderModal({
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),
     setOauthMsg: (msg: string) => dispatch({ type: "set-oauth-msg", msg }),
     setOauthMsgTone: (tone: "ok" | "warn") => dispatch({ type: "set-oauth-tone", tone }),
-    setOauthUrl: (url: string, providerId: string, deviceCode?: string, instructions?: string) =>
-      dispatch({ type: "set-oauth-url", url, providerId, deviceCode, instructions }),
+    setOauthUrl: (url: string, providerId: string, deviceCode?: string, instructions?: string, browserLaunch?: BrowserLaunch) =>
+      dispatch({ type: "set-oauth-url", url, providerId, deviceCode, instructions, browserLaunch }),
     setManualCode: (code: string) => dispatch({ type: "set-manual-code", code }),
     setManualCodeMsg: (msg: string) => dispatch({ type: "set-manual-code-msg", msg }),
     setManualCodeOk: (ok: boolean) => dispatch({ type: "set-manual-code-msg", msg: manualCodeMsg, ok }),
@@ -310,6 +311,7 @@ export default function AddProviderModal({
               oauthUrl={oauthUrlProvider === preset.oauthProvider ? oauthUrl : ""}
               oauthDeviceCode={oauthUrlProvider === preset.oauthProvider ? oauthDeviceCode : ""}
               oauthInstructions={oauthUrlProvider === preset.oauthProvider ? oauthInstructions : ""}
+              oauthBrowserLaunch={oauthUrlProvider === preset.oauthProvider ? oauthBrowserLaunch : undefined}
               manualCode={manualCode}
               manualCodeBusy={manualCodeBusy}
               manualCodeMsg={manualCodeMsg}

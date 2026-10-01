@@ -40,6 +40,7 @@ export function createPoolRetryHarness(context: {
       callerBearer?: boolean;
       headers?: Record<string, string>;
       extraBody?: Record<string, unknown>;
+      redirect?: RequestRedirect;
     }) => Promise<Response>;
     restoreFetch: () => void;
     server: ReturnType<typeof startServer>;
@@ -188,6 +189,7 @@ export function createPoolRetryHarness(context: {
         callerBearer = true,
         headers = {},
         extraBody = {},
+        redirect,
       } = {}) => originalGlobalFetch(new URL(path, server.url), {
         method: "POST",
         headers: {
@@ -197,6 +199,7 @@ export function createPoolRetryHarness(context: {
         },
         body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream, ...extraBody }),
         signal,
+        redirect,
       }),
     };
   }

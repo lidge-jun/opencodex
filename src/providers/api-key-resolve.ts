@@ -16,8 +16,8 @@
  * Policy: a reference that cannot be resolved fails closed (no key) and is warned once per
  * account; nothing ever rewrites plaintext into config or its backups.
  */
-import { createRequire } from "node:module";
 import { resolveEnvValue } from "../config/proxy-env";
+import { loadKeyringBinding } from "../lib/keyring-native";
 import type { OcxProviderConfig } from "../types";
 
 export const KEYCHAIN_REFERENCE_PREFIX = "keychain:";
@@ -31,10 +31,8 @@ export interface ProviderKeychainEntry {
 
 export type ProviderKeychainEntryFactory = (service: string, account: string) => ProviderKeychainEntry;
 
-const nodeRequire = createRequire(import.meta.url);
-
 function defaultEntryFactory(service: string, account: string): ProviderKeychainEntry {
-  const { Entry } = nodeRequire("@napi-rs/keyring") as { Entry: new (s: string, a: string) => ProviderKeychainEntry };
+  const { Entry } = loadKeyringBinding() as { Entry: new (s: string, a: string) => ProviderKeychainEntry };
   return new Entry(service, account);
 }
 

@@ -6,7 +6,7 @@ import { navigateHash } from "../../hash-routing";
 import { useI18n, useT, type TKey } from "../../i18n/shared";
 import { Notice } from "../../ui";
 import { formatRelativeTime, relativeTimeLabelsFromT } from "../../provider-workspace/usage";
-import { CURSOR_SEEN_WINDOW_MS, loadCursorIntegrationStatus, type CursorIntegrationStatus } from "./cursor-api";
+import { CURSOR_SEEN_WINDOW_MS, loadCursorIntegrationStatus, loadCursorLocalInstaller, type CursorIntegrationStatus, type CursorLocalInstaller } from "./cursor-api";
 
 /**
  * The Cursor tab is a read-only companion, not a switch.
@@ -15,7 +15,8 @@ import { CURSOR_SEEN_WINDOW_MS, loadCursorIntegrationStatus, type CursorIntegrat
  * rewrites and its API key in the OS keychain, both out of bounds for this proxy. So the page
  * does the three things it can do honestly: say which Cursor builds are installed, hand the
  * user the two values Cursor's own form wants, and report whether a Cursor client has called
- * us since the proxy started. Everything shown is a GET of one status route.
+ * us since the proxy started. Everything shown is a GET of one status route, except the
+ * installer lookup, which runs only when the user asks for it.
  */
 
 function CopyValue({ value, label }: { value: string; label: string }) {
@@ -56,6 +57,49 @@ function DetectionRow({ labelKey, installed, path, version }: { labelKey: TKey; 
         <span className="cursor-detect-path muted">{version ? `${version} · ` : ""}{path}</span>
       )}
     </div>
+  );
+}
+
+/**
+ * The regular-only notice for #5679: instead of a dead end, offer to ask Cursor's cursor-local
+ * update channel for the Private Inference installer. The lookup is a remote request made by the
+ * hub, so it runs only when the user presses the button — never on page load or on the status
+ * poll — and the page then renders the advertised link, or says honestly that none was found.
+ * The installer URL itself is never fetched: the user follows the link.
+ */
+function CursorInstallerLookup({ apiBase }: { apiBase: string }) {
+  const t = useT();
+  const [state, setState] = useState<"idle" | "checking" | "done">("idle");
+  const [hint, setHint] = useState<CursorLocalInstaller | null>(null);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
+  const check = async () => {
+    controller.current?.abort();
+    const current = new AbortController();
+    controller.current = current;
+    setState("checking");
+    const result = await loadCursorLocalInstaller(apiBase, current.signal);
+    if (current.signal.aborted) return;
+    setHint(result);
+    setState("done");
+  };
+  if (state === "done" && hint?.available && hint.url !== null) {
+    return (
+      <span data-cursor-installer-hint>
+        {t("integrations.cursor.installerIntro", { version: hint.version ?? t("integrations.cursor.unknownVersion") })}
+        {" "}
+        <a href={hint.url} target="_blank" rel="noreferrer" data-cursor-installer-url>{t("integrations.cursor.installerOpen")}</a>
+        .
+      </span>
+    );
+  }
+  return (
+    <>
+      {state === "done" && <span data-cursor-installer-unavailable>{t("integrations.cursor.installerUnavailable")} </span>}
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void check()} disabled={state === "checking"} data-cursor-installer-check>
+        {t(state === "checking" ? "integrations.cursor.installerChecking" : "integrations.cursor.installerCheck")}
+      </button>
+    </>
   );
 }
 
@@ -103,6 +147,14 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
                 {t(status.regularCursor.installed ? "integrations.cursor.regularOnly" : "integrations.cursor.nothingFound")}
                 {" "}
                 <a href={status.guideUrl} target="_blank" rel="noreferrer" data-cursor-guide="notice">{t("integrations.cursor.guide")}</a>
+                {status.regularCursor.installed && (
+                  <>
+                    {" "}
+                    <span data-cursor-installer>
+                      <CursorInstallerLookup apiBase={apiBase} />
+                    </span>
+                  </>
+                )}
               </Notice>
             )}
           </div>

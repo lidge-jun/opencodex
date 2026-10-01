@@ -1089,13 +1089,13 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     });
   });
 
-  test("21: auto-switch rejects wrong providers, invalid thresholds and missing providers", async () => {
-    const wrongProvider = await run(["auto-switch", "anthropic", "on"]);
+  test("21: auto-switch rejects missing Anthropic account selectors, invalid thresholds and missing providers", async () => {
+    const missingAnthropicAccount = await run(["auto-switch", "anthropic", "on"]);
     const invalidThreshold = await run(["auto-switch", "openai", "threshold", "101"]);
     const missingProvider = await run(["auto-switch"]);
 
-    expect(wrongProvider.code).toBe(1);
-    expect(wrongProvider.stderr).toContain("auto-switch only applies to the openai Codex account pool or a generic OAuth provider pool");
+    expect(missingAnthropicAccount.code).toBe(2);
+    expect(missingAnthropicAccount.stderr).toContain("--account <id>");
     expect(invalidThreshold.code).toBe(1);
     expect(invalidThreshold.stderr).toContain("integer 0-100");
     expect(missingProvider.code).toBe(1);

@@ -1058,6 +1058,7 @@ export const quotaResetNotifySchema = z.object({
 
 /**
  * Catalog auto-refresh section (issue #3630).
+ * Missing section or enabled flag uses the hourly default-on scheduler.
  *
  * `.strict()` like its neighbour: a typo in an optional feature section should surface as a
  * rejected write rather than a silently ignored key that leaves the operator believing they

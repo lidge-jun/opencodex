@@ -56,7 +56,9 @@ Per-vendor contracts and the adapter authority that constructs them.
 
 | Doc | Scope |
 | --- | --- |
+| [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
+| [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) | Anthropic OAuth account pause, model routes, and quota labels. |
 | [`providers/openai-tiers.md`](providers/openai-tiers.md) | Pool/Direct account modes, API-key separation, and the public provider and quota contract. |
 | [`providers/openai-accounts.md`](providers/openai-accounts.md) | Migration and restore, wire identity, store concurrency, pool ordering and exclusions, quota observations, and account-bound retention. |
 | [`providers/cursor.md`](providers/cursor.md) | Cursor native exec, parameterized models, checkpoints, and active-context usage. |
@@ -135,10 +137,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/link/` | [`remote-link.md`](remote-link.md) |
-| `src/oauth/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
+| `src/oauth/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
-| `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
+| `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/quota/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |

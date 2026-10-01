@@ -2,6 +2,7 @@
 import { serviceStayOutExitCode, WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
 import { isSupervisedServiceChild, serviceChildOwnershipDecisionForClassifiedChild } from "../service/service-child-ownership";
 import { SERVICE_MANAGED_ENV } from "../service/state";
+import { raiseWindowsProxyPriority } from "../service/windows-process-priority";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -201,9 +202,9 @@ async function refreshOwnedRaycastCatalog(
 }
 
 initializeNodeLauncherContext();
-
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
+if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
 if (process.argv[2] === "__codebuddy-mcp") {
   const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
   await runCodeBuddyMcpServer(process.argv[3] ?? "");
@@ -541,6 +542,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         // Port selection is check-then-bind. The lease prevents every cooperating start or
         // updater from turning that check into a different ownership decision.
         let port = await chooseListenPort(requestedPort, { sibling: siblingStart });
+        raiseWindowsProxyPriority();
         const serverModule = await import("../server");
         const readinessGate = createReadinessGate();
         const localAttestationSecret = createLocalAttestationSecret();
@@ -1271,7 +1273,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (siblingStopFoundOwner(siblingOfPort, live)) {
       record.proxy = "not-running";
       console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
-    } else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {
+    } else if (live?.pid && (await proveLiveProxyOwnedByHome(live)) !== "proven") {
       stopFailed = true;
       ownershipBlocked = true;
       record.proxy = "ownership-refused";

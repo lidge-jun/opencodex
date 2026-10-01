@@ -16,8 +16,8 @@ runs helper features around provider requests.
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Remove optional client-facing hints from canonical Codex Responses passthrough: the two `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` response headers, `response.metadata` events whose metadata type is `safety_buffering`, and top-level `safety_buffering` fields. Other headers, response data, policy refusals and failures are preserved. This does not disable provider safety enforcement or upstream buffering. Native `codex.response.metadata.headers` WebSocket metadata and `/responses/compact` are outside this filter. |
-| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the watchdog everywhere. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
-| `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Device-code flows never open a browser either way. |
+| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the silence watchdog everywhere. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Canonical ChatGPT Responses folded from SSE into non-streaming JSON retain a separate 15-minute whole-turn ceiling even when the silence watchdog is disabled. Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
+| `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Both routes report the outcome as `browserLaunch`: `started`, `failed` (nothing could be opened; the dashboard says so), or `skipped`. Device-code flows never open a browser either way. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. Complete-input requests may reuse an upstream connection within the same selected credential, account, thread and turn; changed handshake policy or missing identity keeps requests on separate connections. This does not trim HTTP input or create previous-response IDs. |
@@ -423,6 +423,40 @@ never lost; the next append tries again. Trimming also refreshes what the dashbo
 
 There is no dashboard control for this yet; set it in `config.json` or with
 `ocx config set usageLedgerMaxBytes <bytes>`.
+
+## Catalog auto-refresh (`catalogAutoRefresh`)
+
+Enabled by default when OpenCodex manages your local Codex client: the section or `enabled`
+may be absent. The proxy refreshes its model catalog every 60 minutes, with one initial refresh
+about three minutes after startup. When the Codex integration is turned off, or the instance
+runs as a hub or beside another live proxy, background refresh runs only with an explicit
+`"enabled": true`, and it never reads Codex sources.
+
+```json
+{
+  "catalogAutoRefresh": { "enabled": true, "intervalMinutes": 60 }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Set to `false` to disable automatic refresh. |
+| `intervalMinutes` | `60` | Refresh cadence; positive values below 15 are clamped to 15. `0` disables refresh. |
+
+Each refresh observes the selected Codex runtime's bundled catalog, then warms authenticated
+Codex model rosters before converging the served list. Source failures use existing evidence
+and retry on a later tick. Cadence and enablement edits take effect on a subsequent tick.
+
+A native OpenAI model that your ChatGPT account's Codex roster lists, but that this OpenCodex
+release does not know yet, is added with the metadata upstream publishes for it (name,
+reasoning levels, context window). OpenCodex remembers such models in
+`discovered-native-models.json` in its home directory and forgets one that has not been seen
+for 14 days. A later release that ships the model takes over its row.
+
+Running Codex sessions retain an in-memory model list. When the served set changes while
+Codex app-servers are running, the proxy logs a restart hint and records `reloadRequired`
+in its auto-refresh status. Run `ocx sync --restart-codex` when ready to restart those sessions.
+Automatic refresh never restarts them.
 
 ## Quota-reset notifications (`quotaResetNotify`)
 

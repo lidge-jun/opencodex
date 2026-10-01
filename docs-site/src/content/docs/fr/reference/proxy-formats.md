@@ -75,6 +75,16 @@ Avec `stream: true`, la réponse est `text/event-stream`. Le pont émet des év�
 Avec `stream: false` ou pas de `stream`, les mêmes événements d'adaptateur sont collectés dans une seule réponse JSON
 objet. Les deux formulaires préservent le modèle sélectionné, les éléments de sortie, l'état du terminal et l'utilisation.
 
+La route canonique ChatGPT Codex n'accepte que SSE en amont ; seul l'appel amont utilise donc
+`stream: true`. OpenCodex valide le flux terminal dans des limites bornées, puis le replie dans la
+forme JSON demandée par le client sans modifier une valeur `store` explicite. Un échec de validation
+renvoie une erreur plutôt qu'un JSON partiel avec HTTP 200. Les limites sont de 4 Mio par trame,
+32 Mio pour le transcript et la source de reconstruction, 100 000 trames SSE et 10 000 éléments de
+sortie reconstruits. `stallTimeoutSec` régit le premier octet du corps et les silences suivants.
+Lorsqu'il vaut `0`, y compris par défaut pour un upstream local, il n'expire pas immédiatement : seul
+le plafond indépendant de 15 minutes pour le tour mis en mémoire reste actif. Les clients streaming
+restent inchangés.
+
 Les trames SSE des réponses destinées au client sont limitées à 4 Mio par trame, mesuré en octets bruts avant la
 SSE délimiteur de bloc. Sur HTTP, une trame amont non terminée qui dépasse la limite échoue fermée
 avec un événement synthétique `response.failed` suivi de `data: [DONE]`. Sur les réponses WebSocket

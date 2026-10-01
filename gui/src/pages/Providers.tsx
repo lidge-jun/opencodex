@@ -26,6 +26,7 @@ import { navigateHash } from "../hash-routing";
 import { JEV_AUTO_CREATE_HASH } from "../app-routing";
 import { useProviderSettingsDeepLink } from "./providers-deep-link";
 import { subscribeKiroDeviceFinal } from "../kiro-device-login-finalizer";
+import type { BrowserLaunch } from "../oauth-browser-launch";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
 // oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
@@ -225,7 +226,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
+  const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string; browserLaunch?: BrowserLaunch } | null>(null);
   const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
@@ -386,7 +387,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const {
     accountSets, setAccountSets, accountLoadStates, switchingAccount, pausingAccount, keyPools, fetchAccountSets, fetchKeyPools,
     refreshAccountRosters, oauthCardProviders, keyCardProviders,
-    switchAccount, pauseAccount, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
+    switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
   } = pools;
   const refreshSelection = useCallback((target?: AccountSelectionTarget) => {
@@ -659,6 +660,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
               onSwitchAccount: switchAccount,
               onPauseAccount: pauseAccount,
+              onAccountPoolThreshold: setAccountPoolThreshold,
+              onAccountThreshold: setAccountThreshold,
               onRemoveAccount: removeAccount,
               onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
               onAddApiKey: addApiKeyValue,
