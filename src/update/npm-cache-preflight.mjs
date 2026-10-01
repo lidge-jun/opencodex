@@ -1,13 +1,16 @@
-import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { npmInvocation } from "./npm-invocation.mjs";
 
 const WORKER_ARG = "--ocx-npm-cache-preflight-worker";
+const ROOT_ONLY_ARG = "--root-only";
 const PROTOCOL_VERSION = 1;
-const WORKER_TIMEOUT_MS = 10_000;
-const NPM_CONFIG_TIMEOUT_MS = 5_000;
+// Windows starts npm through cmd.exe and is routinely slowed by on-access scanning, so the
+// same `npm config get cache` that takes well under a second on POSIX can take several there.
+const WORKER_TIMEOUT_MS = process.platform === "win32" ? 25_000 : 10_000;
+const NPM_CONFIG_TIMEOUT_MS = process.platform === "win32" ? 15_000 : 5_000;
 const INSPECTION_TIMEOUT_MS = 7_500;
 const MAX_ENTRIES = 100_000;
 const MAX_DEPTH = 64;
@@ -17,6 +20,8 @@ const RESULT_REASONS = new Set([
   "cache_entry_foreign_owner",
   "cache_entry_inaccessible",
   "cache_path_malformed",
+  "cache_root_dangling_link",
+  "cache_root_not_directory",
   "inspection_incomplete",
   "npm_config_failed",
   "npm_unavailable",
@@ -30,11 +35,54 @@ function inaccessibleByMode(stat) {
 }
 
 /**
+ * Check that npm can create or use its cache ROOT (#6288). This is the part of the inspection
+ * that is meaningful on every platform: npm's first action is `mkdir -p <cache>`, and it fails
+ * with ENOTDIR when the root — or the nearest existing ancestor npm would create it under — is
+ * a file, or a link/junction whose target is gone. A Windows directory junction relocated to
+ * another volume is ordinary configuration; only an unresolvable one is a problem.
+ */
+export function inspectNpmCacheRoot(cachePath, options = {}) {
+  const lstat = options.lstatFn ?? lstatSync;
+  const stat = options.statFn ?? statSync;
+  let current = resolve(cachePath);
+  let entry;
+  for (;;) {
+    try {
+      entry = lstat(current);
+      break;
+    } catch (error) {
+      if (error?.code !== "ENOENT") return { ok: false, reason: "cache_entry_inaccessible" };
+      const parent = dirname(current);
+      // Nothing on the path exists at all (a missing drive root); npm cannot mkdir there either.
+      if (parent === current) return { ok: false, reason: "cache_root_not_directory" };
+      current = parent;
+    }
+  }
+  let target = entry;
+  if (entry.isSymbolicLink()) {
+    try {
+      target = stat(current);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error?.code === "ENOENT" || error?.code === "ENOTDIR" || error?.code === "ELOOP"
+          ? "cache_root_dangling_link"
+          : "cache_entry_inaccessible",
+      };
+    }
+  }
+  if (!target.isDirectory()) return { ok: false, reason: "cache_root_not_directory" };
+  return { ok: true, reason: "cache_accessible" };
+}
+
+/**
  * Inspect an existing Unix npm cache without following symlinks. The limits are
  * deliberately part of the result contract: an incomplete inspection cannot prove
  * that replacing the live package will succeed.
  */
 export function inspectNpmCacheDirectory(cachePath, options = {}) {
+  const root = inspectNpmCacheRoot(cachePath, options);
+  if (!root.ok) return root;
   const expectedUid = options.expectedUid ?? process.getuid?.();
   const deadline = (options.nowMs ?? Date.now)() + (options.timeoutMs ?? INSPECTION_TIMEOUT_MS);
   const maxEntries = options.maxEntries ?? MAX_ENTRIES;
@@ -118,22 +166,49 @@ export function inspectNpmCacheDirectory(cachePath, options = {}) {
   return { ok: true, reason: "cache_accessible" };
 }
 
-function workerResult() {
-  const invocation = npmInvocation(["config", "get", "cache"]);
+function validCachePath(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 4096
+    && !value.includes("\0") && !/[\r\n]/.test(value) && isAbsolute(value);
+}
+
+/**
+ * Resolve the cache npm itself uses, with the operator's full npmrc chain. The transactional
+ * stage pins this path with `--cache`: its `--prefix <stage>` moves npm's globalconfig to
+ * `<stage>/etc/npmrc`, so without the pin a `cache=` from the global npmrc is silently dropped
+ * and staging falls back to npm's default root — not the root this preflight checked (#6288).
+ */
+export function resolveNpmCachePath(options = {}) {
+  const env = options.env ?? process.env;
+  const invocation = (options.invocationFn ?? npmInvocation)(["config", "get", "cache"], options.platform ?? process.platform, env);
   if (!invocation) return { ok: false, reason: "npm_unavailable" };
-  const npm = spawnSync(invocation.file, invocation.args, {
+  const npm = (options.spawnSyncFn ?? spawnSync)(invocation.file, invocation.args, {
     encoding: "utf8",
-    timeout: NPM_CONFIG_TIMEOUT_MS,
+    timeout: options.timeoutMs ?? NPM_CONFIG_TIMEOUT_MS,
     windowsHide: true,
     ...invocation.options,
+    env: invocation.options?.env ?? env,
   });
-  if (npm.status !== 0) return { ok: false, reason: "npm_config_failed" };
-
+  if (npm?.status !== 0) return { ok: false, reason: "npm_config_failed" };
   const output = typeof npm.stdout === "string" ? npm.stdout.trim() : "";
-  if (!output || output.length > 4096 || output.includes("\0") || /[\r\n]/.test(output) || !isAbsolute(output)) {
-    return { ok: false, reason: "cache_path_malformed" };
+  if (!validCachePath(output)) return { ok: false, reason: "cache_path_malformed" };
+  return { ok: true, path: output };
+}
+
+function workerResult(argv) {
+  const rootOnly = argv.includes(ROOT_ONLY_ARG);
+  const supplied = argv.find(arg => arg !== ROOT_ONLY_ARG);
+  let cachePath;
+  if (supplied !== undefined) {
+    if (!validCachePath(supplied)) return { ok: false, reason: "cache_path_malformed" };
+    cachePath = supplied;
+  } else {
+    const resolved = resolveNpmCachePath();
+    if (!resolved.ok) return resolved;
+    cachePath = resolved.path;
   }
-  return inspectNpmCacheDirectory(output);
+  // Windows has no uid and no Unix owner bits, so the deep ownership/mode walk proves nothing
+  // there; the root check is the part of the contract that holds on every platform.
+  return rootOnly ? inspectNpmCacheRoot(cachePath) : inspectNpmCacheDirectory(cachePath);
 }
 
 // Reasons that legitimately accompany `ok: true`. The parser below cross-checks the flag against
@@ -144,7 +219,6 @@ function workerResult() {
 const OK_REASONS = new Set([
   "cache_accessible",
   "inspection_incomplete",
-  "windows_skip",
 ]);
 
 function parseWorkerOutput(stdout) {
@@ -161,15 +235,19 @@ function parseWorkerOutput(stdout) {
   }
 }
 
-/** Run the bounded cache inspection in an isolated, synchronously-timeboxed worker. */
+/**
+ * Run the bounded cache inspection in an isolated, synchronously-timeboxed worker. Pass
+ * `cachePath` (from {@link resolveNpmCachePath}) to inspect exactly the root a later stage pins;
+ * without it the worker resolves npm's cache itself.
+ */
 export function runNpmCachePreflight(options = {}) {
-  if ((options.platform ?? process.platform) === "win32") {
-    return { ok: true, reason: "windows_skip" };
-  }
+  const workerArgs = [fileURLToPath(import.meta.url), WORKER_ARG];
+  if ((options.platform ?? process.platform) === "win32") workerArgs.push(ROOT_ONLY_ARG);
+  if (options.cachePath !== undefined) workerArgs.push(options.cachePath);
   const spawn = options.spawnSyncFn ?? spawnSync;
   const result = spawn(
     options.execPath ?? process.execPath,
-    [fileURLToPath(import.meta.url), WORKER_ARG],
+    workerArgs,
     {
       encoding: "utf8",
       timeout: options.timeoutMs ?? WORKER_TIMEOUT_MS,
@@ -182,8 +260,14 @@ export function runNpmCachePreflight(options = {}) {
   return parseWorkerOutput(result.stdout) ?? { ok: false, reason: "worker_output_malformed" };
 }
 
-/** Fixed operator guidance; worker/npm output is intentionally never interpolated. */
+/** Fixed operator guidance; worker/npm output and the cache path are intentionally never interpolated. */
 export function npmCachePreflightFailureMessage(reason) {
+  if (reason === "cache_root_dangling_link") {
+    return `npm cache access pre-flight failed (${reason}); npm's cache folder (see 'npm config get cache') is a link or junction whose target is missing — recreate the target folder or remove the link, then retry`;
+  }
+  if (reason === "cache_root_not_directory") {
+    return `npm cache access pre-flight failed (${reason}); npm's cache folder (see 'npm config get cache') or a folder above it is a file or an unavailable drive, so npm would fail with ENOTDIR on mkdir — fix that path or set a different cache, then retry`;
+  }
   return `npm cache access pre-flight failed (${reason}); fix cache ownership and permissions, then retry`;
 }
 
@@ -193,7 +277,7 @@ const isWorker = process.argv[1]
 if (isWorker) {
   let result;
   try {
-    result = workerResult();
+    result = workerResult(process.argv.slice(3));
   } catch {
     result = { ok: false, reason: "cache_entry_inaccessible" };
   }

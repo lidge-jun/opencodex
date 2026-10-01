@@ -351,6 +351,19 @@ because npm's strict script policy plans the global tree before it creates the p
 from a marker: the marker is not an authorization secret, and a neighbouring writer could
 replace a previously checked pathname with a link before traversal.
 
+Before any tray or proxy stop, `src/update/npm-cache-preflight.mjs` checks npm's cache on every
+platform (#6288). The cache root, or the nearest existing folder npm would create it under, must
+resolve to a directory. A file in its place is `cache_root_not_directory`, and a link or Windows
+junction whose target is gone is `cache_root_dangling_link`; both abort with fixed guidance that
+names neither the path nor npm output. Windows runs only this root check, because it has no uid
+or Unix owner bits, while POSIX also runs the bounded ownership/mode walk. The npm launcher
+resolves `npm config get cache` once, with the environment staging uses, checks that path and
+passes it to the stage as `--cache`. The pin is required: `--prefix <stage>` moves npm's
+globalconfig to `<stage>/etc/npmrc`, so a `cache=` from the operator's global npmrc would
+otherwise be dropped and staging would use npm's default root, which the pre-flight never
+checked (`tests/update/update-npm-cache-preflight.test.ts`,
+`tests/update/update-transactional.test.ts`).
+
 The probe ceilings are module-load constants in `src/server/proxy-liveness.ts`: 750 ms for the
 shared default and 1500 ms (three attempts) for `SERVICE_STOP_LIVENESS` and
 `START_OWNERSHIP_LIVENESS`. `OCX_PROBE_TIMEOUT_MS` (whole milliseconds, 1 to 30000) only raises
