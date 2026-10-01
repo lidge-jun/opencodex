@@ -267,15 +267,18 @@ function mainAccount(state: MainAccountHardLockStatus["state"]): CodexAccountEnt
     quotaAutoRefresh: { fiveHourAvailable: false, weeklyAvailable: false, fiveHourEnabled: false, weeklyEnabled: false },
     mainAccountHardLock: { enabled: state !== "off", state } };
 }
-function MainCard({ state }: { state: MainAccountHardLockStatus["state"] }) {
-  return <CodexAccountPoolMainCard t={useT()} main={mainAccount(state)} isMainActive={false}
+const externalUsage = { window: "short", fromPercent: 40, toPercent: 55, observedAt: Date.now() } as const;
+function MainCard({ state, warned = false }: { state: MainAccountHardLockStatus["state"]; warned?: boolean }) {
+  const main = mainAccount(state);
+  if (warned) main.mainAccountHardLock = { ...main.mainAccountHardLock!, externalUsage };
+  return <CodexAccountPoolMainCard t={useT()} main={main} isMainActive={false}
     accountModeState="pool" threshold={80} switchActionLabel="Use main" onSwitch={() => {}}
     onTogglePause={() => {}} pauseUpdatingId={null} pauseBusy={false} onPriorityChange={() => {}}
     priorityUpdatingId={null} onAutoSwitchThresholdChange={async () => true}
     autoSwitchDisabled={false} switchingId={null} onOpenReset={() => {}} />;
 }
 test.each([
-  ["blocked", "Blocked by 98% protection", false],
+  ["blocked", "Blocked by main-account protection (5h 90%, long 98%)", false],
   ["unknown", "Protection on · usage unknown", true],
   ["ready", "Protection on · monitoring", true],
 ] as const)("main card uses server %s state, not rounded weekly usage", async (state, label, canSwitch) => {
@@ -285,6 +288,17 @@ test.each([
   testWindow.location.hash = "#providers";
   await click(button(host, ".codex-main-hard-lock-status button"));
   expect(testWindow.location.hash).toBe("#codex-set");
+});
+
+test.each([true, false])("outside-usage warning follows the server report (present: %p)", async present => {
+  const warning = "Possible usage outside opencodex";
+  const setting = await mount((async () => response({ codexMainAccountHardLock: true, mainAccountHardLock: {
+    enabled: true, state: "ready", thresholds: { short: 90, long: 98 }, ...(present ? { externalUsage } : {}) } })) as typeof fetch);
+  expect(setting.textContent?.includes(warning)).toBe(present);
+  await act(async () => { root?.unmount(); });
+  root = null;
+  const card = await mount((async () => response({})) as typeof fetch, <MainCard state="ready" warned={present} />);
+  expect(card.textContent?.includes(warning)).toBe(present);
 });
 
 test("same-page manage opens Advanced; save refreshes the one injected account controller", async () => {

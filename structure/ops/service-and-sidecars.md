@@ -352,14 +352,26 @@ lease boundary before exiting, and thrown failures release it after owner-aware 
 Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
 Malformed or unreadable records remain unknown. Recovery requires the same complete owner
 identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
-manual-runtime update still prints the existing restart hint.
+The lease is released before any service-manager-mediated start (`service repair` in recovery
+or the post-install refresh): the manager's `ocx start` child cannot join it, and holding it
+through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
+is made again after the release, and the lease is re-acquired before each fallback's ownership
+re-read so a claim landing in the unleased window is vetoed rather than killed unleased.
+Direct recovery retains the lease until readiness or its bounded deadline. The normal successful manual-runtime update still prints the existing
+restart hint.
 
-The npm launcher in `bin/ocx.mjs` makes one exception after a failed update: a service recovery
-releases the lease before the service refresh, as a successful update does. The service manager
-starts the proxy outside the updater's process tree, so that proxy has to take the lease itself;
-held through the repair's health wait, the lease kept it from starting, and recovery fell through
-to a second, directly started proxy (#5760). The recovery decision is made again after the release.
+Every updater lane makes the same exception where the service manager starts the proxy outside
+the updater's process tree, so that proxy has to take the lease itself; held through the
+repair's health wait, the lease kept it from starting, and recovery fell through to a second,
+directly started proxy (#5760). The npm launcher in `bin/ocx.mjs` releases the lease before a
+post-failure service recovery, as a successful update does, and makes the recovery decision
+again after the release. The Bun updater releases before `service repair` in both the recovery
+branch and the post-install refresh — the port reclaim that authorizes kills already ran under
+the lease — and re-acquires before each fallback's ownership re-read, so the re-read and any
+direct start stay serialized with a claim that landed in the unleased window. The dashboard
+restart worker in `src/update/job.ts` releases the lease immediately before `ocx service
+repair`, re-acquires it at the direct-start fallthrough — a still-claimed lease fails closed —
+and re-runs the recorded-owner veto under it before mutating the port.
 
 The npm transaction creates each staging directory exclusively and may clean that fresh path
 while the creating process still owns it. On POSIX it also creates the stage's `lib` directory,

@@ -570,12 +570,23 @@ export async function runUpdate(): Promise<void> {
   };
   const recoverStoppedRuntime = async (reason: string): Promise<void> => {
     try {
-      const current = await resolvedRuntimeOwnership();
-      const recovery = planStoppedRuntimeRecovery({
-        stopAttempted, ...current, sameOwner: sameOwner(current),
-        liveness: currentPackageRuntimeLiveness(), serviceInstalled: serviceWasInstalled,
-        launcherUsable: postUpdateLauncherUsable && existsSync(postUpdateLauncher), hadRuntimeState,
-      });
+      const planRecovery = async () => {
+        const current = await resolvedRuntimeOwnership();
+        return planStoppedRuntimeRecovery({
+          stopAttempted, ...current, sameOwner: sameOwner(current),
+          liveness: currentPackageRuntimeLiveness(), serviceInstalled: serviceWasInstalled,
+          launcherUsable: postUpdateLauncherUsable && existsSync(postUpdateLauncher), hadRuntimeState,
+        });
+      };
+      let recovery = await planRecovery();
+      if (recovery.action === "service") {
+        // The service manager starts the proxy outside this process tree, so it
+        // cannot join this lease, and holding it through the repair's health wait
+        // keeps that proxy from starting (#5760). Release it, then decide again —
+        // a claim could have landed while the repair ran unleased.
+        mutation.release();
+        recovery = await planRecovery();
+      }
       if (recovery.action === "manual") {
         console.warn(`⚠️  ${reason}; runtime recovery requires manual review (${recovery.reason}).`);
       } else if (recovery.action === "service") {
@@ -585,6 +596,9 @@ export async function runUpdate(): Promise<void> {
           env: mutation.controlEnvironment({ ...process.env, OCX_BAKE_PORT: String(capturedListen.port) }),
         });
         if (service.status !== 0 || !isServiceViable()) {
+          // The refresh ran unleased; a claim could have landed meanwhile, so take
+          // the lease back before re-reading ownership and authorizing a direct start.
+          mutation.reacquire();
           const nowOwned = await resolvedRuntimeOwnership();
           const fallback = planStoppedRuntimeRecovery({
             stopAttempted, ...nowOwned, sameOwner: sameOwner(nowOwned),
@@ -595,6 +609,8 @@ export async function runUpdate(): Promise<void> {
           else console.warn("⚠️  Service recovery was not confirmed; no second proxy was started.");
         }
       } else if (recovery.action === "direct") {
+        // No-op while the lease is held; re-locks if the service branch released it.
+        mutation.reacquire();
         await startProxyDirectly();
       }
     } catch {
@@ -815,6 +831,11 @@ export async function runUpdate(): Promise<void> {
       if (!freed) {
         console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; repairing service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
       }
+      // `service repair` re-activates a manager whose `ocx start` child is not a
+      // process descendant and cannot join this lease; held through its serving
+      // wait, the lease makes that child die at the acquire deadline (#5760).
+      // The kill-authorizing reclaim above already ran under the lease.
+      mutation.release();
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(capturedListen.port);
       try {
@@ -855,6 +876,18 @@ export async function runUpdate(): Promise<void> {
             // Re-read rather than reuse the plan from before the package install: the app can
             // claim the runtime during an update that takes minutes, and the refusal the
             // repair above just returned is indistinguishable from any other failure here.
+            // The refresh above ran outside the lease — take it back so this re-read and
+            // the direct start stay serialized with a claim that landed in that window.
+            // A claim that outlasts the wait is reported here: the package is already
+            // swapped, so the unexpected-failure recovery below would run a second,
+            // unleased repair and surface the raw lock error instead.
+            try {
+              mutation.reacquire();
+            } catch {
+              console.warn("⚠️  Updated, but another process kept the runtime ownership lease claimed, so no proxy was started.");
+              console.warn(`   Run 'ocx service repair', then 'ocx start --port ${capturedListen.port}'.`);
+              return 1;
+            }
             const nowOwned = planUpdateRuntimeHandling({
               ...(await resolvedRuntimeOwnership()),
               serviceInstalled: true,

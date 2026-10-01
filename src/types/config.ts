@@ -578,13 +578,15 @@ export interface OcxConfig {
    */
   ultraFastTier?: boolean;
   /**
-   * Stop new identity-matched main-account requests at observed 98% usage (#5694).
+   * Stop new identity-matched main-account requests at configured window usage (#5694).
    *
    * On by default: an absent key and `true` both enable it, and only an explicit `false`
    * opts out. While it blocks, the main account's Luna Reserve cannot activate, so an operator
    * who wants Reserve has to turn the setting off rather than delete the key.
    */
   codexMainAccountHardLock?: boolean;
+  /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
+  codexMainAccountHardLockThresholds?: { short?: number; long?: number };
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

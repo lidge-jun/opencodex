@@ -1705,7 +1705,7 @@ async function handleStatus() {
     process.exit(1);
   }
 
-  const status = await collectStatus();
+  const status = await collectStatus({ mainAccountPolicy: wantsJson });
   if (wantsJson) {
     console.log(JSON.stringify(status.json, null, 2));
     return;

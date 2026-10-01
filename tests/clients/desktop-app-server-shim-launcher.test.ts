@@ -62,6 +62,16 @@ describe("experimental app-server launcher", () => {
     expect(resolveChatgptCodexBinary(root, () => false)).toBeNull();
   });
 
+  test("every probed bundle path stays POSIX, so a Windows host builds the same candidates", () => {
+    const probed: string[] = [];
+    resolveChatgptCodexBinary("/Users/example/Applications/ChatGPT.app", path => { probed.push(path); return false; });
+    expect(probed.length).toBeGreaterThan(0);
+    for (const path of probed) {
+      expect(path).not.toContain("\\");
+      expect(path.startsWith("/Users/example/Applications/ChatGPT.app/Contents/")).toBe(true);
+    }
+  });
+
   test("the writer embeds the binary it is given", () => withDir(dir => {
     const real = "/Volumes/Apps/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
     const path = writeChatgptShimLauncher(dir, real);

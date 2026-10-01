@@ -47,11 +47,20 @@ export function decodeSchtasksOutput(
   return decodeWindowsTextBytes(buffer, options);
 }
 
+/**
+ * Every schtasks operation is sub-second on a healthy system; a wedged Task
+ * Scheduler service must not block a guarded stop forever. A killed command
+ * throws into the same unreadable/failed classification a nonzero exit would —
+ * the guarded verdicts stay fail-closed either way.
+ */
+const SCHTASKS_TIMEOUT_MS = 15_000;
+
 function runFile(file: string, args: string[]): string {
   const buffer = execFileSync(file, args, {
     encoding: "buffer",
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
+    timeout: SCHTASKS_TIMEOUT_MS,
   }) as Buffer;
   return decodeSchtasksOutput(buffer);
 }
