@@ -801,6 +801,59 @@ function probeWinswRegistration(
   return /\b1060\b/.test(text) ? "absent" : "unknown";
 }
 
+/**
+ * The `BINARY_PATH_NAME` value from `sc.exe qc` output, or null when the line is missing.
+ * `sc qc` field names are not localized; the value may be quoted and carry arguments.
+ */
+export function parseScQcBinaryPathName(output: string): string | null {
+  const match = /^[ \t]*BINARY_PATH_NAME[ \t]*:[ \t]*([^\r\n]*)$/m.exec(output);
+  const value = match?.[1]?.trim();
+  return value ? value : null;
+}
+
+function normalizeWindowsExecutablePath(path: string): string {
+  const stripped = path.startsWith("\\\\?\\") ? path.slice(4) : path;
+  return win32Path.normalize(stripped).toLowerCase();
+}
+
+/**
+ * Whether an SCM `BINARY_PATH_NAME` launches exactly `exePath`. A quoted value names the
+ * text between its quotes; an unquoted value names the text through the first `.exe`
+ * followed by whitespace or the end. Comparison is Windows path-normalized and case-insensitive.
+ */
+export function scBinaryPathNamesExecutable(binaryPathName: string, exePath: string): boolean {
+  const value = binaryPathName.trim();
+  let executable: string | null;
+  if (value.startsWith("\"")) {
+    const end = value.indexOf("\"", 1);
+    executable = end > 1 ? value.slice(1, end) : null;
+  } else {
+    executable = /^(.*?\.exe)(?=\s|$)/i.exec(value)?.[1] ?? null;
+  }
+  if (!executable || !exePath.trim()) return false;
+  return normalizeWindowsExecutablePath(executable) === normalizeWindowsExecutablePath(exePath.trim());
+}
+
+/**
+ * The registered WinSW service's `BINARY_PATH_NAME` through trusted System32 `sc.exe qc`,
+ * bounded like every other probe query. Null on any failure; the WinSW executable is never run.
+ */
+export function queryWinswBinaryPathName(
+  deps: Pick<ProbeDeps, "runRaw" | "windowsLocale"> = {},
+): string | null {
+  let sc: string;
+  try {
+    sc = join(resolveTrustedWindowsSystemDirectory(), "sc.exe");
+    if (artifactPresence(sc) !== "present") return null;
+  } catch {
+    return null;
+  }
+  const runRaw = deps.runRaw ?? defaultRawProbeRunner;
+  const queried = runRaw(sc, ["qc", WINSW_SERVICE_ID]);
+  if (queried.spawnFailed || queried.timedOut || queried.status !== 0) return null;
+  return parseScQcBinaryPathName(decodeWindowsTextBytes(queried.stdout, { locale: deps.windowsLocale }));
+}
+
 function inspectWindows(
   deps: Required<Pick<ProbeDeps, "runRaw" | "home">>
     & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale" | "windowsTaskListingCache" | "statePaths">,

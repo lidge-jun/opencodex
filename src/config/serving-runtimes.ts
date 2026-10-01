@@ -33,7 +33,13 @@ import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "./mutation-lock";
-import { inspectServiceManagerInstallation, type ServiceManagerClaim } from "../service-manager-probe";
+import {
+  inspectServiceManagerInstallation,
+  queryWinswBinaryPathName,
+  scBinaryPathNamesExecutable,
+  type ServiceManagerClaim,
+  type ServiceManagerInstallation,
+} from "../service-manager-probe";
 import { compareServicePathToInstall, currentServiceHomes, SERVICE_MANAGED_ENV } from "../service/state";
 import { WINDOWS_WRAPPER_PROTOCOL_ENV } from "../service/windows-wrapper-exit";
 
@@ -458,12 +464,34 @@ export function serviceClaimMatchesCurrentHomes(
       : compareServicePathToInstall(claim.homes.opencodexHome, current.opencodexHome) === "same");
 }
 
-function serviceManagerOwnsCurrentHome(): boolean {
-  const current = currentServiceHomes();
-  const installation = inspectServiceManagerInstallation({ configDir: current.opencodexHome });
+export interface ServiceOwnershipGateDeps {
+  readonly current?: { codexHome: string; opencodexHome: string };
+  readonly env?: NodeJS.ProcessEnv;
+  /** Test seam for the read-only manager inspection of the current config dir. */
+  readonly inspect?: (configDir: string) => ServiceManagerInstallation;
+  /** Test seam for the registered WinSW BINARY_PATH_NAME; production asks trusted `sc.exe qc`. */
+  readonly winswBinaryPathName?: () => string | null;
+}
+
+/**
+ * WinSW reports machine-wide SCM registration while its definition is read from the
+ * current config dir, so the delegation gate binds the registration to that definition:
+ * the registered service binary must be the claim's own executable. Any query failure,
+ * missing value, or mismatch refuses delegation. Other backends are unchanged.
+ */
+export function serviceManagerOwnsCurrentHome(deps: ServiceOwnershipGateDeps = {}): boolean {
+  const current = deps.current ?? currentServiceHomes();
+  const inspect = deps.inspect ?? (configDir => inspectServiceManagerInstallation({ configDir }));
+  const installation = inspect(current.opencodexHome);
   if (installation.kind !== "present") return false;
   return installation.claims.some(claim => claim.registration === "present"
-    && serviceClaimMatchesCurrentHomes(claim, current));
+    && serviceClaimMatchesCurrentHomes(claim, current, deps.env)
+    && (claim.backend !== "winsw" || winswRegistrationRunsDefinition(claim, deps)));
+}
+
+function winswRegistrationRunsDefinition(claim: ServiceManagerClaim, deps: ServiceOwnershipGateDeps): boolean {
+  const binaryPathName = (deps.winswBinaryPathName ?? (() => queryWinswBinaryPathName()))();
+  return binaryPathName !== null && scBinaryPathNamesExecutable(binaryPathName, claim.definitionPath);
 }
 
 /**

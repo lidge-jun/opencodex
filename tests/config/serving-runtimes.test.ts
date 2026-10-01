@@ -14,11 +14,17 @@ import {
   recordServingRuntime,
   selectNewerServingRuntime,
   serviceClaimMatchesCurrentHomes,
+  serviceManagerOwnsCurrentHome,
   servingRuntimeCommandKey,
   servingRuntimesPath,
   type ServedRuntimeRecord,
 } from "../../src/config/serving-runtimes";
 import { buildWinswXml } from "../../src/lib/winsw";
+import {
+  parseScQcBinaryPathName,
+  scBinaryPathNamesExecutable,
+  type ServiceManagerClaim,
+} from "../../src/service-manager-probe";
 import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 import { repoPath } from "../helpers/repo-root";
 
@@ -601,5 +607,84 @@ describe("deferServiceChildToNewerRuntime", () => {
         log: () => {},
       },
     })).toBe(0);
+  });
+});
+
+describe("WinSW registration binding at the delegation gate", () => {
+  const exe = "C:\\Users\\me\\.opencodex\\winsw\\opencodex-proxy-native.exe";
+  const scQc = (binary: string) => [
+    "[SC] QueryServiceConfig SUCCESS",
+    "",
+    "SERVICE_NAME: opencodex-proxy-native",
+    "        TYPE               : 10  WIN32_OWN_PROCESS",
+    "        START_TYPE         : 2   AUTO_START",
+    `        BINARY_PATH_NAME   : ${binary}`,
+    "        DISPLAY_NAME       : opencodex-proxy-native",
+    "",
+  ].join("\r\n");
+
+  test("parses BINARY_PATH_NAME and compares the executable it launches", () => {
+    const quoted = parseScQcBinaryPathName(scQc(`"${exe}" --service`));
+    expect(quoted).toBe(`"${exe}" --service`);
+    expect(scBinaryPathNamesExecutable(quoted!, exe)).toBe(true);
+
+    const unquoted = parseScQcBinaryPathName(scQc(exe));
+    expect(unquoted).toBe(exe);
+    expect(scBinaryPathNamesExecutable(unquoted!, exe)).toBe(true);
+    expect(scBinaryPathNamesExecutable(`${exe} --service`, exe)).toBe(true);
+
+    expect(scBinaryPathNamesExecutable(`"${exe.toUpperCase()}"`, exe)).toBe(true);
+    expect(scBinaryPathNamesExecutable(`"${exe.replaceAll("\\", "/")}"`, exe)).toBe(true);
+
+    const other = "C:\\Users\\other\\.opencodex\\winsw\\opencodex-proxy-native.exe";
+    expect(scBinaryPathNamesExecutable(`"${other}" --service`, exe)).toBe(false);
+    expect(scBinaryPathNamesExecutable(other, exe)).toBe(false);
+    expect(scBinaryPathNamesExecutable(`"${exe}`, exe)).toBe(false);
+    expect(scBinaryPathNamesExecutable(`${exe}x`, exe)).toBe(false);
+
+    expect(parseScQcBinaryPathName("[SC] OpenService FAILED 1060:\r\n")).toBeNull();
+    expect(parseScQcBinaryPathName(scQc(""))).toBeNull();
+  });
+
+  test("a WinSW claim delegates only when the registered binary is its own executable", () => {
+    const dir = freshDir();
+    const current = { codexHome: join(dir, ".codex"), opencodexHome: join(dir, ".opencodex") };
+    const claim: ServiceManagerClaim = {
+      backend: "winsw",
+      definitionPath: exe,
+      homes: { codexHome: current.codexHome, opencodexHome: current.opencodexHome },
+      registration: "present",
+    };
+    const gate = (winswBinaryPathName: () => string | null) => serviceManagerOwnsCurrentHome({
+      current,
+      env: {},
+      inspect: () => ({ kind: "present", claims: [claim] }),
+      winswBinaryPathName,
+    });
+
+    expect(gate(() => `"${exe}"`)).toBe(true);
+    expect(gate(() => "\"C:\\Users\\other\\.opencodex\\winsw\\opencodex-proxy-native.exe\"")).toBe(false);
+    expect(gate(() => null)).toBe(false);
+  });
+
+  test("non-WinSW claims never consult the WinSW registration query", () => {
+    const dir = freshDir();
+    const current = { codexHome: join(dir, ".codex"), opencodexHome: join(dir, ".opencodex") };
+    let queries = 0;
+    expect(serviceManagerOwnsCurrentHome({
+      current,
+      env: {},
+      inspect: () => ({
+        kind: "present",
+        claims: [{
+          backend: "scheduler",
+          definitionPath: join(dir, "opencodex-service-task.xml"),
+          homes: { codexHome: current.codexHome, opencodexHome: current.opencodexHome },
+          registration: "present",
+        }],
+      }),
+      winswBinaryPathName: () => { queries += 1; return null; },
+    })).toBe(true);
+    expect(queries).toBe(0);
   });
 });
