@@ -1337,3 +1337,34 @@ test("a native stream over the byte cap logs a 502 incomplete row and keeps its 
     upstream.stop(true);
   }
 });
+
+test("a turn that sent message_stop and then stalls is finished: 200 terminal, no error frame", async () => {
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(COMPLETE_TURN_SSE)); /* never closes */ },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 30, maxBytes: 0 });
+  const text = await new Response(tapped).text();
+  expect(text).toBe(COMPLETE_TURN_SSE);
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.upstreamError).toBeUndefined();
+});
+
+test("bytes past the cap after message_stop do not turn a finished turn into a failure", async () => {
+  let sent = false;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(COMPLETE_TURN_SSE)); return; }
+      controller.enqueue(new TextEncoder().encode(": keepalive padding ".repeat(64)));
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const cap = new TextEncoder().encode(COMPLETE_TURN_SSE).byteLength + 16;
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 0, maxBytes: cap });
+  const text = await new Response(tapped).text();
+  expect(text).toStartWith(COMPLETE_TURN_SSE);
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+});

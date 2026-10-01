@@ -370,12 +370,19 @@ export function tapAnthropicSseForLog(
     idle.cancel();
     detachAbort();
     recordUsage();
-    // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
-    // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
-    // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
-    logCtx.upstreamError = message.slice(0, 500);
-    finalize(502, { terminalStatus: "incomplete", closeReason });
-    closeWithErrorFrame(errType, message);
+    if (terminalSeen) {
+      // The turn already ended (message_stop or an upstream error event): an upstream that then
+      // idles or keeps sending did not cut it short. Same rule as the read-error branch.
+      finalize(200, { closeReason: "terminal" });
+      try { tapController?.close(); } catch { /* client already torn down */ }
+    } else {
+      // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
+      // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
+      // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
+      logCtx.upstreamError = message.slice(0, 500);
+      finalize(502, { terminalStatus: "incomplete", closeReason });
+      closeWithErrorFrame(errType, message);
+    }
     reader.cancel(new DOMException(message, closeReason === "body_stall" ? "TimeoutError" : "QuotaExceededError")).catch(() => {});
   };
   const idle = idleDeadline(guard?.stallMs ?? 0, () => {
