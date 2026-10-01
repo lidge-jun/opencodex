@@ -84,6 +84,7 @@ describe("Cursor structured final output", () => {
     properties: { outcome: { type: "string", enum: ["allow", "deny"] } },
     required: ["outcome"],
   };
+  /** Encode a Responses request and return its model-visible Cursor action text. */
   function activeText(format?: Record<string, unknown>) {
     const parsed = parseRequest({
       model: "cursor/composer-2.5-fast",

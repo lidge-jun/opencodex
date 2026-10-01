@@ -393,6 +393,11 @@ function updateFramed(hash: ReturnType<typeof createHash>, value: string): void 
   hash.update(bytes);
 }
 
+/**
+ * Hash system/developer instructions and the final-output format for checkpoint lineage.
+ * A separate format field, including its absence, prevents collisions with ordinary prompt text.
+ * @returns The hexadecimal SHA-256 instruction digest.
+ */
 export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
   const hash = createHash("sha256").update("ocx:cursor:sys:");
   updateFramed(hash, "text-format");
@@ -503,6 +508,11 @@ function resolveCursorCheckpoint(
   return { snapshot };
 }
 
+/**
+ * Translate a parsed request into Cursor model, prompt, tool-budget, and continuation state.
+ * Preserves the final-output format for the wire builder's prompt fallback and admits only
+ * checkpoints whose identity and instruction/history lineage match the current request.
+ */
 export function createCursorRequest(
   parsed: OcxParsedRequest,
   options: CreateCursorRequestOptions = {},

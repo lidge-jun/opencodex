@@ -1,6 +1,11 @@
 import type { OcxRequestOptions } from "../../types";
 
-/** Cursor has no native Responses text.format equivalent: repeat its contract in the active action. */
+/**
+ * Render a Responses final-output contract as prompt guidance for Cursor's Connect wire.
+ * This fallback does not enforce JSON decoding or validate the model's response.
+ * @param format The requested JSON object/schema format, or undefined for ordinary text.
+ * @returns Final-answer instructions, including a supplied schema, or an empty string.
+ */
 export function cursorStructuredOutputInstructions(format: OcxRequestOptions["textFormat"]): string {
   if (!format) return "";
   const schema = format.type === "json_schema" && format.schema

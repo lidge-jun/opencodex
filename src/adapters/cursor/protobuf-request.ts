@@ -211,6 +211,10 @@ function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): Roo
   return markerOnly.byteLength <= maxBytes ? { ...markerOnly, outputElided: true } : null;
 }
 
+/**
+ * Encode system roots with the requested final-output contract and applicable tool guidance.
+ * Copies the prompt list so retry guidance does not mutate the caller's request.
+ */
 function systemPromptBlobs(request: CursorRunRequest): RootBlobCandidate[] {
   const prompts = request.system.length > 0 ? [...request.system] : ["You are a helpful assistant."];
   if (isCursorExternalWireModel(request.modelId) && request.echoRetryContinuationText) {
@@ -1547,6 +1551,7 @@ export interface PreparedCursorRunRequest {
 /**
  * Build the wire payload once, and optionally derive a token estimate from the very
  * same roots, action text, and tool definitions that produced it.
+ * Repeats structured final-output instructions in active user-message actions.
  *
  * Cursor only reports absolute context size in checkpoint frames, which live in a
  * process-local map — so after a restart a turn with no checkpoint reports
