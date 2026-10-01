@@ -360,6 +360,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
     case "devin": result = await (await import("./quota/devin")).fetchDevinQuota(provider, accessToken, credential.apiBaseUrl, config.baseUrl); break;
+    case "dsh-account": result = await (await import("./quota/dsh-account")).fetchDshAccountQuota(provider, accessToken); break;
     default: return null;
   }
   return { result, identity, isCurrent };

@@ -101,6 +101,7 @@ ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
 ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
 ocx login devin       # Cognition/Devin: Devin CLI の資格情報を優先インポート、なければ Auth0 ブラウザサインイン
+ocx login dsh-account # DeepSeek Harness Desktop (~/.dsh/.credentials.yaml の許可を取り込み)
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
 ocx login codex        # Codex アカウントプール (別名: chatgpt, openai / プロキシの起動が必要)
 ocx logout <provider>
@@ -117,6 +118,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 | `devin` | `devin` | `https://server.codeium.com` | 実験的な非公式 Cognition/Devin ブリッジ。ログインはまず、インストール済み Devin CLI が保持する認証情報を取り込みます（`devin auth login` が `devin-session-token` を自身の `credentials.toml` に書き込みます）。なければ Auth0 のブラウザサインインを開き、貼り付けたトークンを `RegisterUser` で長期 API キーに交換します。`ocx login devin-cli` は非推奨エイリアスとして引き続き使えます。モデル一覧は `GetCascadeModelConfigs` でアカウントごとに取得し、ストリーミングは Connect-RPC 上の `runTurn` 経路のみを使います。ダッシュボードのプリセットには既定で含まれません。 |
+| `dsh-account` | `dsh-account` | `https://api.deepseek.com/anthropic` | 実験的なインポート優先アカウントプロバイダー。インストールおよびサインイン済みの DeepSeek Harness (DSH) Desktop アカウントを再利用します。明示的なインポート時に `~/.dsh/.credentials.yaml` から厳格に読み取り専用で資格情報を読み込みます。DeepSeek API キー課金とは完全に独立しています。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
 Google Antigravity のアカウント・プロバイダーのクォータ確認は、モデル一覧へのフォールバックも含め、固定の Google エンドポイントを使用します。その宛先では透過 Fake-IP DNS に対応し、TLS 検証、リダイレクト拒否、プライベートアドレス検査を維持します。カスタム base URL はモデル要求にのみ適用されます。`NO_PROXY` は直接接続のポリシーを維持します。
@@ -191,9 +193,20 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ロールバックはスナップショットがある場合にのみ可能なため、セッションストアが存在するのに取得できない場合（ファイルが読めない、スキーマの不一致、トークン選択があいまい）、`KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` が実際の CLI ストアと異なるインポート先を指す場合、またはプライマリ CLI データベースに認識できるトークン行がない場合、**アカウントを追加**は `kiro-cli` のログアウトを拒否します。通常の `kiro-cli` データパス上の壊れたデータベースを修復または削除し、インポート専用セレクタが設定されていれば解除してから再試行してください。既存の `kiro-cli` セッションがまったくない環境には影響しません。
 
+### DeepSeek Account (DSH)
+
+`dsh-account` は、インストールおよびサインイン済みの DeepSeek Harness (DSH) Desktop アプリケーションの認証済みアカウント資格情報を再利用する、実験的なインポート優先アカウントプロバイダーです。
+
+- **DeepSeek API キーから独立:** `dsh-account` はユーザーの認証済み DeepSeek セッションクォータ（通常/ボーナスウォレット残高および総支出）を使用しますが、`deepseek` プロバイダーはプラットフォーム API キー残高から課金されます。この2つの資格情報ドメインおよびルーティングは厳格に分離されており、相互にフォールバックすることはありません。
+- **明示的インポートのみ:** OpenCodeX は DeepSeek Harness がインストールされサインインされているか（`~/.dsh/.credentials.yaml`）を検出しますが、ユーザーの明示的な操作（`ocx login dsh-account` または Web ダッシュボードでのインポートクリック）なしにトークンを自動的にコピー、インポート、または使用することはありません。
+- **DSH 資格情報ストアへの読み取り専用:** OpenCodeX は `~/.dsh/.credentials.yaml` を厳格に読み取り専用として扱います。OpenCodeX が DeepSeek Harness に属するファイルの書き込み、変更、削除、またはアクセス権の変更を行うことは決してありません。
+- **隔離された資格情報の複製とログアウト:** インポート時、OpenCodeX は DeepSeek の信頼できる認証エンドポイント（`/auth-api/v0/users/current`）に対してトークンを検証し、OpenCodeX 認証ストアに独自の複製を保存します。OpenCodeX でアカウントをログアウトまたは削除しても、OpenCodeX のローカル複製が削除されるだけであり、上流のリモートセッションログアウトがトリガーされたり、DeepSeek Harness Desktop からサインアウトされたりすることはありません。
+- **バックグラウンドトークン自動ローテーションなし・401 時の再インポート:** DSH セッショングラントには自動バックグラウンド更新エンドポイントがありません。上流から HTTP 401（`ACCOUNT_TOKEN_INVALID`）が返された場合、OpenCodeX はアカウントを `needsReauth` としてマークし、ルーティングを停止します。アクセスを再開するには、ユーザーが `ocx login dsh-account` で明示的に再インポートする必要があります。
+- **サードパーティ免責事項:** OpenCodeX は、サードパーティクライアントによるセッショングラントの再利用について、DeepSeek 公式からの承認や保証を主張するものではありません。
+
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 100 個含まれています。キー方式 83、OAuth 13、ローカル 3、
+opencodex には組み込みプリセットが 101 個含まれています。キー方式 83、OAuth 14、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 

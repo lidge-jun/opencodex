@@ -1,4 +1,5 @@
 import { createAnthropicAdapter } from "./anthropic";
+import { createDshAccountAdapter } from "./dsh-account";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
 import { createClaudeCliAdapter } from "./claude-cli/adapter";
@@ -146,6 +147,10 @@ export const ADAPTER_REGISTRY = {
     // and the CLI owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+  },
+  "dsh-account": {
+    contractParent: "anthropic",
+    create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createDshAccountAdapter(provider, context),
   },
 } as const satisfies Record<string, AdapterDefinition>;
 

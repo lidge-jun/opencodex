@@ -189,6 +189,7 @@ ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login orcarouter-oauth # OrcaRouter browser consent + PKCE
 ocx login devin       # Cognition/Devin: import Devin CLI credential, else Auth0 browser sign-in
+ocx login dsh-account # DeepSeek Harness Desktop (import ~/.dsh/.credentials.yaml grant)
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login codex        # Codex account pool (aliases: chatgpt, openai; needs a running proxy)
 ocx logout <provider>
@@ -206,6 +207,7 @@ ocx logout <provider>
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
 | `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login first imports the credential the installed Devin CLI already holds (`devin auth login` writes a `devin-session-token` to its own `credentials.toml`); when none is present it opens Auth0 browser sign-in and exchanges the pasted token via Cognition's `RegisterUser` for a long-lived API key. `ocx login devin-cli` remains as a deprecated alias. Models are discovered per account with `GetCascadeModelConfigs`. Account quota comes from `GetUserStatus` under one eight-second request and body deadline: dated daily and weekly windows, plus the monthly prompt and flex credit pool for a credit-billed plan or an unknown strategy with both reset dates absent when a balance field is present. Negative used credits omit the monthly window; valid zero available credits mark it exhausted. A timed-out probe keeps the last good quota. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
+| `dsh-account` | `dsh-account` | `https://api.deepseek.com/anthropic` | Experimental import-first account provider reusing an installed and signed-in DeepSeek Harness (DSH) Desktop account. Reads credentials strictly read-only from `~/.dsh/.credentials.yaml` upon explicit import. Independent from DeepSeek API key billing. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
@@ -465,9 +467,20 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
+### DeepSeek Account (DSH)
+
+`dsh-account` is an experimental, import-first account provider designed to reuse the authenticated account credentials of an installed DeepSeek Harness (DSH) Desktop application.
+
+- **Independent from DeepSeek API Key:** `dsh-account` uses the user's authenticated DeepSeek session quota (normal/bonus wallets and total spend), whereas the `deepseek` provider bills against your platform API Key balance. The two credential domains and routes are strictly separate and never fall through into one another.
+- **Explicit import only:** OpenCodeX detects if DeepSeek Harness is installed and signed in (`~/.dsh/.credentials.yaml`), but will never automatically copy, import, or use the token without an explicit user command (`ocx login dsh-account` or clicking Import in the Web Dashboard).
+- **Read-only DSH credential store:** OpenCodeX treats `~/.dsh/.credentials.yaml` as strictly read-only. OpenCodeX never writes, modifies, removes, or alters the permissions of any files belonging to DeepSeek Harness.
+- **Isolated credential copy & logout:** Upon import, OpenCodeX validates the token against DeepSeek's authoritative identity endpoint (`/auth-api/v0/users/current`) and saves its own copy to the OpenCodeX auth store. Logging out or removing the account in OpenCodeX only deletes the OpenCodeX local copy; it never triggers upstream remote session logout and will not sign you out of DeepSeek Harness Desktop.
+- **No background token rotation & 401 re-import:** DSH session grants do not feature an automatic background refresh endpoint. If upstream returns HTTP 401 (`ACCOUNT_TOKEN_INVALID`), OpenCodeX marks the account `needsReauth` and halts routing. To restore access, the user must explicitly re-import via `ocx login dsh-account`.
+- **Third-party disclaimer:** OpenCodeX makes no claim of official endorsement or authorization by DeepSeek for third-party clients reusing session grants.
+
 ## 3. API-key catalog
 
-opencodex ships 100 built-in presets: 83 key-based, 13 OAuth, three local, and one default
+opencodex ships 101 built-in presets: 83 key-based, 14 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 

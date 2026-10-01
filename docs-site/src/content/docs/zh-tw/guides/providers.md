@@ -98,6 +98,7 @@ ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
 ocx login devin       # Cognition/Devin：優先匯入 Devin CLI 憑證，否則走 Auth0 瀏覽器登入
+ocx login dsh-account # DeepSeek Harness Desktop（匯入 ~/.dsh/.credentials.yaml 授權）
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
 ocx login codex        # Codex 帳號池（別名：chatgpt、openai；需要 proxy 正在執行）
 ocx logout <provider>
@@ -114,6 +115,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
 | `devin` | `devin` | `https://server.codeium.com` | 實驗性的非官方 Cognition/Devin 橋接。登入會先匯入已安裝 Devin CLI 已持有的憑證（`devin auth login` 會把 `devin-session-token` 寫入它自己的 `credentials.toml`）；沒有則開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將貼上的權杖換成長期 API 金鑰。`ocx login devin-cli` 仍作為已棄用別名可用。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
+| `dsh-account` | `dsh-account` | `https://api.deepseek.com/anthropic` | 實驗性優先匯入帳號提供者，複用已安裝並登入的 DeepSeek Harness (DSH) Desktop 帳號。在使用者明確匯入時嚴格以唯讀方式讀取 `~/.dsh/.credentials.yaml` 憑據。獨立於 DeepSeek API Key 計費。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
 Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
@@ -247,9 +249,20 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 `kiro-cli` data path 修復或移除不可讀 database、取消這些 import selector 後重試。沒有既有
 `kiro-cli` session 的新機器登入不受影響。
 
+### DeepSeek Account (DSH)
+
+`dsh-account` 是一個實驗性的、優先匯入既有憑據的帳號提供者，用於複用已安裝且登入的 DeepSeek Harness (DSH) Desktop 應用程式之認證憑據。
+
+- **獨立於 DeepSeek API Key**：`dsh-account` 使用使用者的 DeepSeek 認證工作階段額度（一般/贈送錢包餘額與總支出），而 `deepseek` 提供者則依平台 API Key 餘額扣款。這兩個憑據體系與路由嚴格隔離，互不 fallback。
+- **僅明確匯入**：OpenCodeX 會偵測是否已安裝 DeepSeek Harness 且已登入（`~/.dsh/.credentials.yaml`），但絕不會在未經使用者明確操作（`ocx login dsh-account` 或在 Web 儀表板點選匯入）的情況下自動複製、匯入或使用該權杖。
+- **對 DSH 憑據存放區唯讀**：OpenCodeX 將 `~/.dsh/.credentials.yaml` 視為嚴格唯讀。OpenCodeX 絕不寫入、修改、刪除或變更任何屬於 DeepSeek Harness 的檔案權限。
+- **隔離的憑據複本與登出**：匯入後，OpenCodeX 會透過 DeepSeek 權威身分端點（`/auth-api/v0/users/current`）驗證權杖，並在 OpenCodeX 認證存放區中保存獨立複本。在 OpenCodeX 中登出或移除該帳號僅會刪除 OpenCodeX 本地複本，絕不觸發上游遠端工作階段登出，也不會使 DeepSeek Harness Desktop 登出。
+- **無背景權杖自動輪替與 401 重新匯入**：DSH 工作階段授權不提供自動背景重新整理端點。若上游傳回 HTTP 401（`ACCOUNT_TOKEN_INVALID`），OpenCodeX 會將該帳號標記為 `needsReauth` 並停止路由。若要恢復存取，使用者必須透過 `ocx login dsh-account` 明確重新匯入。
+- **第三方免責聲明**：OpenCodeX 不主張 DeepSeek 官方對第三方客戶端複用工作階段授權提供背書或支援。
+
 ## 3. API 金鑰目錄
 
-opencodex 內建 100 個 preset：83 個 key-based、13 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 101 個 preset：83 個 key-based、14 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
