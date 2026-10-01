@@ -1368,3 +1368,49 @@ test("bytes past the cap after message_stop do not turn a finished turn into a f
   expect(text).not.toContain("event: error");
   expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
 });
+
+// SSE lines may end in CRLF, LF or CR. The tap forwards bytes untouched but must still see the frames.
+function tapWithChunks(chunks: string[], guard: { stallMs: number; maxBytes: number }) {
+  let index = 0;
+  const source = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index < chunks.length) controller.enqueue(new TextEncoder().encode(chunks[index++]!));
+      // then silence (stall) or more bytes, per the test
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), guard);
+  return { tapped, calls, logCtx };
+}
+
+for (const [label, eol] of [["CRLF", "\r\n"], ["CR", "\r"]] as const) {
+  test(`a ${label}-delimited turn that then stalls is finished, and its usage is read`, async () => {
+    const turn = COMPLETE_TURN_SSE.replace(/\n/g, eol);
+    const { tapped, calls, logCtx } = tapWithChunks([turn], { stallMs: 30, maxBytes: 0 });
+    const text = await new Response(tapped).text();
+    expect(text).toBe(turn);
+    expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+    expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
+  });
+}
+
+test("a CRLF delimiter split across chunks is one delimiter, not a frame boundary", async () => {
+  const turn = COMPLETE_TURN_SSE.replace(/\n/g, "\r\n");
+  // Cut every frame between its CR and LF so each chunk ends in a lone CR.
+  const chunks = turn.split("\r\n").map((part, i, all) => (i < all.length - 1 ? `${part}\r` : part)).map((part, i) => (i === 0 ? part : `\n${part}`));
+  expect(chunks.join("")).toBe(turn);
+  const { tapped, calls, logCtx } = tapWithChunks(chunks, { stallMs: 30, maxBytes: 0 });
+  await new Response(tapped).text();
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(logCtx.usage).toEqual(expect.objectContaining({ inputTokens: 12, outputTokens: 5 }));
+});
+
+test("a CRLF turn followed by bytes past the cap is finished, not a failure", async () => {
+  const turn = COMPLETE_TURN_SSE.replace(/\n/g, "\r\n");
+  const cap = new TextEncoder().encode(turn).byteLength + 16;
+  const { tapped, calls } = tapWithChunks([turn, ": padding ".repeat(64)], { stallMs: 0, maxBytes: cap });
+  const text = await new Response(tapped).text();
+  expect(text).not.toContain("event: error");
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+});

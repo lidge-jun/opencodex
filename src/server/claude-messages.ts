@@ -340,12 +340,28 @@ export function tapAnthropicSseForLog(
   };
   const inspect = (chunk: Uint8Array) => {
     buffer += decoder.decode(chunk, { stream: true });
+    // SSE lines may end in CRLF, LF or CR. Normalize the inspection copy to LF (the forwarded
+    // bytes are untouched), holding a trailing CR until the next chunk shows whether an LF
+    // follows it, so a CRLF split across chunks stays one line ending.
+    const heldCr = buffer.endsWith("\r");
+    buffer = (heldCr ? buffer.slice(0, -1) : buffer).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
     let sep: number;
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
       inspectFrame(frame);
     }
+  };
+  // The last block can sit in the buffer without its blank line: an upstream that stopped after
+  // it, or a held trailing CR. Count it before deciding how the turn ended (the Responses relay
+  // flushes the same candidate). Returns true when this flush found the terminal in a block the
+  // client has not seen a blank line after, so the caller restores one.
+  const flushTail = (): boolean => {
+    const terminalBefore = terminalSeen;
+    const tail = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
+    buffer = "";
+    if (tail) inspectFrame(tail);
+    return terminalSeen && !terminalBefore && !tail.endsWith("\n\n");
   };
   const reader = upstream.getReader();
   let settled = false;
@@ -369,12 +385,17 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
+    const terminalInTail = flushTail();
     recordUsage();
     if (terminalSeen) {
       // The turn already ended (message_stop or an upstream error event): an upstream that then
-      // idles or keeps sending did not cut it short. Same rule as the read-error branch.
+      // idles or keeps sending did not cut it short. Same rule as the read-error branch,
+      // including the restored blank line for a terminal found only in the tail.
       finalize(200, { closeReason: "terminal" });
-      try { tapController?.close(); } catch { /* client already torn down */ }
+      try {
+        if (terminalInTail) tapController?.enqueue(encoder.encode("\n\n"));
+        tapController?.close();
+      } catch { /* client already torn down */ }
     } else {
       // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
       // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
@@ -461,12 +482,7 @@ export function tapAnthropicSseForLog(
         settled = true;
         idle.cancel();
         detachAbort();
-        // A read error can follow the last SSE block before its blank-line delimiter. Count
-        // that block before deciding how the turn ended, as the Responses relay does.
-        const terminalBeforeTail = terminalSeen;
-        const tail = buffer + decoder.decode();
-        buffer = "";
-        if (tail) inspectFrame(tail);
+        const terminalInTail = flushTail();
         recordUsage();
         if (isTranslatorBudgetExceededError(err)) {
           // A local cap, not an upstream failure: the non-streaming native Messages fold
@@ -482,7 +498,7 @@ export function tapAnthropicSseForLog(
           try {
             // An SSE parser drops an event that EOF cuts off before its blank line, so restore
             // the delimiter when the terminal was only found in that unterminated tail.
-            if (!terminalBeforeTail) controller.enqueue(encoder.encode("\n\n"));
+            if (terminalInTail) controller.enqueue(encoder.encode("\n\n"));
             controller.close();
           } catch { /* torn down */ }
           reader.cancel(err).catch(() => {});
