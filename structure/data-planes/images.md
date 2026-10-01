@@ -24,6 +24,9 @@ results into assistant messages with `phase: final_answer` and Markdown links to
 artifacts. The final phase keeps the image outside collapsible progress output.
 `src/server/responses/passthrough-delivery.ts` applies this projection after continuation
 observers, on the client branch only, for SSE, JSON and JSON synthesized into SSE.
+The SSE projection emits consistent message lifecycle events and terminal snapshots,
+suppresses replaced hosted-image progress frames, and adjusts numeric sequence numbers
+for inserted or removed events, identically in both relay shapes.
 Hosted items in the continuation cache retain their upstream representation; other
 client rewrites keep their existing cache policy. Generic, remotely admitted and non-Responses
 clients do not receive this filesystem projection. Individual image item events without
