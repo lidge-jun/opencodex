@@ -110,7 +110,6 @@ export async function fetchMuseKeyQuotaOutcome(
   }
 }
 
-/** Compatibility view for existing callers that only need a quota or no reading. */
 export async function fetchMuseKeyQuotaSnapshot(
   accountId: string,
   oauthAccessToken: string,

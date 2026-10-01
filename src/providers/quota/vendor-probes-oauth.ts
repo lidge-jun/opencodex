@@ -475,12 +475,8 @@ export async function fetchMuseAccountQuota(
     ...(entry.identity === identity ? { isCurrent } : {}),
   });
   const token = account.credential.muse?.oauthAccessToken;
-  // API-key-only imports remain passive. A restored row has unknown provenance because
-  // disk intentionally persists ProviderQuota alone; retain that uncertainty as undefined.
   if (!token) return cached ? currentEntry(cached) : { ts: Date.now(), quota: null };
 
-  // Hydrated rows have no persisted identity/provenance, so they cannot satisfy the
-  // probe TTL. The endpoint will establish current credential ownership before reuse.
   if (!forceRefresh && cached && cached.quotaObserved !== undefined
     && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) return currentEntry(cached);
 

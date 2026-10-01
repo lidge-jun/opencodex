@@ -51,7 +51,6 @@ const CONSENT_WARNING = [
   "Supported alternative: the meta-model provider with your own key (META_MODEL_API_KEY).",
 ].join(" ");
 
-/** The Keychain payload. `access_token` is account metadata, not Model API auth. */
 interface MuseKeychainSecret {
   api_key?: unknown;
   access_token?: unknown;
@@ -263,7 +262,6 @@ async function importFromKeychain(
     throw new Error("The Muse Code Keychain entry is not valid JSON. Run `muse login` to rewrite it.");
   }
 
-  // Only api_key authenticates the Model API; access_token stays private account metadata.
   const accessToken = typeof secret.access_token === "string" ? secret.access_token.trim() : "";
   const muse = accessToken.length > 0 && accessToken.length <= 4096 && !/[\x00-\x1f\x7f]/.test(accessToken)
     ? { oauthAccessToken: accessToken }
