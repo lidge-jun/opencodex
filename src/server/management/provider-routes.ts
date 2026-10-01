@@ -1616,10 +1616,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
       });
     }
-    if (name === "jev" && providerMatchesRegistryTransport(name, prov)) {
+    if (name === "jev" && prov.adapter === "jev-decision") {
       const probe = { targetKey: "jev/probe", effort: null } as const;
       const decision = await resolveJevDecision({
-        body: { input: "Verify the configured TypeSafe JEV decision service." },
+        body: { input: "Verify the configured JEV decision service." },
         candidates: [{
           key: probe.targetKey,
           provider: "jev",
@@ -1634,15 +1634,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         return jsonResponse({
           ok: true,
           latencyMs: decision.latencyMs,
-          message: "Connected. TypeSafe JEV answered a decision probe.",
+          message: "Connected. JEV answered a decision probe.",
         });
       }
       return jsonResponse({
         ok: false,
         latencyMs: decision.latencyMs,
         error: decision.gate === "missing_key"
-          ? "TypeSafe JEV API key is not configured"
-          : `TypeSafe JEV decision probe failed (${decision.gate})`,
+          ? "JEV API key is not configured"
+          : `JEV decision probe failed (${decision.gate})`,
       });
     }
     if (prov.liveModels === false) {

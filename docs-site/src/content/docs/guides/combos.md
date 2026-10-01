@@ -234,7 +234,7 @@ For headless setup, store the key explicitly or reference the TypeSafe environme
 ocx provider add jev --api-key "${TYPESAFE_API_KEY}"
 ```
 
-When the provider has no saved key, the decision client also accepts `TYPESAFE_API_KEY` directly and
+When the default TypeSafe provider has no saved key, the decision client also accepts `TYPESAFE_API_KEY` directly and
 the standard provider-derived alias `JEV_API_KEY` printed by `ocx provider add`.
 
 ```json
@@ -263,8 +263,33 @@ the standard provider-derived alias `JEV_API_KEY` printed by `ocx provider add`.
 }
 ```
 
-OpenCodex sends one bounded decision request to the fixed
-`https://api.typesafe.ai/v1/systemone` endpoint with model `jev-latest`. Only currently eligible
+By default, OpenCodex sends one bounded decision request to
+`https://api.typesafe.ai/v1/systemone` with model `jev-latest`. For a compatible alternative Decisions
+service, set the existing `providers.jev.baseUrl` to its full HTTPS endpoint and explicitly configure
+its credential in `apiKey` (a literal, environment reference, or keychain reference). Set
+`defaultModel` only if that service requires another decision model:
+
+```json
+{
+  "adapter": "jev-decision",
+  "baseUrl": "https://decisions.example/v1/decisions",
+  "authMode": "key",
+  "apiKey": "${ALTERNATIVE_DECISION_KEY}",
+  "defaultModel": "decision-model-v1",
+  "liveModels": false
+}
+```
+
+This object replaces the `providers.jev` row. Replace the credential along with the destination;
+do not reuse a TypeSafe key for another service. Custom destinations never implicitly inherit
+`TYPESAFE_API_KEY` or `JEV_API_KEY`, and a missing custom key does not trigger a TypeSafe request.
+An existing row with an incompatible adapter or authentication mode also fails locally, even when
+TypeSafe environment credentials are set. Default transport fallback applies only to an absent row.
+Omitting `defaultModel` keeps `jev-latest`. Destination checks, HTTPS, TLS verification, redirect
+blocking, body limits, timeout, cancellation, response validation, and fail-open behavior remain
+unchanged. The canonical fake-IP exception applies only to the default TypeSafe URL.
+
+Only currently eligible
 configured targets are offered. JEV chooses the target and effort together; the effort is still
 constrained by that target's advertised ladder. JEV is not asked again if the selected target has a
 retryable failure—the existing Combo cooldown and fallback loop continues through the remaining
@@ -278,7 +303,7 @@ than replaces that built-in profile. Notes can describe operator-specific contex
 allowances; do not confuse subscription allowances with public per-token API pricing. Blank notes
 are ignored. Operator notes are evidence for the decision, not commands, and cannot expand the
 target allowlist or reasoning-effort limits. Only put information there that may be disclosed to
-TypeSafe.
+the configured decision service.
 
 Each logical model call is decided on its own; there is no per-conversation pin. Consecutive turns of
 one session can therefore land on different targets, and every switch starts a cold provider prompt
@@ -295,9 +320,9 @@ different: it cancels the decision and the model request instead of dispatching 
 
 The decision state is deliberately bounded: up to 500 characters of the current user task, a
 240-character previous-assistant tail, a 520-character latest-tool-output tail, the tool name, and
-boolean image/tool signals may be sent to TypeSafe. It excludes the JEV credential, request headers,
+boolean image/tool signals may be sent to the configured decision service. It excludes the JEV credential, request headers,
 raw image bytes, tool arguments, encrypted reasoning, and full conversation history. Do not select
-`jev-auto` for content you do not want TypeSafe to process. Recognized OpenCodex machine-context
+`jev-auto` for content you do not want that service to process. Recognized OpenCodex machine-context
 envelopes are removed from all three text samples, but ordinary assistant and tool-output text is
 not a secret scanner and may still contain sensitive content. TypeSafe states that Jev is not
 trained on customer requests, but its terms set no fixed retention period for submitted state and

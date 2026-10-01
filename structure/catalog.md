@@ -1,5 +1,8 @@
 # Model Catalog
 
+`src/codex/catalog/provider-models.ts` returns no inference models for `jev-decision` rows, including
+custom destinations with a configured decision `defaultModel`; `tests/providers/jev-provider.test.ts` covers this boundary.
+
 Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.

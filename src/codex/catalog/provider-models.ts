@@ -179,7 +179,7 @@ export async function fetchProviderModelsWithAuth(
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
   const anthropicSelection = name === "anthropic" && prov.authMode === "oauth"
     ? captureOAuthAccountSelection(name) : null;
-  if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
+  if (prov.authMode === "forward" || prov.adapter === "jev-decision") return observed([], "authoritative"); // No inference catalog
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0

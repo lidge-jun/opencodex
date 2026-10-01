@@ -180,11 +180,18 @@ describe("JEV Combo runtime", () => {
     });
   });
 
-  test("routes the initial call to JEV's allowlisted target and keeps direct/catalog rows", async () => {
+  test.each([JEV_URL, "https://decisions.example/v1/decisions"])("routes the initial call via %s and keeps direct/catalog rows", async (url) => {
     const jevRequests: Array<Record<string, unknown>> = [];
     const config = makeConfig({
-      jevFetch: choiceFetch("sol/gpt-5.6-sol:high", jevRequests),
+      jevFetch: (async (input, init) => {
+        expect(String(input)).toBe(url);
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer decision-test-key");
+        expect(init?.redirect).toBe("manual");
+        return choiceFetch("sol/gpt-5.6-sol:high", jevRequests)(input, init);
+      }) as typeof fetch,
+      jevKey: "decision-test-key",
     });
+    config.providers.jev!.baseUrl = url;
     const childBodies: Record<string, unknown>[] = [];
 
     const response = await execute(config, body => {
@@ -211,6 +218,8 @@ describe("JEV Combo runtime", () => {
     expect(jevRequests[0]).toMatchObject({ model: "jev-latest" });
 
     const catalogConfig = makeConfig();
+    catalogConfig.providers.jev!.baseUrl = url;
+    catalogConfig.providers.jev!.defaultModel = "decision-model-v1";
     delete (catalogConfig.providers.jev as OcxProviderConfig & { fetch?: typeof fetch }).fetch;
     const models = await gatherRoutedModels(catalogConfig);
     expect(models.filter(model => model.provider === "combo").map(catalogModelSlug)).toEqual(["jev-auto"]);
@@ -493,7 +502,7 @@ describe("JEV Combo runtime", () => {
     expect(childBodies[0]).not.toHaveProperty("thinking");
   });
 
-  test("returns 499 without dispatching a model when the caller aborts during JEV", async () => {
+  test.each([JEV_URL, "https://decisions.example/v1/decisions"])("returns 499 without model dispatch when cancelled at %s", async (url) => {
     const controller = new AbortController();
     const reason = new DOMException("caller stopped", "AbortError");
     const jevFetch = (async (_input, init) => new Promise<Response>((_resolve, reject) => {
@@ -501,6 +510,7 @@ describe("JEV Combo runtime", () => {
       queueMicrotask(() => controller.abort(reason));
     })) as typeof fetch;
     const config = makeConfig({ jevFetch });
+    config.providers.jev!.baseUrl = url;
     let modelDispatches = 0;
 
     const response = await execute(config, body => {

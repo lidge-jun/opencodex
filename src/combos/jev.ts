@@ -1,4 +1,5 @@
 import { readBoundedResponseBytes } from "../lib/bounded-body";
+import { providerBaseUrlConfigError } from "../config/provider-validation";
 import {
   providerOutboundPost,
   providerRedirectError,
@@ -538,9 +539,10 @@ function fallbackDecision(
   return { ...fallback, gate, latencyMs };
 }
 
-function canonicalJevProvider(config: OcxConfig): OcxProviderConfig {
+function jevProvider(config: OcxConfig): OcxProviderConfig | undefined {
   const configured = config.providers[JEV_PROVIDER_ID];
-  if (configured && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured)) return configured;
+  if (configured) return configured.adapter === "jev-decision"
+    && (configured.authMode === undefined || configured.authMode === "key") ? configured : undefined;
   return {
     adapter: "jev-decision",
     baseUrl: JEV_API_URL,
@@ -550,7 +552,7 @@ function canonicalJevProvider(config: OcxConfig): OcxProviderConfig {
 }
 
 /**
- * Ask TypeSafe JEV for one allowlisted target/effort decision.
+ * Ask the configured JEV service for one allowlisted target/effort decision.
  *
  * Every operational or response failure returns the supplied first-eligible fallback. A caller
  * abort is the exception: request cancellation remains cancellation and is rethrown by identity.
@@ -567,20 +569,21 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
 
   const configured = options.config.providers[JEV_PROVIDER_ID];
   if (configured?.disabled === true) return failed("missing_key");
-  const configuredOwnsJev = configured
-    && providerMatchesRegistryTransport(JEV_PROVIDER_ID, configured);
-  const apiKey = (
-    configuredOwnsJev ? resolveProviderApiKey(configured.apiKey)?.trim() : undefined
-  ) || process.env.TYPESAFE_API_KEY?.trim()
-    || process.env.JEV_API_KEY?.trim();
+  const provider = jevProvider(options.config);
+  if (!provider) return failed("invalid");
+  const canonical = providerMatchesRegistryTransport(JEV_PROVIDER_ID, provider);
+  const url = canonical ? JEV_API_URL : provider.baseUrl;
+  const apiKey = resolveProviderApiKey(provider.apiKey)?.trim()
+    || (canonical ? process.env.TYPESAFE_API_KEY?.trim() || process.env.JEV_API_KEY?.trim() : undefined);
   if (!apiKey) return failed("missing_key");
+  if (providerBaseUrlConfigError(url)) return failed("invalid");
 
   let requestBody: string;
   try {
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return failed("no_state");
     requestBody = JSON.stringify({
-      model: JEV_MODEL,
+      model: typeof provider.defaultModel === "string" ? provider.defaultModel.trim() || JEV_MODEL : JEV_MODEL,
       state,
       questions: buildJevRouteQuestion(options.candidates),
     });
@@ -598,8 +601,8 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
   try {
     const response = await post(
       JEV_PROVIDER_ID,
-      canonicalJevProvider(options.config),
-      JEV_API_URL,
+      provider,
+      url,
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -612,7 +615,7 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
     );
     if (options.signal?.aborted) throw options.signal.reason;
 
-    const redirectError = await providerRedirectError(response, JEV_API_URL);
+    const redirectError = await providerRedirectError(response, url);
     if (redirectError) return failed("redirect");
     if (!response.ok) {
       try { void response.body?.cancel().catch(() => undefined); } catch { /* best effort */ }

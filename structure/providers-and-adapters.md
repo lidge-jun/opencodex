@@ -302,23 +302,23 @@ and the upstream URL through `handleResponses`.
 `src/providers/registry/entries-extended.ts` owns the canonical `jev` key preset at
 `https://api.typesafe.ai/v1/systemone` with adapter `jev-decision`. It is a credential owner, not an
 inference route: the registry marks it `credentialOnly`, its adapter is deliberately absent from the
-routable adapter registry, live discovery is disabled, no default/static model is published, and
+routable adapter registry, live discovery is disabled, decision `defaultModel` never seeds inference models, and
 key login returns unknown without probing a nonexistent model catalog. The normal `ocx login jev`
 flow and provider-workspace API-key panel both persist the same credential-only row. Combo validation
 rejects the decision provider as a target. `src/server/management/provider-routes.ts`
 special-cases its connection test through the same bounded decision client before the generic
 static-catalog branch. The test sends no user prompt and returns only sanitized health status.
 
-The request path consumes a configured literal/reference key only when the row still matches the
-canonical registry transport, with `TYPESAFE_API_KEY` and the standard provider-derived
-`JEV_API_KEY` as explicit environment fallbacks. A same-named custom destination cannot receive
-either credential through the JEV client. All automated coverage mocks TypeSafe; live-key behavior
-remains an operator smoke boundary.
+The request path consumes the `jev-decision` row's explicit literal/reference key and full HTTPS `baseUrl`,
+with optional `defaultModel` (default `jev-latest`). `TYPESAFE_API_KEY` and `JEV_API_KEY` are implicit fallbacks
+only for the canonical registry transport. A custom destination without its own explicit key fails open without
+contacting TypeSafe; present incompatible adapter/auth rows fail locally before environment-key resolution. Only the canonical URL retains the
+fake-IP exception. `tests/routing/jev-decision.test.ts` exercises pinned destination/key selection, defaults, destination refusal, bounded failures and cancellation; live-key behavior remains an operator smoke boundary.
 
 `src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
 the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
 the JEV credential are excluded. It owns the joint target/effort choice map, strict response
-validation, fixed `jev-latest` destination, four-second deadline, no-redirect policy, bounded response,
+validation, configurable decision destination/model, four-second deadline, no-redirect policy, bounded response,
 and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
 answers fail open to the first eligible target; no response can escape the configured choice map.
 Telemetry never retains extracted state or credentials.
@@ -329,7 +329,7 @@ return are allowed for multi-line notes, every other C0 control character and DE
 refused, and the value is stored sparsely.
 `src/combos/jev.ts` sends a configured target note as `state.operator_notes` on a
 JEV decision, keyed by target; built-in `instructions.model_profiles` and the
-target/effort allowlist stay authoritative. The note reaches TypeSafe with each
+target/effort allowlist stay authoritative. The note reaches the configured decision service with each
 applicable decision, so operators must keep secrets and private paths out of it.
 An absent note leaves the prior decision payload shape intact.
 

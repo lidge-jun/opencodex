@@ -361,7 +361,10 @@ model currently advertises.
 JEV is consulted only for `jev-auto` and only once per logical model call. Missing credentials,
 network failures, or invalid decisions fail open to the first currently eligible target; caller
 cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
-validate a live JEV account.
+validate a live JEV account. Compatible alternative decision services use the existing
+`providers.jev.baseUrl`, explicit `apiKey`, and optional `defaultModel` fields; the TypeSafe endpoint
+and `jev-latest` remain defaults. Custom URLs never implicitly inherit TypeSafe environment keys.
+See the [configuration example](https://opencodex.me/guides/combos/#jev-decision-guided-first-pick).
 
 ## Providers & adapters
 

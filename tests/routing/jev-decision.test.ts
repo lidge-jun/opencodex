@@ -10,6 +10,7 @@ import {
   type ResolveJevDecisionOptions,
 } from "../../src/combos/jev";
 import type { OcxConfig } from "../../src/types";
+import { providerOutboundPost } from "../../src/lib/provider-outbound";
 
 const candidates: JevCandidate[] = [
   {
@@ -295,6 +296,132 @@ const validPayload = {
 };
 
 describe("JEV decision client", () => {
+  test("sends the configured endpoint, model and explicit key through the bounded outbound transport", async () => {
+    const config = jevConfig("${ALTERNATIVE_DECISION_KEY}");
+    const provider = config.providers.jev!;
+    provider.baseUrl = "https://decisions.example/v1/decisions";
+    provider.defaultModel = "decision-model-v1";
+    provider.proxy = "direct";
+    const previous = process.env.ALTERNATIVE_DECISION_KEY;
+    process.env.ALTERNATIVE_DECISION_KEY = "alternative-secret";
+    let sends = 0;
+    const post: JevPost = (name, row, url, init, dependencies) => providerOutboundPost(name, row, url, init, {
+      ...dependencies,
+      resolveAddresses: async (destination, policy) => {
+        expect(destination).toBe(provider.baseUrl);
+        expect(policy).toMatchObject({ allowBenchmarkAddresses: false, allowMihomoIpv6FakeIp: false });
+        expect(dependencies?.isCanonicalUrl?.(name, destination)).toBeFalse();
+        return { hostname: "decisions.example", addresses: [{ address: "93.184.216.34", family: 4 }], privateNetwork: false };
+      },
+      pinnedPost: async (destination, address, body, signal, options) => {
+        sends++;
+        expect(destination).toBe(provider.baseUrl);
+        expect(address.address).toBe("93.184.216.34");
+        expect(new Headers(options?.headers).get("authorization")).toBe("Bearer alternative-secret");
+        expect(options?.rejectUnauthorized).toBeTrue();
+        expect(signal).toBeInstanceOf(AbortSignal);
+        expect(JSON.parse(body).model).toBe("decision-model-v1");
+        expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(65_536);
+        return Response.json(validPayload);
+      },
+    });
+    try {
+      expect(await resolveJevDecision({ body: decisionBody, candidates, fallback, config, post }))
+        .toMatchObject({ gate: "apply", targetKey: "openai/gpt-5.6-sol", effort: "low" });
+      expect(sends).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env.ALTERNATIVE_DECISION_KEY;
+      else process.env.ALTERNATIVE_DECISION_KEY = previous;
+    }
+  });
+
+  test("custom endpoints never inherit TypeSafe environment credentials or fall back to TypeSafe", async () => {
+    const previousTypesafe = process.env.TYPESAFE_API_KEY;
+    const previousJev = process.env.JEV_API_KEY;
+    process.env.TYPESAFE_API_KEY = "typesafe-only-secret";
+    process.env.JEV_API_KEY = "canonical-only-secret";
+    const config = jevConfig();
+    config.providers.jev!.baseUrl = "https://decisions.example/v1/decisions";
+    let sends = 0;
+    const post: JevPost = async (_name, _provider, url, init) => {
+      sends++;
+      expect(url).toBe(config.providers.jev!.baseUrl);
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer alternative-secret");
+      expect(JSON.parse(init.body).model).toBe(JEV_MODEL);
+      return Response.json(validPayload);
+    };
+    try {
+      for (const key of [undefined, "", "${UNSET_ALTERNATIVE_DECISION_KEY}"]) {
+        config.providers.jev!.apiKey = key;
+        expect(await resolveJevDecision({ body: decisionBody, candidates, fallback, config, post }))
+          .toMatchObject({ ...fallback, gate: "missing_key" });
+      }
+      expect(sends).toBe(0);
+      config.providers.jev!.apiKey = "alternative-secret";
+      expect(await resolveJevDecision({ body: decisionBody, candidates, fallback, config, post }))
+        .toMatchObject({ gate: "apply" });
+      expect(sends).toBe(1);
+    } finally {
+      if (previousTypesafe === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousTypesafe;
+      if (previousJev === undefined) delete process.env.JEV_API_KEY;
+      else process.env.JEV_API_KEY = previousJev;
+    }
+  });
+
+  test.each(["adapter", "authMode"] as const)("an incompatible %s never falls back to TypeSafe environment credentials", async (field) => {
+    const config = jevConfig("alternative-secret");
+    if (field === "adapter") config.providers.jev!.adapter = "openai-chat";
+    else config.providers.jev!.authMode = "oauth";
+    config.providers.jev!.baseUrl = "https://decisions.example/v1/decisions";
+    const previousTypesafe = process.env.TYPESAFE_API_KEY;
+    const previousJev = process.env.JEV_API_KEY;
+    process.env.TYPESAFE_API_KEY = "typesafe-only-secret";
+    process.env.JEV_API_KEY = "canonical-only-secret";
+    let sends = 0;
+    try {
+      expect(await resolveJevDecision({
+        body: decisionBody, candidates, fallback, config,
+        post: async () => { sends++; return Response.json(validPayload); },
+      })).toMatchObject({ ...fallback, gate: "invalid" });
+      expect(sends).toBe(0);
+    } finally {
+      if (previousTypesafe === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previousTypesafe;
+      if (previousJev === undefined) delete process.env.JEV_API_KEY;
+      else process.env.JEV_API_KEY = previousJev;
+    }
+  });
+
+  test("custom endpoints retain HTTPS and destination restrictions without any send", async () => {
+    for (const url of ["http://decisions.example/v1/decisions", "https://127.0.0.1/v1/decisions", "https://169.254.169.254/v1/decisions"]) {
+      const config = jevConfig("alternative-secret");
+      config.providers.jev!.baseUrl = url;
+      config.providers.jev!.proxy = "direct";
+      let sends = 0;
+      const post: JevPost = (name, provider, destination, init, dependencies) => providerOutboundPost(name, provider, destination, init, {
+        ...dependencies,
+        pinnedPost: async () => { sends++; return Response.json(validPayload); },
+      });
+      expect(await resolveJevDecision({ body: decisionBody, candidates, fallback, config, post }))
+        .toMatchObject({ ...fallback, gate: "network" });
+      expect(sends).toBe(0);
+    }
+  });
+
+  test("rejects malformed endpoint configuration before outbound dispatch", async () => {
+    let sends = 0;
+    for (const url of ["not-a-url", "https://user:pass@example.test/v1/decisions", "https://decisions.example/v1/decisions?key=secret", "https://decisions.example/v1/decisions#fragment"]) {
+      const config = jevConfig("alternative-secret");
+      config.providers.jev!.baseUrl = url;
+      expect(await resolveJevDecision({
+        body: decisionBody, candidates, fallback, config,
+        post: async () => { sends++; return Response.json(validPayload); },
+      })).toMatchObject({ ...fallback, gate: "invalid" });
+    }
+    expect(sends).toBe(0);
+  });
+
   test("posts one bounded decision request with the configured credential", async () => {
     const calls: Array<{
       name: string;
@@ -523,7 +650,9 @@ describe("JEV decision client", () => {
     expect(calls).toBe(0);
   });
 
-  test("classifies redirects, HTTP errors, oversized bodies, invalid JSON, invalid choices, and network failures", async () => {
+  test.each([JEV_API_URL, "https://decisions.example/v1/decisions"])("classifies bounded failures at %s", async (url) => {
+    const config = jevConfig("secret");
+    config.providers.jev!.baseUrl = url;
     const oversized = "x".repeat(70_000);
     const cases: Array<{ gate: string; post: JevPost }> = [
       {
@@ -542,14 +671,16 @@ describe("JEV decision client", () => {
 
     for (const fixture of cases) {
       const decision = await resolveJevDecision({
-        body: decisionBody, candidates, fallback, config: jevConfig("secret"), post: fixture.post,
+        body: decisionBody, candidates, fallback, config, post: fixture.post,
       });
       expect(decision).toMatchObject({ ...fallback, gate: fixture.gate });
       expect(JSON.stringify(decision)).not.toContain("private");
     }
   });
 
-  test("uses a four-second timeout and preserves caller cancellation by identity", async () => {
+  test.each([JEV_API_URL, "https://decisions.example/v1/decisions"])("keeps timeout and cancellation at %s", async (url) => {
+    const config = jevConfig("secret");
+    config.providers.jev!.baseUrl = url;
     const originalTimeoutDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")!;
     const timeoutReasons: number[] = [];
     Object.defineProperty(AbortSignal, "timeout", {
@@ -566,7 +697,7 @@ describe("JEV decision client", () => {
     }) as JevPost;
     try {
       expect(await resolveJevDecision({
-        body: decisionBody, candidates, fallback, config: jevConfig("secret"), post: abortingPost,
+        body: decisionBody, candidates, fallback, config, post: abortingPost,
       })).toMatchObject({ ...fallback, gate: "timeout" });
     } finally {
       Object.defineProperty(AbortSignal, "timeout", originalTimeoutDescriptor);
@@ -580,7 +711,7 @@ describe("JEV decision client", () => {
       controller.abort(reason);
     })) as JevPost;
     await expect(resolveJevDecision({
-      body: decisionBody, candidates, fallback, config: jevConfig("secret"), post: callerPost, signal: controller.signal,
+      body: decisionBody, candidates, fallback, config, post: callerPost, signal: controller.signal,
     })).rejects.toBe(reason);
   });
 });

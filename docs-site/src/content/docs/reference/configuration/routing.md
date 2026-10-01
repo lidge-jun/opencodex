@@ -167,7 +167,10 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
 commands, see [Combos](/guides/combos/).
 
-The `jev` strategy is optional and requires the canonical `jev` provider credential. That provider
+The `jev` strategy is optional and requires the `jev` decision provider credential. Its full HTTPS
+endpoint and decision model use `providers.jev.baseUrl` and `providers.jev.defaultModel`; defaults
+remain TypeSafe and `jev-latest`. A custom endpoint requires an explicit `providers.jev.apiKey` and
+never implicitly inherits the TypeSafe environment keys. That provider
 is a decision service, publishes no directly routable model, and cannot be a Combo target. JEV sees
 only currently eligible members of `targets`; missing, failed, or invalid decisions use the first
 eligible member, while caller cancellation remains terminal. Adding the provider or Combo never
