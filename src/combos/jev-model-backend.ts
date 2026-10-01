@@ -49,7 +49,8 @@ export function parseJevModelChoice(text: string, allowed: ReadonlySet<string>):
   if (text.length > JEV_MODEL_MAX_RESPONSE_TEXT_CHARS) {
     throw new JevModelInvokeError("malformed", "JEV model response exceeds the text limit");
   }
-  const trimmed = text.trim();
+  // A model whose inline thinking is not split by its adapter can lead with one think block.
+  const trimmed = text.trim().replace(/^<think>[\s\S]*?<\/think>\s*/, "");
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
   let parsed: unknown;
   try {

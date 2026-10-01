@@ -69,9 +69,12 @@ export function ComboJevDecisionSection({
     [providers, decisionProvider],
   );
   const selectedServer = servers.find(option => option.id === decisionProvider?.trim());
+  // The parent passes the whole draft, which changes identity on every keystroke; only its
+  // identity fields affect the route list.
+  const { id: comboId, alias: comboAlias, model: comboModel } = combo;
   const modelRoutes = useMemo(
-    () => jevDecisionModelOptions(models, providers, combos, combo),
-    [models, providers, combos, combo],
+    () => jevDecisionModelOptions(models, providers, combos, { id: comboId, alias: comboAlias, model: comboModel }),
+    [models, providers, combos, comboId, comboAlias, comboModel],
   );
   // Each result remembers the selection it describes; a different selection shows no result.
   const [probe, setProbe] = useState<{ key: string; result: DecisionTestResult } | null>(null);

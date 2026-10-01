@@ -2944,7 +2944,7 @@ export const vi: Record<TKey, string> = {
   "cws.jev.testing": "Đang kiểm tra…",
   "cws.jev.testHint": "Gửi một tác vụ tổng hợp với các lựa chọn giữ chỗ tới cách đã chọn. Không lưu gì cả.",
   "cws.jev.testOk": "{backend} trả lời sau {ms} ms.",
-  "cws.jev.testFailOpen": "Thất bại mở ({gate}) sau {ms} ms. Yêu cầu sẽ dùng mục tiêu đủ điều kiện đầu tiên.",
+  "cws.jev.testFailOpen": "Fail-open ({gate}) sau {ms} ms. Yêu cầu sẽ dùng mục tiêu đủ điều kiện đầu tiên.",
   "cws.jev.testError": "Không chạy được kiểm tra: {error}",
   "cws.jev.backend.typesafe": "TypeSafe",
   "cws.jev.backend.systemone": "Máy chủ System One",

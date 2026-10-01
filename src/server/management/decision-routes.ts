@@ -21,6 +21,26 @@ function optionalString(body: Record<string, unknown>, key: string): string | nu
   return trimmed ? trimmed : null;
 }
 
+type DecisionRow = import("../../types").OcxProviderConfig;
+
+/** Why a decision-service row cannot answer, shared by discovery and the probe. */
+function decisionServiceIssue(
+  id: string,
+  provider: DecisionRow,
+  isSystemOneEndpoint: (url: string) => boolean,
+): { url: string; model: string; issue?: "disabled" | "endpoint" | "model" } {
+  const url = typeof provider.baseUrl === "string" ? provider.baseUrl.trim().replace(/\/+$/, "") : "";
+  const model = provider.defaultModel?.trim() || provider.models?.[0]?.trim() || "";
+  const issue = provider.disabled === true
+    ? "disabled"
+    : id === "jev"
+      ? undefined
+      : !isSystemOneEndpoint(url)
+        ? "endpoint"
+        : !model ? "model" : undefined;
+  return { url, model, ...(issue ? { issue } : {}) };
+}
+
 /**
  * Decision-method management surfaces for JEV combos.
  *
@@ -29,6 +49,11 @@ function optionalString(body: Record<string, unknown>, key: string): string | nu
  * - GET /api/combos/decision-discovery lists configured System One rows and catalog models whose
  *   names look like decision services, with the System One endpoint their provider would serve.
  *   Nothing is probed and nothing is written.
+ *
+ * The probe selects its method only from the body's `decisionProvider` / `decisionModel`; none
+ * means TypeSafe. `comboId` names the combo for the recursion rules and never loads its saved
+ * method, because the dashboard probes an unsaved TypeSafe draft by sending `comboId` alone.
+ * `ocx combo test --combo` resolves the saved method on the client before calling this.
  */
 export async function handleDecisionRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config } = ctx;
@@ -58,6 +83,13 @@ export async function handleDecisionRoutes(ctx: ManagementContext): Promise<Resp
       const row = Object.hasOwn(config.providers, decisionProvider) ? config.providers[decisionProvider] : undefined;
       if (row?.adapter !== "jev-decision") {
         return jsonResponse({ error: `decisionProvider "${decisionProvider}" is not a configured decision service` }, 400);
+      }
+      // Match the combo PUT: a disabled or model-less row is refused by name, not probed into a
+      // generic fail-open gate.
+      const { isSystemOneEndpoint } = await import("../../combos/types");
+      const { issue } = decisionServiceIssue(decisionProvider, row, isSystemOneEndpoint);
+      if (issue) {
+        return jsonResponse({ error: `decisionProvider "${decisionProvider}" is not usable (${issue})`, issue }, 400);
       }
     }
     if (decisionModel) {
@@ -108,15 +140,7 @@ export async function handleDecisionRoutes(ctx: ManagementContext): Promise<Resp
     const configured = Object.entries(config.providers)
       .filter(([, provider]) => provider.adapter === "jev-decision")
       .map(([id, provider]) => {
-        const url = typeof provider.baseUrl === "string" ? provider.baseUrl.trim().replace(/\/+$/, "") : "";
-        const model = provider.defaultModel?.trim() || provider.models?.[0]?.trim() || "";
-        const issue = provider.disabled === true
-          ? "disabled"
-          : id === "jev"
-            ? undefined
-            : !isSystemOneEndpoint(url)
-              ? "endpoint"
-              : !model ? "model" : undefined;
+        const { url, model, issue } = decisionServiceIssue(id, provider, isSystemOneEndpoint);
         return { id, url, ...(model ? { model } : {}), usable: issue === undefined, ...(issue ? { issue } : {}) };
       });
     const { listManagementModelRows } = await import("./model-rows");
@@ -134,4 +158,3 @@ export async function handleDecisionRoutes(ctx: ManagementContext): Promise<Resp
 
   return null;
 }
-

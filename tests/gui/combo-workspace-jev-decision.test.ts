@@ -237,6 +237,11 @@ describe("JEV decision model in the combo workspace", () => {
     expect(service).toMatchObject({ decisionProvider: "mytev", decisionModel: null });
     expect(Object.hasOwn(toPutBody({ ...parsed, strategy: "failover" }).combo, "decisionModel")).toBe(false);
     expect(Object.hasOwn(parseOne({ strategy: "jev", decisionModel: "  " }), "decisionModel")).toBe(false);
+    // A blank model input sends the stored service, never a provider-and-model clear that means TypeSafe.
+    for (const decisionModel of ["", "   "]) {
+      expect(toPutBody({ ...parsed, decisionModel, decisionProvider: "mytev" }).combo)
+        .toMatchObject({ decisionProvider: "mytev", decisionModel: null });
+    }
   });
 
   test("a decisionModel change dirties a JEV draft only", () => {

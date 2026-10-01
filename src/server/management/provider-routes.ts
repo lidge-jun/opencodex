@@ -75,7 +75,7 @@ import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cac
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { probeJevDecisionProvider } from "../../combos/jev";
-import { comboDependsOnProvider } from "../../combos/types";
+import { comboDependsOnProviderRoute } from "./decision-model-validation";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -246,7 +246,7 @@ function providerEditorCandidate(
 
   for (const name of removedProviders) {
     const dependentCombos = Object.entries(persisted.combos ?? {})
-      .filter(([, combo]) => comboDependsOnProvider(combo, name))
+      .filter(([, combo]) => comboDependsOnProviderRoute(persisted, combo, name))
       .map(([id]) => id)
       .sort((a, b) => a.localeCompare(b));
     if (dependentCombos.length > 0) {
@@ -1840,7 +1840,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }, 409);
     }
     const dependentCombos = Object.entries(config.combos ?? {})
-      .filter(([, combo]) => comboDependsOnProvider(combo, name))
+      .filter(([, combo]) => comboDependsOnProviderRoute(config, combo, name))
       .map(([id]) => id)
       .sort((a, b) => a.localeCompare(b));
     if (dependentCombos.length > 0) {

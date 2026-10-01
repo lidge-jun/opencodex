@@ -551,9 +551,11 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
       ...(item.displayName && item.displayName.trim() ? { displayName: item.displayName.trim() } : {}),
       // JEV only: explicit null selects the default, since the server keeps an omitted field.
       // Other strategies omit both; the server drops stored values and rejects sent ones.
+      // One normalized model value drives both selectors, so a blank model input cannot send
+      // provider null and model null together and silently select TypeSafe.
       ...(item.strategy === "jev"
         ? {
-            decisionProvider: item.decisionModel != null ? null : normalizeDecisionProvider(item.decisionProvider),
+            decisionProvider: item.decisionModel?.trim() ? null : normalizeDecisionProvider(item.decisionProvider),
             decisionModel: item.decisionModel?.trim() || null,
             decisionTimeoutMs: item.decisionTimeoutMs ?? null,
           }

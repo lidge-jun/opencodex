@@ -4,6 +4,7 @@ import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { executeComboResponses } from "../../src/server/responses/core-combo";
 import { handleResponses } from "../../src/server/responses/core";
 import type { ResponsesDispatchers } from "../../src/server/responses/core-options";
+import { jevDecisionReasoningEffort } from "../../src/server/responses/jev-model-invoke";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -131,6 +132,8 @@ describe("JEV model decision backend through the combo runtime", () => {
     expect(decision.body.tools).toEqual([]);
     // A bounded answer: the decision turn never inherits an unbounded output budget.
     expect(decision.body.max_output_tokens).toBe(1024);
+    // ...and a reasoning model cannot spend that ceiling thinking before it answers.
+    expect(decision.body.reasoning).toEqual({ effort: "low" });
     expect(JSON.stringify(decision.body)).toContain("luna/gpt-5.6-luna:high");
     expect(JSON.stringify(decision.body)).toContain("Refactor the parser");
     expect(JSON.stringify(decision.body)).not.toContain("exec_command");
@@ -179,6 +182,16 @@ describe("JEV model decision backend through the combo runtime", () => {
 });
 
 describe("decision-model turn guard in request preparation", () => {
+  test("the decision effort is the declared floor, and omitted when no ladder is known", () => {
+    const config = makeConfig();
+    expect(jevDecisionReasoningEffort(config, "judge/judge-small")).toBe("low");
+    config.providers.judge!.modelReasoningEfforts = { "judge-small": ["medium", "high"] };
+    expect(jevDecisionReasoningEffort(config, "judge/judge-small")).toBe("medium");
+    delete config.providers.judge!.modelReasoningEfforts;
+    expect(jevDecisionReasoningEffort(config, "judge/judge-small")).toBeUndefined();
+    expect(jevDecisionReasoningEffort(config, "nowhere/unknown")).toBeUndefined();
+  });
+
   test("an internal decision call that names a JEV combo is refused before dispatch", async () => {
     const config = makeConfig();
     const request = new Request("http://localhost/v1/responses", {

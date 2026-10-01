@@ -100,6 +100,17 @@ describe("decision-method management routes", () => {
     }
   });
 
+  test("decision-test refuses an unusable System One row by name instead of probing it", async () => {
+    const config = makeConfig();
+    config.providers.tev = { adapter: "jev-decision", baseUrl: "https://tev.example.test/v1/systemone", liveModels: false, disabled: true, defaultModel: "tev1" };
+    config.providers["tev-nomodel"] = { adapter: "jev-decision", baseUrl: "https://tev.example.test/v1/systemone", liveModels: false };
+    for (const [decisionProvider, issue] of [["tev", "disabled"], ["tev-nomodel", "model"], ["broken-row", "endpoint"]] as const) {
+      const response = await call(config, "POST", "/api/combos/decision-test", { decisionProvider });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ issue });
+    }
+  });
+
   test("decision-discovery lists configured rows with their usability", async () => {
     const response = await call(makeConfig(), "GET", "/api/combos/decision-discovery");
     const payload = await response.json() as { configured: Array<Record<string, unknown>>; discovered: unknown[] };
@@ -108,4 +119,3 @@ describe("decision-method management routes", () => {
     expect(Array.isArray(payload.discovered)).toBeTrue();
   });
 });
-

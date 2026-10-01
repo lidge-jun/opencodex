@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { comboConfigIssues, comboDependsOnProvider, getCombo } from "../../src/combos/types";
+import { comboConfigIssues, comboDependsOnProvider, getCombo, lexicalDecisionModelBase } from "../../src/combos/types";
 import { getConfigPath, loadConfig, readConfigDiagnostics, saveConfig } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
-import { decisionModelProviderPatchError, decisionModelRouteError, normalizeDecisionModelSelector } from "../../src/server/management/decision-model-validation";
+import { comboDependsOnProviderRoute, decisionModelProviderPatchError, decisionModelRouteError, normalizeDecisionModelSelector } from "../../src/server/management/decision-model-validation";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxComboConfig, OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -117,6 +117,26 @@ describe("JEV decision model config", () => {
     expect(comboDependsOnProvider(combo, "b")).toBe(true);
     expect(comboDependsOnProvider(combo, "bb")).toBe(false);
     expect(comboDependsOnProvider({ ...combo, decisionModel: "jev/model" }, "jev")).toBe(true);
+  });
+
+  test("provider deletion resolves an aliased or default-routed decision model", () => {
+    const cfg = config({ auto: { strategy: "jev", targets, decisionModel: "bee/m2" } });
+    cfg.providers.b!.alias = "bee";
+    const combo = cfg.combos!.auto!;
+    expect(comboDependsOnProvider(combo, "b")).toBe(false);
+    expect(comboDependsOnProviderRoute(cfg, combo, "b")).toBe(true);
+    expect(comboDependsOnProviderRoute(cfg, combo, "a")).toBe(true);
+    const unqualified = { ...combo, targets: [{ provider: "b", model: "m2" }], decisionModel: "m1" };
+    expect(comboDependsOnProviderRoute(cfg, unqualified, "a")).toBe(true);
+    expect(comboDependsOnProviderRoute(cfg, { ...unqualified, decisionModel: "b/m2" }, "a")).toBe(false);
+  });
+
+  test("the schema's string-only selector stand-in strips fast and declared effort suffixes", () => {
+    expect(lexicalDecisionModelBase("judge--fast", false)).toBe("judge");
+    expect(lexicalDecisionModelBase("judge--high", false)).toBe("judge--high");
+    expect(lexicalDecisionModelBase("judge--high", true)).toBe("judge");
+    expect(lexicalDecisionModelBase("judge--none", true)).toBe("judge--none");
+    expect(lexicalDecisionModelBase("judge--turbo", true)).toBe("judge--turbo");
   });
 
   test("adapter PATCH validation recognizes provider aliases and disabled qualified dependencies", () => {

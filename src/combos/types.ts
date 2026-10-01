@@ -1,4 +1,4 @@
-import { isCodexReasoningEffort } from "../reasoning-effort";
+import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, resolveComboId, targetKey } from "./identifiers";
@@ -505,6 +505,21 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
       lastResort: target.lastResort === true,
     })),
   };
+}
+
+/**
+ * Load-time stand-in for the ingress synthetic-row grammar: strip a `--fast` suffix, and a
+ * `--<effort>` suffix when Cursor effort rows are on. It reads only the string, so schema
+ * validation needs no server module, model inventory, or Cursor install detection. The
+ * management save path still resolves the exact grammar against the live inventory.
+ */
+export function lexicalDecisionModelBase(model: string, cursorEffortRows: boolean): string {
+  if (model.endsWith("--fast")) return model.slice(0, -"--fast".length);
+  if (!cursorEffortRows) return model;
+  const separator = model.lastIndexOf("--");
+  if (separator <= 0) return model;
+  const effort = model.slice(separator + 2);
+  return effort !== "none" && isDeclaredReasoningEffort(effort) ? model.slice(0, separator) : model;
 }
 
 /**

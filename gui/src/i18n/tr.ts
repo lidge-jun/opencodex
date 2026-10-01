@@ -2949,7 +2949,7 @@ export const tr: Record<TKey, string> = {
   "cws.jev.testing": "Test ediliyor…",
   "cws.jev.testHint": "Seçilen yönteme yer tutucu seçenekli tek bir yapay görev gönderir. Hiçbir şey kaydedilmez.",
   "cws.jev.testOk": "{backend} {ms} ms içinde yanıt verdi.",
-  "cws.jev.testFailOpen": "{ms} ms sonra açık başarısız oldu ({gate}). İstekler ilk uygun hedefi kullanır.",
+  "cws.jev.testFailOpen": "{ms} ms sonra fail-open devreye girdi ({gate}). İstekler ilk uygun hedefi kullanır.",
   "cws.jev.testError": "Test çalıştırılamadı: {error}",
   "cws.jev.backend.typesafe": "TypeSafe",
   "cws.jev.backend.systemone": "System One sunucusu",

@@ -57,6 +57,7 @@ describe("JEV model prompt and choice parser", () => {
       '"p/small:low"',
       '```json\n{"choice":"p/small:low"}\n```',
       '```\n"p/small:low"\n```',
+      '<think>weighing the two options</think>\n{"choice":"p/small:low"}',
     ]) expect(parseJevModelChoice(text, allowed)).toBe("p/small:low");
   });
 

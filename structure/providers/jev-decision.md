@@ -45,7 +45,9 @@ recursion and route checks live in
 `src/server/management/decision-model-validation.ts` (a decision model may not resolve, after Fast
 or effort selector normalization, to its own Combo, any JEV Combo, or a `jev-decision` row; a provider
 PATCH cannot turn a referenced row into one). `src/server/management/decision-routes.ts` serves
-`POST /api/combos/decision-test`, one synthetic two-option probe of a saved or unsaved method, and
+`POST /api/combos/decision-test`, one synthetic two-option probe of a saved or unsaved method (the
+body's `decisionProvider` / `decisionModel` select the method, none means TypeSafe; `comboId` only
+scopes the recursion rules, and a disabled, model-less or non-System-One row is refused by name), and
 `GET /api/combos/decision-discovery`, read-only System One and catalog hints built by
 `src/server/management/decision-discovery.ts`. Persisted decisions carry an optional `backend`, and
 the usage aggregate reports per-backend counts and latency with older rows as `unknown`.

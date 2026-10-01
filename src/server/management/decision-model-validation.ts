@@ -1,12 +1,33 @@
 import { resolveComboId } from "../../combos/identifiers";
+import { comboDependsOnProvider } from "../../combos/types";
 import { previewRouteModel } from "../../router";
-import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { OcxComboConfig, OcxConfig, OcxProviderConfig } from "../../types";
 import { parseSyntheticRowId } from "../fast-row";
 
 /** Resolve synthetic selectors using the same prospective config as route preview. */
 export function normalizeDecisionModelSelector(config: OcxConfig, model: string): string {
   const parsed = parseSyntheticRowId(model, config);
   return parsed.fastRow?.baseId ?? parsed.effortRow?.baseId ?? model;
+}
+
+/**
+ * Whether deleting provider `name` would leave `combo` invalid. Beyond the lexical check in
+ * `comboDependsOnProvider`, a decision model is resolved the way routing resolves it, so a
+ * provider alias (`judge/model`) or an unqualified model served by the default provider still
+ * counts as a dependency instead of silently falling through to whatever routes it next.
+ */
+export function comboDependsOnProviderRoute(config: OcxConfig, combo: OcxComboConfig, name: string): boolean {
+  if (comboDependsOnProvider(combo, name)) return true;
+  if (typeof combo.decisionModel !== "string" || !combo.decisionModel.trim()) return false;
+  const selector = normalizeDecisionModelSelector(config, combo.decisionModel.trim());
+  const slash = selector.indexOf("/");
+  const prefix = slash > 0 ? selector.slice(0, slash).toLowerCase() : "";
+  if (prefix && (prefix === name.toLowerCase() || prefix === config.providers[name]?.alias?.toLowerCase())) return true;
+  try {
+    return previewRouteModel(config, selector).providerName === name;
+  } catch {
+    return false;
+  }
 }
 
 /** Save-time validation uses preview routing, so it never advances combo selection state. */

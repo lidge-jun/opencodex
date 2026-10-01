@@ -2,6 +2,9 @@ import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { JevModelInvokeError, type JevModelInvoke, type JevModelInvokeResult } from "../../combos/jev-model-backend";
 import { JEV_MAX_REQUEST_BYTES, JEV_MAX_RESPONSE_BYTES } from "../../combos/jev";
 import type { OcxConfig } from "../../types";
+import { codexEffortRank, isCodexReasoningEffort } from "../../reasoning-effort";
+import { routeConcreteModel } from "../../router";
+import { supportedLadderFor } from "../effort-policy";
 import { createInferenceSendBudget } from "../inference/context";
 import { tryAdmitTurn } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
@@ -92,6 +95,26 @@ function decodeSse(bytes: Uint8Array): JevModelInvokeResult {
 export const JEV_MODEL_MAX_OUTPUT_TOKENS = 1024;
 
 /**
+ * The cheapest reasoning effort the decision model declares, so a reasoning model cannot spend
+ * the whole output ceiling thinking before it writes the JSON answer. A model with no known
+ * ladder gets no reasoning field at all: some OpenAI-compatible servers reject one they do not
+ * support, and an unknown capability is not evidence that the field is safe to send.
+ */
+export function jevDecisionReasoningEffort(config: OcxConfig, model: string): string | undefined {
+  let ladder: string[] | undefined;
+  try {
+    const route = routeConcreteModel(config, model);
+    ladder = supportedLadderFor({ provider: route.provider, modelId: route.modelId });
+  } catch {
+    return undefined;
+  }
+  const rankable = (ladder ?? []).filter(isCodexReasoningEffort);
+  if (rankable.length === 0) return undefined;
+  if (rankable.includes("low")) return "low";
+  return rankable.reduce((lowest, effort) => (codexEffortRank(effort) < codexEffortRank(lowest) ? effort : lowest));
+}
+
+/**
  * Build the invoker that runs one decision prompt as an internal Responses turn through the
  * normal router. The decision request is its own logical request: a fresh turn lease and send
  * budget, a detached log context whose spend tracker is settled here, and no caller credential
@@ -99,6 +122,7 @@ export const JEV_MODEL_MAX_OUTPUT_TOKENS = 1024;
  */
 export function createJevModelInvoker(context: JevModelInvokerContext): JevModelInvoke {
   return async ({ model, instructions, input, signal }) => {
+    const effort = jevDecisionReasoningEffort(context.config, model);
     const body = JSON.stringify({
       model,
       stream: true,
@@ -107,6 +131,7 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
       input: [{ role: "user", content: [{ type: "input_text", text: input }] }],
       tools: [],
       max_output_tokens: JEV_MODEL_MAX_OUTPUT_TOKENS,
+      ...(effort ? { reasoning: { effort } } : {}),
     });
     if (new TextEncoder().encode(body).byteLength > JEV_MAX_REQUEST_BYTES) {
       throw new JevModelInvokeError("malformed", "decision request too large");

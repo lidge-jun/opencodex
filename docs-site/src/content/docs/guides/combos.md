@@ -744,10 +744,13 @@ the request-rate fallback. A stored `cooldownMs` can only be removed by editing 
 `waitForCooldownMs` resets to its default when a `PUT` explicitly sends `0`, because the sparse
 serializer omits that default. Omission preserves both values and the dashboard does not expose them yet.
 Omitting `defaultEffortMode`, `reasoningEffortMode`, `imageInput`, or `cooldownWaitPolicy` likewise
-keeps the stored value, as does omitting `decisionProvider` or `decisionTimeoutMs` while the request
-keeps `strategy: "jev"` (a different strategy drops them), and a re-sent target without `lastResort` keeps that target's flag (matched by
+keeps the stored value. For a request that keeps `strategy: "jev"`, the decision method is kept
+only when both `decisionProvider` and `decisionModel` are omitted: sending either one replaces the
+stored method, so `decisionModel: null` without `decisionProvider` selects TypeSafe.
+`decisionTimeoutMs` is kept on its own whenever it is omitted. A different strategy drops all three,
+and a re-sent target without `lastResort` keeps that target's flag (matched by
 provider and model). The dashboard always sends `imageInput` and `reasoningEffortMode`, and for a JEV
-Combo `decisionProvider` and `decisionTimeoutMs` (`null` for the default), so switching them back to
+Combo `decisionProvider`, `decisionModel` and `decisionTimeoutMs` (`null` for the default), so switching them back to
 the default there still replaces the stored value.
 
 For the complete persisted configuration, see [Configuration](/reference/configuration/).

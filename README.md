@@ -366,7 +366,7 @@ validate a live JEV account.
 A JEV Combo can instead ask a self-hosted decision model, such as Ollama's keyless `tev1`: add a
 `jev-decision` provider whose `baseUrl` is the full `/v1/systemone` endpoint and set the Combo's
 `decisionProvider` to it. TypeSafe credentials are never sent there. Details:
-[self-hosted decision model](https://opencodex.me/guides/combos/#self-hosted-decision-model-eg-ollama-tev1).
+[System One-compatible server](https://opencodex.me/guides/combos/#system-one-compatible-server).
 
 ## Providers & adapters
 

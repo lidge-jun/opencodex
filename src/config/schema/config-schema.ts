@@ -53,9 +53,9 @@ import {
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
 import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
-import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
-// Use the ingress grammar at the schema boundary; the combo validator remains server-independent.
-import { parseSyntheticRowId } from "../../server/fast-row";
+// The schema boundary uses a string-only stand-in for the ingress grammar: importing the server
+// parser here would cycle back through config loading and run Cursor detection during validation.
+import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
@@ -728,17 +728,7 @@ export const configSchema = z.object({
         for (const issue of comboConfigIssues(id, raw, config.providers, {
           combos: combos as Record<string, import("../../types").OcxComboConfig>,
           excludeComboId: id,
-          normalizeDecisionModel: model => {
-            // Other malformed entries still receive their own schema issues below; the
-            // ingress inventory must not dereference them while validating this selector.
-            const identityRows = (rows: unknown) => Object.fromEntries(Object.entries(
-              rows && typeof rows === "object" && !Array.isArray(rows) ? rows : {},
-            ).filter(([, row]) => row && typeof row === "object" && !Array.isArray(row)));
-            const parsed = parseSyntheticRowId(model, {
-              ...config, combos: identityRows(combos), routingProfiles: identityRows(config.routingProfiles),
-            } as import("../../types").OcxConfig);
-            return parsed.fastRow?.baseId ?? parsed.effortRow?.baseId ?? model;
-          },
+          normalizeDecisionModel: model => lexicalDecisionModelBase(model, config.cursorEffortRows === true),
         })) {
           ctx.addIssue({
             code: "custom",
