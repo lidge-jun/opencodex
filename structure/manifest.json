@@ -301,6 +301,17 @@
       ]
     },
     {
+      "path": "providers/jev-decision.md",
+      "tier": 4,
+      "title": "JEV Decision Routing",
+      "scope": "JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection.",
+      "documents": [
+        "src/combos/",
+        "src/server/",
+        "src/usage/"
+      ]
+    },
+    {
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",
@@ -446,6 +457,15 @@
         "src/clients/",
         "src/integrations/",
         "src/lib/"
+      ]
+    },
+    {
+      "path": "clients/chatgpt-desktop.md",
+      "tier": 5,
+      "title": "ChatGPT Desktop",
+      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "documents": [
+        "src/chatgpt/"
       ]
     },
     {

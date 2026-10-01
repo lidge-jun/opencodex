@@ -448,7 +448,9 @@ export function captureGatherFlight(
   const authResolver = createAuthResolver(providerAuthOutcomes);
   const comboTargetsByProvider = configuredComboTargetModelsByProvider(config);
   const providers = Object.entries(config.providers)
-    .filter(([, provider]) => provider.disabled !== true)
+    // A decision service (canonical TypeSafe or a self-hosted `jev-decision` row) owns no model
+    // transport: never probe its endpoint for /models and never publish its model id as routable.
+    .filter(([, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision")
     .map(([name, provider]) => captureProviderGather(
       name,
       provider,

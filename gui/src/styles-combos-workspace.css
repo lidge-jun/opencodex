@@ -513,6 +513,29 @@
   color: var(--muted);
 }
 
+/* Decision method: a fieldset for grouping semantics, laid out like any other .cwi-field. */
+.cwi-jev-decision {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cwi-jev-decision > legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.cwi-jev-decision .segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cwi-jev-decision > p:empty {
+  display: none;
+}
+
 .cwi-jev-effort {
   display: inline-flex;
   align-items: center;

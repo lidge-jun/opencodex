@@ -15,6 +15,7 @@ import {
   type ProviderRequestSlot,
 } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
+import { providerTlsFetch } from "../../lib/provider-tls-profile";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
@@ -252,8 +253,10 @@ export function providerFetch(
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
   const base = customExecutor ?? configuredFetch;
+  const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
-    base.preconnect?.(...args);
+    // A TLS profile owns the handshake; a Bun preconnect would open a differently fingerprinted one.
+    if (transport === base) base.preconnect?.(...args);
   };
   // Rebuilt dispatches must use the same physical-send boundary as ordinary HTTP sends.
   // Return the original 3xx so the response owner retains its retry/health/relay contract.
@@ -266,7 +269,7 @@ export function providerFetch(
   // that decided for itself has already marked the init and this pass defers to that decision.
   const dispatch = markEgressTransparentExecutor(Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      sendWithConnectionPolicy(base, input, init, egressBinding),
+      sendWithConnectionPolicy(transport, input, init, egressBinding),
     { preconnect },
   ) as typeof globalThis.fetch);
   const httpFetch = Object.assign(
@@ -281,7 +284,7 @@ export function providerFetch(
       // the override may rebuild against a different host and select a different transport, and
       // refusing on this destination would reject a request whose real route is fine.
       if (options.dispatchOverride) egressFor(input);
-      else providerEgressSendInit(egressBinding, base, input);
+      else providerEgressSendInit(egressBinding, transport, input);
       // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
       // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
       // is decided inside `dispatch`, which runs after this, so the fresh-connection policy
