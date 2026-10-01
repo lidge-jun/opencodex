@@ -34,6 +34,7 @@ export const SIBLING_REFUSED_MANAGEMENT_PATHS: readonly { readonly path: string;
   { path: "/api/grok/apply", children: false },
   { path: "/api/grok/selection", children: false },
   { path: "/api/codex-prompt", children: true },
+  { path: "/api/codex-agent-roles", children: true },
   { path: CODEX_RESTART_PATH, children: false },
   { path: "/api/link/join", children: false },
   { path: "/api/native-main-profiles", children: true },

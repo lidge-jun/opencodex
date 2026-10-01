@@ -7,7 +7,7 @@ These commands control agent policy and routing, inspect the live proxy, and con
 
 ## Agent policy
 
-### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
+### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar> ...`
 
 Manage the headless multi-agent roster, effort caps, prompt injection, fallback, and sidecar settings.
 Use `status` for the current policy. See [Sub-agent surfaces](/guides/sub-agent-surface/) for how
@@ -16,6 +16,28 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
+
+`ocx agent roles` is for omo (Codex / LazyCodex). It lists each Codex agent role in
+`$CODEX_HOME/agents` with its model pin and whether `~/.omo/omo.jsonc` can be updated, or says
+LazyCodex is not installed, in which case `set` is refused. `ocx agent roles set <role> <model>` rewrites only
+that role's root `model` line and mirrors the value into omo.jsonc at
+`codex.agents.<role>.model`. A missing omo.jsonc, or one containing comments, is left unchanged
+and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integrations/#omo-codex--lazycodex-role-models).
+
+```bash
+ocx agent roles set explorer xai/grok-4.5
+```
+
+`ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
+installed. It sizes every role with one call to the default Codex model (or `--model`) and
+prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
+through the same write as `set`, skipping and naming the roles whose model and effort already match.
+See [Auto-assign](/guides/integrations/#auto-assign).
+
+`ocx agent injection suggest <work>` does the same for the delegation model: it sizes the described
+work, proposes the cheapest sufficient model and an effort from the delegation picker's list, and writes
+nothing unless `--apply` is given, which saves through the same write as `injection set`. See
+[Delegation model and effort](/guides/sub-agent-surface/#delegation-model-and-effort).
 
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows

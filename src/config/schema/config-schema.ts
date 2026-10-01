@@ -237,6 +237,12 @@ export const configSchema = z.object({
     z.string(),
     z.array(z.string().trim().min(1)).min(1),
   ).optional().catch(undefined),
+  // Advisory input to role auto-assign only; a malformed block falls back to price ranking.
+  codexRoleTiers: z.object({
+    fast: z.array(z.string().trim().min(1)).optional(),
+    standard: z.array(z.string().trim().min(1)).optional(),
+    frontier: z.array(z.string().trim().min(1)).optional(),
+  }).strict().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),

@@ -96,6 +96,7 @@ import {
   resolveSubagentFallbackModelEligibility,
   canPassThroughEncryptedV2AgentTask,
   applyFinalRouteRequestNormalization,
+  previewXaiOauthWireModel,
 } from "./core-normalize";
 import {
   cachedDeniedCodexAccountIdsForModel,
@@ -513,7 +514,6 @@ export async function prepareResponsesRequest(
     // shadow-intercept target and both subagent-fallback re-routes. Checking
     // the key's scope at this one point is what stops a rewrite from reaching
     // a destination the front door would have refused.
-    assertRouteAllowedByScope(admissionScope, inboundSelector, candidate);
     candidate.staticPolicy = captureRouteStaticPolicy(
       candidate.providerName,
       candidate.modelId,
@@ -521,6 +521,11 @@ export async function prepareResponsesRequest(
       candidate.staticPolicy.effectiveAlias,
       inboundWire,
     );
+    // Fast-only keys authorize the same billed lane that final normalization serializes.
+    assertRouteAllowedByScope(admissionScope, inboundSelector, {
+      providerName: candidate.providerName,
+      modelId: previewXaiOauthWireModel(parsed, candidate, config, inboundWire),
+    });
     return candidate;
   };
   try {
@@ -1193,8 +1198,11 @@ export async function prepareResponsesRequest(
   // actually be billed. A scope checked only before this would authorize the
   // public selector and send the wire model, so the settled route is checked
   // once more here.
-  if (!routeAllowedByScope(admissionScope, route)) {
-    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, route));
+  const scopedDestination = parsed._wireModelOverride === undefined
+    ? route
+    : { providerName: route.providerName, modelId: parsed._wireModelOverride };
+  if (!routeAllowedByScope(admissionScope, scopedDestination)) {
+    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, scopedDestination));
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
