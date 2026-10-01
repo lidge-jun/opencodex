@@ -36,19 +36,51 @@ export function updateRestartVeto(
   return plan.notice ?? "The background runtime is owned elsewhere; it was left running.";
 }
 
+/**
+ * The lease boundary inside a running restart, handed to `restart`.
+ *
+ * `ocx service repair` re-activates the OS service manager — Task Scheduler, launchd
+ * or systemd — and that `ocx start` child is not a descendant of this process: it runs
+ * with the stored registration environment, carries no delegated token, and can never
+ * join the lease held here. Held through the repair's serving wait, the lease keeps
+ * that child from ever starting (#5760; the npm lane releases at this boundary). The
+ * veto is the decision the lease must cover — the reclaim and kills it authorizes —
+ * so the restart re-runs it before mutating once the lease is gone.
+ */
+export interface UpdateRestartLeaseControl {
+  /** Free the lease before a service-manager-mediated start that cannot join it. Idempotent. */
+  releaseForServiceManager(): void;
+  /** Re-run the recorded-owner veto; a non-null notice must stop the restart there. */
+  vetoAgain(): string | null;
+}
+
 export async function runUpdateRestartWithOwnershipLease<T>(
   resolve: (() => ServiceOwnershipResolution) | undefined,
-  restart: () => Promise<T>,
+  restart: (lease: UpdateRestartLeaseControl) => Promise<T>,
 ): Promise<{ readonly kind: "veto"; readonly notice: string } | { readonly kind: "ran"; readonly value: T }> {
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
   const previous = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
   process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
-  try {
-    const veto = updateRestartVeto(resolve);
-    return veto ? { kind: "veto", notice: veto } : { kind: "ran", value: await restart() };
-  } finally {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
     if (previous === undefined) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
     else process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = previous;
     lease.release();
+  };
+  try {
+    const veto = updateRestartVeto(resolve);
+    return veto
+      ? { kind: "veto", notice: veto }
+      : {
+          kind: "ran",
+          value: await restart({
+            releaseForServiceManager: release,
+            vetoAgain: () => updateRestartVeto(resolve),
+          }),
+        };
+  } finally {
+    release();
   }
 }

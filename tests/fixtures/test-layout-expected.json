@@ -1746,6 +1746,7 @@
   "update-mise-node-runtime.test.ts": "update",
   "update-pnpm.test.ts": "update",
   "update-refresh.test.ts": "update",
+  "update-restart-lease.test.ts": "update",
   "update-stop-classification.test.ts": "update",
   "update-stop-first.test.ts": "update",
   "update-transactional-leftovers.test.ts": "update",
