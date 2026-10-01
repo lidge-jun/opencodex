@@ -9,6 +9,9 @@ Native steering follows [the shared WebSocket contract](transports/streaming-hea
 
 Encrypted-task and fallback request handling follow the Responses
 [core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+For policy-selected turns, both subagent selection and the post-recovery selection retain the
+[original policy authorization](transports/policy-fallback.md);
+ordinary subagent fallback configuration does not authorize a destination outside that evaluation.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 

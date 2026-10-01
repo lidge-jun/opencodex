@@ -1092,6 +1092,11 @@ export async function prepareAdapterExchange(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
+          bindRouteReasoningReplayScope({
+            parsed, providerName: route.providerName, provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+            oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+          });
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
           // The replay IS this hop's send, so hand the reservation down and let the layer that
@@ -1191,6 +1196,13 @@ export async function prepareAdapterExchange(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
+          // Same contract as the Kiro refusal arm: the replay must carry the replacement
+          // account's continuation owner and reasoning scope, never the account that just 429'd.
+          bindRouteReasoningReplayScope({
+            parsed, providerName: route.providerName, provider: route.provider,
+            adapterName: transportState.activeAdapter.name,
+            oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+          });
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
           // The replay IS this hop's send, so hand the reservation down and let the layer that

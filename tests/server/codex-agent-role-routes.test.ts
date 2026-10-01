@@ -18,7 +18,8 @@ function restore(name: keyof typeof saved): void {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-agent-role-routes-"));
+  // Match getCodexHome(), which resolves aliases before filesystem access (for example macOS /var).
+  root = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-agent-role-routes-")));
   mkdirSync(join(root, "codex", "agents"), { recursive: true });
   mkdirSync(join(root, "home", ".omo"), { recursive: true });
   writeFileSync(join(root, "codex", "agents", "explorer.toml"), ROLE);

@@ -12,6 +12,35 @@ import type { RequestLogContext } from "../../src/server/request-log";
 
 const encoder = new TextEncoder();
 const frame = (payload: unknown) => encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
+
+describe("tool-output first timing", () => {
+  for (const type of ["response.function_call_arguments.delta", "response.custom_tool_call_input.delta"]) {
+    test(`${type} starts timing once through fragmented SSE`, () => {
+      let firstOutputs = 0;
+      const inspector = createSseInspector({ onFirstOutput: () => { firstOutputs++; } });
+      for (const event of [
+        { type: "response.created" },
+        { type: "response.output_item.added", item: { type: "function_call", arguments: "" } },
+        { type: "response.steer.input.delta", delta: "echo" },
+        { type: "response.inject.input.delta", delta: "echo" },
+        { type, delta: "" },
+        { type, delta: 42 },
+      ]) inspector.feed(frame(event));
+      expect(firstOutputs).toBe(0);
+      for (const delta of ["{", " "]) {
+        const bytes = frame({ type, delta });
+        inspector.feed(bytes.subarray(0, 11));
+        inspector.feed(bytes.subarray(11));
+      }
+      expect(firstOutputs).toBe(1);
+      inspector.feed(frame({ type: "response.output_text.delta", delta: "later prose" }));
+      inspector.feed(frame({ type: "response.completed", response: { status: "completed", output: [] } }));
+      inspector.finish();
+      expect(firstOutputs).toBe(1);
+      expect(inspector.terminalSeen()).toBe(true);
+    });
+  }
+});
 const terminal = (id = "fixture-response") => ({
   type: "response.completed",
   response: {

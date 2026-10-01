@@ -442,15 +442,52 @@ function ledgerEntryExists(path: string): boolean {
   }
 }
 
-function assertSafeLedgerFile(path: string): void {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
-    || (process.platform !== "win32" && stat.uid !== process.getuid!())) {
-    throw new SpendLedgerOwnerError(
+/** Which ledger file a refusal is about. A role, never a path: the path names the user's home. */
+export type SpendLedgerFileRole = "journal" | "journal-compaction" | "salt";
+
+/** The one condition that refused the file, so a report can say which guard fired. */
+export type SpendLedgerFileRefusal =
+  | "not-regular-file"
+  | "symbolic-link"
+  | "extra-hard-link"
+  | "foreign-owner"
+  | "invalid-salt";
+
+/**
+ * A ledger file failed a safety condition.
+ *
+ * The guard is unchanged; this only says which file role and which condition refused it. Issue
+ * #6314 sat for days on "could not be opened safely" because the same sentence covered five
+ * conditions and two files, and the one that fired (a second hard link to the journal, most
+ * likely held briefly by a cloud-sync daemon) could only be found with an instrumented build.
+ * Role and condition are fixed vocabulary, so the message carries no path, salt, alias or
+ * request content.
+ */
+export class SpendLedgerFileRefusedError extends SpendLedgerOwnerError {
+  constructor(readonly role: SpendLedgerFileRole, readonly refusal: SpendLedgerFileRefusal) {
+    super(
       "SPEND_LEDGER_OWNER_UNAVAILABLE",
-      "Spend-ledger storage could not be opened safely.",
+      `Spend-ledger storage could not be opened safely (${role}: ${refusal}).`
+        + (refusal === "extra-hard-link"
+          ? " Another directory entry links to this file; if the opencodex state directory is inside an iCloud Drive or other synced folder, move it out."
+          : ""),
     );
+    this.name = "SpendLedgerFileRefusedError";
   }
+}
+
+function ledgerFileRefusal(path: string): SpendLedgerFileRefusal | undefined {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) return "symbolic-link";
+  if (!stat.isFile()) return "not-regular-file";
+  if (stat.nlink !== 1) return "extra-hard-link";
+  if (process.platform !== "win32" && stat.uid !== process.getuid!()) return "foreign-owner";
+  return undefined;
+}
+
+function assertSafeLedgerFile(path: string, role: SpendLedgerFileRole): void {
+  const refusal = ledgerFileRefusal(path);
+  if (refusal !== undefined) throw new SpendLedgerFileRefusedError(role, refusal);
 }
 
 /**
@@ -471,7 +508,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
     read(): string[] {
       assertStorageOwned(storage);
       if (!ledgerEntryExists(path)) return [];
-      assertSafeLedgerFile(path);
+      assertSafeLedgerFile(path, "journal");
       // Replay is once per process and is the moment a journal inherited from an older build
       // or a restored backup first passes through here.
       hardenLedgerFile(path, { force: true });
@@ -481,9 +518,9 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
       assertStorageOwned(storage);
       ensureDir();
       const created = !ledgerEntryExists(path);
-      if (!created) assertSafeLedgerFile(path);
+      if (!created) assertSafeLedgerFile(path, "journal");
       appendFileSync(path, line + "\n", { encoding: "utf8", mode: 0o600 });
-      assertSafeLedgerFile(path);
+      assertSafeLedgerFile(path, "journal");
       hardenLedgerFile(path, { force: created });
     },
     rewrite(lines: string[]): void {
@@ -491,7 +528,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
       ensureDir();
       // Same directory, so the rename is atomic on the same filesystem: a crash mid-compaction
       // leaves either the old journal or the new one, never a half-written ledger.
-      if (ledgerEntryExists(path)) assertSafeLedgerFile(path);
+      if (ledgerEntryExists(path)) assertSafeLedgerFile(path, "journal");
       const temp = `${path}.compact-${process.pid}-${randomBytes(6).toString("hex")}`;
       // The creation is INSIDE the cleanup, not before it. The name carries random bytes, so a
       // failure anywhere after the entry exists used to leave a uniquely named file and the next
@@ -514,7 +551,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
         closeSync(fd);
         fd = undefined;
         journalFaultForTests?.("validate", temp);
-        assertSafeLedgerFile(temp);
+        assertSafeLedgerFile(temp, "journal-compaction");
         journalFaultForTests?.("harden", temp);
         hardenLedgerFile(temp, { force: true });
         journalFaultForTests?.("rename", temp);
@@ -528,7 +565,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
           try { unlinkSync(temp); } catch { /* same */ }
         }
       }
-      assertSafeLedgerFile(path);
+      assertSafeLedgerFile(path, "journal");
       hardenLedgerFile(path, { force: true });
     },
   };
@@ -545,14 +582,11 @@ export function loadOrCreateSpendLedgerSalt(storage: SpendLedgerStorage): string
   assertStorageOwned(storage);
   const path = spendLedgerStoragePath(storage);
   if (ledgerEntryExists(path)) {
-    assertSafeLedgerFile(path);
+    assertSafeLedgerFile(path, "salt");
     hardenLedgerFile(path, { force: true });
     const existing = readFileSync(path, "utf8").trim();
     if (/^[0-9a-f]{32,}$/.test(existing)) return existing;
-    throw new SpendLedgerOwnerError(
-      "SPEND_LEDGER_OWNER_UNAVAILABLE",
-      "Spend-ledger storage could not be opened safely.",
-    );
+    throw new SpendLedgerFileRefusedError("salt", "invalid-salt");
   }
   const dir = dirname(path);
   assertStorageOwned(storage);
@@ -560,7 +594,7 @@ export function loadOrCreateSpendLedgerSalt(storage: SpendLedgerStorage): string
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const salt = randomBytes(32).toString("hex");
   writeFileSync(path, salt + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
-  assertSafeLedgerFile(path);
+  assertSafeLedgerFile(path, "salt");
   hardenLedgerFile(path, { force: true });
   return salt;
 }
@@ -1205,8 +1239,8 @@ export function sharedSpendLedger(): SpendReservationLedger {
     const saltPath = spendLedgerStoragePath(saltStorage);
     const assertOwnedAccounting = (): void => {
       assertStorageOwned(journalStorage);
-      if (ledgerEntryExists(journalPath)) assertSafeLedgerFile(journalPath);
-      if (ledgerEntryExists(saltPath)) assertSafeLedgerFile(saltPath);
+      if (ledgerEntryExists(journalPath)) assertSafeLedgerFile(journalPath, "journal");
+      if (ledgerEntryExists(saltPath)) assertSafeLedgerFile(saltPath, "salt");
     };
     sharedLedger = createSpendReservationLedger({
       journal: createOwnedFileSpendJournal(journalStorage),
