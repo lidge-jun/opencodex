@@ -29,6 +29,29 @@ Native OpenAI pool routing also accepts
 [Orca-linked accounts](../codex-home.md#orca-source-owned-account-import), whose source resolution
 belongs to the shared account store. The import CLI adds pool rows independently of Desktop profiles.
 
+## Devin Messages output ordering
+
+`src/claude/devin-output-order.ts` orders each physical Devin turn after raw-event preflight in
+`src/server/responses/run-turn-execution.ts` when the original inbound wire is Anthropic
+Messages. Provider names may be customized; the selected adapter determines applicability.
+Text and tool events wait for that turn's terminal so Cognition's late reasoning signature
+precedes them. Claude Code therefore receives a final text or tool block rather than an empty
+signature-only thinking block. Reasoning and transport progress remain live; answer text and
+tool dispatch incur turn-completion latency. Responses and Chat retain their original ordering,
+and routed compaction is excluded.
+
+Retained events own deep snapshots, including nested usage, so producer/consumer mutations
+cannot alter their measured payload. They share the request translator budget and drain on demand without a synchronous
+burst into the adapter queue. They are released on terminal, cancellation, overflow, or adapter
+EOF. Overflow emits one typed `translation_buffer_limit` error and aborts only active Devin
+producers, preserving error classification through hosted search. Cancellation drops held
+semantic output; this consumer preserves error terminals and maps cancelled success/incomplete
+terminals to a 499 with their original usage, so partial output cannot commit completed replay
+state. Hosted search retains its existing independent cancellation mapping.
+Adapter error and incomplete terminals retain partial output and their original usage.
+Ordering occurs before hosted-search interception, independently for each physical iteration,
+so one iteration's signature cannot be attached to another iteration's answer.
+
 ## Desktop modes: gateway and first-party
 
 `src/claude/desktop-first-party.ts` owns the Desktop mode contract. Two modes exist and are
