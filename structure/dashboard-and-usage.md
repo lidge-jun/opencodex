@@ -96,11 +96,11 @@ Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash que
 and drops elsewhere. Each plan candidate links to `#providers?provider=<name>` (`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
 the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a traced Logs row links to the compatibility pair it took. Each chip of the header quota strip
 (`gui/src/components/quota-summary-bar/QuotaSummaryBar.tsx`, one scrolling row with « / » paging) links to `#providers?provider=<name>&tab=accounts`, which opens that provider's
-Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. Links push history, the matrix replaces
+Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. A transparent hit area above the fixed quota popover spans both its width and the visible chip width and bridges their measured gap, keeping details open during pointer travel. The popover is a named group with an account-management link; its text-only quota table describes the chip; focus stays open between its chip and link, and Escape restores focus to the chip. Links push history, the matrix replaces
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their

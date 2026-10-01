@@ -57,7 +57,7 @@ and fresh-location examples. Diagnostics do not introduce a fallback or alter fi
 `src/config/persisted-mutation.ts` owns schema-valid on-disk mutations under the shared lock.
 It rechecks the file before committing, retries a changed snapshot up to three times, and
 returns unavailable for missing, invalid, or persistently conflicting config. Its one-shot
-test seam and the mutation types remain re-exported through `src/config.ts`.
+test seam and the mutation types remain re-exported through `src/config.ts`. Successful, repaired, and salvaged file loads record their source path in the private WeakMap owned by `src/config/rebase-provenance.ts`; defaults and synthetic objects do not acquire it. This metadata is never serialized. Inventory drift cannot turn a file-backed instance into a synthetic discovery writer. Read publication may use the detached policy projection described by the [catalog contract](catalog.md#shared-catalog), without changing the live merge baseline; changing the resolved config home refuses publication.
 
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
@@ -75,7 +75,7 @@ process-wide temp sequence, symlink target resolution, no-follow directory-entry
 externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut. Publication failures in
-`src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch).
+`src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch). `src/config/live-reconcile.ts` adopts committed model discovery and disabled selectors together with their scoped live merge baselines. A later manual enable therefore removes the automatic disable instead of having a stale three-way merge restore it. Unrelated live config baselines are not advanced by that adoption.
 
 Windows hardening there is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the

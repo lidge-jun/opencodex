@@ -29,6 +29,29 @@ Native OpenAI pool routing also accepts
 [Orca-linked accounts](../codex-home.md#orca-source-owned-account-import), whose source resolution
 belongs to the shared account store. The import CLI adds pool rows independently of Desktop profiles.
 
+## Devin Messages output ordering
+
+`src/claude/devin-output-order.ts` orders each physical Devin turn after raw-event preflight in
+`src/server/responses/run-turn-execution.ts` when the original inbound wire is Anthropic
+Messages. Provider names may be customized; the selected adapter determines applicability.
+Text and tool events wait for that turn's terminal so Cognition's late reasoning signature
+precedes them. Claude Code therefore receives a final text or tool block rather than an empty
+signature-only thinking block. Reasoning and transport progress remain live; answer text and
+tool dispatch incur turn-completion latency. Responses and Chat retain their original ordering,
+and routed compaction is excluded.
+
+Retained events own deep snapshots, including nested usage, so producer/consumer mutations
+cannot alter their measured payload. They share the request translator budget and drain on demand without a synchronous
+burst into the adapter queue. They are released on terminal, cancellation, overflow, or adapter
+EOF. Overflow emits one typed `translation_buffer_limit` error and aborts only active Devin
+producers, preserving error classification through hosted search. Cancellation drops held
+semantic output; this consumer preserves error terminals and maps cancelled success/incomplete
+terminals to a 499 with their original usage, so partial output cannot commit completed replay
+state. Hosted search retains its existing independent cancellation mapping.
+Adapter error and incomplete terminals retain partial output and their original usage.
+Ordering occurs before hosted-search interception, independently for each physical iteration,
+so one iteration's signature cannot be attached to another iteration's answer.
+
 ## Desktop modes: gateway and first-party
 
 `src/claude/desktop-first-party.ts` owns the Desktop mode contract. Two modes exist and are
@@ -465,5 +488,7 @@ Native Anthropic passthrough in `src/server/claude-messages.ts` forwards the cal
 ## Native passthrough stream terminals
 
 `tapAnthropicSseForLog` in `src/server/claude-messages.ts` relays the streamed body of both the native passthrough and the managed native Messages lane (`src/server/messages-native.ts`). The response headers are already sent, so a stall, a byte-cap overflow, or an upstream read failure ends the body with an Anthropic `event: error` frame after a blank-line boundary and a clean close: `timeout_error` for an idle stall, `api_error` for the byte cap, and `api_error` when an upstream read fails mid-stream (a socket reset). The mid-stream reset is logged like the Responses relay's read error: status 502, `terminalStatus: "failed"`, `closeReason: "terminal"`, `transportPhase: "mid_stream"`, a synthetic terminal source, the attempt marked `streamAborted`, the redacted reason in `upstreamError`, and the usage seen before the reset. The non-streaming fold in the managed lane closes its row with the tap's meta for a reset, a stall or the byte cap, so its row matches the streaming lane's. The request is not replayed. The logged status is not uniform across these frames: a stall and the byte cap keep status 200 with `closeReason` `body_stall` or `body_overflow`, which classify as `incomplete`, while a reset is a 502 that classifies as `failed`. Some read failures are not upstream failures. When the cancel signal is already aborted, the rejection is a `499` client cancel, because Bun can reject the read before it dispatches the abort listener. The managed lane passes its upstream controller's signal, so shutdown and turn release count as cancels too. When `message_stop` or an upstream `error` event has been seen, including one still in the buffer without its blank-line delimiter, the turn is complete: it logs 200 and closes with no error frame. A terminal found only in that unterminated tail gets its blank line restored, because an SSE parser drops an event that EOF cuts off. A translator budget overflow is a local cap, so it still errors the stream, and the non-streaming fold answers it with 413. `tests/claude-integration/claude-native-passthrough.test.ts` and `tests/claude-integration/messages-native.test.ts` cover both lanes against an upstream that resets after a partial or a complete body, plus both cancel paths.
+
+A native passthrough answered without a stream records its reason in `upstreamError`, so the row and the failure diagnostics in usage.jsonl name the cause. An upstream error response (status 400 or above) is relayed verbatim; the stored diagnostic is `Provider error <status>: <type>` only for a valid Anthropic error envelope with one of the closed types `invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `rate_limit_error`, `api_error`, `overloaded_error` or `request_too_large`. Upstream messages and arbitrary type strings never enter this diagnostic. Unknown or malformed envelopes, non-JSON bodies and bodies over 64 Ki characters log `Provider error <status>`. Local header timeout, body stall, byte-cap overflow and cancel diagnostics contain fixed text plus validated guard limits. Fetch failures log the fixed reason `anthropic passthrough failed: upstream connection error`; the existing redacted client response is preserved. Classification uses these stored reasons and HTTP status, so a `permission_error` at 403 is `permission_denied` regardless of upstream message wording. `tests/claude-integration/claude-native-passthrough.test.ts` covers these cases and checks that echoed account identifiers and request content are absent from both history sinks.
 
 Linked-machine data uses the [connection-bound relay contract](../remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.

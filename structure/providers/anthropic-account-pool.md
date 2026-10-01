@@ -38,3 +38,27 @@ For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching
 
 Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
 only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
+
+## Account entitlement refusal recovery
+
+`src/oauth/anthropic-account-refusal.ts` accepts an HTTP 403 only when a complete bounded
+JSON `error` envelope has `permission_error` or `billing_error` and a whole-message
+account subscription/Claude Code entitlement or Anthropic credit-balance refusal.
+Generic permission, resource/model access, content policy, quoted diagnostics, conflicting
+error codes and incomplete/malformed bodies remain terminal. The shared physical dispatch
+in `src/server/responses/request-transport.ts` binds the refusal to the stored bearer it sent;
+overridden headers, additional API keys and replaced credentials cannot cool that account.
+
+`src/oauth/anthropic-routing.ts` records a process-local cooldown, clears account affinity,
+and applies the existing strategy, pause/reauth exclusions, model route and selection commit.
+Retry-After wins; an undated account 403 uses ten minutes, independently of quota resets.
+A usage probe cannot clear this non-reset-derived cooldown. Plan renewal therefore requires
+no permanent reauthentication flag, though a renewed account waits for cooldown expiry.
+The main dispatch, pre-output empty-completion retry, web-search and image bridge use the
+same bounded recovery and record the final refusal even when no retry sends remain.
+A streamed terminal continuation after assistant output and search after live output or a
+published search call cannot rotate on 403. Non-streaming buffered continuations may recover.
+No eligible replacement preserves the upstream 403; generic 401 handling is unchanged.
+Reactive recovery also works with proactive pooling disabled when multiple accounts are stored.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-quota-dispatch.test.ts`.

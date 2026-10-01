@@ -288,6 +288,10 @@ export function setAccountQuotaFromParsed(
   mainWriter?: MainQuotaWriter,
   policyQuota: MainPolicyQuotaObservation | null = accountId === MAIN_CODEX_ACCOUNT_ID ? quota : null,
   historyEvidence?: QuotaObservationEvidence,
+  // Pool responses carry their credential provenance separately from the optional history
+  // writer: when capture failed before dispatch, an absent writer must fail closed instead
+  // of reading as a writer-free legacy/login observation.
+  poolRequest = false,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
   policyQuota = withoutRetiredCodexQuota(policyQuota);
@@ -298,7 +302,10 @@ export function setAccountQuotaFromParsed(
   hydrateAccountQuotasFromDisk();
   const legacyExisting = accountQuota.get(accountId);
   const updatedAt = Date.now();
-  if (historyEvidence && historyEvidence.writer.accountId === accountId && isPoolQuotaWriterLive(historyEvidence.writer)) {
+  const livePoolEvidence = historyEvidence
+    ? historyEvidence.writer.accountId === accountId && isPoolQuotaWriterLive(historyEvidence.writer)
+    : !poolRequest;
+  if (historyEvidence && livePoolEvidence) {
     quotaHistory.append(historyEvidence.writer, { observedAt: historyEvidence.observedAt, source: historyEvidence.source,
       credentialGeneration: historyEvidence.writer.credentialGeneration, windows: historyWindows(historyEvidence.raw),
     }, updatedAt);
@@ -323,7 +330,7 @@ export function setAccountQuotaFromParsed(
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
   if (!(quota.resetCredits !== undefined && !snapshotHasUsage(quota))) {
-    if (!isMain && policyQuota) observeCodexLowQuota(accountId, policyQuota);
+    if (!isMain && policyQuota && livePoolEvidence) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
 }
@@ -581,7 +588,7 @@ export function applyAccountQuotaFromUpstreamHeaders(
   headers: Headers,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
-  options?: { modelId?: string; poolWriter?: PoolQuotaWriter },
+  options?: { modelId?: string; poolWriter?: PoolQuotaWriter; poolResponse?: boolean },
 ): void {
   const quota = parseUpstreamQuotaHeaders(headers, options);
   if (!quota) return;
@@ -591,7 +598,8 @@ export function applyAccountQuotaFromUpstreamHeaders(
   const validHistory = !["x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent"]
     .some(name => isInvalidPolicyUsagePercent(headers.get(name)));
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota,
-    options?.poolWriter && validHistory ? { writer: options.poolWriter, observedAt: Date.now(), source: "response-header", raw: quota } : undefined);
+    options?.poolWriter && validHistory ? { writer: options.poolWriter, observedAt: Date.now(), source: "response-header", raw: quota } : undefined,
+    options?.poolResponse === true);
 }
 
 export function updateAccountQuota(
