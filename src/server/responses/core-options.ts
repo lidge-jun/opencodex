@@ -19,6 +19,7 @@ import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
 import type { AccountLease } from "../../oauth/kiro-account-load";
+import type { PolicyRequestScope } from "./policy-request-scope";
 
 export interface ConsumedComboFailure {
   response: Response;
@@ -57,6 +58,10 @@ export interface ClientEncoderOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Internal request-owned policy authorization; never read from client headers or body. */
+  policyRequestScope?: PolicyRequestScope;
+  /** Internal concrete selector chosen from the original policy evaluation. */
+  policyFallbackCandidate?: { provider: string; model: string };
   /** Internal routed-compaction recovery: one logical request, one emergency target. */
   compactionRecoveryAttempted?: boolean;
   compactionRecoveryPermit?: SingleUseDispatchPermit;

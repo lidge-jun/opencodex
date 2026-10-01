@@ -6,17 +6,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   deferServiceChildToNewerRuntime,
+  hasNewerRecordedServingRuntime,
   isManagedServiceEnvironment,
   deferToNewerServiceRuntime,
   probeServedRuntimeVersion,
   readServingRuntimes,
   recordServingRuntime,
   selectNewerServingRuntime,
+  serviceClaimMatchesCurrentHomes,
+  serviceManagerOwnsCurrentHome,
   servingRuntimeCommandKey,
   servingRuntimesPath,
   type ServedRuntimeRecord,
 } from "../../src/config/serving-runtimes";
 import { buildWinswXml } from "../../src/lib/winsw";
+import {
+  parseScQcBinaryPathName,
+  scBinaryPathNamesExecutable,
+  type ServiceManagerClaim,
+} from "../../src/service-manager-probe";
 import { buildWindowsServiceScript } from "../../src/service/windows-taskxml";
 import { repoPath } from "../helpers/repo-root";
 
@@ -463,6 +471,7 @@ describe("deferServiceChildToNewerRuntime", () => {
     const deps = {
       dir,
       exists: () => true,
+      installedServiceOwnsCurrentHome: () => true,
       run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }),
       runInherited: async () => { throw new Error("must not run"); },
       log: () => {},
@@ -472,6 +481,18 @@ describe("deferServiceChildToNewerRuntime", () => {
     expect(await deferServiceChildToNewerRuntime({ ...base, sibling: false, env: {} })).toBeNull();
     expect(await deferServiceChildToNewerRuntime({ ...base, sibling: false, env: { OCX_SERVICE: "1" } })).toBeNull();
     expect(await deferServiceChildToNewerRuntime({ ...base, sibling: false, env: { OCX_SERVICE_MANAGED: "1", OCX_DELEGATED_ONCE: "1" } })).toBeNull();
+    let probes = 0;
+    expect(await deferServiceChildToNewerRuntime({
+      ...base,
+      sibling: false,
+      env: { OCX_SERVICE_MANAGED: "1" },
+      deps: {
+        ...deps,
+        installedServiceOwnsCurrentHome: () => false,
+        run: () => { probes += 1; return { status: 0, stdout: "opencodex 2.68.0", stderr: "" }; },
+      },
+    })).toBeNull();
+    expect(probes).toBe(0);
     // The Task Scheduler wrapper's own environment, read back from the batch it generates.
     const batch = buildWindowsServiceScript({ bun: "C:\\ocx\\bun.exe", bunRuntimeSource: "bundled", cli: null }, 10100, []);
     const wrapperEnv = Object.fromEntries([...batch.matchAll(/^set "(OCX_[A-Z_]+)=([^"]*)"$/gm)].map(m => [m[1]!, m[2]!]));
@@ -490,6 +511,65 @@ describe("deferServiceChildToNewerRuntime", () => {
       env: { OCX_SERVICE_MANAGED: "1" },
       deps: { ...deps, runInherited: async () => ({ exitCode: 42, ready: true }) },
     })).toBe(42);
+  });
+
+  test("an empty census never reaches the manager probe", async () => {
+    // The 401-task listing a localized Windows host pays for /query is real work;
+    // with nothing recorded there is no candidate to prove provenance for.
+    const dir = freshDir();
+    let probes = 0;
+    expect(await deferServiceChildToNewerRuntime({
+      sibling: false,
+      env: { OCX_SERVICE_MANAGED: "1" },
+      selfVersion: "2.67.0",
+      selfCommand: [join("/", "npm", "bun.exe"), join("/", "npm", "index.ts")],
+      deps: {
+        dir,
+        exists: () => true,
+        installedServiceOwnsCurrentHome: () => { probes += 1; return true; },
+        run: () => ({ status: 0, stdout: "", stderr: "" }),
+        runInherited: async () => ({ exitCode: 0, ready: true }),
+        log: () => {},
+      },
+    })).toBeNull();
+    expect(probes).toBe(0);
+  });
+
+  test("hasNewerRecordedServingRuntime ignores self, stale, and missing commands", () => {
+    const dir = freshDir();
+    const self = [join("/", "npm", "bun.exe"), join("/", "npm", "index.ts")];
+    expect(hasNewerRecordedServingRuntime("2.67.0", self, { dir })).toBe(false);
+    recordServingRuntime(record(self, "2.68.0"), dir);
+    recordServingRuntime(record([fakeBinary(dir, "older.exe")], "2.66.0"), dir);
+    recordServingRuntime(record([join(dir, "missing.exe")], "2.70.0"), dir);
+    expect(hasNewerRecordedServingRuntime("2.67.0", self, { dir })).toBe(false);
+    recordServingRuntime(record([fakeBinary(dir, "newer.exe")], "2.68.0"), dir);
+    expect(hasNewerRecordedServingRuntime("2.67.0", self, { dir, exists: () => true })).toBe(true);
+  });
+
+  test("a claim omitting home keys only authorizes a default-home process", () => {
+    const dir = freshDir();
+    const current = { codexHome: join(dir, ".codex"), opencodexHome: join(dir, ".opencodex") };
+    const omitted = {
+      backend: "launchd" as const,
+      definitionPath: join(dir, "com.opencodex.proxy.plist"),
+      homes: { codexHome: null, opencodexHome: null },
+      registration: "present" as const,
+    };
+    // A project-controlled .env can set both vars; the omitted-key claim must not
+    // follow them to a project-chosen home.
+    expect(serviceClaimMatchesCurrentHomes(omitted, current, {
+      CODEX_HOME: current.codexHome, OPENCODEX_HOME: current.opencodexHome,
+    })).toBe(false);
+    expect(serviceClaimMatchesCurrentHomes(omitted, current, {})).toBe(true);
+    // A recorded home still must match the current one.
+    const recorded = { ...omitted, homes: { codexHome: current.codexHome, opencodexHome: current.opencodexHome } };
+    expect(serviceClaimMatchesCurrentHomes(recorded, current, {})).toBe(true);
+    expect(serviceClaimMatchesCurrentHomes(recorded, current, {
+      CODEX_HOME: current.codexHome, OPENCODEX_HOME: current.opencodexHome,
+    })).toBe(true);
+    const foreign = { ...omitted, homes: { codexHome: "/elsewhere/.codex", opencodexHome: current.opencodexHome } };
+    expect(serviceClaimMatchesCurrentHomes(foreign, current, {})).toBe(false);
   });
 
   test("a generated WinSW service child delegates to a newer recorded install", async () => {
@@ -517,6 +597,7 @@ describe("deferServiceChildToNewerRuntime", () => {
       deps: {
         dir,
         exists: () => true,
+        installedServiceOwnsCurrentHome: () => true,
         run: () => ({ status: 0, stdout: "opencodex 2.68.0", stderr: "" }),
         runInherited: async (command, args) => {
           expect(command).toEqual([newer]);
@@ -526,5 +607,84 @@ describe("deferServiceChildToNewerRuntime", () => {
         log: () => {},
       },
     })).toBe(0);
+  });
+});
+
+describe("WinSW registration binding at the delegation gate", () => {
+  const exe = "C:\\Users\\me\\.opencodex\\winsw\\opencodex-proxy-native.exe";
+  const scQc = (binary: string) => [
+    "[SC] QueryServiceConfig SUCCESS",
+    "",
+    "SERVICE_NAME: opencodex-proxy-native",
+    "        TYPE               : 10  WIN32_OWN_PROCESS",
+    "        START_TYPE         : 2   AUTO_START",
+    `        BINARY_PATH_NAME   : ${binary}`,
+    "        DISPLAY_NAME       : opencodex-proxy-native",
+    "",
+  ].join("\r\n");
+
+  test("parses BINARY_PATH_NAME and compares the executable it launches", () => {
+    const quoted = parseScQcBinaryPathName(scQc(`"${exe}" --service`));
+    expect(quoted).toBe(`"${exe}" --service`);
+    expect(scBinaryPathNamesExecutable(quoted!, exe)).toBe(true);
+
+    const unquoted = parseScQcBinaryPathName(scQc(exe));
+    expect(unquoted).toBe(exe);
+    expect(scBinaryPathNamesExecutable(unquoted!, exe)).toBe(true);
+    expect(scBinaryPathNamesExecutable(`${exe} --service`, exe)).toBe(true);
+
+    expect(scBinaryPathNamesExecutable(`"${exe.toUpperCase()}"`, exe)).toBe(true);
+    expect(scBinaryPathNamesExecutable(`"${exe.replaceAll("\\", "/")}"`, exe)).toBe(true);
+
+    const other = "C:\\Users\\other\\.opencodex\\winsw\\opencodex-proxy-native.exe";
+    expect(scBinaryPathNamesExecutable(`"${other}" --service`, exe)).toBe(false);
+    expect(scBinaryPathNamesExecutable(other, exe)).toBe(false);
+    expect(scBinaryPathNamesExecutable(`"${exe}`, exe)).toBe(false);
+    expect(scBinaryPathNamesExecutable(`${exe}x`, exe)).toBe(false);
+
+    expect(parseScQcBinaryPathName("[SC] OpenService FAILED 1060:\r\n")).toBeNull();
+    expect(parseScQcBinaryPathName(scQc(""))).toBeNull();
+  });
+
+  test("a WinSW claim delegates only when the registered binary is its own executable", () => {
+    const dir = freshDir();
+    const current = { codexHome: join(dir, ".codex"), opencodexHome: join(dir, ".opencodex") };
+    const claim: ServiceManagerClaim = {
+      backend: "winsw",
+      definitionPath: exe,
+      homes: { codexHome: current.codexHome, opencodexHome: current.opencodexHome },
+      registration: "present",
+    };
+    const gate = (winswBinaryPathName: () => string | null) => serviceManagerOwnsCurrentHome({
+      current,
+      env: {},
+      inspect: () => ({ kind: "present", claims: [claim] }),
+      winswBinaryPathName,
+    });
+
+    expect(gate(() => `"${exe}"`)).toBe(true);
+    expect(gate(() => "\"C:\\Users\\other\\.opencodex\\winsw\\opencodex-proxy-native.exe\"")).toBe(false);
+    expect(gate(() => null)).toBe(false);
+  });
+
+  test("non-WinSW claims never consult the WinSW registration query", () => {
+    const dir = freshDir();
+    const current = { codexHome: join(dir, ".codex"), opencodexHome: join(dir, ".opencodex") };
+    let queries = 0;
+    expect(serviceManagerOwnsCurrentHome({
+      current,
+      env: {},
+      inspect: () => ({
+        kind: "present",
+        claims: [{
+          backend: "scheduler",
+          definitionPath: join(dir, "opencodex-service-task.xml"),
+          homes: { codexHome: current.codexHome, opencodexHome: current.opencodexHome },
+          registration: "present",
+        }],
+      }),
+      winswBinaryPathName: () => { queries += 1; return null; },
+    })).toBe(true);
+    expect(queries).toBe(0);
   });
 });
