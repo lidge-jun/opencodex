@@ -878,7 +878,16 @@ export async function runUpdate(): Promise<void> {
             // repair above just returned is indistinguishable from any other failure here.
             // The refresh above ran outside the lease — take it back so this re-read and
             // the direct start stay serialized with a claim that landed in that window.
-            mutation.reacquire();
+            // A claim that outlasts the wait is reported here: the package is already
+            // swapped, so the unexpected-failure recovery below would run a second,
+            // unleased repair and surface the raw lock error instead.
+            try {
+              mutation.reacquire();
+            } catch {
+              console.warn("⚠️  Updated, but another process kept the runtime ownership lease claimed, so no proxy was started.");
+              console.warn(`   Run 'ocx service repair', then 'ocx start --port ${capturedListen.port}'.`);
+              return 1;
+            }
             const nowOwned = planUpdateRuntimeHandling({
               ...(await resolvedRuntimeOwnership()),
               serviceInstalled: true,

@@ -147,6 +147,12 @@ test("the Bun updater releases the lease before each service-manager-mediated st
   const postReacquire = source.indexOf("mutation.reacquire();", postSpawn);
   const postReRead = source.indexOf("const nowOwned", postInstall);
   expect(postReacquire).toBeLessThan(postReRead);
+  // After the package swap, a lease that stays claimed is reported with manual recovery and a
+  // non-zero exit instead of escaping into the unexpected-failure recovery.
+  const guarded = source.slice(source.lastIndexOf("try {", postReacquire), source.indexOf("const nowOwned", postReacquire));
+  expect(guarded).toMatch(/^try \{\s*mutation\.reacquire\(\);\s*\} catch \{/);
+  expect(guarded).toContain("no proxy was started");
+  expect(guarded).toContain("return 1;");
 });
 
 test.skipIf(process.platform === "win32")("unmanaged recovery joins the lease and waits for PID-bound health", async () => {
