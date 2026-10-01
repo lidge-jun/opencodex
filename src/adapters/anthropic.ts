@@ -1050,7 +1050,17 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
           const maxOut = parsed.options.maxOutputTokens ?? omittedMaxTokens;
           const wantBudget = reasoningBudget(effectiveReasoning);
-          const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
+          // Clamp to what the TARGET can emit, not to a flat 32k. REASONING_MAX_TOKENS_CEILING
+          // dates from Claude 4.x models that really stopped near 32k; Opus 4.6 and Sonnet 4.6
+          // document 128K and Haiku 4.5 64K, so the flat ceiling silently cut an explicit
+          // caller `max_tokens` to a quarter of what the model supports — the adaptive branch
+          // above honours the caller's figure, and this one did not. A provider that states the
+          // model's real maximum is more authoritative than the constant; it stays the fallback
+          // for a target whose ceiling is unknown.
+          const modelCeiling = typeof configuredMaxOut === "number" && configuredMaxOut > 0
+            ? configuredMaxOut
+            : REASONING_MAX_TOKENS_CEILING;
+          const maxTokens = Math.min(modelCeiling, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
           const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
           body.max_tokens = maxTokens;
           body.thinking = { type: "enabled", budget_tokens: budget };
