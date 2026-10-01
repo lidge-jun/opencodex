@@ -1124,6 +1124,33 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
   },
   {
+    command: ["combo", "test"],
+    summary: "Run one JEV decision probe through a decision method: TypeSafe, a System One row, or an opencodex model.",
+    routes: [{ method: "POST", path: "/api/combos/decision-test" }],
+    flags: [
+      { name: "--combo", value: "string", summary: "Combo id whose saved decision method is probed and whose recursion rules apply." },
+      { name: "--decision-provider", value: "string", summary: "Probe a jev-decision provider row (or jev for TypeSafe) instead of the saved method." },
+      { name: "--decision-model", value: "string", summary: "Probe an opencodex-routed model instead of the saved method." },
+      { name: "--decision-timeout", value: "number", summary: "Decision deadline in milliseconds (1000-120000)." },
+      { name: "--json", value: "boolean", summary: "Emit the probe result." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Sends one synthetic two-option decision; it may spend a decision call on the chosen backend."],
+  },
+  {
+    command: ["combo", "discover"],
+    summary: "List configured System One decision rows and catalog models that look like decision services.",
+    routes: [{ method: "GET", path: "/api/combos/decision-discovery" }],
+    flags: [
+      { name: "--query", value: "string", summary: "Match catalog rows by this text instead of the built-in decision-model hint." },
+      { name: "--json", value: "boolean", summary: "Emit the discovery payload." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["Read-only: nothing is probed and no provider row is created."],
+  },
+  {
     command: ["api", "explain"],
     summary: "Preview the request path a model would take from one inbound API, computed from config.",
     routes: [{ method: "POST", path: "/api/protocols/plan" }],

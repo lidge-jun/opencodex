@@ -54,10 +54,13 @@ import {
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
 import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
-import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
+// The schema boundary uses a string-only stand-in for the ingress grammar: importing the server
+// parser here would cycle back through config loading and run Cursor detection during validation.
+import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
 import { redactSecretString } from "../../lib/redact";
 import { openRouterRoutingConfigError } from "../../providers/openrouter-routing";
 import { vercelGatewayRoutingConfigError } from "../../providers/vercel-gateway-routing";
@@ -478,6 +481,14 @@ export const configSchema = z.object({
         });
       }
     }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
+      });
+    }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
       ctx.addIssue({
@@ -728,6 +739,7 @@ export const configSchema = z.object({
         for (const issue of comboConfigIssues(id, raw, config.providers, {
           combos: combos as Record<string, import("../../types").OcxComboConfig>,
           excludeComboId: id,
+          normalizeDecisionModel: model => lexicalDecisionModelBase(model, config.cursorEffortRows === true),
         })) {
           ctx.addIssue({
             code: "custom",

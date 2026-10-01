@@ -363,6 +363,11 @@ JEV は `jev-auto` でのみ、論理的なモデル呼び出しごとに一度�
 呼び出し元のキャンセルは引き続きリクエストをキャンセルします。自動テストは TypeSafe のモック
 エンドポイントを使い、実際の JEV アカウントは検証しません。
 
+JEV Combo は、キー不要の Ollama `tev1` のようなセルフホストの判断モデルを代わりに使うこともできます。
+`baseUrl` が完全な `/v1/systemone` エンドポイントである `jev-decision` プロバイダーを追加し、Combo の
+`decisionProvider` に指定します。TypeSafe の認証情報がそこへ送られることはありません。詳しくは
+[セルフホストの判断モデル](https://opencodex.me/ja/guides/combos/)を参照してください。
+
 ## プロバイダーとアダプター
 
 <!-- sponsors:main-first-mention -->

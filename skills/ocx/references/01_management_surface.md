@@ -490,6 +490,23 @@ Read the protocol contract version, API surfaces, protocol settings and feature 
 
 JSON mode: `payload`.
 
+### `ocx combo discover`
+
+List configured System One decision rows and catalog models that look like decision services.
+
+| Method | Route |
+|---|---|
+| GET | `/api/combos/decision-discovery` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--query` | string | Match catalog rows by this text instead of the built-in decision-model hint. |
+| `--json` | boolean | Emit the discovery payload. |
+
+JSON mode: `payload`.
+
+- Read-only: nothing is probed and no provider row is created.
+
 ### `ocx api explain`
 
 Preview the request path a model would take from one inbound API, computed from config.
@@ -1241,6 +1258,26 @@ JSON mode: `payload`.
 - A bare invocation reads and never writes.
 - suggest sizes the described work with one model call, picks the cheapest sufficient model the delegation picker offers, and writes nothing unless --apply is given.
 
+### `ocx combo test`
+
+Run one JEV decision probe through a decision method: TypeSafe, a System One row, or an opencodex model.
+
+| Method | Route |
+|---|---|
+| POST | `/api/combos/decision-test` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--combo` | string | Combo id whose saved decision method is probed and whose recursion rules apply. |
+| `--decision-provider` | string | Probe a jev-decision provider row (or jev for TypeSafe) instead of the saved method. |
+| `--decision-model` | string | Probe an opencodex-routed model instead of the saved method. |
+| `--decision-timeout` | number | Decision deadline in milliseconds (1000-120000). |
+| `--json` | boolean | Emit the probe result. |
+
+JSON mode: `payload`.
+
+- Sends one synthetic two-option decision; it may spend a decision call on the chosen backend.
+
 ### `ocx api policy`
 
 Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.
@@ -1264,6 +1301,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 70
-- of those, state-changing: 40
+- declared capabilities: 72
+- of those, state-changing: 41
 - head-resolved invocations: 2

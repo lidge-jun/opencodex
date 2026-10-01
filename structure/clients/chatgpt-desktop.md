@@ -50,7 +50,9 @@ rename (never through a symbolic link), quits the bundle by id, waits for this u
 instance to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH.
 The launcher itself exits 127 with a stderr hint when the recorded binary is gone.
 Restore relaunches without
-that override and removes the launcher only after open succeeds. Status reports
+that override and removes the launcher only after open succeeds; when no
+`com.openai.codex` bundle is found it removes the launcher, relaunches nothing and
+exits 1. Status reports
 the experimental flag, launcher presence, and the verified bundle process's override
 without printing its environment. Other platforms reject all three operations.
 

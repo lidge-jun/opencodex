@@ -363,6 +363,11 @@ network failures, or invalid decisions fail open to the first currently eligible
 cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
 validate a live JEV account.
 
+A JEV Combo can instead ask a self-hosted decision model, such as Ollama's keyless `tev1`: add a
+`jev-decision` provider whose `baseUrl` is the full `/v1/systemone` endpoint and set the Combo's
+`decisionProvider` to it. TypeSafe credentials are never sent there. Details:
+[System One-compatible server](https://opencodex.me/guides/combos/#system-one-compatible-server).
+
 ## Providers & adapters
 
 <!-- sponsors:main-first-mention -->
