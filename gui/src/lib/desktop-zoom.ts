@@ -82,7 +82,7 @@ export function zoomKeyAction(
   os: HostOs,
 ): ZoomAction | null {
   const modifier = os === "macos" ? event.metaKey : event.ctrlKey;
-  if (!modifier || event.altKey) return null;
+  if (!modifier) return null;
   if (event.key === "-" || event.key === "_") return "out";
   if (event.key === "=" || event.key === "+") return "in";
   if (event.key === "0") return "reset";

@@ -26,7 +26,7 @@ function Probe({ managed }: { managed: boolean }) {
   return <DesktopZoomControl percent={zoom.percent} canZoomIn={zoom.canZoomIn} canZoomOut={zoom.canZoomOut} onStep={zoom.step} />;
 }
 
-function mount(node: React.ReactElement, saved?: string) {
+function mount(node: React.ReactElement, saved?: string, beforeRender?: () => void) {
   win = new Window({ url: "http://127.0.0.1:10100/", settings: { navigator: { userAgent: LINUX_SHELL } } });
   previous = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previous;
   calls = [];
@@ -45,6 +45,9 @@ function mount(node: React.ReactElement, saved?: string) {
     localStorage: { configurable: true, writable: true, value: win.localStorage },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, writable: true, value: true },
   });
+  // The shell injects its polyfill when the document is created, so anything that stands in for it
+  // is registered here, before the dashboard has rendered and registered its own listeners.
+  beforeRender?.();
   const host = win.document.createElement("div") as never as HTMLElement;
   win.document.body.appendChild(host as never);
   act(() => { root = createRoot(host); root.render(<LanguageProvider>{node}</LanguageProvider>); });
@@ -54,6 +57,35 @@ function mount(node: React.ReactElement, saved?: string) {
 function press(init: KeyboardEventInit) {
   const event = new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
   act(() => { win.dispatchEvent(event); });
+  return event;
+}
+
+/**
+ * Tauri's zoom polyfill is injected into the page before the dashboard runs and listens on
+ * `window` in the bubble phase. Events from the page start at an element, so the real path is
+ * element, then window. Registration order matters: the polyfill's listeners exist first, so a
+ * dashboard listener that merely stops propagation in the bubble phase would run too late. Call
+ * this through `mount`'s `beforeRender` so the stand-in is registered the way the shell's is.
+ */
+function installPolyfillStandIn() {
+  const seen = { keydown: [] as string[], mousewheel: 0 };
+  win.addEventListener("keydown", (event) => { seen.keydown.push((event as KeyboardEvent).key); });
+  win.addEventListener("mousewheel", () => { seen.mousewheel += 1; });
+  return seen;
+}
+
+function pressOnPage(init: KeyboardEventInit) {
+  const event = new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  act(() => { win.document.body.dispatchEvent(event); });
+  return event;
+}
+
+function wheelOnPage(type: "wheel" | "mousewheel", init: WheelEventInit) {
+  const event = new win.WheelEvent(type, { bubbles: true, cancelable: true, ...init });
+  // happy-dom's WheelEvent drops the modifier flags from its init (a browser keeps them), so the
+  // flag the handlers read is set on the instance.
+  Object.defineProperty(event, "ctrlKey", { value: init.ctrlKey === true });
+  act(() => { win.document.body.dispatchEvent(event); });
   return event;
 }
 
@@ -115,4 +147,64 @@ test("outside the managed hosts nothing is applied or intercepted", () => {
   expect(event.defaultPrevented).toBe(false);
   expect(zoomCalls()).toEqual([]);
   expect(win.localStorage.getItem(ZOOM_STORAGE_KEY)).toBe("1.3");
+});
+
+/**
+ * Version skew between the shell and the dashboard it is showing (PR review). The dashboard is
+ * served by the runtime and the shell is the installed app, so they are not always the same
+ * version: a declined takeover leaves the app attached to an older runtime, and an app update
+ * leaves the shell newer than a service that has not restarted. The polyfill is injected by the
+ * shell, so a dashboard that handles zoom has to be the only writer without the shell's help,
+ * and a dashboard that does not must leave the polyfill working.
+ */
+test("a newer dashboard is the only zoom writer even when the shell injects its polyfill", () => {
+  let polyfill!: ReturnType<typeof installPolyfillStandIn>;
+  mount(<Probe managed />, "1.3", () => { polyfill = installPolyfillStandIn(); });
+  const event = pressOnPage({ key: "=", ctrlKey: true });
+  expect(zoomCalls()).toEqual([1.3, 1.4]);
+  expect(polyfill.keydown).toEqual([]);
+  expect(event.defaultPrevented).toBe(true);
+});
+
+test("an older dashboard that does not manage zoom leaves the polyfill working", () => {
+  let polyfill!: ReturnType<typeof installPolyfillStandIn>;
+  mount(<Probe managed={false} />, "1.3", () => { polyfill = installPolyfillStandIn(); });
+  const event = pressOnPage({ key: "=", ctrlKey: true });
+  expect(polyfill.keydown).toEqual(["="]);
+  expect(event.defaultPrevented).toBe(false);
+  expect(zoomCalls()).toEqual([]);
+});
+
+test("keys that are not zoom keys still reach the rest of the page", () => {
+  let polyfill!: ReturnType<typeof installPolyfillStandIn>;
+  mount(<Probe managed />, undefined, () => { polyfill = installPolyfillStandIn(); });
+  pressOnPage({ key: "b", ctrlKey: true });
+  pressOnPage({ key: "=" });
+  expect(polyfill.keydown).toEqual(["b", "="]);
+});
+
+test("the polyfill's Alt variants cannot sneak a second write past the dashboard", () => {
+  let polyfill!: ReturnType<typeof installPolyfillStandIn>;
+  mount(<Probe managed />, "1", () => { polyfill = installPolyfillStandIn(); });
+  pressOnPage({ key: "-", ctrlKey: true, altKey: true });
+  expect(polyfill.keydown).toEqual([]);
+  expect(zoomCalls().at(-1)).toBe(0.9);
+});
+
+test("Ctrl + wheel is taken by the dashboard and the legacy mousewheel event is silenced too", () => {
+  let polyfill!: ReturnType<typeof installPolyfillStandIn>;
+  mount(<Probe managed />, "1", () => { polyfill = installPolyfillStandIn(); });
+  wheelOnPage("wheel", { ctrlKey: true, deltaY: -120 });
+  wheelOnPage("mousewheel", { ctrlKey: true, deltaY: -120 });
+  expect(zoomCalls()).toEqual([1, 1.1]);
+  expect(polyfill.mousewheel).toBe(0);
+});
+
+test("a wheel turn without Ctrl scrolls the page and reaches every listener", () => {
+  let polyfill!: ReturnType<typeof installPolyfillStandIn>;
+  mount(<Probe managed />, "1", () => { polyfill = installPolyfillStandIn(); });
+  const event = wheelOnPage("mousewheel", { deltaY: -120 });
+  expect(polyfill.mousewheel).toBe(1);
+  expect(event.defaultPrevented).toBe(false);
+  expect(zoomCalls()).toEqual([1]);
 });

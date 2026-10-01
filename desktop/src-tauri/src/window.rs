@@ -273,9 +273,9 @@ mod tests {
         }
     }
 
-    /// The dashboard's zoom control runs inside the loopback dashboard, which is a remote origin to
-    /// Tauri. The capability that lets it call `set_webview_zoom` is the only one reaching that
-    /// origin, so it stays pinned to this window, this origin and this one command.
+    /// The zoom polyfill runs inside the loopback dashboard, which is a remote origin to Tauri. The
+    /// capability that lets it call `set_webview_zoom` is the only one reaching that origin, so it
+    /// stays pinned to this window, this origin and this one command.
     #[test]
     fn the_dashboard_reaches_only_the_zoom_command() {
         let zoom: serde_json::Value =

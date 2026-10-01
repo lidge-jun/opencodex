@@ -28,12 +28,17 @@ none of the matching WKUIDelegate panel methods on macOS, so a platform dialog i
 drawing anything.
 `withGlobalTauri` is on so that page can invoke without a bundler. The bootstrap commands are
 granted to the local app origin only: `capabilities/default.json` declares no `remote` entry, and
-Tauri checks the ACL for any invoke from a non-local origin. The one exception is page zoom. WebView2
-handles Ctrl + / - / 0 natively, so the builder leaves Tauri's zoom hotkeys on for Windows only; on macOS
-and Linux the dashboard owns zoom (`gui/src/lib/desktop-zoom.ts`): it handles the same keys and Ctrl +
-wheel, keeps the level in `localStorage` and re-applies it at start, and calls `set_webview_zoom`. Tauri's
-own polyfill cannot do that, since its level restarts at 1 on every page load. `capabilities/dashboard-zoom.json`
-grants that single command to the main window for `http://127.0.0.1:*`, and a test in `window.rs` pins its shape.
+Tauri checks the ACL for any invoke from a non-local origin. The one exception is page zoom. The main
+window keeps Tauri's zoom hotkeys on (Cmd or Ctrl with + / - / 0): WebView2 handles them natively, and on
+macOS and Linux Tauri injects a keydown polyfill that calls `set_webview_zoom` from whatever page is loaded.
+A dashboard that handles zoom itself (`gui/src/lib/desktop-zoom.ts`) keeps the level in `localStorage`,
+re-applies it at start and calls the same command, and its handlers run in the capture phase and stop the
+event before the polyfill's bubble-phase listeners see it. Nothing is negotiated, because the shell cannot
+know which dashboard it shows: the runtime serves the dashboard and the installed app is the shell, so a
+declined takeover or a service that has not restarted puts them on different versions. An older dashboard
+has no handler, so the polyfill keeps working; an older shell's polyfill is pre-empted by a newer
+dashboard. `capabilities/dashboard-zoom.json` grants that single command to the main window for
+`http://127.0.0.1:*`, and a test in `window.rs` pins its shape.
 
 The main window carries an integrated title bar on macOS: the builder sets
 `TitleBarStyle::Overlay` with `hidden_title`, so the webview draws to the top of the window and

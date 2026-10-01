@@ -318,12 +318,10 @@ pub fn run() {
                     .inner_size(1100.0, 720.0)
                     .visible(false)
                     .user_agent(&window::webview_user_agent())
-                    // Windows keeps WebView2's native zoom. On macOS and Linux the dashboard owns
-                    // page zoom (`gui/src/lib/desktop-zoom.ts`): Tauri's keydown polyfill keeps the
-                    // level in a script variable that restarts at 1 on every page load, so it can
-                    // neither remember the level nor stay in step with the sidebar control. The
-                    // dashboard's one IPC call is granted by `capabilities/dashboard-zoom.json`.
-                    .zoom_hotkeys_enabled(cfg!(target_os = "windows"))
+                    // Cmd on macOS, Ctrl elsewhere, with + / - / 0. WebView2 zooms natively; on
+                    // macOS and Linux Tauri injects a keydown polyfill whose one IPC call is granted
+                    // to the loopback dashboard by `capabilities/dashboard-zoom.json`.
+                    .zoom_hotkeys_enabled(true)
                     .on_navigation(window::navigation_allowed(app.handle().clone()))
                     .on_new_window(window::open_new_windows_in_default_browser())
                     // A hidden window still loads pages: wry builds this one with WebView2

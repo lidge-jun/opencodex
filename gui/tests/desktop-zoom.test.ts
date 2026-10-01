@@ -94,10 +94,14 @@ describe("key bindings", () => {
     expect(zoomKeyAction(press("=", { ctrlKey: true }), "macos")).toBeNull();
   });
 
-  test("a bare key, another key, or an Alt chord is ignored", () => {
+  test("a bare key or another key is ignored", () => {
     expect(zoomKeyAction(press("="), "linux")).toBeNull();
     expect(zoomKeyAction(press("b", { ctrlKey: true }), "linux")).toBeNull();
-    expect(zoomKeyAction(press("=", { ctrlKey: true, altKey: true }), "linux")).toBeNull();
+  });
+
+  test("an Alt chord is handled like Tauri's polyfill handled it, so the dashboard stays the only writer", () => {
+    expect(zoomKeyAction(press("=", { ctrlKey: true, altKey: true }), "linux")).toBe("in");
+    expect(zoomKeyAction(press("-", { ctrlKey: true, altKey: true }), "linux")).toBe("out");
   });
 
   test("only macOS and Linux are managed by the dashboard", () => {
