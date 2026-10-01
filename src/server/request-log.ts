@@ -247,6 +247,8 @@ export interface RequestLogContext {
   terminalSource?: "upstream" | "synthetic";
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+  /** Full eligible provider/model membership from a policy route; never logged. */
+  policyEligibility?: ReadonlySet<string>;
   /** Privacy-bounded JEV selection metadata; downstream usage is recorded on attempts[]. */
   jevDecision?: PersistedJevDecisionV1;
   /** Opt-in shadow evidence, normalized again at the logging boundary. */

@@ -5,7 +5,7 @@ import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./subagent-mod
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION } from "./multi-agent-surface";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES } from "../lib/app-owned-memory";
 import { describeProxyForLog, readWindowsSystemProxy, type WindowsProxyRegistryReader } from "../lib/windows-system-proxy";
-import { readMacOSSystemProxy, type MacOSProxyReader } from "./macos-system-proxy";
+import { readMacOSSystemProxy, type MacOSProxyReader, type MacOSSystemProxyResult } from "./macos-system-proxy";
 import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "../types";
 import type { OcxRuntimeRole } from "../types/config";
 
@@ -187,6 +187,34 @@ export function applyProxyEnv(config: OcxConfig, announce = false): void {
   if (outbound) console.log(`   outbound proxy: ${redactUrlForLog(outbound)}`);
 }
 
+/**
+ * Builds the refusal reason for an unsafe macOS discovery outcome. Toggle refusals
+ * name the toggle only — they are not an exception-translation problem, so the
+ * "exceptions" framing is reserved for entries. Entry refusals report shape counts
+ * and setting names, never the entries themselves: naming them would leak
+ * bypass-list hostnames (internal servers, banked domains) into shared logs.
+ */
+function describeDiscoveryRefusal(
+  found: Extract<MacOSSystemProxyResult, { kind: "unsafe-exceptions" }>,
+): string {
+  const counts = found.unrepresentable;
+  if (counts) {
+    const parts = [
+      counts.cidr > 0 && `${counts.cidr} CIDR`,
+      counts.hostname > 0 && `${counts.hostname} bare-hostname`,
+      counts.wildcard > 0 && `${counts.wildcard} wildcard-shaped`,
+      counts.other > 0 && `${counts.other} other`,
+    ].filter(Boolean).join(", ");
+    const entries = counts.cidr + counts.hostname + counts.wildcard + counts.other;
+    const entriesPhrase = `${entries} ${entries === 1 ? "exception entry" : "exception entries"} cannot be safely translated (${parts})`;
+    return found.setting
+      ? `${found.setting} is enabled; ${entriesPhrase}; discovery refused`
+      : `macOS exceptions cannot be safely translated (${parts}); discovery refused`;
+  }
+  if (found.setting) return `${found.setting} is enabled; discovery refused`;
+  return "macOS exceptions cannot be safely translated; discovery refused";
+}
+
 /** Test seam for `proxy: "auto"`: the registry reader and platform are injectable. */
 export function applyProxyEnvWith(
   config: OcxConfig,
@@ -224,10 +252,12 @@ export function applyProxyEnvWith(
       const found = readMacOSSystemProxy(auto.macOSReader);
       if (found.kind !== "proxy") {
         const reason = found.kind === "unsafe-exceptions"
-          ? "macOS exceptions cannot be safely translated; discovery refused"
-          : found.kind === "disabled"
-            ? "macOS system proxy is disabled"
-            : "macOS proxy settings could not be read";
+          ? describeDiscoveryRefusal(found)
+          : found.kind === "socks-only"
+            ? "macOS system proxy is SOCKS-only, which HTTP_PROXY cannot express; using direct egress"
+            : found.kind === "disabled"
+              ? "macOS system proxy is disabled"
+              : "macOS proxy settings could not be read";
         console.log(`[opencodex] proxy "auto": ${reason}; proxy environment unchanged`);
         return;
       }

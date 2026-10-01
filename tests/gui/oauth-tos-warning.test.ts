@@ -19,6 +19,7 @@ describe("oauth ToS risk map", () => {
   test("flags elevated unofficial bridges", () => {
     expect(oauthTosRisk("github-copilot")).toBe("elevated");
     expect(oauthTosRisk("cursor")).toBe("elevated");
+    expect(oauthTosRisk("zed")).toBe("elevated");
   });
 
   test("leaves lower-risk OAuth providers unmarked", () => {

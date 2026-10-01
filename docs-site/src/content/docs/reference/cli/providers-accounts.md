@@ -799,3 +799,6 @@ ocx account routes anthropic --clear
 ```
 
 The file is limited to 64 KiB. The server validates each route and stores it under `anthropicAccountPool.routes`; writes require the running proxy. Use stored account IDs from `ocx account list anthropic --json`. Rules only affect the enabled pool and never claim that an account is entitled to a model. Request logs identify a matched rule as `route:#<n>` (1-based list position), without its operator name.
+
+Vision and web-search helpers match their own model independently and can fail locally when their
+strict route has no eligible account. See [Anthropic helper account routing](/reference/configuration/providers/#anthropicaccountpool-experimental).

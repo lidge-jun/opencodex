@@ -139,6 +139,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   xiaomi: "Xiaomi",
   cursor: "Cursor",
   deepseek: "DeepSeek",
+  zed: "Zed",
   // "Devin", not the registry's "Cognition (Devin/Windsurf)". This label sits in
   // a narrow provider rail beside one-word names like Cursor and Kimi, and the
   // long form is the registry's disambiguation for an add-provider list, not a

@@ -206,6 +206,20 @@ export function setGrokApplyFlightTestHooks(
 }
 import type { ManagementContext } from "./context";
 
+async function injectionModelOptions(config: OcxConfig, models: readonly CatalogModel[]) {
+  const disabled = new Set(config.disabledModels ?? []);
+  const { listCatalogNativeSlugs } = await import("../../codex/catalog");
+  const nativeModels = listCatalogNativeSlugs()
+    .filter(slug => !disabled.has(slug))
+    .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
+  const routedModels = uniqueCatalogModelsForPublicList([...models])
+    .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
+    .filter(m => ![...disabled].some(stored => (
+      stored === m.namespaced || slugEquals(stored, m.provider, m.model)
+    )));
+  return [...nativeModels, ...routedModels];
+}
+
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -547,18 +561,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // effort the prompt tells the agent to pass to spawn_agent. GET returns the current
   // picks + available models/efforts; PUT sets or clears them.
   if (url.pathname === "/api/injection-model" && req.method === "GET") {
-    const models = await fetchAllModels(config);
-    const disabled = new Set(config.disabledModels ?? []);
-    const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
-    const nativeModels = listCatalogNativeSlugs()
-      .filter(slug => !disabled.has(slug))
-      .map(slug => ({ provider: "openai", model: slug, namespaced: slug }));
-    const routedModels = uniqueCatalogModelsForPublicList(models)
-      .map(m => ({ provider: m.provider, model: m.id, namespaced: catalogModelSlug(m) }))
-      .filter(m => ![...disabled].some(stored => (
-        stored === m.namespaced || slugEquals(stored, m.provider, m.model)
-      )));
     return jsonResponse({
       multiAgentGuidanceEnabled: multiAgentGuidanceEnabled(config),
       syncCodexSubagentDefaults: subagentDefaultSyncEffective(config),
@@ -566,8 +569,40 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       effort: config.injectionEffort ?? null,
       prompt: config.injectionPrompt ?? null,
       efforts: CODEX_REASONING_LEVELS.map(l => l.effort),
-      available: [...nativeModels, ...routedModels],
+      available: await injectionModelOptions(config, await fetchAllModels(config)),
     });
+  }
+  // Read-only: sizes the described delegated work and proposes a model and effort from the
+  // same options GET offers. The page applies an accepted proposal through the PUT below.
+  if (url.pathname === "/api/injection-model/suggest" && req.method === "POST") {
+    let body: unknown;
+    try { body = await readManagementJsonBody(req); } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    const { work, model } = (body ?? {}) as { work?: unknown; model?: unknown };
+    const { ROLE_INSTRUCTIONS_EXCERPT_CHARS } = await import("../../codex/role-sizing");
+    if (typeof work !== "string" || work.trim() === "" || work.length > ROLE_INSTRUCTIONS_EXCERPT_CHARS) {
+      return jsonResponse({ error: `work must be a nonblank string of at most ${ROLE_INSTRUCTIONS_EXCERPT_CHARS} characters`, code: "invalid_work" }, 400);
+    }
+    if (model !== undefined && typeof model !== "string") {
+      return jsonResponse({ error: "model must be a string", code: "invalid_model" }, 400);
+    }
+    const { proposeDelegationModel, NoSizingModelError } = await import("./codex-role-auto-assign");
+    const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
+    try {
+      return jsonResponse(await proposeDelegationModel({
+        config,
+        work: work.trim(),
+        offered: (await injectionModelOptions(config, models)).map(option => option.namespaced),
+        ...(typeof model === "string" ? { sizingModel: model } : {}),
+        models,
+        ...(deps.completeCodexRoleSizing ? { completeRoleSizing: deps.completeCodexRoleSizing } : {}),
+      }));
+    } catch (error) {
+      if (error instanceof NoSizingModelError) return jsonResponse({ error: error.message, code: "no_sizing_model" }, 409);
+      throw error;
+    }
   }
   if (url.pathname === "/api/injection-model" && req.method === "PUT") {
     let parsedBody: unknown;

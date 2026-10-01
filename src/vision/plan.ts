@@ -43,6 +43,7 @@ export function resolveVisionTimeoutMs(value: unknown): number {
 export interface AnthropicVisionProvider {
   providerName: string;
   provider: OcxProviderConfig;
+  config: OcxConfig;
 }
 
 /**
@@ -52,7 +53,7 @@ export interface AnthropicVisionProvider {
 export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionProvider | undefined {
   const auth = resolveSidecarAuth(config);
   if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
-  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config };
 }
 
 export function resolveVisionBackend(

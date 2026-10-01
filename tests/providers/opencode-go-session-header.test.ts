@@ -608,7 +608,7 @@ describe("OpenCode Go affinity across the policy fallback retry (#4172)", () => 
       return Response.json({ id: "resp_policy_go", object: "response", status: "completed", output: [] });
     }) as unknown as NonNullable<Parameters<typeof handleResponsesWithPolicyFallback>[4]>["runCore"];
 
-    const config = { providers: { "opencode-go": opencodeGo() } } as unknown as OcxConfig;
+    const config = { providers: { "opencode-go": opencodeGo(), "opencode-go-2": opencodeGo() } } as unknown as OcxConfig;
     const response = await handleResponsesWithPolicyFallback(
       req, config, { model: "", provider: "" } as never, {}, { runCore },
     );
