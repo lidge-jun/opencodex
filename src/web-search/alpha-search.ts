@@ -62,7 +62,7 @@ const DEFAULT_BACKEND_MODELS = {
 export type AlphaSearchSidecarBackend = keyof typeof DEFAULT_BACKEND_MODELS;
 
 type ResolvedAlphaSearchSidecar =
-  | { backend: "anthropic"; providerName: string; provider: OcxProviderConfig }
+  | { backend: "anthropic"; providerName: string; provider: OcxProviderConfig; config: OcxConfig }
   | { backend: "xai"; providerName: string; provider: OcxProviderConfig }
   | { backend: "gemini"; providerName: string; provider: OcxProviderConfig }
   | { backend: "exa"; apiKey: string };
@@ -103,7 +103,7 @@ export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecar
     case "anthropic": {
       const found = findAnthropicSidecarProvider(config);
       return found
-        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider } }
+        ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider, config } }
         : { status: "missing-credential", backend };
     }
     case "xai": {
@@ -188,7 +188,7 @@ async function runAlphaSearchQuery(
 ): Promise<SidecarOutcome> {
   switch (resolved.backend) {
     case "anthropic":
-      return runAnthropicWebSearch(query, resolved.providerName, resolved.provider, settings, signal);
+      return runAnthropicWebSearch(query, resolved.providerName, resolved.provider, settings, signal, config);
     case "xai":
       return runXaiWebSearch(
         query,

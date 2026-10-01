@@ -28,6 +28,17 @@ and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integ
 ocx agent roles set explorer xai/grok-4.5
 ```
 
+`ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
+installed. It sizes every role with one call to the default Codex model (or `--model`) and
+prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
+through the same write as `set`, skipping and naming the roles whose model and effort already match.
+See [Auto-assign](/guides/integrations/#auto-assign).
+
+`ocx agent injection suggest <work>` does the same for the delegation model: it sizes the described
+work, proposes the cheapest sufficient model and an effort from the delegation picker's list, and writes
+nothing unless `--apply` is given, which saves through the same write as `injection set`. See
+[Delegation model and effort](/guides/sub-agent-surface/#delegation-model-and-effort).
+
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows
 (picker-visible rows plus the login-entitled Luna/Haiku auth slots, intersected with executor

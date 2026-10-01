@@ -170,7 +170,7 @@ export function planWebSearch(
   // resolveSidecarBackend's explicit-or-openai contract.
   const auth = resolveSidecarAuth(config);
   const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
-    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider }
+    ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config }
     : undefined;
   const backend = resolveSidecarBackend(cfg.backend);
   const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;

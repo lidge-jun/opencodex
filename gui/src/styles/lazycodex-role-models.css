@@ -8,3 +8,17 @@
   .lazycodex-role-models .tbl { min-width: 0; }
   .lazycodex-role-models .tbl :is(th, td):nth-child(2) { display: none; }
 }
+.lazycodex-auto-assign { margin: 8px 0 12px; }
+.lazycodex-auto-assign-bar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.lazycodex-auto-assign-bar > .page-sub { flex: 1 1 260px; margin: 0; }
+.lazycodex-auto-assign-bar h5 { margin: 0; }
+.lazycodex-auto-assign-actions { display: flex; gap: 8px; margin-left: auto; }
+.lazycodex-auto-assign-panel { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.lazycodex-auto-assign-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 10px; }
+.lazycodex-auto-assign-list > li { padding-top: 10px; border-top: 1px solid var(--border); min-width: 0; }
+.lazycodex-auto-assign-list p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.lazycodex-auto-assign-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lazycodex-auto-assign-change { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin-top: 4px; }
+.lazycodex-auto-assign-change code { overflow-wrap: anywhere; }
+.lazycodex-auto-assign-change > :is(button, .lazycodex-auto-assign-done) { margin-left: auto; }
+.lazycodex-auto-assign-done { color: var(--green); font-weight: 600; }

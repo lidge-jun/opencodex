@@ -1,11 +1,14 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../../src/server/responses";
 import { finalizeAccountLease } from "../../../src/server/responses/core-lifetime";
-import { acquireAccountLease, accountInFlight } from "../../../src/oauth/kiro-account-load";
-import { captureOAuthAccountSelection, getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
+import { acquireAccountLease, accountInFlight, observeQueuedAccountLeaseForTests } from "../../../src/oauth/kiro-account-load";
+import { captureOAuthAccountSelection, credentialGeneration, getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
+import * as oauth from "../../../src/oauth";
+import * as adapterResolve from "../../../src/server/adapter-resolve";
+import * as kiroCatalog from "../../../src/providers/kiro-model-catalog";
 import { encodeMessage } from "../../../src/lib/eventstream-decoder";
 import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-failover";
 import type { OcxConfig } from "../../../src/types";
@@ -167,6 +170,34 @@ test("an abandoned response body releases its lease when the request aborts", as
   controller.abort();
   expect(accountInFlight("kiro", id!)).toBe(0);
   await response.body?.cancel();
+});
+
+test("cancellation during Kiro credential recovery cannot install a replacement lease", async () => {
+  const [id] = await seed();
+  const controller = new AbortController();
+  let refreshStarted!: () => void;
+  let finishRefresh!: () => void;
+  const started = new Promise<void>(resolve => { refreshStarted = resolve; });
+  const refreshGate = new Promise<void>(resolve => { finishRefresh = resolve; });
+  globalThis.fetch = (async input => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.endsWith("/refreshToken")) {
+      refreshStarted();
+      await refreshGate;
+      return Response.json({ accessToken: "refreshed-access", refreshToken: "load-refresh-0", expiresIn: 3600 });
+    }
+    return new Response("expired", { status: 401 });
+  }) as typeof fetch;
+
+  const pending = handleResponses(request(controller.signal), config(),
+    { model: "claude-sonnet-4.5", provider: "kiro" }, { abortSignal: controller.signal });
+  await started;
+  controller.abort();
+  expect(accountInFlight("kiro", id!)).toBe(0);
+  finishRefresh();
+  const response = await pending;
+  expect(response.status).toBe(401);
+  expect(accountInFlight("kiro", id!)).toBe(0);
 });
 
 test("a reactive rotation onto a full account leaves the store selection and request state unchanged", async () => {
@@ -393,4 +424,57 @@ test("aborting initial capacity wait returns the client cancellation response", 
   const response = await pending;
   expect(response.status).toBe(499);
   expect(accountInFlight("kiro", a!)).toBe(1);
+});
+
+test("a lease granted as the request aborts is released instead of sending", async () => {
+  const [a] = await seed();
+  const block = (await acquireAccountLease("kiro", a!))!;
+  const credential = getAccountSet("kiro")!.accounts.find(row => row.id === a)!.credential;
+  const snapshot: oauth.OAuthAccessSnapshot = { provider: "kiro", accountId: a!,
+    generation: credentialGeneration(credential), accessToken: credential.access, kiro: credential.kiro };
+  const activeSnapshot = spyOn(oauth, "getValidAccessTokenSnapshot").mockResolvedValue(snapshot);
+  const accountSnapshot = spyOn(oauth, "getValidAccessSnapshotForAccount").mockResolvedValue(snapshot);
+  const refresh = spyOn(oauth, "forceRefreshOAuthAccessSnapshot").mockImplementation(async () => {
+    throw new Error("Unexpected credential refresh in cancellation regression");
+  });
+  const adapter = spyOn(adapterResolve, "resolveAdapter").mockImplementation(() => {
+    throw new Error("Unexpected adapter construction in cancellation regression");
+  });
+  const catalog = spyOn(kiroCatalog, "refreshKiroAccountModelsDetached").mockImplementation(() => {});
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends += 1;
+    throw new Error("Unexpected fetch in cancellation regression");
+  }) as typeof fetch;
+  const controller = new AbortController();
+  let notifyQueued!: () => void;
+  const queued = new Promise<void>(resolve => { notifyQueued = resolve; });
+  const stopObserving = observeQueuedAccountLeaseForTests((provider, accountId) => {
+    if (provider === "kiro" && accountId === a) notifyQueued();
+  });
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = handleResponses(request(controller.signal), config(),
+      { model: "claude-sonnet-4.5", provider: "kiro" }, { abortSignal: controller.signal });
+    await Promise.race([queued, pending.then(() => { throw new Error("Request completed before lease queueing"); })]);
+    // The real handoff grants synchronously; abort before the await continuation installs it.
+    block.release();
+    expect(accountInFlight("kiro", a!)).toBe(1);
+    controller.abort();
+    const response = await pending;
+    expect(response.status).toBe(499);
+    expect(accountInFlight("kiro", a!)).toBe(0);
+    expect(activeSnapshot.mock.calls.length + accountSnapshot.mock.calls.length).toBeGreaterThan(0);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(adapter).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+    expect(sends).toBe(0);
+  } finally {
+    controller.abort();
+    block.release();
+    stopObserving();
+    await pending?.catch(() => undefined);
+    activeSnapshot.mockRestore(); accountSnapshot.mockRestore(); refresh.mockRestore();
+    adapter.mockRestore(); catalog.mockRestore();
+  }
 });

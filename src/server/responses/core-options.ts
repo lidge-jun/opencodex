@@ -66,7 +66,7 @@ export interface HandleResponsesOptions {
   /** Physical-send reports already delivered to the shared used setter, including booking settlement. */
   onCompactionRecoverySendsReported?: (count: number) => void;
   /** Private holder for the Kiro serving-account lease. */
-  accountLoad?: { lease: AccountLease | null };
+  accountLoad?: { lease: AccountLease | null; cancelled: boolean };
   /** Internal Claude replay identity; consumed only by the final canonical Go transport. */
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */

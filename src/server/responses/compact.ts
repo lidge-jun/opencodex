@@ -1,4 +1,5 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import { previewXaiOauthWireModel } from "./core-normalize";
 import {
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
@@ -670,7 +671,15 @@ export async function handleResponsesCompact(
     // A compaction override picks the model, not the caller, so the key's scope
     // is applied to what the override resolved to rather than to the selector
     // the client sent.
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), compactRequestedModel, route);
+    // Routed xAI OAuth compaction must preview its Fast wire model here;
+    // native compact keeps checking the destination it dispatches directly.
+    const callerTier = (raw as Record<string, unknown>).service_tier;
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), compactRequestedModel, {
+      providerName: route.providerName,
+      modelId: previewXaiOauthWireModel({ options: {
+        serviceTier: compactFastRow ? "priority" : typeof callerTier === "string" ? callerTier : undefined,
+      } }, route, config, "responses"),
+    });
   } catch (err) {
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoEligiblePolicyCandidateError) {
