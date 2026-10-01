@@ -52,6 +52,7 @@ import { configSchema } from "./schema/config-schema";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
+  chatgptDesktopSchema,
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
@@ -305,6 +306,22 @@ function catalogAutoRefreshError(value: unknown): string | null {
   const issue = result.error.issues[0];
   const field = issue?.path.join(".");
   return `schema_invalid: catalogAutoRefresh${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+/**
+ * The read path's `.catch(undefined)` turns a malformed chatgptDesktop block into an absent one,
+ * so a live save of `{ unblockSend: true, port: 65536 }` would otherwise report success while
+ * silently disabling the integration the operator asked for. Reject it at the write boundary;
+ * a hand-edited file still degrades to off on load.
+ */
+function chatgptDesktopConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "chatgptDesktop") || raw.chatgptDesktop === undefined) return null;
+  const result = chatgptDesktopSchema.safeParse(raw.chatgptDesktop);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: chatgptDesktop${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
 }
 
 /**
@@ -642,6 +659,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
     ?? catalogAutoRefreshError(value)
+    ?? chatgptDesktopConfigError(value)
     ?? spendError(value)
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)

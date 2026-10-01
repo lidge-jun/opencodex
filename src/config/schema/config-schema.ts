@@ -4,6 +4,7 @@ import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
+  chatgptDesktopSchema,
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
@@ -268,6 +269,10 @@ export const configSchema = z.object({
     enabled: z.boolean().optional(),
     leadTimeMinutes: z.number().int().min(1).max(60).optional(),
   }).optional().catch(undefined),
+  // ChatGPT desktop send-unblock (opt-in, default off). Same degrade-to-off rule: a malformed
+  // group must never cost the operator their other settings. Live writes are rejected
+  // explicitly by chatgptDesktopConfigError in validateConfigCandidate().
+  chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   // Same degrade-to-off rule as the flags above: a hand-edited typo in an opt-in pool
   // feature must never cost the operator their providers.
   pool: z.object({

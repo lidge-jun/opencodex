@@ -1082,6 +1082,27 @@ export interface OcxConfig {
    */
   resetCreditAutoRedeem?: { enabled?: boolean; leadTimeMinutes?: number };
   /**
+   * ChatGPT desktop-app integration, opt-in and off by default.
+   *
+   * With `unblockSend: true` the service binds a local TLS listener for `chatgpt.com` and
+   * rewrites the subscription-quota send locks out of the payloads the desktop app reads:
+   * `blocked_features[send]` / `limits_progress[send]` entries in conversation payloads, and
+   * `rate_limit.allowed` / `rate_limit.limit_reached` in the `/backend-api/wham/usage`
+   * snapshot and stream. Quota display (percentages, reset times, upsell banner) is left
+   * untouched, so the app keeps showing the account's real usage while the composer unlocks
+   * for turns whose model calls are routed to third-party providers. There are two launch
+   * modes: by default the app must be launched with the resolver rule printed at startup,
+   * while `pacFallback: true` launches it with a generated PAC URL instead (the app then
+   * routes chatgpt.com through the local entry first and falls back to the system route).
+   * In both modes the intercept CA must be trusted once (see the startup log). A malformed
+   * value reads as off. `appServerShim: true` also runs the app's bundled app-server through a
+   * stdio shim that opens the account rate-limit gate the app reads from it, for builds where
+   * that gate does not come through the Chromium network stack; the app must be launched with
+   * `ocx chatgpt launch` after changing it. `port` (1–65535) overrides the default listener port (public
+   * port + 200).
+   */
+  chatgptDesktop?: { unblockSend?: boolean; pacFallback?: boolean; appServerShim?: boolean; port?: number };
+  /**
    * Shared account-pool kernel, opt-in and off by default.
    *
    * `kernel: true` is what makes a generic OAuth provider's stored `strategy` and

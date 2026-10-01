@@ -1076,6 +1076,19 @@ export const catalogAutoRefreshSchema = z.object({
 }).strict();
 
 /**
+ * ChatGPT desktop send-unblock settings. Exported so the write-boundary check in
+ * diagnostics.ts rejects what the read path's `.catch(undefined)` would silently drop:
+ * a live save of `{ unblockSend: true, port: 65536 }` must fail loudly, not report
+ * success with the whole block gone and the feature quietly off.
+ */
+export const chatgptDesktopSchema = z.object({
+  unblockSend: z.boolean().optional(),
+  pacFallback: z.boolean().optional(),
+  appServerShim: z.boolean().optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+}).strict();
+
+/**
  * One spend scope's ceiling.
  *
  * `.strict()` for the usual reason and one sharper one. Elsewhere a silently ignored key

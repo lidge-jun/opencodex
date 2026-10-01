@@ -302,6 +302,10 @@ configured outbound fetch, preserving physical-send admission and dispatch overr
 Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
 Proxy-selected discovery peers remain unpinnable, and private destinations still
 require explicit private-network permission plus NO_PROXY before direct transport.
+The SOCKS5 handshake itself — method negotiation, the RFC 1929 username/password
+subnegotiation a credentialed `socks5://` URL triggers, and CONNECT — lives in
+`src/lib/socks5-handshake.ts` and is shared by the fetch tunnel and the ChatGPT
+desktop relay's raw dial, so both routes authenticate a given proxy URL identically.
 
 The tunnel reader keeps incomplete framing separate from queued socket bytes,
 waits for new input, and caps headers even when the terminating delimiter arrives
