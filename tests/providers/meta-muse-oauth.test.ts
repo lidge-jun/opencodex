@@ -10,8 +10,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
-import { OAUTH_PROVIDERS } from "../../src/oauth";
+import { getLoginStatus, OAUTH_PROVIDERS } from "../../src/oauth";
 import { loginMetaMuse, refreshMetaMuseToken } from "../../src/oauth/meta-muse";
+import { removeCredential, saveCredential } from "../../src/oauth/store";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { supportsPerAccountQuota } from "../../src/providers/quota";
@@ -26,6 +27,7 @@ const MODELS = ["muse-spark-1.3", "muse-spark-1.3-contributor"] as const;
 
 /** A synthetic key of the measured grammar. Assembled at runtime, never a real value. */
 const CANARY = `LLM|${"1".repeat(16)}|${"c".repeat(27)}`;
+const ACCOUNT_TOKEN = "meta-account-" + "z".repeat(48);
 
 function entry() {
   const found = getProviderRegistryEntry("meta-muse");
@@ -46,7 +48,7 @@ function deps(over: Partial<Parameters<typeof loginMetaMuse>[1]> = {}) {
   return {
     platform: "darwin",
     readPointer: async () => pointer(),
-    readKeychain: async () => JSON.stringify({ secret_schema_version: 1, api_key: CANARY, access_token: "x".repeat(280) }),
+    readKeychain: async () => JSON.stringify({ secret_schema_version: 1, api_key: CANARY, access_token: ACCOUNT_TOKEN }),
     fetchImpl: okFetch,
     ...over,
   };
@@ -99,7 +101,7 @@ describe("meta-muse registry entry", () => {
     // The quota sentence must stay true in both directions: it now claims a reading,
     // so it must also say why that reading can be old and where it is absent.
     expect(note).toContain("shows the last observed value with its age");
-    expect(note).toContain("no endpoint to query them on demand");
+    expect(note).toContain("Muse OAuth access token, from device login or a local CLI import");
     expect(note).toContain("translated (non-passthrough) turns report none");
     expect(note).not.toContain("does not yet read or display it");
   });
@@ -108,13 +110,8 @@ describe("meta-muse registry entry", () => {
     expect(OAUTH_PROVIDERS["meta-muse"]?.defaultRefreshPolicy).toBe("disabled");
   });
 
-  /*
-   * supportsPerAccountQuota gates fetchAccountQuota, whose fallback sends any
-   * non-Kiro/non-Antigravity bearer to Anthropic's usage endpoint. Flipping this without
-   * a dedicated branch would ship a Meta key to Anthropic.
-   */
-  test("stays out of the per-account quota probe path", () => {
-    expect(supportsPerAccountQuota("meta-muse")).toBe(false);
+  test("supports account-token quota reads", () => {
+    expect(supportsPerAccountQuota("meta-muse")).toBe(true);
   });
 
   test("does not capture the live command-code meta/ model namespace", () => {
@@ -146,12 +143,34 @@ describe("meta-muse credential import", () => {
     expect(warning).toContain("meta-model");
   });
 
-  test("imports the api_key, not the access_token that 401s", async () => {
+  test("keeps Model API auth on api_key and retains access_token as metadata", async () => {
     const creds = await loginMetaMuse({}, deps());
     expect(creds.access).toBe(CANARY);
     expect(creds.refresh).toBe(CANARY);
     expect(creds.expires).toBe(Number.MAX_SAFE_INTEGER);
     expect(creds.source).toBe("local-cli");
+    expect(creds.muse?.oauthAccessToken).toBe(ACCOUNT_TOKEN);
+  });
+
+  test("imports API-key-only credentials when the optional account token is missing", async () => {
+    const creds = await loginMetaMuse({}, deps({
+      readKeychain: async () => JSON.stringify({ secret_schema_version: 1, api_key: CANARY }),
+    }));
+    expect(creds.access).toBe(CANARY);
+    expect(creds.refresh).toBe(CANARY);
+    expect(creds.muse).toBeUndefined();
+  });
+
+  test("the public account status omits imported credential metadata", async () => {
+    const creds = await loginMetaMuse({}, deps());
+    await saveCredential("meta-muse", creds);
+    const status = getLoginStatus("meta-muse", false);
+    const publicStatus = JSON.stringify(status);
+    expect(status.accounts).toHaveLength(1);
+    expect(status.accounts?.[0]).not.toHaveProperty("muse");
+    expect(publicStatus).not.toContain(ACCOUNT_TOKEN);
+    expect(publicStatus).not.toContain(CANARY);
+    await removeCredential("meta-muse");
   });
 
   test("carries a normalized email, and no accountId, so the display mask applies", async () => {

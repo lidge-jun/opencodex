@@ -46,6 +46,7 @@ export type OAuthAccountHealthStatus = "healthy" | "cooldown" | "reauth_required
 export type AccountQuotaMode = "probe" | "passive" | "unsupported";
 export interface AccountQuotaReading {
   quotaMode?: AccountQuotaMode;
+  quotaObserved?: boolean;
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;

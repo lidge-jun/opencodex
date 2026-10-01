@@ -2543,7 +2543,7 @@ export const ko: Record<TKey, string> = {
   "quota.ageHours": "{n}시간",
   "quota.ageDays": "{n}일",
   "quota.observedAgo": "{age} 전에 확인한 값",
-  "quota.observedHint": "Meta는 스트리밍 응답 중에만 사용량을 보고합니다. 실시간 수치가 아니라 마지막으로 확인된 값입니다.",
+  "quota.observedHint": "이 사용량은 스트리밍 응답 중에 보고되었습니다. 표시된 시간이 관측 시점이며 실시간 수치는 아닙니다.",
   "quota.weeklyLimit": "주간 한도",
   "quota.monthlyLimit": "30일 한도",
   "quota.cursorFirstParty": "자사 모델",

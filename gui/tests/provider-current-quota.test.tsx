@@ -55,6 +55,22 @@ test("Overview and Usage place the same current-account section after usage stat
   expect(usage.indexOf('pws-usage-metrics')).toBeLessThan(usage.indexOf('aria-label="Current account usage"'));
 });
 
+test("Muse subscription and weekly quota appear in the Providers usage section", () => {
+  const markup = render(<ProviderUsage
+    item={{ ...item, name: "meta-muse", adapter: "meta-muse" }}
+    quotaReport={{
+      source: "meta-muse:subscription-observation",
+      observed: true,
+      updatedAt: observedAt,
+      quota: { customWindows: [{ label: "subscription", percent: 45 }], weeklyPercent: 28 },
+    }}
+  />);
+  expect(markup).toContain('aria-label="Current account usage"');
+  expect(markup).toContain("45% used");
+  expect(markup).toContain("28% used");
+  expect(markup).toContain("This usage was reported during a streaming response");
+});
+
 test("an unobserved active passive row cannot inherit the previous account report", () => {
   const markup = render(<ProviderCurrentQuota
     report={{ observed: true, quota: { weeklyPercent: 75, updatedAt: observedAt } }}
@@ -71,6 +87,23 @@ test("known current-account state overrides stale provider quota", () => {
     const markup = render(<ProviderCurrentQuota report={report} reading={{ quotaMode }} />);
     expect(markup).not.toContain("75%");
   }
+});
+
+test("passive and probe-fallback observations show their age without inheriting another account", () => {
+  const staleReport = { observed: true, quota: { weeklyPercent: 92, updatedAt: observedAt } };
+  const accountQuota = { weeklyPercent: 41, updatedAt: observedAt + 60_000 };
+  const observedProbe = render(<ProviderCurrentQuota
+    report={staleReport}
+    reading={{ quotaMode: "probe", quotaObserved: true, quota: accountQuota }}
+  />);
+  expect(observedProbe).toContain("41% used");
+  expect(observedProbe).not.toContain("92% used");
+  expect(observedProbe).toContain("This usage was reported during a streaming response");
+
+  const probe = render(<ProviderCurrentQuota reading={{ quotaMode: "probe", quotaObserved: false, quota: accountQuota }} />);
+  expect(probe).not.toContain("This usage was reported during a streaming response");
+  const passive = render(<ProviderCurrentQuota reading={{ quotaMode: "passive", quota: accountQuota }} />);
+  expect(passive).toContain("This usage was reported during a streaming response");
 });
 
 test("all-account and current sections preserve zero and credit-only readings", () => {

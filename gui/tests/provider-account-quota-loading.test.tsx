@@ -474,6 +474,39 @@ test("roster-only refresh retains a matching diagnosis and clears it after mode 
   expect(requests.every(request => !request.url.includes("quota=1"))).toBe(true);
 });
 
+test("quota observation stays on its account through roster and late enrichment merges", async () => {
+  const response = deferred<Response>();
+  const started = deferred<void>();
+  const quota = { ...reading, fiveHourPercent: 45 };
+  await act(async () => {
+    pools.setAccountSets({ fixture: { activeAccountId: "a", accounts: [
+      { id: "a", active: true, quotaMode: "probe", quotaObserved: true, quota: reading },
+      { id: "b", active: false, quotaMode: "probe", quotaObserved: true },
+    ] } });
+  });
+  respond = async url => {
+    if (url.includes("quota=1")) { started.resolve(); return response.promise; }
+    return Response.json({ activeAccountId: "b", accounts: [
+      { id: "a", active: false, quotaMode: "probe" },
+      { id: "b", active: true, quotaMode: "probe" },
+    ] });
+  };
+  let full!: Promise<boolean>;
+  await act(async () => { full = pools.fetchAccountSets(["fixture"], true); await started.promise; });
+  await act(async () => { await pools.refreshAccountRosters({ provider: "fixture", kind: "oauth" }); });
+  await act(async () => {
+    response.resolve(Response.json({ activeAccountId: "a", accounts: [
+      { id: "a", active: true, quotaMode: "probe", quota },
+      { id: "b", active: false, quotaMode: "probe", quota, quotaObserved: false },
+    ] }));
+    expect(await full).toBe(true);
+  });
+  const accounts = pools.accountSets.fixture.accounts;
+  expect(accounts.find(row => row.active)?.id).toBe("b");
+  expect(accounts.find(row => row.id === "a")?.quotaObserved).toBe(true);
+  expect(accounts.find(row => row.id === "b")?.quotaObserved).toBe(false);
+});
+
 test.each([true, false])("late quota failure=%s preserves newer selection and matching membership", async failure => {
   const response = deferred<Response>();
   const started = deferred<void>();

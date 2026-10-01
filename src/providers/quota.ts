@@ -61,7 +61,7 @@ import {
   fetchCursorQuota,
   fetchKiroQuota,
   fetchMuseKeyQuota,
-  fetchPassiveProviderQuota,
+  fetchMuseAccountQuota,
   fetchXaiQuota,
 } from "./quota/vendor-probes-oauth";
 import { fetchCommandCodeQuota, fetchKimiQuota, keyQuotaReaderForProvider } from "./quota/vendor-probes-key";
@@ -124,12 +124,7 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return await fetchAntigravityQuota(name);
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
-    // meta-muse: a device-logged-in account can be probed at the key endpoint; an
-    // imported or pasted one cannot, and falls back to its last in-band observation.
-    // The probe is tried first and its failure is never fatal to the row.
-    if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) {
-      return (await fetchMuseKeyQuota(name)) ?? await fetchPassiveProviderQuota(name);
-    }
+    if (provider.authMode === "oauth" && name === "meta-muse") return fetchMuseKeyQuota(name, forceRefresh, provider);
     const reader = keyQuotaReaderForProvider(name, provider);
     // Keep destination/auth fields bound to the same request as the reader's captured
     // bearer, even if the live provider object changes while the quota probe awaits.
@@ -418,6 +413,7 @@ async function fetchAccountQuota(
 ): Promise<AccountQuotaCacheEntry> {
   if (accountQuotaProbeSkip(provider, accountId)) return accountQuotaProbeSkip(provider, accountId)!;
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
+  if (provider === "meta-muse") return fetchMuseAccountQuota(provider, accountId, forceRefresh, providerConfig);
   if (provider === "anthropic" || provider === "kiro") hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, accountId);
   const writerGeneration = captureConfigGeneration();
@@ -523,6 +519,7 @@ async function fetchAccountQuota(
   accountQuotaInflight.set(flightKey, probe);
   return probe;
 }
+
 /**
  * Per-account quota rows for a provider's logged-in accounts. Probes run in parallel; a
  * single failing account never blocks the others.
@@ -540,11 +537,12 @@ export async function fetchProviderAccountQuotas(
     const result: ProviderAccountQuota = {
       accountId: account.id,
       quota: provider === "anthropic" ? normalizeAnthropicQuota(entry.quota, Date.now()) : entry.quota,
+      ...(entry.quotaObserved !== undefined ? { quotaObserved: entry.quotaObserved } : {}),
       ...(entry.unavailable ? { unavailable: true as const } : {}),
       ...(entry.unavailable && entry.quotaFailure && entry.quotaFailureIsCurrent?.() === true ? { quotaFailure: entry.quotaFailure } : {}),
     };
     if (entry.quotaFailureIsCurrent) Object.defineProperty(result, "quotaFailureIsCurrent", { value: entry.quotaFailureIsCurrent });
-    if (provider === "anthropic" && entry.isCurrent) Object.defineProperty(result, "isCurrent", { value: entry.isCurrent });
+    if ((provider === "anthropic" || provider === "meta-muse") && entry.isCurrent) Object.defineProperty(result, "isCurrent", { value: entry.isCurrent });
     if (!explicitAccountReader(provider)) return result;
     const identity = entry.identity;
     Object.defineProperty(result, "isCurrent", { value: () => {

@@ -2504,7 +2504,7 @@ export const de: Record<TKey, string> = {
   "quota.ageHours": "{n} Std.",
   "quota.ageDays": "{n} T.",
   "quota.observedAgo": "Vor {age} erfasst",
-  "quota.observedHint": "Meta meldet die Nutzung nur während einer Streaming-Antwort. Dies ist der zuletzt erfasste Wert, keine Live-Messung.",
+  "quota.observedHint": "Diese Nutzung wurde während einer Streaming-Antwort gemeldet. Der angezeigte Zeitpunkt gibt an, wann sie erfasst wurde; es handelt sich nicht um einen Live-Wert.",
   "quota.weeklyLimit": "Wochenlimit",
   "quota.monthlyLimit": "30-Tage-Limit",
   "quota.cursorFirstParty": "Erstanbieter-Modelle",

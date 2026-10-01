@@ -513,8 +513,8 @@ describe("explicit OAuth account quota readers", () => {
     for (const provider of ["anthropic", "kiro", "google-antigravity", ...cases.map(row => row.provider)]) {
       expect(providerOAuthAccountQuotaMode(provider)).toBe("probe");
     }
-    expect(providerOAuthAccountQuotaMode("meta-muse")).toBe("passive");
-    expect(supportsPerAccountQuota("meta-muse")).toBe(false);
+    expect(providerOAuthAccountQuotaMode("meta-muse")).toBe("probe");
+    expect(supportsPerAccountQuota("meta-muse")).toBe(true);
     expect(providerOAuthAccountQuotaMode("github-copilot")).toBe("unsupported");
   });
 

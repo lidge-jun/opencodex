@@ -16,6 +16,7 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }
   const rowOwnsReading = reading !== undefined && (
     reading.quotaMode !== undefined || reading.quota !== undefined
     || reading.quotaUnavailable !== undefined || reading.quotaPending !== undefined
+    || reading.quotaObserved !== undefined
   );
   const effective: AccountQuotaReading = rowOwnsReading ? reading : {
     quota: accountQuotaFromReport(current),

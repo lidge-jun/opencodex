@@ -424,7 +424,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               needsReauth: summary.needsReauth === true,
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
-          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
+          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode: providerOAuthAccountQuotaMode(provider, summary.id),
             ...(supportsPause ? { paused: full?.paused === true } : {}),
             ...(provider === "anthropic" && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThreshold(config, full),
@@ -437,10 +437,6 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // account can show its own 5h/weekly bars (not just the active one). Opt-in via ?quota=1
     // so the plain account list stays a cheap local read; ?refresh=1 bypasses the TTL.
     const wantQuota = url.searchParams.get("quota") === "1" && quotaMode === "probe";
-    // Meta publishes no quota endpoint: its usage is observed in-band on streaming turns
-    // and read back from the cache here. `?refresh=1` is accepted and ignored on this
-    // path rather than rejected -- the GUI sends it for every provider on a manual
-    // refresh, and a 400 would report an error for what is simply a no-op.
     const passiveQuota = url.searchParams.get("quota") === "1" && quotaMode === "passive";
     if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
     const forceRefresh = url.searchParams.get("refresh") === "1";
@@ -459,10 +455,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
           return { ...account, quota: null, quotaUnavailable: true };
         }
+        if (account.quotaMode === "passive" && row.quota === null) return account;
         return {
           ...account,
           quota: row.quota,
-          ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true,
+          ...(row.quotaObserved !== undefined ? { quotaObserved: row.quotaObserved } : {}),
+          ...(account.quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true,
             ...(row.unavailable && row.quotaFailure && row.quotaFailureIsCurrent?.() === true ? { quotaFailure: row.quotaFailure } : {}),
           } : {}),
         };

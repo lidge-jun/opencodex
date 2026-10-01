@@ -66,14 +66,9 @@ afterEach(() => {
 });
 
 describe("passive Muse quota cache", () => {
-  /*
-   * supportsPerAccountQuota gates fetchAccountQuota, whose fallback sends any
-   * non-Kiro/non-Antigravity bearer to Anthropic's usage endpoint. The passive path must
-   * never flip it -- this is the exfiltration guard the meta-muse OAuth unit installed.
-   */
-  test("is passive without entering the probe allowlist", () => {
+  test("supports both passive observations and dedicated account-token probes", () => {
     expect(hasPassiveAccountQuota("meta-muse")).toBe(true);
-    expect(supportsPerAccountQuota("meta-muse")).toBe(false);
+    expect(supportsPerAccountQuota("meta-muse")).toBe(true);
   });
 
   test("ignores providers that are not passive", () => {

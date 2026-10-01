@@ -1502,7 +1502,7 @@ export const fr: Record<TKey, string> = {
   "quota.ageHours": "{n} h",
   "quota.ageDays": "{n} j",
   "quota.observedAgo": "Relevé il y a {age}",
-  "quota.observedHint": "Meta ne communique l'utilisation que pendant une réponse en streaming : il s'agit de la dernière valeur observée, pas d'une mesure en direct.",
+  "quota.observedHint": "Cette utilisation a été signalée pendant une réponse en streaming. L'heure indiquée est celle de l'observation ; il ne s'agit pas d'une mesure en temps réel.",
   "quota.weeklyLimit": "Limite hebdomadaire",
   "quota.monthlyLimit": "Limite sur 30 jours",
   "quota.cursorFirstParty": "Modèles propriétaires",

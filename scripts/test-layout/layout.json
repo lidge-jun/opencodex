@@ -1104,6 +1104,7 @@
     "memory-watchdog.test.ts": "server",
     "meta-model-api-provider.test.ts": "providers",
     "meta-muse-oauth.test.ts": "providers",
+    "muse-account-quota.test.ts": "providers",
     "mimo-effort.test.ts": "providers",
     "mimo-free-provider.test.ts": "providers",
     "mimo-token-plan-provider.test.ts": "providers",

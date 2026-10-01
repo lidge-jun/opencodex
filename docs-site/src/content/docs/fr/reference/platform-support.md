@@ -55,15 +55,20 @@ qui les transmet directement au processus enfant.
 
 ### Meta Muse Code
 
-Sur macOS, OpenCodex importe la clé API déjà enregistrée par la CLI Muse Code
-après `muse login` : vous n'avez pas à en fournir une seconde.
+Sur macOS, une connexion classique essaie d'abord d'importer la clé API déjà
+enregistrée par `muse login`. Si aucune clé locale n'est disponible, ou sur une
+autre plateforme, OpenCodex démarre l'autorisation par appareil sans lancer la
+CLI Muse. L'ajout d'un compte et la réauthentification ignorent l'importation.
+Si l'autorisation par appareil échoue sans annulation, une interface de saisie
+peut accepter une clé manuelle. La clé collée passe les mêmes contrôles de
+format et la même validation par le Model API qu'une clé importée. La connexion
+de gestion exige une session du tableau de bord avant l'acquisition
+d'identifiants ou l'envoi du code.
 
-Ailleurs, OpenCodex vous demande de coller la clé. Meta ne distribue aucune CLI
-Windows native ; sous Linux, la CLI existe, mais l'emplacement de ses
-identifiants n'a pas été vérifié. OpenCodex évite donc de deviner le magasin.
-La même clé figure dans la [console développeur de Meta](https://dev.meta.ai),
-et une clé collée passe les mêmes contrôles de format et la même validation en
-direct auprès de l'API Model qu'une clé importée.
+Pour actualiser le quota, OpenCodex utilise le jeton de compte Muse s'il est
+disponible. Sinon, OpenCodex affiche l'utilisation de l'abonnement observée dans
+les flux de réponse, lorsqu'elle existe. Cette actualisation n'ouvre pas de
+navigateur et ne remplace pas la clé API du modèle.
 
 ## Remarques pour Windows
 

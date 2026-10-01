@@ -28,6 +28,8 @@ const ACCOUNT_TOKEN_SKEW_MS = 60_000;
 export type AccountQuotaCacheEntry = {
   ts: number;
   quota: ProviderQuota | null;
+  /** True only for an in-band Muse subscription-usage observation; false is a key probe. */
+  quotaObserved?: boolean;
   /** Last probe failed (429 / network / expired login); still may hold last-good quota. */
   unavailable?: true;
   quotaFailure?: QuotaFailureCode;
@@ -166,6 +168,7 @@ export function mayCommitProviderQuotaKey(key: string, writerGeneration: number)
 export interface ProviderAccountQuota {
   accountId: string;
   quota: ProviderQuota | null;
+  quotaObserved?: boolean;
   /** Set when the probe could not reach upstream (expired login, 429, network). */
   unavailable?: true;
   quotaFailure?: QuotaFailureCode;
@@ -175,7 +178,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic" || provider === "kiro" || provider === "google-antigravity"
+  return provider === "anthropic" || provider === "kiro" || provider === "google-antigravity" || provider === "meta-muse"
     || explicitAccountReader(provider);
 }
 
@@ -184,8 +187,11 @@ export function explicitAccountReader(provider: string): boolean {
     || provider === "devin";
 }
 
-export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
-  return hasPassiveAccountQuota(provider) ? "passive" : supportsPerAccountQuota(provider) ? "probe" : "unsupported";
+export function providerOAuthAccountQuotaMode(provider: string, accountId?: string): AccountQuotaMode {
+  if (accountId && provider === "meta-muse") {
+    return getAccountCredential(provider, accountId)?.muse?.oauthAccessToken ? "probe" : "passive";
+  }
+  return supportsPerAccountQuota(provider) ? "probe" : hasPassiveAccountQuota(provider) ? "passive" : "unsupported";
 }
 
 export function accountCacheKey(provider: string, accountId: string): string {
@@ -320,7 +326,10 @@ export function recordPassiveAccountQuota(
   // them. A probe writer cannot hit this because its own read hydrates first; an
   // observation arrives unprompted, so it must hydrate itself.
   hydrateAccountQuotaCache();
-  accountQuotaCache.set(key, { ts: Date.now(), quota });
+  const identity = explicitQuotaIdentity(provider, accountId);
+  const isCurrent = identity ? () => explicitQuotaIdentity(provider, accountId) === identity : undefined;
+  accountQuotaCache.set(key, { ts: Date.now(), quota, quotaObserved: true,
+    ...(identity ? { identity } : {}), ...(isCurrent ? { isCurrent } : {}) });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
   persistAccountQuotaCache();
@@ -349,7 +358,12 @@ export function readPassiveProviderAccountQuotas(provider: string): ProviderAcco
   const rows: ProviderAccountQuota[] = [];
   for (const account of set.accounts) {
     const entry = accountQuotaCache.get(accountCacheKey(provider, account.id));
-    if (entry?.quota) rows.push({ accountId: account.id, quota: entry.quota });
+    if (entry?.quota) {
+      const row: ProviderAccountQuota = { accountId: account.id, quota: entry.quota,
+        ...(entry.quotaObserved === undefined ? {} : { quotaObserved: entry.quotaObserved }) };
+      if (entry.isCurrent) Object.defineProperty(row, "isCurrent", { value: entry.isCurrent });
+      rows.push(row);
+    }
   }
   return rows;
 }
@@ -477,10 +491,14 @@ export function explicitQuotaIdentity(provider: string, accountId: string, confi
 }
 
 export function quotaCredentialIdentity(provider: string, accountId: string, credential: NonNullable<ReturnType<typeof getAccountCredential>>, target: OcxProviderConfig): string {
+  const museAccount = provider === "meta-muse"
+    ? getAccountSet(provider)?.accounts.find(account => account.id === accountId)
+    : undefined;
   return createHash("sha256").update(JSON.stringify([
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
     target.adapter, target.baseUrl, target.authMode, target.disabled === true,
+    ...(provider === "meta-muse" ? [credential.muse?.oauthAccessToken, museAccount?.loginId] : []),
     // Only credentials that carry their own endpoint (Devin tenants) extend the identity, so
     // every other provider's existing cache keys stay valid.
     ...(provider === "devin" && credential.apiBaseUrl ? [credential.apiBaseUrl] : []),

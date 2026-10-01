@@ -1356,6 +1356,14 @@ Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 custom provider.
 
+**Meta Muse Code quota.** Accounts with a Muse access token use a direct quota probe.
+Other accounts use subscription usage observed in response streams when available.
+Refresh does not open a browser, switch the active account, or replace the Model API key.
+A missing quota window stays unknown, never 0%. A temporary probe failure keeps the last good
+value and its timestamp; an inactive subscription or terminal authentication failure clears it.
+Muse key-mint probes are spaced at least five minutes apart per account, even after a forced
+refresh. This display does not change Meta's billing or usage terms above.
+
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and
 does not follow redirects. The response's rolling, weekly, and monthly `percent` values are

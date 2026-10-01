@@ -1209,7 +1209,7 @@ export const zhTW: Record<TKey, string> = {
   "quota.ageHours": "{n} 小時",
   "quota.ageDays": "{n} 天",
   "quota.observedAgo": "{age}前取得",
-  "quota.observedHint": "Meta 僅在串流回應期間回報用量，因此這是最後一次取得的數值，而非即時讀數。",
+  "quota.observedHint": "此用量是在串流回應期間回報的。顯示的時間是觀測時間；這不是即時讀數。",
   "quota.weeklyLimit": "每週限額",
   "quota.monthlyLimit": "30 天限額",
   "quota.cursorFirstParty": "官方模型",

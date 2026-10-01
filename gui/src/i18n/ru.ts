@@ -1496,7 +1496,7 @@ export const ru: Record<TKey, string> = {
   "quota.ageHours": "{n} ч",
   "quota.ageDays": "{n} дн",
   "quota.observedAgo": "Получено {age} назад",
-  "quota.observedHint": "Meta сообщает об использовании только во время потокового ответа, поэтому это последнее полученное значение, а не текущее.",
+  "quota.observedHint": "Эти данные об использовании получены во время потокового ответа. Указано время наблюдения; это не текущие данные.",
   "quota.weeklyLimit": "Недельный лимит",
   "quota.monthlyLimit": "30-дневный лимит",
   "quota.cursorFirstParty": "Собственные модели",

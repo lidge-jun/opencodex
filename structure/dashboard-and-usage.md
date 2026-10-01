@@ -233,10 +233,10 @@ Account quota discovery is capability-based. Cheap OAuth and provider-key lists 
 `refresh=1` bypasses settled quota cache while joining a current same-identity read.
 OAuth readers use the named stored account; key readers use isolated per-key configuration,
 never active-key mutation or the provider-wide cache. Response projection rechecks key identity
-and exposes only quota/availability fields, not its internal identity guard. Passive observations
-retain their original timestamp and never trigger inference or token renewal. Unsupported,
-unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed
-because they may share one upstream balance.
+and exposes only quota/availability fields, not its internal guard. Meta Muse uses per-account `probe` only with `muse.oauthAccessToken`; otherwise it uses passive response-stream observations.
+Its bounded key-mint probe reads subscription usage without replacing the Model API key or selecting another account; empty windows stay unknown, never zero. Temporary failures preserve the last good value and timestamp; inactive subscriptions and terminal auth failures clear it.
+Forced Muse probes retain five-minute minimum spacing per account. Passive observations retain their timestamps and trigger no inference or token renewal. Unsupported, unobserved, failed and measured-zero readings remain distinct;
+multiple keys are not summed because they may share one upstream balance.
 
 Provider details use one account-quota reading renderer for Overview, Usage and Accounts/API
 keys. Current-account usage sits below usage statistics; a known-mode active row is authoritative
