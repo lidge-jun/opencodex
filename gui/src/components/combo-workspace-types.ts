@@ -14,6 +14,10 @@ export type ModelOption = {
   namespaced?: string;
   reasoningEfforts?: string[];
   inputModalities?: string[];
+  /** Operator-declared modalities; beats the (sidecar-widened) catalog view on reload. */
+  inputModalitiesDeclared?: string[];
+  /** Authoritative runtime verdict from /api/models: the Vision Sidecar describes this model's images. */
+  visionSidecarConsumer?: boolean;
 };
 
 export type ComboAddIntent = "blank" | "jev-auto";
@@ -27,6 +31,8 @@ export interface ComboWorkspaceProps {
   models: ModelOption[];
   /** Combo ids currently present in the live catalog (`provider === "combo"`). */
   cataloguedComboIds?: ReadonlySet<string>;
+  /** Vision Sidecar enabled state from /api/sidecar-settings; undefined = unknown, no warning. */
+  visionEnabled?: boolean;
   loading?: boolean;
   onRefresh: () => void;
   onSave: (item: ComboItem, isCreate: boolean, renameFrom?: string) => Promise<{ ok: boolean; error?: string }>;

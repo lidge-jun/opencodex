@@ -1,14 +1,71 @@
 import type { ComboTarget } from "./combo-workspace-data";
 import type { ModelOption } from "./components/combo-workspace-types";
 
-/** Whether every selected target advertises image input (incomplete rows fail closed). */
+type ComboImageMemberKind = "vision" | "sidecar" | "blocked" | "missing";
+
+/**
+ * One combo member's image story. Classification must survive a reload, so it
+ * reads `visionSidecarConsumer` — the runtime predicate's verdict served on the
+ * /api/models row — before falling back to the DECLARED modalities
+ * (`inputModalitiesDeclared`). A model covered only by legacy `noVisionModels`
+ * has no declaration and its advertised modalities are widened to image, so the
+ * flag is what keeps it a sidecar member after reload. Rows with no known
+ * modalities, or modalities without text, cannot be covered and block the combo.
+ */
+function imageMemberKind(target: ComboTarget, models: ModelOption[]): ComboImageMemberKind {
+  const provider = target.provider.trim();
+  const modelId = target.model.trim();
+  if (!provider || !modelId) return "missing";
+  const model = models.find((row) => row.provider === provider && row.id === modelId);
+  if (!model) return "missing";
+  if (model.visionSidecarConsumer === true) return "sidecar";
+  const declared = model.inputModalitiesDeclared ?? model.inputModalities;
+  if (!declared || declared.length === 0) return "blocked";
+  if (declared.includes("image")) return "vision";
+  return declared.includes("text") ? "sidecar" : "blocked";
+}
+
+/** Whether images can be enabled: every target is known and either images natively or can be declared text-only. */
 export function comboImagesSupported(targets: ComboTarget[], models: ModelOption[]): boolean {
   if (targets.length === 0) return false;
   return targets.every((target) => {
-    const provider = target.provider.trim();
-    const modelId = target.model.trim();
-    if (!provider || !modelId) return false;
-    const model = models.find((row) => row.provider === provider && row.id === modelId);
-    return !!model?.inputModalities?.includes("image");
+    const kind = imageMemberKind(target, models);
+    return kind === "vision" || kind === "sidecar";
   });
+}
+
+/**
+ * Exact targets that need a text-only declaration so the Vision Sidecar covers
+ * them when the combo accepts images. Deduplicated in submission order.
+ */
+export function comboVisionSidecarTargets(
+  targets: ComboTarget[],
+  models: ModelOption[],
+): Array<{ provider: string; model: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ provider: string; model: string }> = [];
+  for (const target of targets) {
+    if (imageMemberKind(target, models) !== "sidecar") continue;
+    const provider = target.provider.trim();
+    const model = target.model.trim();
+    const key = `${provider}/${model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ provider, model });
+  }
+  return out;
+}
+
+/**
+ * Exact targets that cannot be covered by the Vision Sidecar: their row is
+ * known but its modalities are unknown or have no text input. Named in the
+ * hint so the operator knows which member blocks the image switch.
+ */
+export function comboImageBlockedTargets(
+  targets: ComboTarget[],
+  models: ModelOption[],
+): Array<{ provider: string; model: string }> {
+  return targets
+    .filter((target) => imageMemberKind(target, models) === "blocked")
+    .map((target) => ({ provider: target.provider.trim(), model: target.model.trim() }));
 }

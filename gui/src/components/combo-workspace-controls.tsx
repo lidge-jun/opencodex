@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ComboEffort, ComboStrategy, ComboTarget, ProviderQuotaStates } from "../combo-workspace-data";
-import { comboImagesSupported } from "../combo-capabilities";
+import { comboImageBlockedTargets, comboImagesSupported, comboVisionSidecarTargets } from "../combo-capabilities";
 import { COMBO_EFFORTS, COMBO_STRATEGIES, COMBO_STRATEGY_LABEL_KEYS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
@@ -88,6 +88,7 @@ export function ComboCapabilities({
   models,
   imageInput,
   reasoningEffortMode,
+  visionEnabled,
   disabled,
   onChange,
 }: {
@@ -95,13 +96,30 @@ export function ComboCapabilities({
   models: ModelOption[];
   imageInput: "auto" | "disabled";
   reasoningEffortMode: "strict" | "adaptive";
+  /** Vision Sidecar enabled state; undefined = unknown, renders no warning. */
+  visionEnabled?: boolean;
   disabled?: boolean;
   onChange: (patch: { imageInput?: "auto" | "disabled"; reasoningEffortMode?: "strict" | "adaptive" }) => void;
 }) {
   const t = useT();
   const imagesSupported = comboImagesSupported(targets, models);
+  const blockedTargets = comboImageBlockedTargets(targets, models);
   // Default: checked (auto) when supported; force off when any target lacks image.
   const effectiveOn = imagesSupported && imageInput !== "disabled";
+  const sidecarTargets = comboVisionSidecarTargets(targets, models);
+  // Enrollment wording only while image input is enabled: a disabled combo is not
+  // enrolling anything, so it gets the plain hint instead of save-time promises.
+  const imageHint = !imagesSupported
+    ? blockedTargets.length > 0
+      ? t("cws.capability.imageInputBlockedHint", {
+        models: blockedTargets.map(({ provider, model }) => `${provider}/${model}`).join(", "),
+      })
+      : t("cws.capability.imageInputUnavailable")
+    : sidecarTargets.length > 0 && imageInput !== "disabled"
+      ? t("cws.capability.imageInputSidecarHint", {
+        models: sidecarTargets.map(({ provider, model }) => `${provider}/${model}`).join(", "),
+      })
+      : t("cws.capability.imageInputHint");
 
   return (
     <section className="cwi-capabilities" aria-label={t("cws.capabilities")}>
@@ -110,8 +128,14 @@ export function ComboCapabilities({
         <div>
           <span className="cwi-capability-label">{t("cws.capability.imageInput")}</span>
           <p className="muted cwi-capability-hint">
-            {imagesSupported ? t("cws.capability.imageInputHint") : t("cws.capability.imageInputUnavailable")}
+            {imageHint}
           </p>
+          {sidecarTargets.length > 0 && effectiveOn && visionEnabled === false ? (
+            <p className="muted cwi-capability-hint" style={{ color: "var(--danger, #b42318)" }}>
+              {t("cws.capability.imageInputSidecarDisabled")}{" "}
+              <a href="#dashboard">{t("nav.dashboard")}</a>
+            </p>
+          ) : null}
         </div>
         <Switch
           on={effectiveOn}

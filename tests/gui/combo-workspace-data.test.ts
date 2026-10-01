@@ -19,7 +19,7 @@ import {
   updateComboAliasDraft,
   validateComboDraft,
 } from "../../gui/src/combo-workspace-data";
-import { comboImagesSupported } from "../../gui/src/combo-capabilities";
+import { comboImageBlockedTargets, comboImagesSupported, comboVisionSidecarTargets } from "../../gui/src/combo-capabilities";
 
 const configuredProviders = {
   a: {},
@@ -846,7 +846,7 @@ describe("comboImagesSupported", () => {
     )).toBe(false);
   });
 
-  test("returns true only when every complete target advertises image", () => {
+  test("returns true when every known target advertises image", () => {
     const models = [
       { provider: "a", id: "m1", inputModalities: ["text", "image"] },
       { provider: "b", id: "m2", inputModalities: ["text", "image"] },
@@ -857,19 +857,100 @@ describe("comboImagesSupported", () => {
     )).toBe(true);
   });
 
-  test("returns false when any target is missing from the catalog or lacks image", () => {
+  test("allows text-only members for sidecar coverage but fails closed on unknown, silent, and text-free rows", () => {
     const models = [
       { provider: "a", id: "m1", inputModalities: ["text", "image"] },
       { provider: "b", id: "m2", inputModalities: ["text"] },
     ];
+    // Known text-only rows can be declared text-only on save; only catalog-absent rows block.
     expect(comboImagesSupported(
       [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }],
       models,
+    )).toBe(true);
+    // No known modalities: the runtime cannot prove text input, so enrollment is refused.
+    expect(comboImagesSupported(
+      [{ provider: "a", model: "m1" }, { provider: "c", model: "m3" }],
+      [...models, { provider: "c", id: "m3" }],
+    )).toBe(false);
+    // Audio-only rows have no text input; the sidecar cannot cover them.
+    expect(comboImagesSupported(
+      [{ provider: "a", model: "m1" }, { provider: "c", model: "m3" }],
+      [...models, { provider: "c", id: "m3", inputModalities: ["audio"] }],
     )).toBe(false);
     expect(comboImagesSupported(
       [{ provider: "a", model: "m1" }, { provider: "b", model: "ghost" }],
       models,
     )).toBe(false);
+  });
+
+  test("classifies from the declared modalities so enrollment survives reload", () => {
+    // After enrollment the catalog WIDENS the row to image, but the declaration
+    // still says text-only: reload must keep it a sidecar member, not native vision.
+    const reloaded = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"], inputModalitiesDeclared: ["text"] },
+    ];
+    expect(comboImagesSupported([{ provider: "a", model: "m1" }], reloaded)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "a", model: "m1" }], reloaded))
+      .toEqual([{ provider: "a", model: "m1" }]);
+  });
+
+  test("visionSidecarConsumer beats image-advertised modalities when no declaration exists", () => {
+    // Legacy `noVisionModels` rows carry no declaration while the catalog widens
+    // them to image; the runtime flag alone keeps them sidecar members.
+    const reloaded = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"], visionSidecarConsumer: true },
+    ];
+    expect(comboImagesSupported([{ provider: "a", model: "m1" }], reloaded)).toBe(true);
+    expect(comboVisionSidecarTargets([{ provider: "a", model: "m1" }], reloaded))
+      .toEqual([{ provider: "a", model: "m1" }]);
+  });
+});
+
+describe("comboVisionSidecarTargets", () => {
+  test("returns only known text-only members, deduplicated", () => {
+    const models = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"] },
+      { provider: "b", id: "m2", inputModalities: ["text"] },
+      { provider: "c", id: "m3" },
+    ];
+    expect(comboVisionSidecarTargets(
+      [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+        { provider: "b", model: "m2" },
+        { provider: "c", model: "m3" },
+      ],
+      models,
+    )).toEqual([
+      { provider: "b", model: "m2" },
+    ]);
+  });
+
+  test("ignores incomplete or catalog-absent targets", () => {
+    expect(comboVisionSidecarTargets(
+      [{ provider: "", model: "" }, { provider: "b", model: "ghost" }],
+      [{ provider: "b", id: "m2", inputModalities: ["text"] }],
+    )).toEqual([]);
+  });
+
+  test("comboImageBlockedTargets names the members that refuse coverage", () => {
+    const models = [
+      { provider: "a", id: "m1", inputModalities: ["text", "image"] },
+      { provider: "b", id: "m2" },
+      { provider: "c", id: "m3", inputModalities: ["audio"] },
+    ];
+    expect(comboImageBlockedTargets(
+      [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+        { provider: "c", model: "m3" },
+        { provider: "b", model: "ghost" },
+      ],
+      models,
+    )).toEqual([
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+    ]);
   });
 });
 
@@ -899,5 +980,16 @@ describe("combo imageInput draft persistence", () => {
     expect(toPutBody(auto).combo.imageInput).toBe("auto");
     const disabled = { ...auto, imageInput: "disabled" as const };
     expect(toPutBody(disabled).combo.imageInput).toBe("disabled");
+  });
+
+  test("toPutBody carries visionSidecarTargets as a top-level request-only field", () => {
+    const auto = emptyDraft("x");
+    auto.targets = [{ provider: "a", model: "m1" }];
+    const sidecar = [{ provider: "a", model: "m1" }];
+    const body = toPutBody(auto, { visionSidecarTargets: sidecar });
+    expect(body.visionSidecarTargets).toEqual(sidecar);
+    expect(body.combo).not.toHaveProperty("visionSidecarTargets");
+    // Empty lists stay off the wire.
+    expect(toPutBody(auto, { visionSidecarTargets: [] })).not.toHaveProperty("visionSidecarTargets");
   });
 });
