@@ -492,19 +492,12 @@ export async function fetchMuseAccountQuota(
   }
 
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
-    const outcome = await fetchMuseKeyQuotaOutcome(accountId, token, {}, undefined, identity);
+    let outcome = await fetchMuseKeyQuotaOutcome(accountId, token, {}, undefined, identity);
     if (!canPublish()) return { ts: Date.now(), quota: null, unavailable: true, quotaObserved: false, isCurrent };
 
     if (outcome.kind === "throttled") {
       if (cached) return currentEntry(cached);
-      const entry: AccountQuotaCacheEntry = {
-        ts: outcome.quota?.updatedAt ?? Date.now(), quota: outcome.quota, quotaObserved: false, identity, isCurrent,
-      };
-      if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {
-        accountQuotaCache.set(key, entry);
-        persistAccountQuotaCache();
-      }
-      return entry;
+      outcome = outcome.quota ? { kind: "quota", quota: outcome.quota } : { kind: "empty" };
     }
 
     if (outcome.kind === "empty" || outcome.kind === "terminal") {
@@ -528,7 +521,7 @@ export async function fetchMuseAccountQuota(
 
     if (outcome.kind === "quota") {
       const entry: AccountQuotaCacheEntry = {
-        ts: Date.now(), quota: outcome.quota, quotaObserved: false, identity, isCurrent,
+        ts: outcome.quota.updatedAt, quota: outcome.quota, quotaObserved: false, identity, isCurrent,
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration) && canPublish()) {
         accountQuotaCache.set(key, entry);
