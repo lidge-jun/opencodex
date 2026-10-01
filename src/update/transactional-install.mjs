@@ -390,6 +390,7 @@ export function transactionalNpmUpdate({
   targetVersion,
   tag,
   runNpm,
+  cachePath,
   log = () => {},
   deps = {},
 }) {
@@ -432,8 +433,12 @@ export function transactionalNpmUpdate({
   // @oven/bun-* executable into bun/bin, so a successful npm exit without this narrow
   // approval leaves the staged tree intentionally incomplete. Allow only the package
   // whose executable the manifest verifies below; never broaden this to all scripts.
+  // --prefix <stage> also moves npm's globalconfig to <stage>/etc/npmrc, so a `cache=` from the
+  // operator's global npmrc would be dropped and npm would fall back to its default root. Pin
+  // the cache the pre-flight resolved and checked, so staging uses that exact root (#6288).
+  const cacheArgs = typeof cachePath === "string" && cachePath.length > 0 ? ["--cache", cachePath] : [];
   const install = runNpm([
-    "install", "-g", "--prefix", stageRoot,
+    "install", "-g", "--prefix", stageRoot, ...cacheArgs,
     "--allow-scripts=bun", "--no-audit", "--no-fund", spec,
   ]);
   if (install.status !== 0) {

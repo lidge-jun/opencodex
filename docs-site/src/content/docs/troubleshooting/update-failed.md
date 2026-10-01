@@ -79,10 +79,24 @@ proxy stays in that state, and `ocx restart` may report that no proxy is running
 still holds the port; use `ocx service restart`, or end the process whose `pid` the `/healthz`
 response shows and then run `ocx start`.
 
-## What is not known yet
+## If the update stops at the npm cache check
 
-The report's `ENOTDIR` on `mkdir` means npm tried to create a folder where a path component was a
-file. The job log withholds the path, so which component that was is not known, and the leftover
-folders above have not been shown to cause it. If it keeps happening, open an issue with the full
-terminal output of `ocx update` and the output of `npm config get prefix` and
-`npm config get cache` (for example, a cache on a different drive).
+`ENOTDIR` on `mkdir` means npm tried to create a folder where a path component was a file, or
+a link whose target no longer exists. One confirmed cause
+([#6288](https://github.com/lidge-jun/opencodex/issues/6288)) is a `%LOCALAPPDATA%\npm-cache`
+junction that pointed to another drive after the target folder had been deleted or the drive had
+been removed.
+
+The updater checks npm's cache folder before it stops the proxy, and the npm staging install uses
+the same folder that `npm config get cache` reports. If the cache folder cannot be used, the update
+stops with `cache_root_dangling_link` or `cache_root_not_directory` and leaves the proxy running:
+
+- `cache_root_dangling_link`: the cache folder is a link or junction whose target is missing.
+  Recreate the target folder, or remove the link so npm can create a normal folder.
+- `cache_root_not_directory`: the cache folder, or a folder above it, is a file or sits on a drive
+  that is not available. Move the file aside, or point npm at another cache with
+  `npm config set cache <folder>`.
+
+Then run `ocx update` again. If `ENOTDIR` persists after the check passes, open an issue with the
+full terminal output of `ocx update` and the output of `npm config get prefix` and
+`npm config get cache`.

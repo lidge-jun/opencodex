@@ -495,6 +495,8 @@ export interface OcxClientConnectionConfig {
 }
 
 export interface OcxConfig {
+  /** Experimental macOS app-server stdout shim; absent or false disables it. */
+  chatgptDesktop?: { appServerShim?: boolean };
   port: number;
   /** Runtime topology role. Absence preserves the historical standalone behavior. */
   runtimeRole?: OcxRuntimeRole;

@@ -530,6 +530,16 @@ JSON mode: `payload`.
 
 Each of these writes. Check the flags column before running one unattended.
 
+### `ocx chatgpt`
+
+Experimental ChatGPT app-server shim: launch, restore or status (macOS only).
+
+Drives no management route.
+
+JSON mode: `none`.
+
+- Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher.
+
 ### `ocx link issue`
 
 Issue one link credential and record its tunnel metadata.
@@ -1291,6 +1301,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 71
-- of those, state-changing: 40
+- declared capabilities: 72
+- of those, state-changing: 41
 - head-resolved invocations: 2

@@ -460,6 +460,15 @@
       ]
     },
     {
+      "path": "clients/chatgpt-desktop.md",
+      "tier": 5,
+      "title": "ChatGPT Desktop",
+      "scope": "Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries.",
+      "documents": [
+        "src/chatgpt/"
+      ]
+    },
+    {
       "path": "clients/claude-desktop.md",
       "tier": 5,
       "title": "Claude Desktop Integration",

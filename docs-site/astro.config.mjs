@@ -108,6 +108,7 @@ export default defineConfig({
             { label: "Grok Build", translations: { fr: "Grok Build", ko: "Grok Build", "zh-CN": "Grok Build", "zh-TW": "Grok Build", ru: "Grok Build", ja: "Grok Build", tr: "Grok Build" }, slug: "guides/grok-build" },
             { label: "opencode", translations: { fr: "opencode", ko: "opencode", "zh-CN": "opencode", "zh-TW": "opencode", ru: "opencode", ja: "opencode", tr: "opencode" }, slug: "guides/opencode" },
             { label: "Pi", translations: { fr: "Pi", ko: "Pi", "zh-CN": "Pi", "zh-TW": "Pi", ru: "Pi", ja: "Pi", tr: "Pi" }, slug: "guides/pi" },
+            { label: "ChatGPT Desktop (experimental)", slug: "guides/chatgpt-desktop" },
             { label: "Integrations", translations: { fr: "Intégrations", ko: "연동", "zh-CN": "集成", "zh-TW": "整合", ru: "Интеграции", ja: "連携", tr: "Entegrasyonlar" }, slug: "guides/integrations" },
             { label: "MiniMax clients", translations: { fr: "Clients MiniMax", ko: "MiniMax 클라이언트", "zh-CN": "MiniMax 客户端", "zh-TW": "MiniMax 客戶端", ru: "Клиенты MiniMax", ja: "MiniMax クライアント", tr: "MiniMax İstemcileri" }, slug: "guides/minimax" },
             { label: "Sidecars: Web Search & Vision", translations: { fr: "Services auxiliaires : recherche web et vision", ko: "사이드카: 웹 검색 & 비전", "zh-CN": "边车：网络搜索与视觉", "zh-TW": "邊車：網路搜尋與視覺", ru: "Сайдкары: веб-поиск и зрение", ja: "サイドカー: ウェブ検索 & ビジョン", tr: "Sidecar'lar: Web Arama ve Görme" }, slug: "guides/sidecars" },

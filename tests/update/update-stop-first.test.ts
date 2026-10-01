@@ -552,7 +552,7 @@ describe("update stops the running proxy before replacing files", () => {
   test("cache access gates in both CLI entry points precede every tray/proxy stop", () => {
     const runtimeGate = updateSource.indexOf("const cachePreflight = runNpmCachePreflight();");
     const runtimeStop = updateSource.indexOf('selfLaunchArgv(["stop"])');
-    const launcherGate = launcherSource.indexOf("const cachePreflight = runNpmCachePreflight();");
+    const launcherGate = launcherSource.indexOf("runNpmCachePreflight({ cachePath: npmCache.path })");
     const launcherTrayStop = launcherSource.indexOf('runTrayLifecycle(launcher, "stop")');
     const launcherProxyStop = launcherSource.indexOf('[launcher, "stop"]');
 
@@ -561,6 +561,8 @@ describe("update stops the running proxy before replacing files", () => {
     expect(runtimeGate).toBeLessThan(runtimeStop);
     expect(launcherGate).toBeLessThan(launcherTrayStop);
     expect(launcherGate).toBeLessThan(launcherProxyStop);
+    // #6288: the stage installs into the very cache root the gate checked.
+    expect(launcherSource.indexOf("cachePath: npmCachePath,")).toBeGreaterThan(launcherSource.indexOf("transactionalNpmUpdate({"));
   });
 
   test("npm launcher update path stops via its own launcher path before npm install", () => {
