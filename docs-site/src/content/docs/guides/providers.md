@@ -872,13 +872,13 @@ OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OA
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.
 
-Meta reports subscription window usage inside streaming responses, and OpenCodex reads it
-from there. The account row shows the last observed 5-hour and weekly windows with how old
-that reading is — Meta publishes no endpoint to query them on demand, so a value is only
-refreshed by another streaming turn through this provider, and a turn that goes through
-request translation rather than passthrough reports none. An account that has not yet
-served a streaming turn simply shows no quota, which is not an error. Rate limits apply
-per team, not per key.
+Accounts without a Muse access token (`muse.oauthAccessToken`) rely on subscription usage
+observed in streaming responses. Their account rows show the last observed 5-hour and
+weekly windows with how old that reading is. Those values refresh through another streaming
+turn; a turn that uses request translation rather than passthrough reports none. A tokenless
+account that has not yet served a streaming turn shows no quota, which is not an error.
+Accounts with a Muse access token also support the direct quota probe described under
+[Rate limits](#rate-limits-in-the-providers-overview). Rate limits apply per team, not per key.
 
 For a supported setup, use `meta-model` above with your own key.
 
