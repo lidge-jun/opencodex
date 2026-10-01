@@ -1,3 +1,5 @@
+import type { MainAccountHardLockStatus } from "../codex/main-account-hard-lock";
+import type { MainAccountExternalUsageWarning } from "../codex/main-account-external-usage";
 import { getCodexAccountHealthSnapshot, type CodexCooldownSource } from "../codex/routing";
 import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
@@ -353,7 +355,10 @@ export function collectOAuthHealthEntries(
   return entries;
 }
 
+export type CodexMainAccountPolicyHealth = MainAccountHardLockStatus & { externalUsage?: MainAccountExternalUsageWarning };
+
 type ProxyCodexAccountHealth = {
+  mainAccountHardLock?: unknown;
   id: string;
   health?: OAuthAccountHealth;
   needsReauth?: boolean;
@@ -372,11 +377,37 @@ function coerceRemoteAccountHealth(
 }
 
 type LiveProxyCodexHealthResult = {
+  mainAccountHardLock?: CodexMainAccountPolicyHealth;
   source: CodexHealthSource;
   entries: OAuthHealthEntry[] | null;
 };
 
-async function fetchCodexHealthFromLiveProxy(
+/** Whitelisted projection: never forward account metadata or arbitrary management fields. */
+export function projectMainAccountPolicyHealth(value: unknown): CodexMainAccountPolicyHealth | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const thresholds = raw.thresholds as { short?: unknown; long?: unknown } | undefined;
+  const percent = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 100;
+  if (typeof raw.enabled !== "boolean" || typeof raw.state !== "string"
+    || !(raw.enabled ? ["unknown", "ready", "blocked"] : ["off"]).includes(raw.state)
+    || !thresholds || !percent(thresholds.short) || !percent(thresholds.long)
+    || !Number.isInteger(thresholds.short) || !Number.isInteger(thresholds.long)
+    || thresholds.short < 80 || thresholds.short > thresholds.long) return undefined;
+  const result: CodexMainAccountPolicyHealth = { enabled: raw.enabled,
+    state: raw.state as MainAccountHardLockStatus["state"], thresholds: { short: thresholds.short, long: thresholds.long } };
+  if (raw.window === "short" || raw.window === "long") result.window = raw.window;
+  if (typeof raw.resetAt === "number" && Number.isFinite(raw.resetAt)) result.resetAt = raw.resetAt;
+  const warning = raw.externalUsage as Partial<MainAccountExternalUsageWarning> | undefined;
+  if (warning && (warning.window === "short" || warning.window === "long")
+    && percent(warning.fromPercent) && percent(warning.toPercent)
+    && typeof warning.observedAt === "number" && Number.isFinite(warning.observedAt)) {
+    result.externalUsage = { window: warning.window, fromPercent: warning.fromPercent,
+      toPercent: warning.toPercent, observedAt: warning.observedAt };
+  }
+  return result;
+}
+
+export async function fetchCodexHealthFromLiveProxy(
   fetchImpl: typeof fetch | undefined = undefined,
   findLiveProxyImpl: typeof findLiveProxy = findLiveProxy,
   readRuntimePortImpl: typeof readRuntimePort = readRuntimePort,
@@ -404,7 +435,10 @@ async function fetchCodexHealthFromLiveProxy(
       if (!account?.id || typeof account.id !== "string") continue;
       pushEntry(entries, "codex", account.id, coerceRemoteAccountHealth(account));
     }
-    return { source: "management-api", entries };
+    const mainAccountHardLock = projectMainAccountPolicyHealth(
+      json.accounts.find(account => account?.id === MAIN_CODEX_ACCOUNT_ID)?.mainAccountHardLock,
+    );
+    return { source: "management-api", entries, ...(mainAccountHardLock ? { mainAccountHardLock } : {}) };
   } catch {
     return { source: "management-api-unavailable", entries: null };
   }
@@ -418,6 +452,7 @@ export type CodexHealthSource =
   | "management-api-unavailable";
 
 export type OAuthCliHealthReport = {
+  mainAccountHardLock?: CodexMainAccountPolicyHealth;
   entries: OAuthHealthEntry[];
   codexHealthSource: CodexHealthSource;
 };
@@ -450,7 +485,8 @@ export async function collectOAuthHealthEntriesForCli(
   );
   if (remote.entries) {
     for (const entry of remote.entries) entries.push(entry);
-    return { entries, codexHealthSource: "management-api" };
+    return { entries, codexHealthSource: "management-api",
+      ...(remote.mainAccountHardLock ? { mainAccountHardLock: remote.mainAccountHardLock } : {}) };
   }
   return { entries, codexHealthSource: remote.source };
 }

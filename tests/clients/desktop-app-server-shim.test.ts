@@ -187,6 +187,13 @@ describe("app-server line filter", () => {
     expect(out[0]).toBe(oversized);
     expect(JSON.parse(out[1]!).result.ordinaryUsageAllowed).toBe(true);
     expect(seen.some(line => line.includes("padding"))).toBe(false);
+
+    // The same oversized line arriving whole, newline included, in one chunk is not parsed either.
+    seen.length = 0;
+    const single = collect([enc(`${oversized}\n${rpcResult(EXHAUSTED_RATE_LIMITS)}\n`)], createRpcLineFilter(rewrite, 1024)).split("\n");
+    expect(single[0]).toBe(oversized);
+    expect(JSON.parse(single[1]!).result.ordinaryUsageAllowed).toBe(true);
+    expect(seen.some(line => line.includes("padding"))).toBe(false);
   });
 });
 

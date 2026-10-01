@@ -40,6 +40,9 @@ Restore leaves the config flag as configured. Set `chatgptDesktop.appServerShim`
 to `false` or remove it to disable future explicit shim launches. Normal launches
 from Dock or Spotlight do not apply the shim automatically.
 
+If ChatGPT is not installed (no `com.openai.codex` bundle is found), `restore`
+only removes the launcher: it cannot relaunch anything and exits with an error.
+
 ## Rewrite boundary
 
 Only `account/rateLimits/updated` notifications and responses whose top-level
@@ -82,9 +85,13 @@ the running ChatGPT bundle process carries the expected launcher override.
 
 ## Failure behavior and known limits
 
-A failed precondition or a failed self-test runs the original binary with untouched stdout.
+When the platform is not macOS, the OpenCodex runtime is missing, or the filter
+self-test fails, the launcher runs the original binary with untouched stdout. A
+missing bundled app-server binary is the exception: there is nothing to fall back
+to, so the launcher exits with an error (see below).
 A filter that passes the self-test and then dies mid-session closes the pipe.
-Expected (not yet validated against the bundled app-server): the server gets SIGPIPE or a write error and Desktop respawns it through the same launcher.
+What the bundled app-server does after that has not been verified; it may get
+SIGPIPE or a write error and be respawned by Desktop through the same launcher.
 The filter's passthrough mode limits this to an exit/crash case: a rewrite exception
 passes its line through, and an unexpected rewrite-machinery failure switches the
 remaining stream to raw bytes.

@@ -1,3 +1,4 @@
+import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import * as z from "zod/v4";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
@@ -191,6 +192,10 @@ export const configSchema = z.object({
   // Default-on policy (#5694): absence and malformed hand edits both mean "on", and only an
   // explicit `false` written by the settings PUT opts out.
   codexMainAccountHardLock: z.boolean().optional().catch(undefined),
+  codexMainAccountHardLockThresholds: z.object({
+    short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
+    long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
+  }).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),

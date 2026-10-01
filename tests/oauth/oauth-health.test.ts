@@ -9,6 +9,7 @@ import {
   collectOAuthHealthEntriesForCli,
   projectOAuthAccountHealth,
   projectCodexAccountHealth,
+  projectMainAccountPolicyHealth,
 } from "../../src/oauth/health";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
@@ -446,5 +447,52 @@ describe("getCodexAccountHealthSnapshot", () => {
       cooldownSource: "retry-after",
     });
     expect(getCodexAccountHealthSnapshot("missing", now)).toBeNull();
+  });
+});
+
+describe("projectMainAccountPolicyHealth", () => {
+  const valid = { enabled: true, state: "ready", thresholds: { short: 90, long: 98 } };
+
+  test("projects a valid policy and copies only whitelisted fields", () => {
+    expect(projectMainAccountPolicyHealth({ ...valid, window: "short", resetAt: 1_000, accountId: "leak" }))
+      .toEqual({ enabled: true, state: "ready", thresholds: { short: 90, long: 98 }, window: "short", resetAt: 1_000 });
+  });
+
+  test("rejects a state that does not match enabled", () => {
+    expect(projectMainAccountPolicyHealth({ ...valid, enabled: false })).toBeUndefined();
+    expect(projectMainAccountPolicyHealth({ ...valid, state: "off" })).toBeUndefined();
+    expect(projectMainAccountPolicyHealth({ enabled: false, state: "off", thresholds: valid.thresholds }))
+      .toEqual({ enabled: false, state: "off", thresholds: { short: 90, long: 98 } });
+  });
+
+  test("rejects thresholds that are out of range, unordered, fractional or missing", () => {
+    for (const thresholds of [
+      { short: 79, long: 98 },
+      { short: 99, long: 98 },
+      { short: 90.5, long: 98 },
+      { short: 90, long: 101 },
+      { short: "90", long: 98 },
+      undefined,
+    ]) {
+      expect(projectMainAccountPolicyHealth({ ...valid, thresholds })).toBeUndefined();
+    }
+    expect(projectMainAccountPolicyHealth(null)).toBeUndefined();
+    expect(projectMainAccountPolicyHealth([valid])).toBeUndefined();
+  });
+
+  test("drops a malformed external-usage warning but keeps the policy", () => {
+    for (const externalUsage of [
+      { window: "monthly", fromPercent: 10, toPercent: 20, observedAt: 1 },
+      { window: "short", fromPercent: -1, toPercent: 20, observedAt: 1 },
+      { window: "short", fromPercent: 10, toPercent: 120, observedAt: 1 },
+      { window: "short", fromPercent: 10, toPercent: 20, observedAt: Number.NaN },
+    ]) {
+      const projected = projectMainAccountPolicyHealth({ ...valid, externalUsage });
+      expect(projected).toEqual({ enabled: true, state: "ready", thresholds: { short: 90, long: 98 } });
+    }
+    expect(projectMainAccountPolicyHealth({
+      ...valid,
+      externalUsage: { window: "long", fromPercent: 10, toPercent: 20, observedAt: 5, extra: "x" },
+    })?.externalUsage).toEqual({ window: "long", fromPercent: 10, toPercent: 20, observedAt: 5 });
   });
 });

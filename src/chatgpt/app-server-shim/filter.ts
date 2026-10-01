@@ -75,8 +75,13 @@ export function createRpcLineFilter(
         let heldLength = previousLength;
         for (let i = chunk.indexOf(NEWLINE, start); i !== -1; i = chunk.indexOf(NEWLINE, start)) {
           const tail = chunk.subarray(start, i + 1);
-          const whole = heldLength === 0 ? tail : concatParts([...held, tail], heldLength + tail.length);
-          out.push(emit(whole.subarray(0, whole.length - 1), whole, true));
+          if (heldLength + tail.length - 1 > maxLineBytes) {
+            // A complete line over the cap is passed through as it arrived, never joined or parsed.
+            out.push(...held, tail);
+          } else {
+            const whole = heldLength === 0 ? tail : concatParts([...held, tail], heldLength + tail.length);
+            out.push(emit(whole.subarray(0, whole.length - 1), whole, true));
+          }
           held = [];
           heldLength = 0;
           start = i + 1;

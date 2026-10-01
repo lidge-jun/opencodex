@@ -1,6 +1,6 @@
 import { accessSync, chmodSync, constants, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
 
@@ -32,7 +32,7 @@ export function resolveChatgptCodexBinary(
   isExecutable: (path: string) => boolean = isExecutableFile,
 ): string | null {
   for (const layout of BUNDLED_CODEX_LAYOUTS) {
-    const candidate = join(bundleRoot, ...layout);
+    const candidate = posix.join(bundleRoot, ...layout); // macOS bundle paths are POSIX on every host
     if (isExecutable(candidate)) return candidate;
   }
   return null;

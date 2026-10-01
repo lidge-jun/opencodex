@@ -2,6 +2,8 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "main-account-hard-lock-thresholds.test.ts": "codex-integration",
+    "main-account-external-usage.test.ts": "codex-integration",
     "jev-decision-model-config.test.ts": "routing",
     "cli-combo-partial-update.test.ts": "cli",
     "desktop-app-server-shim.test.ts": "clients",

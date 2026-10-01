@@ -1,6 +1,11 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+// POSIX path operations on purpose: every path this module classifies is a macOS path. The
+// host's own path module would build backslash or drive-letter paths on Windows and make the
+// injected-platform tests compare different strings there (dev CI windows 5/9 after #6398).
+import { posix } from "node:path";
+
+const { join, resolve } = posix;
 
 /**
  * Where a state directory sits relative to the folders macOS keeps in sync with a cloud.

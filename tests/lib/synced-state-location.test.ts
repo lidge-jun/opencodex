@@ -64,4 +64,17 @@ describe("synced state directory detection (#6314)", () => {
       expect(text).not.toContain("/Users/");
     }
   });
+
+  test("classification uses macOS path rules whatever host runs it", () => {
+    // The probe says darwin while this may run on Windows: no separator or drive-letter handling
+    // from the host may reach the paths being compared.
+    const seen: string[] = [];
+    const entryExists = (path: string): boolean => {
+      seen.push(path);
+      return desktopDocumentsSynced(path);
+    };
+    expect(syncedStateLocation(`${HOME}/Documents/state`, probe({ entryExists }))).toBe("icloud-desktop-documents");
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((path) => path.startsWith(`${HOME}/`) && !path.includes("\\"))).toBe(true);
+  });
 });
