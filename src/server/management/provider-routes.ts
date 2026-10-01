@@ -962,8 +962,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
       // Only opt-in Fast lanes (Anthropic fast mode bills usage credits) get a dashboard switch.
       ...(getProviderRegistryEntry(name)?.fastOptIn === true ? { fastOptIn: { enabled: p.fastEnabled === true } } : {}),
-      discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
-      ...providerTlsProfileDiagnostic(name, p),
+      discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name), ...providerTlsProfileDiagnostic(name, p),
       ...(name === "openai" && isCanonicalOpenAiForwardProvider(p)
         ? { entitlement: getCodexModelEntitlementStatus(config) }
         : {}),
