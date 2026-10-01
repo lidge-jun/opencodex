@@ -21,7 +21,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
@@ -33,7 +33,7 @@ import {
   type UpdateJobState,
 } from "../../src/update/job";
 import { runUpdateRestartWithOwnershipLease } from "../../src/update/restart-ownership";
-import type { ServiceOwnershipResolution } from "../../src/service/state";
+import { serviceStatePaths, type ServiceOwnershipResolution } from "../../src/service/state";
 import { isolationBudgetMs, watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
@@ -43,6 +43,8 @@ type Sandbox = {
   home: string;
   ocxHome: string;
   codexHome: string;
+  /** The last entry serviceStatePaths() keeps — the path the lease binds to. */
+  authority: string;
   lockDir: string;
 };
 
@@ -71,14 +73,9 @@ function sandbox(): Sandbox {
   const home = join(root, "home");
   const codexHome = join(root, "codex");
   const ocxHome = join(root, "ocx");
-  const defaultHome = join(home, ".opencodex");
-  for (const path of [home, codexHome, ocxHome, join(root, "runtime"), defaultHome]) {
+  for (const path of [home, codexHome, ocxHome, join(root, "runtime"), join(home, ".opencodex")]) {
     mkdirSync(path, { recursive: true });
   }
-  // serviceStatePaths() ends with the default-home authority; the lease binds there.
-  const lockDir = join(realpathSync.native(defaultHome), "service-state.json.mutation.lock");
-  const box = { root, home, ocxHome, codexHome, lockDir };
-  sandboxes.push(box);
   // In-process callers (serviceStatePaths, updateJobPath) resolve from these.
   process.env.OPENCODEX_HOME = ocxHome;
   process.env.HOME = home;
@@ -88,6 +85,12 @@ function sandbox(): Sandbox {
   process.env.OCX_TEST_HOME_GUARD = "1";
   process.env.OCX_REAL_HOME = realHome;
   delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  // The authority differs by platform: on Windows USERPROFILE tracks this sandbox so
+  // the kept last entry is home/.opencodex; on POSIX homedir() ignores $HOME and the
+  // armed home guard drops that legacy entry, leaving the OPENCODEX_HOME record.
+  const authority = serviceStatePaths().at(-1)!;
+  const box = { root, home, ocxHome, codexHome, authority, lockDir: leasePathFor(authority) };
+  sandboxes.push(box);
   return box;
 }
 
@@ -144,9 +147,18 @@ function spawnServiceChild(box: Sandbox, port: number): ChildProcess {
 
 const LEASE_MODULE_URL = pathToFileURL(repoPath("src/service/ownership-mutation-lease.mjs")).href;
 
+/** Mirrors leasePath() in src/service/ownership-mutation-lease.mjs. */
+function leasePathFor(authority: string): string {
+  try { return `${realpathSync.native(authority)}.mutation.lock`; }
+  catch {
+    try { return join(realpathSync.native(dirname(authority)), `${basename(authority)}.mutation.lock`); }
+    catch { return `${authority}.mutation.lock`; }
+  }
+}
+
 /** The authority the wrapper's `serviceStatePaths()` binds its lock to. */
 function authorityPath(box: Sandbox): string {
-  return join(box.home, ".opencodex", "service-state.json");
+  return box.authority;
 }
 
 /** A fresh-process acquire probe with no delegated token — what a foreign claimant faces. */
