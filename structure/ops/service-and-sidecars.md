@@ -356,7 +356,10 @@ platform (#6288). The cache root, or the nearest existing folder npm would creat
 resolve to a directory. A file in its place is `cache_root_not_directory`, and a link or Windows
 junction whose target is gone is `cache_root_dangling_link`; both abort with fixed guidance that
 names neither the path nor npm output. Windows runs only this root check, because it has no uid
-or Unix owner bits, while POSIX also runs the bounded ownership/mode walk. The npm launcher
+or Unix owner bits, while POSIX also runs the bounded ownership/mode walk. Windows skipped the
+gate entirely before #6288, so there only those two root reasons block; an unresolvable npm cache
+path, a worker timeout or any other inconclusive result returns `windows_skip` and the update
+proceeds unpinned as before. POSIX keeps failing closed on them. The npm launcher
 resolves `npm config get cache` once, with the environment staging uses, checks that path and
 passes it to the stage as `--cache`. The pin is required: `--prefix <stage>` moves npm's
 globalconfig to `<stage>/etc/npmrc`, so a `cache=` from the operator's global npmrc would

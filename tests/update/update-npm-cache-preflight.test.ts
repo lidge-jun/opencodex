@@ -323,7 +323,26 @@ describe("npm cache root usability (#6288)", () => {
   });
 
   test("the worker refuses a supplied cache path that is not absolute", () => {
-    expect(runWorker("relative/npm-cache")).toEqual({ ok: false, reason: "cache_path_malformed" });
+    expect(runNpmCachePreflight({ platform: "linux", cachePath: "relative/npm-cache" }))
+      .toEqual({ ok: false, reason: "cache_path_malformed" });
+  });
+
+  test("Windows keeps the pre-#6288 skip for inconclusive results and blocks only a broken root", () => {
+    const emit = (status: number | null, payload?: Record<string, unknown>) => (() => ({
+      status, signal: null, stdout: payload ? JSON.stringify(payload) : "", stderr: "",
+    })) as never;
+    const skip = { ok: true, reason: "windows_skip" };
+    expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(null) })).toEqual(skip);
+    expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(1) })).toEqual(skip);
+    for (const reason of ["npm_config_failed", "npm_unavailable", "cache_entry_inaccessible"]) {
+      expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(0, { protocol: 1, ok: false, reason }) })).toEqual(skip);
+    }
+    for (const reason of ["cache_root_dangling_link", "cache_root_not_directory"]) {
+      expect(runNpmCachePreflight({ platform: "win32", spawnSyncFn: emit(0, { protocol: 1, ok: false, reason }) }))
+        .toEqual({ ok: false, reason });
+    }
+    // POSIX still fails closed on the same inconclusive results.
+    expect(runNpmCachePreflight({ platform: "linux", spawnSyncFn: emit(null) })).toEqual({ ok: false, reason: "worker_timeout" });
   });
 
   test("resolveNpmCachePath returns npm's configured cache with the caller's environment", () => {

@@ -277,7 +277,11 @@ function runPackageManagerSelfUpdate(manager) {
   let npmCachePath;
   if (manager === "npm") {
     const npmCache = resolveNpmCachePath({ env: unprivilegedOwnershipMutationEnvironment(process.env) });
-    const cachePreflight = npmCache.ok ? runNpmCachePreflight({ cachePath: npmCache.path }) : npmCache;
+    // Windows skipped this gate before #6288: an unresolvable npm cache path keeps that behavior
+    // there (no check, no pin) and only a confirmed broken root aborts the update.
+    const cachePreflight = npmCache.ok
+      ? runNpmCachePreflight({ cachePath: npmCache.path })
+      : process.platform === "win32" ? { ok: true, reason: "windows_skip" } : npmCache;
     if (!cachePreflight.ok) {
       console.error(`opencodex: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
       process.exit(1);

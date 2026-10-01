@@ -219,6 +219,7 @@ function workerResult(argv) {
 const OK_REASONS = new Set([
   "cache_accessible",
   "inspection_incomplete",
+  "windows_skip",
 ]);
 
 function parseWorkerOutput(stdout) {
@@ -241,6 +242,20 @@ function parseWorkerOutput(stdout) {
  * without it the worker resolves npm's cache itself.
  */
 export function runNpmCachePreflight(options = {}) {
+  const result = runPreflightWorker(options);
+  // Before #6288 Windows skipped this gate entirely. Only the root shapes that make npm's own
+  // mkdir fail with ENOTDIR may now refuse an update there; a slow or unavailable npm, a worker
+  // timeout, or any other inconclusive result keeps the previous behavior instead of blocking.
+  if ((options.platform ?? process.platform) === "win32" && !result.ok
+    && !WINDOWS_BLOCKING_REASONS.has(result.reason)) {
+    return { ok: true, reason: "windows_skip" };
+  }
+  return result;
+}
+
+const WINDOWS_BLOCKING_REASONS = new Set(["cache_root_dangling_link", "cache_root_not_directory"]);
+
+function runPreflightWorker(options) {
   const workerArgs = [fileURLToPath(import.meta.url), WORKER_ARG];
   if ((options.platform ?? process.platform) === "win32") workerArgs.push(ROOT_ONLY_ARG);
   if (options.cachePath !== undefined) workerArgs.push(options.cachePath);
