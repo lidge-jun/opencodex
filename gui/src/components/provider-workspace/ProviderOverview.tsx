@@ -202,7 +202,7 @@ export default function ProviderOverview({
         )}
       </section>
 
-      {item.adapter === "jev-decision" && item.hasApiKey && onCreateJevAuto && (
+      {item.adapter === "jev-decision" && onCreateJevAuto && (
         <section className="pws-section" aria-label={t("cws.jev.create")}>
           <h3 className="pws-section-title">{t("cws.jev.create")}</h3>
           <p className="muted" style={{ marginTop: 0 }}>{t("cws.jev.setupHint")}</p>

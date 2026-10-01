@@ -152,6 +152,18 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
+With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+`--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
+Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
+opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
+this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+decision deadline (1000–120000, default 4000); `-` clears any of the three.
+
+`ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
+[--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
+unsaved selection and reports the gate, backend, and latency; it may spend one decision call.
+`ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
+like decision models, with the derived endpoint.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 

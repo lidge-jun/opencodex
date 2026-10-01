@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { ownerRegistryDir, readOwnerRegistry, registerOwnerRegistryHome } from "../../src/config/owner-registry";
@@ -19,7 +19,11 @@ let home: string;
 let calls: string[][];
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-owner-registry-acl-"));
+  // The no-follow writer canonicalizes the registry directory before naming its temp file, so
+  // the mocked icacls runner sees the real path. On macOS tmpdir() sits under /var, a symlink to
+  // /private/var: an uncanonical root made the prefix assertion throw inside the runner, the
+  // required entry hardening failed, and registration silently wrote nothing.
+  root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-owner-registry-acl-")));
   home = join(root, "home");
   mkdirSync(home);
   writeFileSync(join(home, "runtime-port.json"), "{}\n");

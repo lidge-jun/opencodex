@@ -92,8 +92,8 @@ function writeUnit(codexHome: string, opencodexHome: string): string {
   const path = join(dir, "opencodex-proxy.service");
   writeFileSync(path, [
     "[Service]",
-    `Environment="CODEX_HOME=${codexHome}"`,
-    `Environment="OPENCODEX_HOME=${opencodexHome}"`,
+    `Environment=${JSON.stringify(`CODEX_HOME=${codexHome}`).replace(/%/g, "%%")}`,
+    `Environment=${JSON.stringify(`OPENCODEX_HOME=${opencodexHome}`).replace(/%/g, "%%")}`,
   ].join("\n"));
   return path;
 }
@@ -188,6 +188,19 @@ describe("absence has to be proven twice", () => {
     expect(result.claims[0].registration).toBe("absent");
     expect(result.claims[0].definitionPath).toBe(path);
     expect(result.claims[0].homes).toEqual({ codexHome: "/somewhere/.codex", opencodexHome: "/somewhere/.opencodex" });
+  });
+
+  test("XML-escaped home values decode back to the installed home", () => {
+    writePlist("/Users/example/R&amp;D/.codex", "/Users/example/R&amp;D/.opencodex");
+    const { run } = recorder(() => ({ status: 113 }));
+    const result = inspectServiceManagerInstallation({ run, platform: "darwin", uid: 501, home });
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") return;
+    // The writer escapes XML; a raw compare would read a foreign home and skip delegation.
+    expect(result.claims[0].homes).toEqual({
+      codexHome: "/Users/example/R&D/.codex",
+      opencodexHome: "/Users/example/R&D/.opencodex",
+    });
   });
 
   test("a registration with no definition file is unknown, not present", () => {

@@ -119,7 +119,7 @@ export function NativeMainProfilesView({
         </form>
       </>}
       {action && s && <div ref={confirmationRef} role="group" tabIndex={-1} aria-labelledby={`${id}-confirm-title`}
-        className="notice notice-warn" style={{ marginTop: 12 }}
+        className="notice notice-warn" style={{ marginTop: 12, display: "block" }}
         onKeyDown={event => {
           if (event.key === "Escape" && !busy) { event.preventDefault(); onSelect(null); }
         }}>
@@ -131,9 +131,9 @@ export function NativeMainProfilesView({
           <input id={`${id}-stopped`} type="checkbox" checked={confirmedStopped}
             disabled={mutationDisabled} onChange={event => onStopped(event.target.checked)} /> {t("nativeMain.stopped")}
         </label></p>
-        <div className="row">
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onSelect(null)}>{t("nativeMain.cancel")}</button>
-          <button type="button" className="btn btn-sm btn-primary" disabled={mutationDisabled || !confirmedStopped || !canApplyNativeMain(s, action)}
+        <div className="row" style={{ flexWrap: "wrap" }}>
+          <button type="button" className="btn btn-sm" style={{ whiteSpace: "normal", overflowWrap: "anywhere", maxWidth: "100%" }} disabled={busy} onClick={() => onSelect(null)}>{t("nativeMain.cancel")}</button>
+          <button type="button" className="btn btn-sm btn-primary" style={{ whiteSpace: "normal", overflowWrap: "anywhere", maxWidth: "100%" }} disabled={mutationDisabled || !confirmedStopped || !canApplyNativeMain(s, action)}
             onClick={onConfirm}>{t("nativeMain.confirm")}</button>
         </div>
       </div>}

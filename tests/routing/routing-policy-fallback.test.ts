@@ -15,6 +15,15 @@ import {
   type PolicyFallbackDeps,
 } from "../../src/server/responses/policy-fallback";
 
+function fixtureConfig(): OcxConfig {
+  return {
+    port: 0, defaultProvider: "provider-a",
+    providers: Object.fromEntries(["a", "b", "c", "d"].map(id => [`provider-${id}`, {
+      adapter: "openai-chat", baseUrl: `https://${id}.example/v1`, authMode: "key",
+      apiKey: "fixture-key", models: [`model-${id}`],
+    }])),
+  } as OcxConfig;
+}
 function policyTrace(): RouteDecisionTraceV1 {
   return {
     version: 1,
@@ -58,7 +67,7 @@ describe("policy candidate fallback", () => {
     } }, { status: 400 });
     markResponseNonReplayable(failure);
     let coreCalls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
       runCore: async (req, _config, context, options) => {
         coreCalls += 1;
         options.onRequestBodyParsed?.(await req.json());
@@ -76,7 +85,7 @@ describe("policy candidate fallback", () => {
   test.each([false, true])("reset refusal stays terminal across policy and account recovery (replacement=%s)", async replacement => {
     let sends = 0;
     let coreCalls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
       runCore: async (req, _config, context, options) => {
         coreCalls += 1;
         const body = await req.json();
@@ -109,7 +118,7 @@ describe("policy candidate fallback", () => {
     const snapshots: unknown[] = [];
     const primaryAuth: Array<string | null> = [];
     const response = await handleResponsesWithPolicyFallback(new Request(initial, { headers }), {
-      port: 0, defaultProvider: "provider-a", providers: {},
+      ...fixtureConfig(),
     }, log, {}, {
       runCore: async (req, _config, context, options) => {
         options.onRequestBodyParsed?.(await req.json());
@@ -138,6 +147,111 @@ describe("policy candidate fallback", () => {
     ]);
   });
 
+  test("does not let a redirected fallback escape the original policy", async () => {
+    const trace = policyTrace();
+    const config = {
+      port: 10100,
+      defaultProvider: "provider-a",
+      blockedModelRedirects: { "provider-b/model-b": "remote/remote-model" },
+      providers: {
+        "provider-a": { adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-a"] },
+        "provider-b": { adapter: "openai-chat", baseUrl: "http://localhost:11435/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-b"] },
+        "provider-c": { adapter: "openai-chat", baseUrl: "http://localhost:11436/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-c"] },
+        remote: { adapter: "openai-chat", baseUrl: "https://remote.example/v1", apiKey: "remote-key", models: ["remote-model"] },
+      },
+    } as OcxConfig;
+    const seenModels: string[] = [];
+    const response = await handleResponsesWithPolicyFallback(request(), config, {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        context.routeDecision = trace;
+        return seenModels.length === 1
+          ? Response.json({ error: { type: "rate_limit_error" } }, { status: 429 })
+          : Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-c/model-c"]);
+  });
+
+  test("a fallback candidate with an unresolvable redirect is skipped instead of ending the fallback", async () => {
+    const trace = policyTrace();
+    const config = {
+      port: 10100,
+      defaultProvider: "provider-a",
+      blockedModelRedirects: {
+        "provider-b/model-b": "remote/remote-model",
+        "remote/remote-model": "provider-b/model-b",
+      },
+      providers: {
+        "provider-a": { adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-a"] },
+        "provider-b": { adapter: "openai-chat", baseUrl: "http://localhost:11435/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-b"] },
+        "provider-c": { adapter: "openai-chat", baseUrl: "http://localhost:11436/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-c"] },
+        remote: { adapter: "openai-chat", baseUrl: "https://remote.example/v1", apiKey: "remote-key", models: ["remote-model"] },
+      },
+    } as OcxConfig;
+    const seenModels: string[] = [];
+    const response = await handleResponsesWithPolicyFallback(request(), config, {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        context.routeDecision = trace;
+        return seenModels.length === 1
+          ? Response.json({ error: { type: "rate_limit_error" } }, { status: 429 })
+          : Response.json({ status: "completed" });
+      },
+    });
+
+    // The cyclic redirect on provider-b cannot resolve, so it is skipped and the
+    // healthy eligible candidate still serves the request.
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-c/model-c"]);
+  });
+
+  test("a redirect into an eligible candidate truncated out of the trace still hops", async () => {
+    const trace = policyTrace();
+    const config = {
+      port: 10100,
+      defaultProvider: "provider-a",
+      blockedModelRedirects: { "provider-b/model-b": "remote/remote-model" },
+      providers: {
+        "provider-a": { adapter: "openai-chat", baseUrl: "http://localhost:11434/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-a"] },
+        "provider-b": { adapter: "openai-chat", baseUrl: "http://localhost:11435/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-b"] },
+        "provider-c": { adapter: "openai-chat", baseUrl: "http://localhost:11436/v1", authMode: "local", allowPrivateNetwork: true, models: ["model-c"] },
+        remote: { adapter: "openai-chat", baseUrl: "https://remote.example/v1", apiKey: "remote-key", models: ["remote-model"] },
+      },
+    } as OcxConfig;
+    // Full evaluation membership, as stored on RequestLogContext for traces whose
+    // bounded candidate list dropped eligible rows.
+    const log: RequestLogContext = {
+      policyEligibility: new Set([
+        "provider-a\u0000model-a",
+        "provider-b\u0000model-b",
+        "provider-c\u0000model-c",
+        "remote\u0000remote-model",
+      ]),
+    };
+    const seenModels: string[] = [];
+    const response = await handleResponsesWithPolicyFallback(request(), config, log, {}, {
+      runCore: async (req, _config, context, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        context.routeDecision = trace;
+        return seenModels.length === 1
+          ? Response.json({ error: { type: "rate_limit_error" } }, { status: 429 })
+          : Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
+  });
+
   test("leaves request body parsing to the core handler", async () => {
     const req = request();
     let cloneCalls = 0;
@@ -150,7 +264,7 @@ describe("policy candidate fallback", () => {
 
     const response = await handleResponsesWithPolicyFallback(
       req,
-      {} as OcxConfig,
+      fixtureConfig(),
       {} as RequestLogContext,
       {},
       { runCore: async () => new Response(null, { status: 204 }) },
@@ -165,7 +279,7 @@ describe("policy candidate fallback", () => {
     const logCtx = { routeDecision: trace } as RequestLogContext;
     const seenInputs: unknown[] = [];
     let calls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, {
       runCore: async (req, _config, context, options) => {
         calls += 1;
         const body = await req.json() as { input: unknown; model: string };
@@ -189,7 +303,7 @@ describe("policy candidate fallback", () => {
       model: "provider-a/model-a",
       input: { get content(): string { throw new Error("unexpected deep clone"); } },
     };
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
       runCore: async (_req, _config, _context, options) => {
         options.onRequestBodyParsed?.(body);
         return new Response(null, { status: 204 });
@@ -249,7 +363,7 @@ describe("policy candidate fallback", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "policy/daily", input: [{ role: "user", content: "hello" }], stream: false }),
     });
-    const response = await handleResponsesWithPolicyFallback(req, {} as OcxConfig, logCtx, {}, {
+    const response = await handleResponsesWithPolicyFallback(req, fixtureConfig(), logCtx, {}, {
       runCore: async (req, _config, context, options) => {
         calls += 1;
         const body = await req.json() as { input: { role: string; content: string }[]; model: string };
@@ -299,7 +413,7 @@ describe("policy candidate fallback", () => {
       return Response.json({ id: "resp", object: "response", status: "completed", output: [] });
     };
 
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, { runCore });
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, { runCore });
 
     expect(response.status).toBe(200);
     expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
@@ -324,7 +438,7 @@ describe("policy candidate fallback", () => {
       );
     };
 
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, { runCore });
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, { runCore });
 
     expect(response.status).toBe(400);
     expect(seenModels).toEqual(["policy/daily"]);
@@ -351,7 +465,7 @@ describe("policy candidate fallback", () => {
       return Response.json({ id: "resp", object: "response", status: "completed", output: [] });
     };
 
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, { runCore });
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, { runCore });
 
     expect(response.status).toBe(200);
     expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
@@ -371,7 +485,7 @@ describe("policy candidate fallback", () => {
     initialHeaders.set("chatgpt-account-id", "caller-account");
     const credentialedRequest = new Request(initialRequest, { headers: initialHeaders });
 
-    const response = await handleResponsesWithPolicyFallback(credentialedRequest, {} as OcxConfig, logCtx, {
+    const response = await handleResponsesWithPolicyFallback(credentialedRequest, fixtureConfig(), logCtx, {
       onRequestBodyRead: () => {
         bodyAcceptedCount += 1;
       },
@@ -421,7 +535,7 @@ describe("policy candidate fallback", () => {
     const seenModels: string[] = [];
     let replaySignals = 0;
 
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {
       onStoredPool401ReplayDispatched: () => { replaySignals += 1; },
     }, {
       runCore: async (req, _config, childLog, options) => {
@@ -447,7 +561,7 @@ describe("policy candidate fallback", () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     let calls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, {
       runCore: async (req, _config, _ctx, options) => {
         calls += 1;
         options.onRequestBodyParsed?.(await req.json());
@@ -463,7 +577,7 @@ describe("policy candidate fallback", () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     let calls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, {
       runCore: async (req, _config, childLog, options) => {
         calls += 1;
         options.onRequestBodyParsed?.(await req.json());
@@ -484,7 +598,7 @@ describe("policy candidate fallback", () => {
     const controller = new AbortController();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     let calls = 0;
-    const response = await handleResponsesWithPolicyFallback(request(controller.signal), {} as OcxConfig, logCtx, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(controller.signal), fixtureConfig(), logCtx, {}, {
       runCore: async (req, _config, childLog, options) => {
         calls += 1;
         options.onRequestBodyParsed?.(await req.json());
@@ -502,7 +616,7 @@ describe("policy candidate fallback", () => {
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     let calls = 0;
     const body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\ndata: {\"type\":\"response.failed\"}\n\n";
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), logCtx, {}, {
       runCore: async (req, _config, childLog, options) => {
         calls += 1;
         options.onRequestBodyParsed?.(await req.json());

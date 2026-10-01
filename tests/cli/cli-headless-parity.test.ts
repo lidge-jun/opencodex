@@ -829,6 +829,39 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set forwards a JEV decision provider and timeout, clears them with -, and rejects other strategies", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleComboCommand([
+      "set", "jev-local", "--targets", "openai/gpt-6-astra,openai/gpt-5.6-sol", "--strategy", "jev",
+      "--decision-provider", "ollama-tev1", "--decision-timeout", "60000", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(await handleComboCommand([
+      "set", "jev-local", "--targets", "openai/gpt-6-astra", "--strategy", "jev",
+      "--decision-provider", "-", "--decision-timeout", "-", "--json",
+    ], runtime.deps)).toBe(0);
+    const puts = runtime.requests.filter(request => request.method === "PUT").map(request => request.body);
+    expect(puts[0]).toMatchObject({
+      id: "jev-local",
+      combo: { strategy: "jev", decisionProvider: "ollama-tev1", decisionTimeoutMs: 60_000 },
+    });
+    expect(puts[1]).toMatchObject({ combo: { decisionProvider: null, decisionTimeoutMs: null } });
+
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const args of [
+        ["--decision-provider", "ollama-tev1"],
+        ["--strategy", "jev", "--decision-timeout", "999"],
+        ["--decision-timeout", "5000"],
+      ]) {
+        const rejected = fakeRuntime();
+        expect(await handleComboCommand(["set", "demo", "--targets", "a/m1", ...args], rejected.deps)).toBe(2);
+        expect(rejected.requests).toEqual([]);
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("combo set exposes the opt-in force-default policy", async () => {
     const runtime = fakeRuntime();
     expect(await handleComboCommand([

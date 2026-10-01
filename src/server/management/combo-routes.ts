@@ -66,6 +66,8 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { shadowCallTargetError } from "./shadow-call-validation";
+import { decisionModelRouteError, normalizeDecisionModelSelector } from "./decision-model-validation";
+import { comboConfigIssues, resolveComboId } from "../../combos/types";
 import { COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS } from "../../combos";
 
 
@@ -221,13 +223,62 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "defaultEffortMode") && previous?.defaultEffortMode !== undefined
         ? { defaultEffortMode: previous.defaultEffortMode }
         : {}),
+      // An API or CLI round-trip of a JEV combo that omits these keeps them; the dashboard sends
+      // both explicitly (null = default). Switching to another strategy drops them rather than
+      // failing validation.
+      ...(!Object.hasOwn(requestedCombo, "decisionProvider")
+        && !Object.hasOwn(requestedCombo, "decisionModel")
+        && previous?.decisionProvider !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionProvider: previous.decisionProvider }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionModel")
+        && !Object.hasOwn(requestedCombo, "decisionProvider")
+        && previous?.decisionModel !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionModel: previous.decisionModel }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionTimeoutMs")
+        && previous?.decisionTimeoutMs !== undefined
+        && requestedCombo.strategy === "jev"
+        ? { decisionTimeoutMs: previous.decisionTimeoutMs }
+        : {}),
     };
-    const error = comboConfigError(id, effectiveCombo, config.providers, {
+    const nextCombos = { ...(config.combos ?? {}) };
+    if (renameFrom) delete nextCombos[renameFrom];
+    nextCombos[id] = effectiveCombo as unknown as OcxComboConfig;
+    const prospectiveConfig = { ...config, combos: nextCombos };
+    // Decision routes follow the same combo identity migration as agent/shadow references,
+    // retaining any synthetic suffix while resolving the old identity against the old map.
+    if (previous) {
+      const nextPublicModel = comboPublicModelId(id, nextCombos[id]!);
+      for (const [otherId, combo] of Object.entries(nextCombos)) {
+        if (otherId === id || typeof combo.decisionModel !== "string") continue;
+        const model = combo.decisionModel.trim();
+        const selector = normalizeDecisionModelSelector(config, model);
+        if (resolveComboId(config, selector) !== sourceId) continue;
+        const nextSelector = selector === comboModelId(sourceId) ? comboModelId(id) : nextPublicModel;
+        nextCombos[otherId] = { ...combo, decisionModel: nextSelector + model.slice(selector.length) };
+      }
+    }
+    const validationOptions = {
       requireEnabledTarget: true,
-      combos: config.combos,
+      requireUsableDecisionService: true,
+      combos: nextCombos,
       excludeComboId: sourceId,
-    });
+      normalizeDecisionModel: (model: string) => normalizeDecisionModelSelector(prospectiveConfig, model),
+    };
+    const error = comboConfigError(id, effectiveCombo, config.providers, validationOptions);
     if (error) return jsonResponse({ error }, 400);
+    for (const [otherId, combo] of Object.entries(nextCombos)) {
+      if (typeof combo.decisionModel !== "string") continue;
+      const issue = otherId === id ? undefined : comboConfigIssues(otherId, combo, config.providers, {
+        combos: nextCombos,
+        normalizeDecisionModel: validationOptions.normalizeDecisionModel,
+      }).find(issue => issue.path[0] === "decisionModel");
+      const routeError = issue?.message ?? decisionModelRouteError(prospectiveConfig, otherId, combo.decisionModel);
+      if (routeError) return jsonResponse({ error: issue ? `combo "${otherId}": ${routeError}` : routeError }, 400);
+    }
     const normalized = normalizeComboConfig(effectiveCombo as unknown as OcxComboConfig);
     // Persist only non-default identity/capability fields so config stays sparse.
     // Capability defaults (`imageInput`, `reasoningEffortMode`) go through the same
@@ -267,8 +318,6 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     if (codexAccountNamespaceForModel(config.codexAccountNamespaces, newPublicModel)) {
       return jsonResponse({ error: CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR }, 409);
     }
-    const nextCombos = { ...(config.combos ?? {}) };
-    if (renameFrom) delete nextCombos[renameFrom];
     nextCombos[id] = stored;
     let shouldSyncClaudeAgentDefs = false;
     const migratedModels = new Map<string, string>();
@@ -361,6 +410,14 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     if (!id) return jsonResponse({ error: "id query param is required" }, 400);
     if (!Object.hasOwn(config.combos ?? {}, id)) {
       return jsonResponse({ error: "unknown combo" }, 404);
+    }
+    const dependents = Object.entries(config.combos ?? {}).filter(([otherId, combo]) =>
+      otherId !== id && typeof combo.decisionModel === "string"
+      && resolveComboId(config, normalizeDecisionModelSelector(config, combo.decisionModel.trim())) === id,
+    ).map(([otherId]) => otherId);
+    if (dependents.length) {
+      return jsonResponse({ error: `combo "${id}" is referenced by decisionModel in combos: ${dependents.join(", ")}`,
+        code: "combo_has_dependent_combos", combos: dependents }, 409);
     }
     const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../combos");
     delete config.combos![id];

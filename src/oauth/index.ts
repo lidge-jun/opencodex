@@ -39,6 +39,7 @@ import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, Re
 import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
+import { loginZed, refreshZedToken } from "./zed";
 import { assertDevinCliAdoptionOwnership, loginDevin, refreshDevinToken } from "./devin";
 import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
@@ -100,6 +101,11 @@ export interface OAuthAccessSnapshot {
    * concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
+  /**
+   * The upstream's own user id for providers that sign requests with it (Zed's `user_id`).
+   * `accountId` is the local store slot key, a hash, and must never stand in for it.
+   */
+  providerUserId?: string;
 }
 
 export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
@@ -319,6 +325,13 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     providerConfig: oauthConfig("cursor"),
     defaultModel: oauthDefaultModel("cursor"),
   },
+  zed: {
+    login: ctrl => loginZed(ctrl),
+    refresh: refreshZedToken,
+    providerConfig: oauthConfig("zed"),
+    defaultModel: oauthDefaultModel("zed"),
+    defaultRefreshPolicy: "disabled",
+  },
   devin: {
     // Import-first: adopts a signed-in Devin CLI credential when one exists and
     // only then falls back to the Auth0 browser flow. forceLogin skips the
@@ -511,6 +524,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accessToken: cred.access,
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
     ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
+    ...(oauthProvider === "zed" && cred.accountId ? { providerUserId: cred.accountId } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
