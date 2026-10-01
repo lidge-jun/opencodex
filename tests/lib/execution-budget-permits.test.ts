@@ -521,3 +521,41 @@ describe("the ambiguous-resend allowance", () => {
     expect(budget.claimAmbiguousResend?.(1)).toBe(true);
   });
 });
+
+
+test("a validated rebase remains admissible after alternate-target spend and refunds exactly", () => {
+  const budget = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
+  for (const [sendClass, targetKey] of [["initial", "a"], ["account-failover", "b"]] as const) {
+    const decision = budget.reserveDispatch({ sendClass, targetKey });
+    expect(decision.allowed).toBe(true);
+    if (!decision.allowed) throw new Error("expected fixture admission");
+    decision.permit.use();
+  }
+  expect(budget.alternateTargetSends).toBe(1);
+  expect(budget.targetTransitions).toBe(1);
+  const intent = { sendClass: "repair" as const, targetKey: "c", rebasedTarget: true };
+  expect(budget.reserveDispatch({ ...intent, replaySafe: false })).toEqual({ allowed: false, reason: "not-replay-safe" });
+  const reservation = budget.reserveDispatch(intent);
+  expect(reservation.allowed).toBe(true);
+  if (!reservation.allowed) throw new Error("validated rebase was refused");
+  expect(budget.used).toBe(3);
+  expect(budget.lastTargetKey).toBe("c");
+  expect(budget.alternateTargetSends).toBe(1);
+  expect(budget.targetTransitions).toBe(1);
+  reservation.permit.release();
+  reservation.permit.release();
+  expect(budget.used).toBe(2);
+  expect(budget.lastTargetKey).toBe("b");
+  expect(budget.alternateTargetSends).toBe(1);
+  expect(budget.targetTransitions).toBe(1);
+  for (const targetKey of ["c", "d"]) {
+    const admitted = budget.reserveDispatch({ ...intent, targetKey });
+    expect(admitted.allowed).toBe(true);
+    if (!admitted.allowed) throw new Error("expected fixture admission");
+    admitted.permit.use();
+  }
+  expect(budget.used).toBe(4);
+  expect(budget.reserveDispatch({ ...intent, targetKey: "e" })).toEqual({ allowed: false, reason: "total-exhausted" });
+  expect(budget.alternateTargetSends).toBe(1);
+  expect(budget.targetTransitions).toBe(1);
+});
