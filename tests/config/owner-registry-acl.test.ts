@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { ownerRegistryDir, readOwnerRegistry, registerOwnerRegistryHome } from "../../src/config/owner-registry";
@@ -19,7 +19,10 @@ let home: string;
 let calls: string[][];
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "ocx-owner-registry-acl-"));
+  // The no-follow writer resolves the parent directory, so on macOS a /var/folders tmpdir
+  // becomes /private/var/folders. Use the resolved root so the icacls stub's prefix check
+  // compares like with like on every platform.
+  root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-owner-registry-acl-")));
   home = join(root, "home");
   mkdirSync(home);
   writeFileSync(join(home, "runtime-port.json"), "{}\n");
