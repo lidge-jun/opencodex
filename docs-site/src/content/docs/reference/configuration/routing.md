@@ -86,6 +86,11 @@ a caller `Authorization` header addressed to the source route is stripped, as fo
 A disabled destination, a forward destination, or a key/OAuth destination without usable stored
 credentials keeps the source route's legacy behavior. Under a routing policy, every redirect target
 must itself be a declared eligible candidate, even when it keeps the same provider.
+The initial evaluation's eligible provider/model set remains fixed through fallback and subagent
+recovery. Retries use concrete candidates, so a combo alias cannot replace a candidate's destination.
+Different candidates that resolve to a destination already attempted do not send the turn there again.
+An eligible virtual model keeps its normal wire-model mapping without adding that wire id to the
+profile's allowed candidates. If a local replacement is skipped, fallback retains the last upstream failure.
 Malformed redirect maps are ignored with a warning on load and rejected on configuration writes.
 Redirected routes record `blocked-model-redirect`; omitting the setting leaves routing unchanged.
 
@@ -146,6 +151,9 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
 | `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |
 | `displayName?` | `string` | — | Display-only catalog label, required and non-empty for a native alias. |
+| `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` whose `baseUrl` ends in `/systemone`. |
+| `decisionModel?` | `string` | unset | `strategy: "jev"` only, mutually exclusive with `decisionProvider`. An ordinary opencodex route (for example `ollama/qwen3:4b`) asked to pick one offered option as JSON. It runs with the selected provider's stored credentials, never the caller's, and cannot resolve to this combo, any JEV combo, or a `jev-decision` row. |
+| `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
 
 ```json
 {
@@ -167,13 +175,58 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
 commands, see [Combos](/guides/combos/).
 
-The `jev` strategy is optional and requires the canonical `jev` provider credential. That provider
+The `jev` strategy is optional. Only the TypeSafe method, used when neither `decisionProvider` nor
+`decisionModel` is set, requires the canonical `jev` provider credential. That provider
 is a decision service, publishes no directly routable model, and cannot be a Combo target. JEV sees
 only currently eligible members of `targets`; missing, failed, or invalid decisions use the first
 eligible member, while caller cancellation remains terminal. Adding the provider or Combo never
 changes `defaultProvider` or hides direct model rows. See
-[JEV: decision-guided first pick](/guides/combos/#jev-decision-guided-first-pick) for setup, privacy
-bounds, and the one-decision-per-call contract.
+[Decision method](/guides/combos/#decision-method) for the three methods, setup, privacy bounds, and
+the one-decision-per-call contract.
+
+### Self-hosted decision model (e.g. Ollama tev1)
+
+`decisionProvider` can point a JEV Combo at a self-hosted Jev-API-compatible decision model such as
+Ollama's `tev1` (Ollama 0.35+, `POST /v1/systemone`, no API key):
+
+```json
+{
+  "providers": {
+    "ollama-tev1": {
+      "adapter": "jev-decision",
+      "baseUrl": "http://127.0.0.1:11434/v1/systemone",
+      "allowPrivateNetwork": true,
+      "defaultModel": "tev1:4b",
+      "liveModels": false
+    }
+  },
+  "combos": {
+    "jev-local": {
+      "strategy": "jev",
+      "decisionProvider": "ollama-tev1",
+      "decisionTimeoutMs": 60000,
+      "targets": [
+        { "provider": "openai", "model": "gpt-5.6-sol" },
+        { "provider": "openai", "model": "gpt-5.6-luna" }
+      ]
+    }
+  }
+}
+```
+
+The row's `baseUrl` is the full decision endpoint and must end in `/systemone`; its model is
+`defaultModel`, else `models[0]` (a row with neither fails open without a request). Loopback needs
+the row's own explicit `allowPrivateNetwork: true`, and plain `http:` is accepted only for `localhost`
+or a loopback/RFC 1918/ULA address literal reached without a proxy. Only the row's own `apiKey` is
+sent — none when it is unset — and a key referencing the TypeSafe environment variables or another
+provider's keychain entry is refused, so TypeSafe credentials never reach it. Options are sent as
+description strings, which Ollama requires. `tev1` was trained on 2–24 options, so keep target ×
+effort pairs at 24 or fewer (fewer than 2 or more than 26 fail open without a request);
+its effective context is about 2k tokens and OpenCodex clips the task text to 500 characters. Keep the
+model resident (`OLLAMA_KEEP_ALIVE=-1`) and raise `decisionTimeoutMs` for slow services; see
+[System One-compatible server](/guides/combos/#system-one-compatible-server).
+In the dashboard, choose **System One-compatible server** in the JEV Combo's **Decision method**
+section under **Models → Combos**, then pick the row and set **Decision timeout (ms)**.
 
 ## Routing policy profiles (`config.routingProfiles`)
 

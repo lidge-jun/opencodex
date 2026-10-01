@@ -19,9 +19,10 @@ let home: string;
 let calls: string[][];
 
 beforeEach(() => {
-  // The no-follow writer resolves the parent directory, so on macOS a /var/folders tmpdir
-  // becomes /private/var/folders. Use the resolved root so the icacls stub's prefix check
-  // compares like with like on every platform.
+  // The no-follow writer canonicalizes the registry directory before naming its temp file, so
+  // the mocked icacls runner sees the real path. On macOS tmpdir() sits under /var, a symlink to
+  // /private/var: an uncanonical root made the prefix assertion throw inside the runner, the
+  // required entry hardening failed, and registration silently wrote nothing.
   root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-owner-registry-acl-")));
   home = join(root, "home");
   mkdirSync(home);

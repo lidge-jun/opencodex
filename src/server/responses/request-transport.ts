@@ -306,6 +306,12 @@ export async function prepareResponsesTransport(
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
     }
+    if (route.providerName === "zed") {
+      // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
+      const zedContext = { userId: snapshot.providerUserId ?? "" };
+      parsed._zedAuthContext = zedContext;
+      if (retryParsed !== parsed) retryParsed._zedAuthContext = { ...zedContext };
+    }
     // Re-stamp: a request that rotated accounts must be attributed to the account that actually
     // served it. All three rotation sites funnel through here, so this is the only re-stamp
     // needed -- and putting it anywhere else would let one of the three drift.
@@ -730,6 +736,9 @@ export async function prepareResponsesTransport(
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
+        }
+        if (route.providerName === "zed") {
+          parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
         // Project identity belongs to the admitted account on EVERY request, including
         // the request after a pool transition made that account the persisted active one.

@@ -178,3 +178,48 @@ test("JEV stats renders the fail-open summary in Simplified Chinese", async () =
   expect(host.textContent).toContain("已应用 2 · 故障开放 1");
   expect(host.textContent).not.toContain("Fail-open");
 });
+
+async function renderStats(payload: Record<string, unknown>) {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => Response.json(payload),
+  });
+  const { createRoot } = await import("react-dom/client");
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => {
+    root!.render(
+      <LanguageProvider>
+        <JevStatsPanel apiBase="" comboId="jev-auto" active />
+      </LanguageProvider>,
+    );
+  });
+  await flush();
+  return host;
+}
+
+test("JEV stats lists decisions by method when the server reports backends", async () => {
+  const host = await renderStats({
+    ...response,
+    backends: [
+      { backend: "model", decisions: 3, applied: 2, averageLatencyMs: 120 },
+      { backend: "unknown", decisions: 1, applied: 1, averageLatencyMs: null },
+    ],
+  });
+  const table = host.querySelector<HTMLTableElement>('table[aria-label="Decisions by method"]');
+  expect(table).not.toBeNull();
+  const rows = [...table!.querySelectorAll("tbody tr")]
+    .map(row => [...row.querySelectorAll("td")].map(cell => cell.textContent?.trim()));
+  expect(rows.map(row => row.slice(0, 3))).toEqual([
+    ["opencodex model", "3", "2"],
+    ["Unknown (older records)", "1", "1"],
+  ]);
+  expect(rows[0]![3]).toContain("120");
+  expect(rows[1]![3]).toBe("—");
+});
+
+test("JEV stats omits the method table for a server without backends", async () => {
+  const host = await renderStats(response);
+  expect(host.querySelector('table[aria-label="Decisions by method"]')).toBeNull();
+});
