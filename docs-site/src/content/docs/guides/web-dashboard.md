@@ -87,9 +87,12 @@ is visible) and never forces an upstream refresh.
   provider-named window or prepaid credits.
 - A chip turns amber at 70% used and red at 90% used.
 - Hover or keyboard-focus a chip to see every reported window with its reset time and the time the
-  reading was taken. On a touch screen, the first tap shows those details.
+  reading was taken. The details stay open as the pointer moves from the chip into the popover,
+  including across the small visual gap. On a touch screen, the first tap shows those details.
 - Click a chip (or tap it a second time) to open that provider's Accounts tab in Providers, where
-  its accounts or API keys are managed.
+  its accounts or API keys are managed. The popover's **Open account management** link opens the
+  same tab; keyboard users can Tab from the chip to this link and press Enter. Escape closes the
+  popover and returns focus to the chip when focus was inside the popover.
 - The bar always stays on one line. When the chips do not fit, scroll it sideways or use the « and
   » buttons at either end.
 - Providers that report no quota window are left out. The bar is hidden when no provider reports one.

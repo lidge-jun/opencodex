@@ -806,8 +806,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
         // Evaluate visibility AFTER discovery: a concurrent visibility write may have completed.
         const visible = new Set(filterCatalogVisibleModels(models, config).map(catalogModelSlug).filter(slug => slug.includes("/")));
+        // A bare native id orders the complete picker (docs: guides/model-ordering.md).
+        for (const row of nativeModelRows(config)) if (!row.disabled) visible.add(row.slug);
         if (pickerOrder.some(model => !visible.has(model))) {
-          return jsonResponse({ error: "pickerOrder must contain each visible routed model at most once" }, 400);
+          return jsonResponse({ error: "pickerOrder must contain visible routed or native model ids, each at most once" }, 400);
         }
       }
     }

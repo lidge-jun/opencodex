@@ -569,6 +569,8 @@ OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
 operated by TOKENLAB AI INC.
 Create a workspace [API key](https://tokenlab.sh/dashboard/api?tab=keys), then run
 `ocx provider add tokenlab` or select **TokenLab** in the dashboard's **Add provider** picker.
+TokenLab maintains a step-by-step [OpenCodex integration guide](https://docs.tokenlab.sh/integrations/opencodex)
+([한국어](https://docs.tokenlab.sh/ko/integrations/opencodex)) covering setup and per-model routing.
 The preset uses [Chat Completions](https://docs.tokenlab.sh/quickstart) and discovers models at
 `GET /v1/models?category=chat`, keeping only entries that declare `tool-use` capability.
 Image, video, audio, embedding and decision models are excluded from this chat preset.
