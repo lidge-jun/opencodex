@@ -555,6 +555,36 @@ ocx agent roles
 ocx agent roles set explorer xai/grok-4.5
 ```
 
+### Auto-assign
+
+Auto-assign is part of omo (Codex / LazyCodex): it sits above the role table in that section and
+exists only while LazyCodex is detected. Without it the dashboard shows neither, the API answers
+409 `lazycodex_not_detected`, and `ocx agent roles suggest` is refused.
+
+Auto-assign proposes a model for every role at once. opencodex asks your
+default Codex model (the root `model` in Codex `config.toml`) one question: for each role, given its
+description and the start of its instructions, which capability tier (fast, standard or frontier)
+and how much reasoning (glance, measured, thorough or exhaustive) does it need? That model never
+picks a model. opencodex then picks the cheapest model from your picker list that reaches the tier:
+
+- Models listed under `codexRoleTiers` in the opencodex config (`{ "fast": [...], "standard": [...], "frontier": [...] }`)
+  have that tier.
+- Other models with a known price are ranked by price and split evenly across the three tiers. With only
+  one or two priced models, the dearest is frontier and the other, if any, is standard.
+- Models with no price and no listed tier are never proposed. List them to include them.
+
+Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
+it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
+cannot be applied. Nothing is written until you press Apply on a row or Apply all. Applying uses the
+same save as picking by hand, and also rewrites the role's `model_reasoning_effort` when the file already has
+one. The effort is placed on the chosen model's own levels: its lowest, its default, one above the
+default, or its highest.
+
+```bash
+ocx agent roles suggest
+ocx agent roles suggest --model xai/grok-4.5 --apply
+```
+
 ## Kilo
 
 Kilo CLI, VS Code, and JetBrains share one global config. This integration writes

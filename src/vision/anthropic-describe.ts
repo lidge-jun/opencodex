@@ -1,10 +1,11 @@
-import type { OcxProviderConfig } from "../types";
+import type { OcxConfig, OcxProviderConfig } from "../types";
 import { sidecarThinkingOff } from "../adapters/anthropic-model-contract";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
-import { getValidAccessToken, publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { getAnthropicSidecarAccessToken } from "../oauth/anthropic-routing";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
 import type { DescribeOutcome, VisionSettings } from "./describe";
 
@@ -152,13 +153,14 @@ export async function describeImageAnthropic(
   provider: OcxProviderConfig,
   settings: VisionSettings,
   abortSignal?: AbortSignal,
+  config?: OcxConfig,
 ): Promise<DescribeOutcome> {
   const image = buildImageBlock(imageUrl);
   if (!image.block) return { text: "", error: image.error ?? "invalid image" };
 
   let token: string;
   try {
-    token = await getValidAccessToken(providerName);
+    token = await getAnthropicSidecarAccessToken(providerName, settings.model, config);
   } catch (error) {
     return { text: "", error: `anthropic vision sidecar auth failed: ${publicOAuthAuthenticationErrorMessage(error)}` };
   }

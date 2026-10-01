@@ -97,6 +97,7 @@ import {
   resolveSubagentFallbackModelEligibility,
   canPassThroughEncryptedV2AgentTask,
   applyFinalRouteRequestNormalization,
+  previewXaiOauthWireModel,
 } from "./core-normalize";
 import {
   cachedDeniedCodexAccountIdsForModel,
@@ -520,7 +521,6 @@ export async function prepareResponsesRequest(
     // skips the request-owned policy capture here; the accepted target is
     // captured where it becomes the request's route. A declined policy target
     // must not lend its eligibility or "policy" route kind to the request.
-    assertRouteAllowedByScope(admissionScope, inboundSelector, candidate);
     if (captureRequestPolicy) capturePolicyRequestRoute(policyScope, candidate);
     candidate.staticPolicy = captureRouteStaticPolicy(
       candidate.providerName,
@@ -529,6 +529,11 @@ export async function prepareResponsesRequest(
       candidate.staticPolicy.effectiveAlias,
       inboundWire,
     );
+    // Fast-only keys authorize the same billed lane that final normalization serializes.
+    assertRouteAllowedByScope(admissionScope, inboundSelector, {
+      providerName: candidate.providerName,
+      modelId: previewXaiOauthWireModel(parsed, candidate, config, inboundWire),
+    });
     return candidate;
   };
   try {
@@ -1220,8 +1225,11 @@ export async function prepareResponsesRequest(
   // actually be billed. A scope checked only before this would authorize the
   // public selector and send the wire model, so the settled route is checked
   // once more here.
-  if (!routeAllowedByScope(admissionScope, route)) {
-    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, route));
+  const scopedDestination = parsed._wireModelOverride === undefined
+    ? route
+    : { providerName: route.providerName, modelId: parsed._wireModelOverride };
+  if (!routeAllowedByScope(admissionScope, scopedDestination)) {
+    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, scopedDestination));
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.

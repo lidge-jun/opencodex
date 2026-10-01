@@ -652,6 +652,11 @@ export interface OcxConfig {
    */
   subagentModelFallbackByModel?: Record<string, string[]>;
   /**
+   * Capability tier of named models for Codex role auto-assign, overriding its price-rank
+   * classification. Models no list names and no price covers are never proposed.
+   */
+  codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
+  /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
   subagentModelFallbackPollMs?: number;

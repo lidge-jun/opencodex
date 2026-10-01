@@ -38,7 +38,26 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { recordAttemptRequestedEffort } from "../request-log";
 import type { ResolvedFastPolicy } from "../../providers/fastwire";
-import { applyXaiOauthFastModel } from "../../providers/xai-fast-model";
+import { applyXaiOauthFastModel, xaiOauthFastModelForDecision } from "../../providers/xai-fast-model";
+
+/** Preview the billed xAI lane without mutating request state or resolving credentials. */
+export function previewXaiOauthWireModel(
+  parsed: { options: Pick<OcxParsedRequest["options"], "serviceTier"> },
+  route: RouteResult,
+  config: OcxConfig,
+  inboundWire: InboundWire,
+): string {
+  if (route.providerName !== "xai" || route.provider.authMode !== "oauth") return route.modelId;
+  const provider = resolveWireProtocolOverride(
+    route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy,
+  );
+  const policy = fastPolicyForModel(
+    provider, route.modelId, route.providerName, inboundWire, config.providers[route.providerName],
+  );
+  return xaiOauthFastModelForDecision(
+    { ...route, provider }, decideTier(policy, config.fastMode, parsed.options.serviceTier),
+  ) ?? route.modelId;
+}
 
 export const MAX_FAST_WIRE_CAPABILITY_WARNINGS = 256;
 
