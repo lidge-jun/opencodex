@@ -144,10 +144,7 @@ export function isOcxCommandLine(commandLine: string): boolean {
     || normalized.includes("src/cli/index.ts")
     || normalized.includes("@bitkyc08/opencodex")
     || /@bitkyc08\/\.opencodex-/.test(normalized)
-    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd|\.exe)?(?:$|[\s"'])/.test(normalized)
-    // Bundled desktop sidecars are named `ocx-<target triple>[.exe]` — the runtimes
-    // they spawn are ours even though the triple suffix breaks the bare-name boundary.
-    || /(?:^|[\s/"'])ocx-(?:x86_64|aarch64|arm64|armv7|i686|riscv64gc|riscv64|powerpc64(?:le)?|s390x|loongarch64)[a-z0-9_-]*(?:\.exe)?(?:$|[\s"'])/.test(normalized);
+    || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd|\.exe)?(?:$|[\s"'])/.test(normalized);
 }
 
 export function isOcxStartCommandLine(commandLine: string): boolean {

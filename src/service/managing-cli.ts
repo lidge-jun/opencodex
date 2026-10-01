@@ -112,7 +112,10 @@ function probeVersion(
 ): ManagingCliObservation {
   const identity = [executable, ...args].join(" ");
   let observation = probeVersionOnce(executable, args, deps, identity);
-  for (let attempt = 1; observation.status !== "observed" && attempt < VERSION_PROBE_ATTEMPTS; attempt += 1) {
+  // One bounded retry, Windows only (the platform the flake family was verified on):
+  // a single shim-timeout answer must not flip the fingerprint of an unchanged CLI.
+  const attempts = deps.platform === "win32" ? VERSION_PROBE_ATTEMPTS : 1;
+  for (let attempt = 1; observation.status !== "observed" && attempt < attempts; attempt += 1) {
     observation = probeVersionOnce(executable, args, deps, identity);
   }
   return observation;

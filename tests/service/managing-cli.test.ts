@@ -137,6 +137,21 @@ describe("managing CLI probe resilience", () => {
     expect(calls).toBe(2);
   });
 
+  test("a failing probe is not retried off Windows", () => {
+    let calls = 0;
+    const spawn = (() => {
+      calls += 1;
+      return { status: 1, stdout: "", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const result = observeManagingClis(null, {
+      platform: "linux", env: { PATH: "/opt" }, execPath: "/other/ocx",
+      exists: path => path === "/opt/ocx", isFile: () => true,
+      ownVersion: () => "2.76.0", spawn,
+    });
+    expect(result.path.status).toBe("unknown");
+    expect(calls).toBe(1);
+  });
+
   test("a persistently failing probe stays fail-closed after the bounded retry", () => {
     let calls = 0;
     const spawn = (() => {
