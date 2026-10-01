@@ -25,6 +25,7 @@ const USAGE = `Usage:
   ocx agent [status] [--json]
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
       [--prompt <text|->] [--guidance <on|off>] [--json]
+  ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
@@ -54,6 +55,58 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+interface DelegationProposal {
+  model: string | null;
+  effort: string | null;
+  status: "proposed" | "unassigned" | "unsized";
+  tier?: string;
+  effortIntent?: string;
+  rationale?: string;
+  moveUpIf?: string;
+  moveDownIf?: string;
+  proposedModel?: string | null;
+  proposedEffort?: string | null;
+  reason?: string | null;
+}
+
+async function suggestInjection(args: string[], wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
+  const model = takeOption(args, "--model");
+  const apply = takeFlag(args, "--apply");
+  if (args.some(arg => arg.startsWith("--"))) rejectArgs(args, USAGE);
+  const work = args.join(" ").trim();
+  if (!work) throw new CliUsageError("describe the delegated work to size", USAGE);
+  const result = await runtimeRequest<{ sizingModel?: string; proposal?: DelegationProposal }>(
+    "/api/injection-model/suggest",
+    { method: "POST", body: JSON.stringify({ work, ...(model ? { model } : {}) }) },
+    deps,
+  );
+  const p = result.proposal;
+  const alreadySet = p?.status === "proposed" && !!p.proposedModel
+    && p.proposedModel === p.model && (p.proposedEffort ?? null) === (p.effort ?? null);
+  let applied: { model: string; effort: string | null } | null = null;
+  if (apply && !alreadySet && p?.status === "proposed" && p.proposedModel) {
+    applied = { model: p.proposedModel, effort: p.proposedEffort ?? null };
+    await runtimeRequest("/api/injection-model", { method: "PUT", body: JSON.stringify(applied) }, deps);
+  }
+  printData(apply ? { ...result, applied, alreadySet } : result, wantsJson, [
+    `Sized with ${result.sizingModel ?? "unknown"}.`,
+    !p || p.status === "unsized"
+      ? `Not sized (${p?.reason ?? "unknown"}).`
+      : p.status === "unassigned"
+        ? `${p.tier}/${p.effortIntent}, no model (${p.reason ?? "unknown"})`
+        : `${p.model ?? "(none)"}${p.effort ? ` (${p.effort})` : ""} -> ${p.proposedModel}${p.proposedEffort ? ` (${p.proposedEffort})` : ""} [${p.tier}/${p.effortIntent}] ${p.rationale ?? ""}`,
+    ...(p?.moveUpIf ? [`Move up if: ${p.moveUpIf}`] : []),
+    ...(p?.moveDownIf ? [`Move down if: ${p.moveDownIf}`] : []),
+    apply
+      ? (applied
+        ? "Applied to the delegation model."
+        : alreadySet
+          ? `Already set to ${p!.proposedModel}${p!.proposedEffort ? ` (${p!.proposedEffort})` : ""}; nothing applied.`
+          : "Nothing to apply.")
+      : "Nothing was written; rerun with --apply to set the delegation model.",
+  ]);
+}
+
 async function injection(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
@@ -62,6 +115,10 @@ async function injection(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest("/api/injection-model", {}, deps);
     printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action === "suggest") {
+    await suggestInjection(args, wantsJson, deps);
     return;
   }
   if (action !== "set") throw new CliUsageError(`unknown injection action ${action}`, USAGE);

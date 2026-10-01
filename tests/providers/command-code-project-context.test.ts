@@ -85,12 +85,27 @@ describe("loadCommandCodeProjectContext", () => {
     expect(result).toEqual(EMPTY_COMMAND_CODE_PROJECT_CONTEXT);
   });
 
-  test("relative containment includes descendants of a filesystem root", () => {
+  test("canonical containment includes descendants of a filesystem root", () => {
     const fsRoot = parse(tmpdir()).root;
     expect(isContainedCanonicalPath(fsRoot, join(fsRoot, "AGENTS.md"))).toBe(true);
     const nested = join(fsRoot, "project");
     expect(isContainedCanonicalPath(nested, join(nested, "..hidden"))).toBe(true);
     expect(isContainedCanonicalPath(nested, join(fsRoot, "project-sibling", "SKILL.md"))).toBe(false);
+  });
+
+  test("Windows containment preserves case-sensitive directory identities", () => {
+    expect(isContainedCanonicalPath("C:\\work\\project", "C:\\work\\project\\AGENTS.md", "\\")).toBe(true);
+    expect(isContainedCanonicalPath("C:\\work\\project", "C:\\work\\PROJECT\\secret.txt", "\\")).toBe(false);
+  });
+
+  test("canonical drive and UNC roots keep exact component boundaries", () => {
+    expect(isContainedCanonicalPath("C:\\", "C:\\work\\AGENTS.md", "\\")).toBe(true);
+    expect(isContainedCanonicalPath("C:\\", "D:\\work\\AGENTS.md", "\\")).toBe(false);
+    expect(isContainedCanonicalPath("\\\\server\\share", "\\\\server\\share\\AGENTS.md", "\\")).toBe(true);
+    expect(isContainedCanonicalPath("\\\\server\\share\\", "\\\\server\\share\\project\\SKILL.md", "\\")).toBe(true);
+    expect(isContainedCanonicalPath("\\\\server\\share", "\\\\server\\share-sibling\\AGENTS.md", "\\")).toBe(false);
+    expect(isContainedCanonicalPath("\\\\server\\share\\project", "\\\\server\\share\\project-sibling\\SKILL.md", "\\")).toBe(false);
+    expect(isContainedCanonicalPath("\\\\server\\share\\project", "\\\\server\\other\\project\\SKILL.md", "\\")).toBe(false);
   });
 
   test("stalled asynchronous path metadata obeys the overall deadline", async () => {
@@ -696,6 +711,39 @@ describe("loadCommandCodeProjectContext", () => {
       setCommandCodeBeforeOpenForTests(undefined);
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a file whose post-open canonical path changes case", async () => {
+    // Windows-only delta: the post-open check compares the resolved path to the
+    // pre-open canonical path byte-for-byte now. Containment alone cannot catch a
+    // case-only rename because the parent prefix stays identical, so a filename
+    // whose realpath changes case between canonicalization and open is refused.
+    if (process.platform !== "win32") return;
+    const root = makeTempDir("ocx-cc-ctx-case-swap-");
+    const skillFile = join(root, ".commandcode", "skills", "case-skill", "SKILL.md");
+    let changedCanonicalPaths = 0;
+    try {
+      writeSkill(root, ".commandcode/skills", "case-skill", "case body");
+      setCommandCodeBeforeOpenForTests(path => {
+        if (path !== skillFile) return;
+        realpathMock.mockImplementation(async (p, opts) => {
+          const resolved = await realRealpath(p, opts);
+          if (typeof resolved === "string" && resolved === skillFile) {
+            changedCanonicalPaths += 1;
+            return resolved.replace(/SKILL\.md$/, "skill.md");
+          }
+          return resolved;
+        });
+      });
+      const result = await loadCommandCodeProjectContext(root);
+      expect(result.skills).toBeNull();
+      expect(JSON.stringify(result)).not.toContain("case body");
+      expect(changedCanonicalPaths).toBeGreaterThan(0);
+    } finally {
+      setCommandCodeBeforeOpenForTests(undefined);
+      realpathMock.mockImplementation(realRealpath);
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

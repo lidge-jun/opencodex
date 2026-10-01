@@ -144,7 +144,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
   // Qwen3.8-27B's pinned chat template rejects non-leading system and every developer role;
   // a later user is rendered in place. Keep this exception specific to that template family.
-  const qwen38LeadingSystemTemplate = !nativeOpenAI && /^(?:Qwen\/)?Qwen3\.8-27B$/i.test(parsed.modelId);
+  const qwen38LeadingSystemTemplate = !nativeOpenAI && /^(?:Qwen\/)?(?:Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?)$/i.test(parsed.modelId);
   // Which role a developer message carries, and why the unrecorded state folds, is stated once
   // in ./developer-role.ts and read from there by the native passthrough as well. Either way the
   // message keeps the slot it arrived in — only the role changes, never the position.

@@ -426,6 +426,8 @@ yürütmeyi kapalı bırakın.
 
 Grok 4.7, OAuth üzerinde Fast ile `low` / `medium` / `high` / `xhigh` düzeylerini ve 500.000 tokenlık bağlam penceresini destekler. [xAI standart fiyatı](https://docs.x.ai/developers/models/grok-4.7) milyon token başına giriş için $2,00, önbellekli giriş için $0,50 ve çıkış için $6,00; 200.000 token ve üzeri bağlamda sırasıyla $4,00 / $1,00 / $12,00’dır.
 
+Sağlayıcı için açık bir `fastWire` yapılandırılmadığında, `allowedModels` ile sınırlandırılmış bir opencodex API anahtarının OAuth Fast istekleri için `xai/grok-4.7-build-fast` (veya sağlayıcı öneki olmayan model kimliği) iznine sahip olması gerekir. Yalnızca `xai/grok-4.7` izni bu Fast modeline erişim sağlamaz. Yalnızca Fast modeline izin veren anahtar bu modeli kullanabilir; normal istekler veya Fast kapalıyken yapılan istekler yine `xai/grok-4.7` izni gerektirir. Açık bir `fastWire` yapılandırılmışsa gerçekten gönderilen modele izin verin: örneğin, `service-tier` türü `xai/grok-4.7` modelini korur ve bu modelin iznini gerektirir. Sağlayıcı kısıtlamaları geçerliliğini korur.
+
 ## OpenRouter sağlayıcı yönlendirmesi
 
 OpenRouter bir modeli birkaç çıkarım sağlayıcısı aracılığıyla sunabilir.

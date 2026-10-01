@@ -35,6 +35,7 @@ export function resolveSidecarBackend(
 export interface AnthropicSidecarProvider {
   providerName: string;
   provider: OcxProviderConfig;
+  config: OcxConfig;
 }
 
 /**
@@ -48,7 +49,7 @@ export interface AnthropicSidecarProvider {
 export function findAnthropicSidecarProvider(config: OcxConfig): AnthropicSidecarProvider | undefined {
   const auth = resolveSidecarAuth(config);
   if (!auth.isAnthropicAuth || !auth.anthropicProviderName || !auth.anthropicProvider) return undefined;
-  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider };
+  return { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config };
 }
 
 /**
