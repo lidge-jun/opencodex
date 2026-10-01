@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildChatgptShimLauncher, writeChatgptShimLauncher, chatgptShimLauncherPath } from "../../src/chatgpt/app-server-shim/launcher";
+import {
+  buildChatgptShimLauncher,
+  chatgptShimLauncherPath,
+  resolveChatgptCodexBinary,
+  writeChatgptShimLauncher,
+} from "../../src/chatgpt/app-server-shim/launcher";
 import { selfLaunchArgv } from "../../src/lib/self-launch-argv";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -45,6 +50,21 @@ describe("experimental app-server launcher", () => {
     const path = writeChatgptShimLauncher(dir);
     expect(path).toBe(chatgptShimLauncherPath(dir));
     if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o755);
+  }));
+
+  test("the bundled binary is derived from the discovered bundle root, not the conventional path", () => {
+    const root = "/Users/example/Applications/ChatGPT.app";
+    const current = `${root}/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`;
+    const legacy = `${root}/Contents/Resources/codex`;
+    expect(resolveChatgptCodexBinary(root, path => path === current || path === legacy)).toBe(current);
+    expect(resolveChatgptCodexBinary(root, path => path === legacy)).toBe(legacy);
+    expect(resolveChatgptCodexBinary(root, () => false)).toBeNull();
+  });
+
+  test("the writer embeds the binary it is given", () => withDir(dir => {
+    const real = "/Volumes/Apps/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+    const path = writeChatgptShimLauncher(dir, real);
+    expect(readFileSync(path, "utf8")).toContain(`REAL='${real}'`);
   }));
 
   // Stub uname activates the macOS precondition on Linux without requiring the actual app.

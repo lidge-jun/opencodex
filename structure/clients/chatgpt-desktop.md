@@ -25,16 +25,23 @@ The filter's passthrough mode limits this to an exit/crash case.
 The pure gate rewrite changes known plain-quota fields only in eligible JSON-RPC
 rate-limit notifications and top-level rate-limit results. Workspace, credit,
 unknown reached-type and spend-control restrictions preserve closed gate flags.
+Both the rate-limit flags and `ordinaryUsageAllowed` open only where the subtree shows
+plain-quota evidence: a cleared plain reached type or a usage window at 100%.
 Usage percentages, resets and window durations remain accurate. Unrelated messages
 and malformed lines remain byte-identical; changed lines are reserialized.
 A per-line rewrite exception preserves that line. A failure in the framing/rewrite
 machinery preserves buffered bytes and switches the rest of the stream to raw
 passthrough. Output-write failures propagate; they are not rewrite failures.
+A partial line is held as a list of chunks and joined once at its newline, so a long
+line split across many pipe reads costs linear copying.
 
-Launch writes a mode-0755 executable, waits for the old ChatGPT instance to quit,
-then invokes open with the launcher in CODEX_CLI_PATH. Restore relaunches without
+The app is discovered and confirmed by bundle identifier through
+`darwinDesktopAppAdapter.discover` (`src/codex/desktop-app/darwin.ts`). Launch derives
+the bundled app-server binary from that root (`resolveChatgptCodexBinary`) and refuses
+when none exists, writes a mode-0755 executable, quits the bundle by id, waits for it
+to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH. Restore relaunches without
 that override and removes the launcher only after open succeeds. Status reports
-the experimental flag, launcher presence, and the named bundle process's override
+the experimental flag, launcher presence, and the verified bundle process's override
 without printing its environment. Other platforms reject all three operations.
 
 The launcher and its executable paths are local code-execution inputs. This

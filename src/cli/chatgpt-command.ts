@@ -1,7 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { loadConfig } from "../config";
-import { chatgptShimLauncherPath, writeChatgptShimLauncher } from "../chatgpt/app-server-shim/launcher";
+import {
+  chatgptShimLauncherPath,
+  resolveChatgptCodexBinary,
+  writeChatgptShimLauncher,
+} from "../chatgpt/app-server-shim/launcher";
+import { darwinDefaultExec, darwinDesktopAppAdapter } from "../codex/desktop-app/darwin";
+import type { DesktopAppInstall } from "../codex/desktop-app/types";
 
 const USAGE = `Usage (experimental, macOS only):
   ocx chatgpt launch   Relaunch ChatGPT with the experimental app-server shim (requires appServerShim: true)
@@ -14,16 +21,30 @@ function run(command: string, args: string[]) {
 }
 
 /**
- * Only inspect the named bundle process; never print the environment being inspected.
+ * The installed app, found and confirmed by bundle identifier (com.openai.codex) the same way the
+ * desktop restart adapter does. "ChatGPT" is a display name another app can share, so quitting,
+ * relaunching and the binary path all key on this verified bundle rather than on the name.
+ */
+function discoverApp(): DesktopAppInstall | null {
+  try {
+    return darwinDesktopAppAdapter.discover(darwinDefaultExec);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Only inspect the verified bundle's own process; never print the environment being inspected.
  * `-a` keeps ancestors in the match: when ocx runs inside a ChatGPT/Codex session the app is
  * one of this process's ancestors, and plain `pgrep -x` would report it as not running.
  */
-function appState(launcher: string): { running: boolean; shim: boolean } {
+function appState(install: DesktopAppInstall, launcher: string): { running: boolean; shim: boolean } {
+  const shell = join(install.root, "Contents", "MacOS", "ChatGPT");
   const pids = run("pgrep", ["-a", "-x", "ChatGPT"]);
   if (!pids.ok) return { running: false, shim: false };
   for (const pid of pids.output.split(/\s+/).filter(value => /^\d+$/.test(value))) {
     const command = run("ps", ["eww", "-o", "command=", "-p", pid]);
-    if (command.ok && command.output.includes("ChatGPT.app/Contents/MacOS/ChatGPT")) {
+    if (command.ok && (command.output === shell || command.output.startsWith(`${shell} `))) {
       const marker = `CODEX_CLI_PATH=${launcher}`;
       const start = command.output.indexOf(marker);
       return { running: true, shim: start >= 0 && (start === 0 || command.output[start - 1] === " ")
@@ -34,16 +55,16 @@ function appState(launcher: string): { running: boolean; shim: boolean } {
 }
 
 /** Adapted from #5947: open ignores new launch settings until the previous app exits. */
-async function quitApp(launcher: string): Promise<boolean> {
-  if (!appState(launcher).running) return true;
+async function quitApp(install: DesktopAppInstall, launcher: string): Promise<boolean> {
+  if (!appState(install, launcher).running) return true;
   for (let attempt = 0; attempt < 3; attempt++) {
-    run("osascript", ["-e", 'quit app "ChatGPT"']);
+    run("/usr/bin/osascript", ["-e", `quit app id "${install.id}"`]);
     for (let poll = 0; poll < 20; poll++) {
-      if (!appState(launcher).running) return true;
+      if (!appState(install, launcher).running) return true;
       await Bun.sleep(250);
     }
   }
-  return !appState(launcher).running;
+  return !appState(install, launcher).running;
 }
 
 export async function handleChatgptCommand(args: string[], platform: NodeJS.Platform = process.platform): Promise<number> {
@@ -63,29 +84,41 @@ export async function handleChatgptCommand(args: string[], platform: NodeJS.Plat
   try {
     const config = loadConfig();
     const launcher = chatgptShimLauncherPath();
+    const install = discoverApp();
     if (sub === "status") {
-      const app = appState(launcher);
+      const app = install ? appState(install, launcher) : { running: false, shim: false };
       console.log(`app-server shim (experimental): ${config.chatgptDesktop?.appServerShim === true ? "on" : "off"}
 launcher: ${existsSync(launcher) ? "present" : "absent"}
-app: ${app.running ? "running" : "not running"}
+app: ${install ? (app.running ? "running" : "not running") : "not installed"}
 CODEX_CLI_PATH launcher: ${app.shim ? "yes" : "no"}`);
       return 0;
+    }
+    if (!install) {
+      if (sub === "restore") rmSync(launcher, { force: true });
+      console.error("ChatGPT (com.openai.codex) was not found; install or open it once, then retry.");
+      return 1;
     }
     if (sub === "launch") {
       if (config.chatgptDesktop?.appServerShim !== true) {
         console.error('Experimental shim disabled; set chatgptDesktop.appServerShim: true before launching.');
         return 1;
       }
-      writeChatgptShimLauncher();
+      const binary = resolveChatgptCodexBinary(install.root);
+      if (!binary) {
+        console.error(`No bundled app-server binary was found in ${install.root}; the shim cannot launch this build.`);
+        return 1;
+      }
+      writeChatgptShimLauncher(undefined, binary);
     }
-    if (!(await quitApp(launcher))) {
+    if (!(await quitApp(install, launcher))) {
       console.error("ChatGPT did not quit; quit it manually and retry.");
       return 1;
     }
     // Remove an inherited override too: restore must launch without CODEX_CLI_PATH.
     const env = { ...process.env };
     delete env.CODEX_CLI_PATH;
-    const result = spawnSync("open", ["-a", "ChatGPT", ...(sub === "launch" ? ["--env", `CODEX_CLI_PATH=${launcher}`] : [])], {
+    // Open the verified bundle by path, so the relaunch is the same app that was quit.
+    const result = spawnSync("/usr/bin/open", ["-a", install.root, ...(sub === "launch" ? ["--env", `CODEX_CLI_PATH=${launcher}`] : [])], {
       encoding: "utf8", env, timeout: 10000,
     });
     if (result.status !== 0) throw new Error(result.error?.message ?? (result.stderr?.trim() || "open failed"));

@@ -24,7 +24,10 @@ ocx chatgpt status
 
 `launch` creates an executable launcher under the OpenCodex config directory,
 quits ChatGPT if it is running, and relaunches it with
-`open -a ChatGPT --env CODEX_CLI_PATH=<launcher>`. Save ongoing work first: this
+`open -a <bundle> --env CODEX_CLI_PATH=<launcher>`. The app is found by its bundle
+identifier, `com.openai.codex`, so an install in `~/Applications` or on another
+volume works, and another app that shares the "ChatGPT" name is never quit or
+opened. Save ongoing work first: this
 restarts the app. It does not require a running OpenCodex proxy.
 
 To remove the launcher and relaunch without the override:
@@ -43,8 +46,9 @@ Only `account/rateLimits/updated` notifications and responses whose top-level
 result contains `rateLimits`, `rateLimitsByLimitId`, or `ordinaryUsageAllowed`
 are eligible. Plain `rate_limit_reached` markers are cleared; known quota gate
 flags (`allowed`, `limit_reached` / `limitReached`, `ordinaryUsageAllowed`) are
-opened where the payload permits it. `ordinaryUsageAllowed` requires plain-quota
-exhaustion evidence. Workspace, credit, unknown reached-type and spend-control
+opened only with plain-quota evidence (a cleared plain reached type or a window at
+100%). A flag closed for a reason the payload does not show stays closed. Workspace,
+credit, unknown reached-type and spend-control
 restrictions keep the usage gate closed.
 
 Displayed usage stays honest: percentages, reset times, window durations, plan
@@ -61,7 +65,8 @@ and, for source installs, the CLI entry path. `CODEX_CLI_PATH` tells ChatGPT to
 execute this launcher instead of its bundled binary directly. Keep the launcher,
 its config directory, and the OpenCodex installation under your control: changing
 these executable paths changes code the app runs. The launcher still `exec`s the
-bundled binary at its standard `/Applications/ChatGPT.app` location.
+bundled binary of the discovered bundle; if that bundle has no app-server binary,
+`launch` refuses instead of writing a launcher.
 
 This integration installs no certificate, network listener, PAC, or background
 watcher. It does not log the app's messages or environment. Status reports whether

@@ -65,9 +65,11 @@ export function unlockRateLimitGate(value: unknown): boolean {
       exhausted ||= r.exhausted;
       blocked ||= r.blocked;
     }
-    // The rate-limit flags are opened only when no workspace, credit or spend-control reason
-    // stands anywhere in this payload; with one present the flags stay as the server sent them.
-    if (!blocked && !payloadBlocked) {
+    // The rate-limit flags are opened only when the plain quota is the visible reason in this
+    // subtree and no workspace, credit or spend-control reason stands anywhere in the payload.
+    // A flag closed for a reason the payload does not show stays as the server sent it.
+    const plainQuotaShown = (cleared || exhausted) && !blocked && !payloadBlocked;
+    if (plainQuotaShown) {
       for (const key of ["rate_limit", "rateLimit"] as const) {
         const rateLimit = node[key];
         if (!isRecord(rateLimit)) continue;
@@ -86,7 +88,7 @@ export function unlockRateLimitGate(value: unknown): boolean {
     // `ordinaryUsageAllowed: false` is the same quota gate seen from the RPC side, and the only
     // field the app reads for it. Open it only when the plain quota is the visible reason and
     // nothing else still explains the block.
-    if (node.ordinaryUsageAllowed === false && (cleared || exhausted) && !blocked && !payloadBlocked) {
+    if (node.ordinaryUsageAllowed === false && plainQuotaShown) {
       node.ordinaryUsageAllowed = true;
       changed = true;
     }
@@ -95,4 +97,3 @@ export function unlockRateLimitGate(value: unknown): boolean {
   visit(value);
   return changed;
 }
-
