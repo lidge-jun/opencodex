@@ -28,6 +28,17 @@ and the command says so. See [omo (Codex / LazyCodex) role models](/guides/integ
 ocx agent roles set explorer xai/grok-4.5
 ```
 
+`ocx agent roles suggest` is omo (Codex / LazyCodex) only, refused like `set` when LazyCodex is not
+installed. It sizes every role with one call to the default Codex model (or `--model`) and
+prints a proposed model and effort per role without writing anything. `--apply` writes every proposal
+through the same write as `set`, skipping and naming the roles whose model and effort already match.
+See [Auto-assign](/guides/integrations/#auto-assign).
+
+`ocx agent injection suggest <work>` does the same for the delegation model: it sizes the described
+work, proposes the cheapest sufficient model and an effort from the delegation picker's list, and writes
+nothing unless `--apply` is given, which saves through the same write as `injection set`. See
+[Delegation model and effort](/guides/sub-agent-surface/#delegation-model-and-effort).
+
 `ocx agent sidecar web --list` and `ocx agent sidecar vision --list` print the models the
 server currently offers for each sidecar — the exact filtered set the dashboard picker shows
 (picker-visible rows plus the login-entitled Luna/Haiku auth slots, intersected with executor
@@ -141,6 +152,18 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
+With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+`--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
+Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
+opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
+this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+decision deadline (1000–120000, default 4000); `-` clears any of the three.
+
+`ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
+[--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
+unsaved selection and reports the gate, backend, and latency; it may spend one decision call.
+`ocx combo discover [--query <text>]` lists configured System One rows and catalog models that look
+like decision models, with the derived endpoint.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 

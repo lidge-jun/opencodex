@@ -5,7 +5,9 @@ import { join } from "node:path";
 import {
   AgentRoleModelError,
   listCodexAgentRoleModels,
+  readCodexAgentRoleEffort,
   setTomlRootModel,
+  setTomlRootReasoningEffort,
   writeCodexAgentRoleModel,
 } from "../../src/codex/agent-role-models";
 
@@ -74,6 +76,23 @@ describe("setTomlRootModel", () => {
   });
 });
 
+describe("setTomlRootReasoningEffort", () => {
+  const prose = IMPORTED_ROLE.replace("inside prose.", "model_reasoning_effort = \"low\" is prose too.");
+
+  test("replaces only the root effort, not a matching line inside the instructions", () => {
+    const next = setTomlRootReasoningEffort(prose, "xhigh");
+    expect(next).toBe(prose.replace('model_reasoning_effort = "high"\n', 'model_reasoning_effort = "xhigh"\n'));
+    expect(next).toContain('model_reasoning_effort = "low" is prose too.');
+  });
+
+  test("keeps CRLF, a BOM, a literal quote style and a trailing comment byte for byte", () => {
+    const crlf = "\ufeff" + prose.replace('model_reasoning_effort = "high"', "model_reasoning_effort   =  'high' # tuned").replace(/\n/g, "\r\n");
+    const next = setTomlRootReasoningEffort(crlf, "low");
+    expect(next).toBe(crlf.replace("'high' # tuned", "'low' # tuned"));
+    expect(setTomlRootReasoningEffort(next, "low")).toBe(next);
+  });
+});
+
 describe("writeCodexAgentRoleModel", () => {
   let home: string | null = null;
   afterEach(() => {
@@ -125,5 +144,23 @@ describe("writeCodexAgentRoleModel", () => {
     expect(caught).toBeInstanceOf(AgentRoleModelError);
     expect((caught as AgentRoleModelError).code).toBe("invalid_role_file");
     expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(broken);
+  });
+
+  test("writes the model and effort together and changes nothing else", () => {
+    const dir = codexHome();
+    expect(readCodexAgentRoleEffort("explorer", dir)).toBe("high");
+    expect(writeCodexAgentRoleModel("explorer", "xai/grok-4.5", dir, "medium")).toEqual({ status: "written" });
+    expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(IMPORTED_ROLE
+      .replace('model = "gpt-5.5" # pinned', 'model = "xai/grok-4.5" # pinned')
+      .replace('model_reasoning_effort = "high"', 'model_reasoning_effort = "medium"'));
+    expect(readCodexAgentRoleEffort("explorer", dir)).toBe("medium");
+  });
+
+  test("refuses an unknown effort without writing the model either", () => {
+    const dir = codexHome();
+    for (const effort of ["turbo", "", "high\n"]) {
+      expect(() => writeCodexAgentRoleModel("explorer", "xai/grok-4.5", dir, effort)).toThrow(AgentRoleModelError);
+    }
+    expect(readFileSync(join(dir, "agents", "explorer.toml"), "utf8")).toBe(IMPORTED_ROLE);
   });
 });

@@ -3,6 +3,7 @@ import { useDataSurface } from "../../data-surface";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Select, type SelectOption } from "../../ui";
+import LazyCodexRoleAutoAssign from "./LazyCodexRoleAutoAssign";
 
 interface RoleRow {
   role: string;
@@ -53,15 +54,15 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   });
   const data = resource.state.data;
 
-  const save = async (role: string, model: string) => {
-    if (pending !== null) return;
+  const save = async (role: string, model: string, effort: string | null = null): Promise<boolean> => {
+    if (pending !== null) return false;
     setPending(role);
     setResult(null);
     try {
       const response = await fetch(`${apiBase}/api/codex-agent-roles/${encodeURIComponent(role)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify(effort ? { model, effort } : { model }),
       });
       const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
         response,
@@ -78,8 +79,10 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         return omoStatus === "write_failed" ? { ...rest, [role]: model } : rest;
       });
       await resource.refresh();
+      return true;
     } catch {
       setResult({ tone: "err", text: t("integrations.lazycodexRoles.saveFailed", { role }) });
+      return false;
     } finally {
       setPending(null);
     }
@@ -114,6 +117,8 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       {data.roles.length === 0 ? (
         <p className="page-sub">{t("integrations.lazycodexRoles.empty")}</p>
       ) : (
+        <>
+        <LazyCodexRoleAutoAssign apiBase={apiBase} busy={pending !== null} apply={save} />
         <div className="tbl-wrap">
           <table className="tbl">
             <thead>
@@ -163,6 +168,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
             </tbody>
           </table>
         </div>
+        </>
       )}
     </section>
   );

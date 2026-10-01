@@ -19,18 +19,13 @@
  * admission secret in a forwardable header is a forwarding hazard). Loopback
  * binds require no token at all (resolveApiAuth admits loopback).
  *
- * Destination (#4236): the unauthenticated loopback listener when one is
- * enabled, otherwise the BIND address — the former roadmap-170 limitation
- * ("a bindHost where 127.0.0.1 does not answer cannot reach its own
- * loopback") is closed by resolving through `localInferenceDestination`
- * rather than composing 127.0.0.1 by hand.
+ * Destination (#4236) and transport: postLocalChatCompletion in
+ * src/lib/local-chat-completion.ts, which resolves the unauthenticated
+ * loopback listener when one is enabled and otherwise the BIND address.
  */
 import type { OcxConfig } from "../types";
-import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
-import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
-import { redactSecretString } from "../lib/redact";
-import { sidecarEnter } from "../lib/sidecar-tracker";
-import { configuredPort } from "../server/auth-cors";
+import { localAdmissionToken } from "../lib/local-destinations";
+import { localChatCompletionBaseUrl, postLocalChatCompletion } from "../lib/local-chat-completion";
 import type { DescribeOutcome, VisionSettings } from "./describe";
 
 export const VISION_DESCRIBE_TERMINAL_HEADER = "x-opencodex-vision-describe";
@@ -77,28 +72,7 @@ export function routedDescribeAdmissionToken(config: Pick<OcxConfig, "apiKeys">)
 export function routedDescribeBaseUrl(
   config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
 ): string {
-  return routedDescribeDestination(config).origin;
-}
-
-/**
- * The local destination this self-fetch dials, and whether it needs a credential.
- *
- * This is a local client like any other: the unauthenticated loopback listener when one is
- * enabled, otherwise the bind address — on a tailnet-bound hub there is no loopback socket at
- * all (#4236). The helper sends the OpenAI chat wire, which that listener now admits.
- */
-function routedDescribeDestination(
-  config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
-) {
-  // config.port can be 0 (ephemeral bind, tests) or stale after a live port override; the
-  // server records its ACTUAL bound port via setCorsOrigin at startup, so prefer that when
-  // config carries no positive port. `configuredPort()` is itself `0` when `_corsOrigin` has no
-  // explicit port (a default-port origin), so the literal default has to backstop it or the
-  // composed URL names port 0 and the self-fetch cannot connect.
-  const port = config.port && config.port > 0
-    ? config.port
-    : Number(configuredPort()) || 10_100;
-  return localInferenceDestination(config, port);
+  return localChatCompletionBaseUrl(config);
 }
 
 export async function describeImageRouted(
@@ -114,93 +88,27 @@ export async function describeImageRouted(
   const invalid = validateImageUrl(imageUrl);
   if (invalid) return { text: "", error: invalid };
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    [VISION_DESCRIBE_TERMINAL_HEADER]: "1",
-  };
-  const admission = routedDescribeAdmissionToken(config);
-  if (admission) headers["x-opencodex-api-key"] = admission;
-  // A bind that demands admission with no resolvable credential would return 401 with a body
-  // the caller reports as a describe failure; naming the cause once is the difference between
-  // "vision is broken" and a fixable configuration note.
-  if (!admission && !baseUrlOverride && routedDescribeDestination(config).requiresAdmissionToken) {
-    console.warn(
-      "[vision] routed describe has no opencodex data-plane credential for "
-      + `${routedDescribeBaseUrl(config)} — the self-fetch will be refused.`,
-    );
-  }
-
-  const requestBody = {
-    model: routedModel,
-    stream: false,
-    messages: [
-      { role: "system", content: DESCRIBE_INSTRUCTION },
-      {
-        role: "user",
-        content: [
-          ...(contextText ? [{ type: "text", text: `User's request context: ${contextText}` }] : []),
-          { type: "image_url", image_url: { url: imageUrl } },
-        ],
-      },
-    ],
-  };
-
-  const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
-  const sidecarExit = sidecarEnter("vision");
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`${baseUrlOverride ?? routedDescribeBaseUrl(config)}/v1/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: linkedSignal.signal,
-      redirect: "manual",
-    });
-    const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
-    try {
-      const raw = await res.text();
-      if (raw.length > MAX_ROUTED_RESPONSE_BYTES) {
-        return { text: "", error: "routed describe response exceeded byte bound" };
-      }
-      if (!res.ok) {
-        return { text: "", error: `routed describe HTTP ${res.status}: ${redactSecretString(raw.slice(0, 200))}` };
-      }
-      let payload: unknown;
-      try { payload = JSON.parse(raw); } catch {
-        return { text: "", error: "routed describe returned non-JSON" };
-      }
-      const content = extractChatContent(payload);
-      if (!content) return { text: "", error: "routed describe returned no text" };
-      return { text: content };
-    } finally {
-      detachBodyGuard();
-    }
-  } catch (e) {
-    const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
-    console.warn(`[vision] routed describe ${kind} (${Date.now() - t0}ms)`);
-    return { text: "", error: redactSecretString(e instanceof Error ? e.message : String(e)) };
-  } finally {
-    sidecarExit();
-    linkedSignal.cleanup();
-  }
-}
-
-function extractChatContent(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const choices = (payload as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return undefined;
-  const message = (choices[0] as { message?: unknown })?.message;
-  if (!message || typeof message !== "object") return undefined;
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string" && content.trim().length > 0) return content;
-  // Some adapters emit content parts; join text parts.
-  if (Array.isArray(content)) {
-    const joined = content
-      .map(part => (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? (part as { text: string }).text
-        : ""))
-      .join("");
-    if (joined.trim().length > 0) return joined;
-  }
-  return undefined;
+  return postLocalChatCompletion({
+    config,
+    label: "routed describe",
+    logTag: "vision",
+    timeoutMs: settings.timeoutMs,
+    maxResponseBytes: MAX_ROUTED_RESPONSE_BYTES,
+    headers: { [VISION_DESCRIBE_TERMINAL_HEADER]: "1" },
+    abortSignal,
+    baseUrlOverride,
+    body: {
+      model: routedModel,
+      messages: [
+        { role: "system", content: DESCRIBE_INSTRUCTION },
+        {
+          role: "user",
+          content: [
+            ...(contextText ? [{ type: "text", text: `User's request context: ${contextText}` }] : []),
+            { type: "image_url", image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+    },
+  });
 }

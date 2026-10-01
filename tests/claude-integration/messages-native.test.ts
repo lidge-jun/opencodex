@@ -341,6 +341,30 @@ describe("managed native Messages", () => {
     const row = rowFor(requestId);
     expect(row.status).toBe(502);
     expect(row.closeReason).toBe("body_overflow");
+    expect(row.terminalStatus).toBe("incomplete");
+  });
+
+  test("a relayed stream over the byte cap is a 502 incomplete row, like the passthrough", async () => {
+    const config = fixtureConfig(startUpstream(ok), { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
+    const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
+    expect(response.status).toBe(200);
+    expect(text).toContain("exceeded 64 bytes");
+    const row = rowFor(requestId);
+    expect(row.status).toBe(502);
+    expect(row.terminalStatus).toBe("incomplete");
+    expect(row.closeReason).toBe("body_overflow");
+  });
+
+  test("a relayed stream that stalls is a 502 incomplete row with the tap's reason", async () => {
+    const config = fixtureConfig(startUpstream(hangingAfterPartialTurn), { claudeCode: { bodyStallSec: 1 } as OcxConfig["claudeCode"] });
+    const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
+    expect(response.status).toBe(200);
+    expect(text).toContain('"type":"timeout_error"');
+    const row = rowFor(requestId);
+    expect(row.status).toBe(502);
+    expect(row.terminalStatus).toBe("incomplete");
+    expect(row.closeReason).toBe("body_stall");
+    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
   });
 
   test("a client that disconnects mid-stream is logged as a cancel, not an upstream failure", async () => {

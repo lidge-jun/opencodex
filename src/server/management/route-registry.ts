@@ -144,6 +144,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/grok", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/injection-model", module: "server/management/agent-settings-routes", mutates: false },
+  { method: "POST", path: "/api/injection-model/suggest", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/subagent-model-fallback", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/subagent-models", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: false },
@@ -168,6 +169,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/v2", module: "server/management/agent-settings-routes", mutates: true },
   // server/management/codex-agent-role-routes
   { method: "GET", path: "/api/codex-agent-roles", module: "server/management/codex-agent-role-routes", mutates: false },
+  { method: "POST", path: "/api/codex-agent-roles/auto-assign", module: "server/management/codex-agent-role-routes", mutates: false, mechanism: "path-constant" },
   { method: "PUT", path: "/api/codex-agent-roles/{role}", module: "server/management/codex-agent-role-routes", mutates: true, mechanism: "prefix-decode" },
   // server/management/aside-profile-routes
   { method: "GET", path: "/api/client-integrations/aside", module: "server/management/aside-profile-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "compatibility-alias", why: "Legacy Aside status alias; the current CLI reads the same aggregate through GET /api/client-integrations/aside/profiles." } },
@@ -196,6 +198,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
   { method: "GET", path: "/api/combos", module: "server/management/combo-routes", mutates: false },
   { method: "PUT", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
+  // server/management/decision-routes
+  { method: "GET", path: "/api/combos/decision-discovery", module: "server/management/decision-routes", mutates: false },
+  { method: "POST", path: "/api/combos/decision-test", module: "server/management/decision-routes", mutates: true },
   // server/management/config-routes
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },

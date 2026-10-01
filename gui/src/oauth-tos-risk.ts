@@ -8,7 +8,7 @@
 export type OAuthTosRiskLevel = "high" | "elevated";
 
 const HIGH_RISK = new Set(["anthropic", "google-antigravity", "meta-muse"]);
-const ELEVATED_RISK = new Set(["github-copilot", "cursor"]);
+const ELEVATED_RISK = new Set(["github-copilot", "cursor", "zed"]);
 
 export function oauthTosRisk(providerId: string): OAuthTosRiskLevel | null {
   const id = providerId.trim().toLowerCase();

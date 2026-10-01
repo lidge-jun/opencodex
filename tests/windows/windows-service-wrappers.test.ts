@@ -195,3 +195,61 @@ test.skipIf(process.platform !== "win32")("cmd restarts zero/crash exits and sto
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const date of ["Wed 09/30/2026", "2026-09-30(수)", "2026/09/30 (水)"]) {
+  for (const scenario of ["healthy", "missing bun", "missing cli", "restore bun", "restore cli", "empty backup", "standalone healthy", "standalone missing"] as const) {
+    test.skipIf(process.platform !== "win32")(`cmd prelaunch with ${date}: ${scenario}`, async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { spawnSync } = await import("node:child_process");
+      const { buildWindowsServiceScript } = await import("../../src/service/windows-taskxml");
+      const dir = mkdtempSync(join(tmpdir(), "ocx-wrapper-locale-"));
+      try {
+        // Every path used by recovery is disposable, including the live package.
+        const pkg = join(dir, "package (test)!");
+        const bun = join(pkg, "bun.cmd");
+        const cli = join(pkg, "src", "cli", "index.ts");
+        const log = join(dir, "service.log");
+        const backup = join(dir, ".ocx-backup-20260930 (test)!", "opencodex");
+        const child = '@echo off\r\necho FAKE-CHILD-STARTED\r\nexit /b 42\r\n';
+        mkdirSync(join(pkg, "src", "cli"), { recursive: true });
+        if (scenario !== "missing bun" && scenario !== "restore bun" && scenario !== "empty backup" && scenario !== "standalone missing") writeFileSync(bun, child);
+        if (scenario !== "missing cli" && scenario !== "restore cli") writeFileSync(cli, "fixture");
+        if (scenario.startsWith("restore") || scenario === "empty backup") {
+          mkdirSync(join(backup, "src", "cli"), { recursive: true });
+          if (scenario !== "empty backup") {
+            writeFileSync(join(backup, "package.json"), "{}");
+            writeFileSync(join(backup, "bun.cmd"), child);
+            writeFileSync(join(backup, "src", "cli", "index.ts"), "fixture");
+          }
+        }
+        const batch = buildWindowsServiceScript({ bun, bunRuntimeSource: "bundled", cli: scenario.startsWith("standalone") ? null : cli }, 10100, []);
+        // Keep the complete generated loop, prelaunch guards and recovery. Replace
+        // environment setup with isolated paths; CALL lets our fake .cmd child
+        // return to the wrapper just as the real Bun executable would.
+        const body = batch.slice(batch.indexOf(":loop\r\n"))
+          .replace(/^"%OCX_BUN%" /m, 'call "%OCX_BUN%" ');
+        const file = join(dir, "wrapper.cmd");
+        writeFileSync(file, ["@echo off", "setlocal EnableExtensions DisableDelayedExpansion", 'set "ERRORLEVEL="',
+          `set "OCX_BUN=${bun}"`, `set "OCX_CLI=${cli}"`, `set "OCX_PKG_DIR=${pkg}"`,
+          `set "OCX_SERVICE_LOG=${log}"`, 'set "OCX_API_TOKEN_FILE=fixture"', body].join("\r\n"));
+        const result = spawnSync("cmd.exe", ["/d", "/c", file], {
+          timeout: 5000, encoding: "utf8", env: { ...process.env, DATE: date, TIME: "12:16:55.17", ERRORLEVEL: "42" },
+        });
+        expect(result.error).toBeUndefined();
+        const started = scenario === "healthy" || scenario === "standalone healthy" || scenario.startsWith("restore");
+        expect(result.status).toBe(started ? 0 : 3);
+        const output = existsSync(log) ? readFileSync(log, "utf8") : "";
+        expect(output.includes("FAKE-CHILD-STARTED")).toBe(started);
+        if (!started) expect(output).toContain(`installation is incomplete: ${scenario === "missing cli" ? "CLI entry" : "bundled Bun"} is missing`);
+        if (scenario.startsWith("restore")) {
+          expect(output).toContain("restored previous install from .ocx-backup-20260930 (test)!");
+          expect(existsSync(join(pkg, "package.json"))).toBe(true);
+        }
+        if (scenario === "empty backup") expect(output).toContain("no restorable backup found");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+}

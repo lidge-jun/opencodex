@@ -1,3 +1,4 @@
+import { forgetMainAccountUsage, observeMainAccountUsage, type FreshWindow } from "./main-account-external-usage";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
@@ -10,7 +11,7 @@ import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaW
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
-import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT, resetAtToMs } from "./quota-types";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT, resetAtToMs } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 
 export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
@@ -260,7 +261,7 @@ function assignCarriedShort(
   const existingShortPercent = existing.shortPercent;
   const preserveBlockingEvidence = policyEvidence
     && finitePercent(existingShortPercent)
-    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT
     && existingShortPercent <= 100;
   if (!preserveBlockingEvidence && shortResetHasElapsed(existing.shortResetAt, now)) return;
   if (existing.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
@@ -315,6 +316,19 @@ export function setAccountQuotaFromParsed(
   const next = mergeAccountQuota(quota, legacyExisting, updatedAt);
   accountQuota.set(accountId, next);
   if (isMain) {
+    if (mainWriter && policyQuota && snapshotHasUsage(policyQuota)) {
+      const windows: FreshWindow[] = [];
+      const add = (kind: FreshWindow["kind"], percent: number | undefined, reset: number | undefined) => {
+        if (finitePercent(percent) && percent >= 0 && percent <= 100
+          && typeof reset === "number" && Number.isFinite(reset) && reset > 0) {
+          windows.push({ kind, percent, resetAtMs: resetAtToMs(reset) });
+        }
+      };
+      add("short", policyQuota.shortPercent, policyQuota.shortResetAt);
+      if (policyQuota.monthlyIsPrimaryWindow === true) add("long", policyQuota.monthlyPercent, policyQuota.monthlyResetAt);
+      else add("long", policyQuota.weeklyPercent, policyQuota.weeklyResetAt);
+      observeMainAccountUsage(mainWriter.identityKey, windows, updatedAt);
+    }
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
@@ -371,7 +385,7 @@ function mergeAccountQuota(
     && quota.weeklyPercent === undefined
     && quota.monthlyIsPrimaryWindow !== true
     && finitePercent(existingWeeklyPercent)
-    && existingWeeklyPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingWeeklyPercent >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT
     && existingWeeklyPercent <= 100;
   if (snapshotHasWeekly(quota) && !preserveKnownWeekly) {
     if (quota.weeklyPercent !== undefined) next.weeklyPercent = quota.weeklyPercent;
@@ -404,7 +418,7 @@ function mergeAccountQuota(
   const preserveKnownShort = policyEvidence
     && quota.shortPercent === undefined
     && finitePercent(existingShortPercent)
-    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT
     && existingShortPercent <= 100;
   if (snapshotHasShort(quota) && !preserveKnownShort) {
     if (quota.shortPercent !== undefined) {
@@ -778,6 +792,7 @@ function forgetCodexQuotaBaseline(accountId?: string): void {
 }
 
 export function clearAccountQuota(accountId?: string): void {
+  if (!accountId || accountId === MAIN_CODEX_ACCOUNT_ID) forgetMainAccountUsage();
   if (accountId) hydrateAccountQuotasFromDisk();
   quotaHistory.clear(accountId);
   if (accountId) {

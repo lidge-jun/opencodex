@@ -96,6 +96,13 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["chatgpt"],
+    summary: "Experimental ChatGPT app-server shim: launch, restore or status (macOS only).",
+    routes: [], flags: [], mutates: true, json: "none",
+    bannerLines: ["ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)"],
+    details: ["Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher."],
+  },
+  {
     command: ["link", "port"],
     summary: "Allocate a free loopback port for a remote home link.",
     routes: [],
@@ -1080,18 +1087,47 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["agent", "roles"],
-    summary: "omo (Codex / LazyCodex): show each Codex agent role's model pin, or set one role's model in its TOML and in omo.jsonc.",
+    summary: "omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.",
     routes: [
       { method: "GET", path: "/api/codex-agent-roles" },
       { method: "PUT", path: "/api/codex-agent-roles/{role}" },
+      { method: "POST", path: "/api/codex-agent-roles/auto-assign" },
     ],
-    flags: [{ name: "--json", value: "boolean", summary: "Emit the role list or the write result as JSON." }],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the role list, the write result or the proposals as JSON." },
+      { name: "--model", value: "string", summary: "suggest: size the roles with this model instead of the Codex default model." },
+      { name: "--apply", value: "boolean", summary: "suggest: write every proposal through the role model write." },
+    ],
     mutates: true,
     json: "payload",
     details: [
       "A bare invocation reads and never writes.",
-      "Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles and set is refused.",
+      "Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.",
       "set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml; omo.jsonc is skipped when absent or when it contains comments.",
+      "suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort.",
+    ],
+  },
+  {
+    command: ["agent", "injection"],
+    summary: "Show or set the delegation model and effort, or suggest both for a described piece of delegated work.",
+    routes: [
+      { method: "GET", path: "/api/injection-model" },
+      { method: "PUT", path: "/api/injection-model" },
+      { method: "POST", path: "/api/injection-model/suggest" },
+    ],
+    flags: [
+      { name: "--json", value: "boolean", summary: "Emit the delegation settings, the write result or the proposal as JSON." },
+      { name: "--model", value: "string", summary: "set: the delegation model, - clears it. suggest: size the work with this model instead of the Codex default model." },
+      { name: "--effort", value: "string", summary: "set: the delegation reasoning effort, - clears it." },
+      { name: "--prompt", value: "string", summary: "set: a custom guidance prompt, - clears it." },
+      { name: "--guidance", value: "string", summary: "set: on or off for OpenCodex delegation guidance." },
+      { name: "--apply", value: "boolean", summary: "suggest: write the proposed model and effort through the delegation settings write." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "suggest sizes the described work with one model call, picks the cheapest sufficient model the delegation picker offers, and writes nothing unless --apply is given.",
     ],
   },
   {
@@ -1104,6 +1140,33 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
     mutates: false,
     json: "payload",
+  },
+  {
+    command: ["combo", "test"],
+    summary: "Run one JEV decision probe through a decision method: TypeSafe, a System One row, or an opencodex model.",
+    routes: [{ method: "POST", path: "/api/combos/decision-test" }],
+    flags: [
+      { name: "--combo", value: "string", summary: "Combo id whose saved decision method is probed and whose recursion rules apply." },
+      { name: "--decision-provider", value: "string", summary: "Probe a jev-decision provider row (or jev for TypeSafe) instead of the saved method." },
+      { name: "--decision-model", value: "string", summary: "Probe an opencodex-routed model instead of the saved method." },
+      { name: "--decision-timeout", value: "number", summary: "Decision deadline in milliseconds (1000-120000)." },
+      { name: "--json", value: "boolean", summary: "Emit the probe result." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Sends one synthetic two-option decision; it may spend a decision call on the chosen backend."],
+  },
+  {
+    command: ["combo", "discover"],
+    summary: "List configured System One decision rows and catalog models that look like decision services.",
+    routes: [{ method: "GET", path: "/api/combos/decision-discovery" }],
+    flags: [
+      { name: "--query", value: "string", summary: "Match catalog rows by this text instead of the built-in decision-model hint." },
+      { name: "--json", value: "boolean", summary: "Emit the discovery payload." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["Read-only: nothing is probed and no provider row is created."],
   },
   {
     command: ["api", "explain"],

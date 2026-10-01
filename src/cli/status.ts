@@ -1,3 +1,4 @@
+import type { CodexMainAccountPolicyHealth } from "../oauth/health";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { existsSync, readFileSync } from "node:fs";
 import { codexAutoStartEnabled, getConfigPath, readConfigDiagnostics } from "../config";
@@ -104,6 +105,7 @@ export type CliRemoteHubStatus = {
 };
 
 export type CliStatusJson = {
+  mainAccountHardLock?: CodexMainAccountPolicyHealth;
   schemaVersion: 1;
   /**
    * This machine's topology role, named rather than inferred (#4236).
@@ -676,7 +678,8 @@ export function missingCodexCatalogLines(missingCatalogPath: string | null): str
   ];
 }
 
-export async function collectStatus(): Promise<CliStatusView> {
+/** `mainAccountPolicy`: only `--json` asks; the human report reads the same accounts once via OAuth health. */
+export async function collectStatus(options: { mainAccountPolicy?: boolean } = {}): Promise<CliStatusView> {
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
   const claudeDesktop = {
@@ -714,6 +717,9 @@ export async function collectStatus(): Promise<CliStatusView> {
   const live = await findLiveProxy({
     configFn: () => ({ port: config.port, hostname: config.hostname }),
   });
+  const mainAccountHardLock = options.mainAccountPolicy && live
+    ? (await (await import("../oauth/health")).fetchCodexHealthFromLiveProxy(undefined, async () => live)).mainAccountHardLock
+    : undefined;
   const pidFile = readPid();
   // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
   const pid = resolveStatusPid(live, pidFile);
@@ -865,6 +871,7 @@ export async function collectStatus(): Promise<CliStatusView> {
     proxyLabel,
     healthLabel: health.label,
     json: {
+      ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
       schemaVersion: 1,
       runtimeRole: config.runtimeRole ?? "standalone",
       proxy: {

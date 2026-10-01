@@ -414,7 +414,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 
 | Owner | Responsibility |
 | --- | --- |
-| `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission. |
+| `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission, retaining [original policy authorization](policy-fallback.md). xAI OAuth model-scope admission previews the billed Fast lane using the serialization decision shared with Chat, Messages and routed compact admission; final normalization rechecks the actual wire destination. |
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. |
 | `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
@@ -435,7 +435,7 @@ Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts
 `core-combo-failure.ts`, `core-combo-native.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
 `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
 and small composition contracts. Existing public helper names are re-exported by `core.ts`.
-Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; `core.ts` and `core-lifetime.ts` release it on returned-body completion, error, or cancellation, outside the inner admission `finally`.
+Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; cancellation permanently fences the request holder so recovery cannot install a late lease after abort cleanup. `core.ts` and `core-lifetime.ts` release the lease on returned-body completion, error, or cancellation, outside the inner admission `finally`.
 
 Mutable values are not copied across phases. A phase exposes only the values consumed by later
 phases, with getters/setters over the original local bindings where a retry or callback can
@@ -576,7 +576,7 @@ reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 
 ## Adapter-to-Responses bridge
 
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
-`src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream,
+`src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream; its once-only first-output observer includes nonempty `tool_call_delta` arguments (including custom-tool input), but not tool-start scaffolding or empty arguments,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
 from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
 caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they

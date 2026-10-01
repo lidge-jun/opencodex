@@ -28,6 +28,8 @@ ambiguous-resend gate and replay boundary, combo quota fallback and commit bound
 routing overrides, and output headroom. The endpoint and dispatch rules they build on are in
 [Responses transport](responses.md). `src/lib/errors.ts` classifies an HTTP 400 input-token-count overflow as `context_length_exceeded`, including the counted-token variant; the wording is Google's, but the shared classifier matches it for any provider. Output-token limits and protected failures retain their existing categories. Classification does not itself shorten input or authorize replay.
 
+Policy-selected turns also retain their [original candidate authorization](policy-fallback.md) through fallback and subagent recovery.
+
 ## Chat-to-Responses message phase inference
 
 Chat Completions streams do not carry the Responses `message.phase` field. The bridge keeps an

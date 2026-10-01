@@ -25,10 +25,11 @@ const USAGE = `Usage:
   ocx agent [status] [--json]
   ocx agent injection <status|set> [--model <id|->] [--effort <level|->]
       [--prompt <text|->] [--guidance <on|off>] [--json]
+  ocx agent injection suggest <work description> [--model <id>] [--apply] [--json]
   ocx agent effort <status|set> [--main <level|->] [--subagent <level|->] [--json]
   ocx agent subagents <status|set|clear> [model,model...] [--json]
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
-  ocx agent roles [status|set <role> <model>] [--json]
+  ocx agent roles [status|set <role> <model>|suggest [--model <id>] [--apply]] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
       [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>] [--json]
@@ -54,6 +55,58 @@ async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, summaryLines(result));
 }
 
+interface DelegationProposal {
+  model: string | null;
+  effort: string | null;
+  status: "proposed" | "unassigned" | "unsized";
+  tier?: string;
+  effortIntent?: string;
+  rationale?: string;
+  moveUpIf?: string;
+  moveDownIf?: string;
+  proposedModel?: string | null;
+  proposedEffort?: string | null;
+  reason?: string | null;
+}
+
+async function suggestInjection(args: string[], wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
+  const model = takeOption(args, "--model");
+  const apply = takeFlag(args, "--apply");
+  if (args.some(arg => arg.startsWith("--"))) rejectArgs(args, USAGE);
+  const work = args.join(" ").trim();
+  if (!work) throw new CliUsageError("describe the delegated work to size", USAGE);
+  const result = await runtimeRequest<{ sizingModel?: string; proposal?: DelegationProposal }>(
+    "/api/injection-model/suggest",
+    { method: "POST", body: JSON.stringify({ work, ...(model ? { model } : {}) }) },
+    deps,
+  );
+  const p = result.proposal;
+  const alreadySet = p?.status === "proposed" && !!p.proposedModel
+    && p.proposedModel === p.model && (p.proposedEffort ?? null) === (p.effort ?? null);
+  let applied: { model: string; effort: string | null } | null = null;
+  if (apply && !alreadySet && p?.status === "proposed" && p.proposedModel) {
+    applied = { model: p.proposedModel, effort: p.proposedEffort ?? null };
+    await runtimeRequest("/api/injection-model", { method: "PUT", body: JSON.stringify(applied) }, deps);
+  }
+  printData(apply ? { ...result, applied, alreadySet } : result, wantsJson, [
+    `Sized with ${result.sizingModel ?? "unknown"}.`,
+    !p || p.status === "unsized"
+      ? `Not sized (${p?.reason ?? "unknown"}).`
+      : p.status === "unassigned"
+        ? `${p.tier}/${p.effortIntent}, no model (${p.reason ?? "unknown"})`
+        : `${p.model ?? "(none)"}${p.effort ? ` (${p.effort})` : ""} -> ${p.proposedModel}${p.proposedEffort ? ` (${p.proposedEffort})` : ""} [${p.tier}/${p.effortIntent}] ${p.rationale ?? ""}`,
+    ...(p?.moveUpIf ? [`Move up if: ${p.moveUpIf}`] : []),
+    ...(p?.moveDownIf ? [`Move down if: ${p.moveDownIf}`] : []),
+    apply
+      ? (applied
+        ? "Applied to the delegation model."
+        : alreadySet
+          ? `Already set to ${p!.proposedModel}${p!.proposedEffort ? ` (${p!.proposedEffort})` : ""}; nothing applied.`
+          : "Nothing to apply.")
+      : "Nothing was written; rerun with --apply to set the delegation model.",
+  ]);
+}
+
 async function injection(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
@@ -62,6 +115,10 @@ async function injection(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest("/api/injection-model", {}, deps);
     printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action === "suggest") {
+    await suggestInjection(args, wantsJson, deps);
     return;
   }
   if (action !== "set") throw new CliUsageError(`unknown injection action ${action}`, USAGE);
@@ -243,6 +300,71 @@ interface CodexAgentRolesStatus {
   roles?: Array<{ role: string; model: string | null; omoJsoncModel: string | null }>;
 }
 
+interface CodexRoleProposal {
+  role: string;
+  model: string | null;
+  effort?: string | null;
+  status: "proposed" | "unassigned" | "unsized";
+  tier?: string;
+  effortIntent?: string;
+  rationale?: string;
+  proposedModel?: string | null;
+  proposedEffort?: string | null;
+  reason?: string | null;
+}
+
+function proposalAlreadySet(proposal: CodexRoleProposal): boolean {
+  return proposal.proposedModel === proposal.model
+    && (proposal.proposedEffort == null || proposal.proposedEffort === proposal.effort);
+}
+
+const OMO_JSONC_NOT_WRITTEN = new Set(["skipped_comments", "invalid", "write_failed"]);
+
+async function suggestRoles(args: string[], wantsJson: boolean, deps: RuntimeApiDeps): Promise<void> {
+  const model = takeOption(args, "--model");
+  const apply = takeFlag(args, "--apply");
+  rejectArgs(args, USAGE);
+  const result = await runtimeRequest<{ sizingModel?: string; proposals?: CodexRoleProposal[] }>(
+    "/api/codex-agent-roles/auto-assign",
+    { method: "POST", body: JSON.stringify(model ? { model } : {}) },
+    deps,
+  );
+  const proposals = result.proposals ?? [];
+  const applied: Array<{ role: string; model: string; effort?: string }> = [];
+  const skipped: string[] = [];
+  const omoJsoncNotWritten: Array<{ role: string; status: string }> = [];
+  if (apply) {
+    for (const proposal of proposals) {
+      if (proposal.status !== "proposed" || !proposal.proposedModel) continue;
+      if (proposalAlreadySet(proposal)) {
+        skipped.push(proposal.role);
+        continue;
+      }
+      const body = { model: proposal.proposedModel, ...(proposal.proposedEffort ? { effort: proposal.proposedEffort } : {}) };
+      const written = await runtimeRequest<{ omoJsonc?: { status?: string } } | null>(
+        `/api/codex-agent-roles/${encodeURIComponent(proposal.role)}`,
+        { method: "PUT", body: JSON.stringify(body) },
+        deps,
+      );
+      applied.push({ role: proposal.role, ...body });
+      const omoStatus = written?.omoJsonc?.status;
+      if (omoStatus && OMO_JSONC_NOT_WRITTEN.has(omoStatus)) omoJsoncNotWritten.push({ role: proposal.role, status: omoStatus });
+    }
+  }
+  printData(apply ? { ...result, applied, skipped, omoJsoncNotWritten } : result, wantsJson, [
+    `Sized with ${result.sizingModel ?? "unknown"}.`,
+    ...proposals.map(p => p.status === "unsized"
+      ? `${p.role}: not sized (${p.reason ?? "unknown"})`
+      : p.status === "unassigned"
+        ? `${p.role}: ${p.tier}/${p.effortIntent}, no model (${p.reason ?? "unknown"})`
+        : `${p.role}: ${p.model ?? "(no pin)"} -> ${p.proposedModel}${p.proposedEffort ? ` (${p.proposedEffort})` : ""} [${p.tier}/${p.effortIntent}] ${p.rationale ?? ""}`),
+    apply
+      ? `Applied ${applied.length} of ${proposals.length} roles.${skipped.length > 0 ? ` Skipped ${skipped.length} already set: ${skipped.join(", ")}.` : ""}`
+      : "Nothing was written; rerun with --apply to write every proposal that differs from the role's current pin.",
+    ...omoJsoncNotWritten.map(entry => `${entry.role}: omo.jsonc not written (${entry.status}); the role TOML was updated.`),
+  ]);
+}
+
 async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -260,6 +382,10 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       ...(rows.length === 0 ? ["No Codex agent roles found."] : rows.map(row => `${row.role}: ${row.model ?? "(no model pin)"}`)),
       `omo.jsonc: ${result.omoJsonc?.state ?? "unknown"}`,
     ]);
+    return;
+  }
+  if (action === "suggest") {
+    await suggestRoles(args, wantsJson, deps);
     return;
   }
   if (action !== "set") throw new CliUsageError(`unknown roles action ${action}`, USAGE);

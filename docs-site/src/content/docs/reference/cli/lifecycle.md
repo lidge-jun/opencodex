@@ -231,6 +231,10 @@ section, so the two commands should agree on restart protection. If you are diag
 compare the reported live startup verdict with the local service details rather than treating the shell
 probe as more authoritative.
 
+The `clients=pending-restart(...)` diagnostic lists Codex CLI clients that predate the routing
+injection. On macOS, Electron renderer, utility, and crashpad helpers under Codex.app's framework
+are excluded from that client list, including helpers whose executable paths contain spaces.
+
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
 non-healthy account (provider, masked account id, status such as reauthentication required, rate or
@@ -496,6 +500,10 @@ priority (`7`, also the scheduler default when omitted) can delay the proxy's he
 CPU contention, making the tray report Offline even while the process is alive. After upgrading,
 run `ocx service repair` to migrate that registered priority and restart the service. This migration
 may request UAC approval; a priority already set to normal or high does not itself trigger replacement.
+
+The Windows wrapper supports locale dates containing parentheses, including Korean and Japanese
+date formats. After upgrading, run `ocx service repair` to replace an older generated wrapper
+that exits before launching Bun on those locales.
 
 The Windows wrapper verifies its baked Bun runtime and CLI entry before every start attempt. If an
 interrupted package update removed either file, it logs one `installation is incomplete` message and

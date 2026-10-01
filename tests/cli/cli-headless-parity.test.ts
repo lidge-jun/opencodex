@@ -829,6 +829,39 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set forwards a JEV decision provider and timeout, clears them with -, and rejects other strategies", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleComboCommand([
+      "set", "jev-local", "--targets", "openai/gpt-6-astra,openai/gpt-5.6-sol", "--strategy", "jev",
+      "--decision-provider", "ollama-tev1", "--decision-timeout", "60000", "--json",
+    ], runtime.deps)).toBe(0);
+    expect(await handleComboCommand([
+      "set", "jev-local", "--targets", "openai/gpt-6-astra", "--strategy", "jev",
+      "--decision-provider", "-", "--decision-timeout", "-", "--json",
+    ], runtime.deps)).toBe(0);
+    const puts = runtime.requests.filter(request => request.method === "PUT").map(request => request.body);
+    expect(puts[0]).toMatchObject({
+      id: "jev-local",
+      combo: { strategy: "jev", decisionProvider: "ollama-tev1", decisionTimeoutMs: 60_000 },
+    });
+    expect(puts[1]).toMatchObject({ combo: { decisionProvider: null, decisionTimeoutMs: null } });
+
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const args of [
+        ["--decision-provider", "ollama-tev1"],
+        ["--strategy", "jev", "--decision-timeout", "999"],
+        ["--decision-timeout", "5000"],
+      ]) {
+        const rejected = fakeRuntime();
+        expect(await handleComboCommand(["set", "demo", "--targets", "a/m1", ...args], rejected.deps)).toBe(2);
+        expect(rejected.requests).toEqual([]);
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("combo set exposes the opt-in force-default policy", async () => {
     const runtime = fakeRuntime();
     expect(await handleComboCommand([
@@ -959,6 +992,151 @@ describe("headless GUI parity CLI", () => {
       { path: "/api/codex-agent-roles", method: "GET", body: null },
       { path: "/api/codex-agent-roles/ocx%20explorer", method: "PUT", body: { model: "xai/grok-4.5" } },
     ]);
+  });
+
+  test("agent roles suggest prints proposals, and --apply writes only proposed roles through PUT", async () => {
+    const proposals = {
+      sizingModel: "gpt-5.5",
+      proposals: [
+        { role: "explorer", model: "gpt-5.5", status: "proposed", tier: "fast", effortIntent: "glance", proposedModel: "a/small", proposedEffort: "low" },
+        { role: "worker", model: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null },
+        { role: "vague", model: null, status: "unsized", reason: "no JSON" },
+      ],
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--model", "a/sizer", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: { model: "a/sizer" } },
+      { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} },
+      { path: "/api/codex-agent-roles/explorer", method: "PUT", body: { model: "a/small", effort: "low" } },
+      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid" } },
+    ]);
+  });
+
+  test("agent roles suggest --apply skips proposals that already match the role's pin and says so", async () => {
+    const proposals = {
+      sizingModel: "gpt-5.5",
+      proposals: [
+        { role: "explorer", model: "a/small", effort: "low", status: "proposed", tier: "fast", effortIntent: "glance", proposedModel: "a/small", proposedEffort: "low" },
+        { role: "reviewer", model: "a/mid", effort: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null },
+        { role: "planner", model: "a/mid", effort: "low", status: "proposed", tier: "standard", effortIntent: "thorough", proposedModel: "a/mid", proposedEffort: "high" },
+        { role: "worker", model: null, effort: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null },
+      ],
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let output = "";
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).toBe(0);
+      output = logSpy.mock.calls.flat().join("\n");
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} },
+      { path: "/api/codex-agent-roles/planner", method: "PUT", body: { model: "a/mid", effort: "high" } },
+      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid" } },
+    ]);
+    expect(output).toContain("Applied 2 of 4 roles. Skipped 2 already set: explorer, reviewer.");
+  });
+
+  test("agent roles suggest --apply names each role whose omo.jsonc mirror was not written", async () => {
+    const proposals = {
+      sizingModel: "gpt-5.5",
+      proposals: ["explorer", "reviewer", "planner", "worker"].map(role => ({
+        role, model: null, effort: null, status: "proposed", tier: "standard", effortIntent: "measured", proposedModel: "a/mid", proposedEffort: null,
+      })),
+    };
+    const mirror: Record<string, string> = { explorer: "written", reviewer: "write_failed", planner: "invalid", worker: "skipped_comments" };
+    const runtime = fakeRuntime(req => req.method === "POST"
+      ? proposals
+      : { ok: true, toml: { status: "written" }, omoJsonc: { status: mirror[new URL(req.url).pathname.split("/").pop()!] } });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let output = "";
+    let json: { applied?: unknown[]; omoJsoncNotWritten?: unknown } = {};
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).toBe(0);
+      output = logSpy.mock.calls.flat().join("\n");
+      logSpy.mockClear();
+      expect(await handleAgentCommand(["roles", "suggest", "--apply", "--json"], runtime.deps)).toBe(0);
+      json = JSON.parse(String(logSpy.mock.calls.flat().join("")));
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(output).toContain("Applied 4 of 4 roles.");
+    expect(output).toContain("reviewer: omo.jsonc not written (write_failed)");
+    expect(output).toContain("planner: omo.jsonc not written (invalid)");
+    expect(output).toContain("worker: omo.jsonc not written (skipped_comments)");
+    expect(output).not.toContain("explorer: omo.jsonc");
+    expect(json.applied).toHaveLength(4);
+    expect(json.omoJsoncNotWritten).toEqual([
+      { role: "reviewer", status: "write_failed" },
+      { role: "planner", status: "invalid" },
+      { role: "worker", status: "skipped_comments" },
+    ]);
+  });
+
+  test("agent roles suggest --apply stops at the lazycodex_not_detected refusal and writes nothing", async () => {
+    const runtime = fakeRuntime(req => req.method === "POST"
+      ? Response.json({ error: "omo (Codex / LazyCodex) is not installed in this CODEX_HOME", code: "lazycodex_not_detected" }, { status: 409 })
+      : { ok: true });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    let output = "";
+    try {
+      expect(await handleAgentCommand(["roles", "suggest", "--apply"], runtime.deps)).not.toBe(0);
+      output = errorSpy.mock.calls.flat().join("\n");
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([{ path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} }]);
+    expect(output).toContain("omo (Codex / LazyCodex) is not installed");
+  });
+
+  test("agent injection suggest prints the proposal, and --apply writes it through PUT /api/injection-model", async () => {
+    const suggestion = {
+      sizingModel: "gpt-5.5",
+      proposal: { model: "a/big", effort: "high", status: "proposed", tier: "fast", effortIntent: "glance", rationale: "Bounded edits.", moveUpIf: "It crosses modules.", moveDownIf: "Never.", proposedModel: "a/small", proposedEffort: "low", reason: null },
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? suggestion : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["injection", "suggest", "rename", "symbols", "--model", "a/sizer", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["injection", "suggest", "rename symbols", "--apply"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["injection", "suggest"], runtime.deps)).not.toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/injection-model/suggest", method: "POST", body: { work: "rename symbols", model: "a/sizer" } },
+      { path: "/api/injection-model/suggest", method: "POST", body: { work: "rename symbols" } },
+      { path: "/api/injection-model", method: "PUT", body: { model: "a/small", effort: "low" } },
+    ]);
+  });
+
+  test("agent injection suggest --apply skips a proposal that already matches the delegation model and effort and says so", async () => {
+    const suggestion = {
+      sizingModel: "gpt-5.5",
+      proposal: { model: "a/small", effort: "low", status: "proposed", tier: "fast", effortIntent: "glance", rationale: "Bounded edits.", moveUpIf: "It crosses modules.", moveDownIf: "Never.", proposedModel: "a/small", proposedEffort: "low", reason: null },
+    };
+    const runtime = fakeRuntime(req => req.method === "POST" ? suggestion : { ok: true });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let output = "";
+    try {
+      expect(await handleAgentCommand(["injection", "suggest", "rename symbols", "--apply"], runtime.deps)).toBe(0);
+      output = logSpy.mock.calls.flat().join("\n");
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/injection-model/suggest", method: "POST", body: { work: "rename symbols" } },
+    ]);
+    expect(output).toContain("Already set to a/small (low); nothing applied.");
   });
 
   test("API key create returns the one-time key through the access command", async () => {

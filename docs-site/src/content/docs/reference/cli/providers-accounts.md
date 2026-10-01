@@ -137,9 +137,9 @@ Remove the stored OAuth credential for a provider.
 
 ## Accounts and key pools
 
-### Main-account 98% protection
+### Main-account quota protection
 
-In **Codex settings → Multi-auth → Advanced settings**, **Block main account at 98%**
+In **Codex settings → Multi-auth → Advanced settings**, **Block main account**
 is on by default beside Ultra Fast. Switching it off applies immediately; turning it back on first
 shows the consequences, and cancelling does not change the setting. The main-account card shows
 monitoring, unknown usage, or a current policy block even when Advanced settings is closed.
@@ -151,10 +151,23 @@ account usable ([#5694](https://github.com/lidge-jun/opencodex/issues/5694)). Th
 Reserve: while the block is in force, Reserve on that main account cannot activate. To let the main
 account run to exhaustion and hand over to Reserve, turn the switch off.
 
-The **5h window and the weekly window each block on their own**: either one reaching 98% blocks
+The **5h window and the weekly window each block on their own**: the 5h window reaching 90% or the weekly window reaching 98% blocks
 immediately, even while the other still has headroom. Monthly-only accounts use their monthly
 window. The block releases automatically, with the switch still on, once every blocking window
-reports a fresh reading below 98% (a 0% reset counts); the next 98% observation blocks again.
+reports a fresh reading below its threshold (a 0% reset counts); the next observation at the threshold blocks again.
+Configure `codexMainAccountHardLockThresholds` in `config.json` with optional `short` and `long`
+percentages, for example `{ "short": 90, "long": 98 }`. Both must be integers from 80 through 100,
+and `short` must not exceed `long`; omitted fields use the defaults. The settings API accepts the
+same object and returns the effective values in `mainAccountHardLock.thresholds`.
+
+The dashboard and `ocx status` show **possible usage outside opencodex** when fresh readings rise
+by at least one point in the same reset episode without recent main-account activity through this
+proxy. This is an advisory observation, not proof: a long-running turn can also cause it. The lock
+may not prevent exhaustion from outside traffic. The process-local notice clears on identity or
+reset changes and expires after six hours or at the observed reset, whichever comes first.
+`ocx status --json` exposes the state, effective thresholds, blocking window kind, and optional
+`externalUsage` warning under `mainAccountHardLock` when live management evidence is available.
+
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
 While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
@@ -168,7 +181,7 @@ its primary window explicitly lasts **at least 24 hours** and reports valid usag
 explicitly `null` and a measured secondary supplies the weekly usage. In either case, secondary/tertiary
 windows must be explicitly `null` or explicitly last at least 24 hours and report valid usage. This follows the parser's short/long boundary, so a
 one-day window qualifies as well as weekly/monthly windows. The current window still uses the same
-98% threshold. This relies on the single reported snapshot; repeated observations are not required.
+configured long-window threshold (98% by default). This relies on the single reported snapshot; repeated observations are not required.
 Any omitted window field, an unknown duration, or partial response headers cannot clear a previous block.
 All-null responses carrying only credits and supplementary monthly-only readings also cannot establish recovery.
 The proxy checks the stored credential again before applying a delayed response. An unreadable file
@@ -190,7 +203,7 @@ keyring credentials, and traffic outside the proxy can still spend quota. Added 
 providers remain available.
 
 With protection on, an owned startup restores the main credential's in-memory identity
-binding after native-profile recovery and cleanup, so a persisted 98% block survives a restart.
+binding after native-profile recovery and cleanup, so a persisted policy block survives a restart.
 Caller-owned Direct, exact-main, main-fallback, and main-pin requests can briefly receive 503
 while that binding is pending; healthy stored Pool accounts stay eligible throughout. No
 credential is read from a foreign or unconfirmed service home for this initialization.
@@ -224,7 +237,7 @@ Each compatibility request checks a credential-bound server authorization, cache
 requires ordinary usage to be disallowed, the Luna Reserve banner, and exactly one allowed Reserve
 bucket. Missing, denied, stale or mismatched evidence refuses the request; it does not switch accounts
 or silently use ordinary Luna. Passive usage can revoke authorization but cannot create it.
-Global cooldown, pause, reauthentication and the 98% hard lock still apply. Turn the hard lock off if
+Global cooldown, pause, reauthentication and the main-account hard lock still apply. Turn the hard lock off if
 you want to use Reserve on an exhausted main account; doing so does not grant server entitlement.
 This compatibility path supports conversation requests and compaction, not Reserve as a vision or
 web-search helper or a standalone search-relay model. Choose another model for those helpers.
@@ -799,3 +812,6 @@ ocx account routes anthropic --clear
 ```
 
 The file is limited to 64 KiB. The server validates each route and stores it under `anthropicAccountPool.routes`; writes require the running proxy. Use stored account IDs from `ocx account list anthropic --json`. Rules only affect the enabled pool and never claim that an account is entitled to a model. Request logs identify a matched rule as `route:#<n>` (1-based list position), without its operator name.
+
+Vision and web-search helpers match their own model independently and can fail locally when their
+strict route has no eligible account. See [Anthropic helper account routing](/reference/configuration/providers/#anthropicaccountpool-experimental).
