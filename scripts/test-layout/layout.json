@@ -1688,6 +1688,7 @@
     "injection-model-suggest-routes.test.ts": "codex-integration",
     "subagent-roster-retention.test.ts": "routing",
     "sync-client-integrations.test.ts": "clients",
+    "synced-state-location.test.ts": "lib",
     "synthetic-tool.test.ts": "images",
     "system-env.test.ts": "server",
     "system-restart-client-package-tree.test.ts": "cli",
