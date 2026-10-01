@@ -1282,3 +1282,58 @@ test("a client that leaves while a non-stream body is pending logs the cancel as
     upstream.stop();
   }
 });
+
+// --- A stalled or over-cap stream is a visible incomplete turn, in the row and in usage.jsonl ---
+
+async function stalledStreamRow(upstream: { url: URL }, extraClaude: Record<string, unknown>) {
+  const { clearRequestLogsForTests } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, ""), extraClaude));
+  const server = startServer(0);
+  try {
+    const res = await fetch(new URL("/v1/messages?beta=true", server.url), {
+      method: "POST",
+      headers: OAUTH_HEADERS,
+      body: JSON.stringify(claudeBody()),
+    });
+    const text = await res.text();
+    const logs = logsFromApiBody<{ status?: number; terminalStatus?: string; closeReason?: string; upstreamError?: string }>(
+      await (await fetch(new URL("/api/logs?tail=1", server.url))).json(),
+    );
+    expect(logs).toHaveLength(1);
+    return { res, text, row: logs[0]!, usage: readRecentUsageEntries(1)[0] };
+  } finally {
+    await server.stop(true);
+  }
+}
+
+test("a stalled native stream logs a 502 incomplete row and keeps its diagnostics in usage.jsonl", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE)); /* then silence */ },
+  }), { headers: { "content-type": "text/event-stream" } }) });
+  try {
+    const { res, text, row, usage } = await stalledStreamRow(upstream, { bodyStallSec: 1 });
+    expect(res.status).toBe(200);
+    expect(text).toContain('"type":"timeout_error"');
+    // Same row the Responses relay writes for a stall-timeout incomplete (httpStatusForRequestLogTerminal).
+    expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_stall" });
+    expect(row.upstreamError).toBe("anthropic passthrough body stalled: no upstream bytes for 1s");
+    // usage.jsonl keeps failure diagnostics only for failed or non-completed rows; a 200 row dropped them.
+    expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_stall" });
+  } finally {
+    upstream.stop(true);
+  }
+});
+
+test("a native stream over the byte cap logs a 502 incomplete row and keeps its diagnostics in usage.jsonl", async () => {
+  const upstream = Bun.serve({ port: 0, fetch: () => new Response(PARTIAL_TURN_SSE, { headers: { "content-type": "text/event-stream" } }) });
+  try {
+    const { text, row, usage } = await stalledStreamRow(upstream, { bodyMaxBytes: 64 });
+    expect(text).toContain("exceeded 64 bytes");
+    expect(row).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
+    expect(row.upstreamError).toBe("anthropic passthrough body exceeded 64 bytes");
+    expect(usage).toMatchObject({ status: 502, terminalStatus: "incomplete", closeReason: "body_overflow" });
+  } finally {
+    upstream.stop(true);
+  }
+});

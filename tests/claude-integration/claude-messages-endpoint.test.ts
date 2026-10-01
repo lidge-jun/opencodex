@@ -479,7 +479,7 @@ test("A1: stalled upstream body gets an Anthropic timeout_error tail and body_st
   expect(text).toContain("message_start"); // prior bytes preserved
   expect(text).toContain("\n\nevent: error\ndata: ");
   expect(text).toContain('"type":"timeout_error"');
-  expect(calls).toEqual([{ status: 200, closeReason: "body_stall" }]);
+  expect(calls).toEqual([{ status: 502, closeReason: "body_stall" }]);
 });
 
 test("A2: unbounded upstream body gets an api_error tail and body_overflow close reason", async () => {
@@ -494,7 +494,7 @@ test("A2: unbounded upstream body gets an api_error tail and body_overflow close
   expect(text).toContain("\n\nevent: error\ndata: ");
   expect(text).toContain('"type":"api_error"');
   expect(text).toContain("exceeded 120 bytes");
-  expect(calls).toEqual([{ status: 200, closeReason: "body_overflow" }]);
+  expect(calls).toEqual([{ status: 502, closeReason: "body_overflow" }]);
 });
 
 test("A3: client abort mid-body finalizes 499 client_cancel, not 200 terminal (misclassification regression)", async () => {

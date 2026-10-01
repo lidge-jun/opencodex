@@ -296,7 +296,7 @@ export interface PassthroughBodyGuard {
 }
 
 type PassthroughCloseReason = "terminal" | "client_cancel" | "body_stall" | "body_overflow";
-type PassthroughFinalizeMeta = { closeReason: PassthroughCloseReason; terminalStatus?: "failed" };
+type PassthroughFinalizeMeta = { closeReason: PassthroughCloseReason; terminalStatus?: "failed" | "incomplete" };
 
 /**
  * Tap an Anthropic-vocabulary SSE stream for the request log (usage + terminal),
@@ -370,7 +370,11 @@ export function tapAnthropicSseForLog(
     idle.cancel();
     detachAbort();
     recordUsage();
-    finalize(200, { closeReason });
+    // A cut-short turn, logged as the Responses relay logs a stall-timeout incomplete
+    // (httpStatusForRequestLogTerminal: only a max_output_tokens incomplete is a 200). A 200
+    // row with no terminalStatus also lost its failure diagnostics in usage.jsonl.
+    logCtx.upstreamError = message.slice(0, 500);
+    finalize(502, { terminalStatus: "incomplete", closeReason });
     closeWithErrorFrame(errType, message);
     reader.cancel(new DOMException(message, closeReason === "body_stall" ? "TimeoutError" : "QuotaExceededError")).catch(() => {});
   };

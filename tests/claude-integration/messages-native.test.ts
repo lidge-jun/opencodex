@@ -343,6 +343,17 @@ describe("managed native Messages", () => {
     expect(row.closeReason).toBe("body_overflow");
   });
 
+  test("a relayed stream over the byte cap is a 502 incomplete row, like the passthrough", async () => {
+    const config = fixtureConfig(startUpstream(ok), { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
+    const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
+    expect(response.status).toBe(200);
+    expect(text).toContain("exceeded 64 bytes");
+    const row = rowFor(requestId);
+    expect(row.status).toBe(502);
+    expect(row.terminalStatus).toBe("incomplete");
+    expect(row.closeReason).toBe("body_overflow");
+  });
+
   test("a client that disconnects mid-stream is logged as a cancel, not an upstream failure", async () => {
     const config = fixtureConfig(startUpstream(hangingAfterPartialTurn));
     const client = new AbortController();
