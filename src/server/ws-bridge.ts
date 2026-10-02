@@ -8,6 +8,7 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
 
@@ -181,17 +182,6 @@ export function buildWsErrorFrame(
     error,
     headers: headers ? safeResponseHeaders(headers) : {},
   };
-}
-
-function parseSseBlock(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (line.startsWith("data:")) {
-      const value = line.slice(5);
-      data.push(value.startsWith(" ") ? value.slice(1) : value);
-    }
-  }
-  return data.length > 0 ? data.join("\n") : null;
 }
 
 function payloadType(payload: string): string | null {

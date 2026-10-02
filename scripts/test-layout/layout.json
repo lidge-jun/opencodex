@@ -1686,6 +1686,8 @@
     "sse-inspector-bounds.test.ts": "responses",
     "sse-null-data-frame.test.ts": "responses",
     "sse-payload-rewrite.test.ts": "responses",
+    "sse-rewrite-line-endings.test.ts": "responses",
+    "chat-sse-framing-guard.test.ts": "responses",
     "sse-unspaced-data-fields.test.ts": "responses",
     "stale-state-purge.test.ts": "service",
     "stall-subprocess-exit.test.ts": "lib",

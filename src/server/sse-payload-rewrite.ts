@@ -65,7 +65,8 @@ export function composeSseBlockRewrites(...rewrites: SseBlockRewrite[]): SseBloc
 
 /** Split one complete SSE event block while retaining its original blank-line delimiter. */
 export function nextSseBlock(buffer: string): { block: string; delimiter: string; rest: string } | null {
-  const match = buffer.match(/\r?\n\r?\n/);
+  // The negative lookahead prevents backtracking from splitting one CRLF into two endings.
+  const match = buffer.match(/(?:\r\n|\r(?!\n)|\n){2}/);
   if (!match || match.index === undefined) return null;
   return {
     block: buffer.slice(0, match.index),
@@ -95,6 +96,7 @@ export function createSseBlockBuffer(
   let offset = 0;
   let scanOffset = 0;
   let bufferBytes = 0;
+  const delimiterPattern = /(?:\r\n|\r(?!\n)|\n){2}/g;
 
   const compact = (): void => {
     if (offset === 0) return;
@@ -128,41 +130,30 @@ export function createSseBlockBuffer(
       }
     },
     next() {
-      for (;;) {
-        const newline = buffer.indexOf("\n", scanOffset);
-        if (newline < 0) {
-          scanOffset = buffer.length;
-          return null;
-        }
-        let end = newline + 1;
-        if (buffer[end] === "\r") end += 1;
-        if (end === buffer.length) {
-          // Keep the candidate first newline until its possible blank-line delimiter arrives.
-          scanOffset = newline;
-          return null;
-        }
-        if (buffer[end] !== "\n") {
-          scanOffset = newline + 1;
-          continue;
-        }
-        end += 1;
-        const start = newline > offset && buffer[newline - 1] === "\r" ? newline - 1 : newline;
-        const block = buffer.slice(offset, start);
-        const delimiter = buffer.slice(start, end);
-        const nextBytes = bufferBytes - Buffer.byteLength(block, "utf8") - delimiter.length;
-        const reservation = budget.reserveTransient(nextBytes, scope);
-        reservation.commitRetained();
-        budget.releaseRetained(bufferBytes, scope);
-        bufferBytes = nextBytes;
-        offset = end;
-        scanOffset = end;
-        if (offset === buffer.length) {
-          buffer = "";
-          offset = 0;
-          scanOffset = 0;
-        }
-        return { block, delimiter };
+      delimiterPattern.lastIndex = scanOffset;
+      const match = delimiterPattern.exec(buffer);
+      if (!match) {
+        // A delimiter is at most four code units. Revisit only its possible split prefix.
+        scanOffset = Math.max(offset, buffer.length - 3);
+        return null;
       }
+      const start = match.index;
+      const end = start + match[0].length;
+      const block = buffer.slice(offset, start);
+      const delimiter = buffer.slice(start, end);
+      const nextBytes = bufferBytes - Buffer.byteLength(block, "utf8") - delimiter.length;
+      const reservation = budget.reserveTransient(nextBytes, scope);
+      reservation.commitRetained();
+      budget.releaseRetained(bufferBytes, scope);
+      bufferBytes = nextBytes;
+      offset = end;
+      scanOffset = end;
+      if (offset === buffer.length) {
+        buffer = "";
+        offset = 0;
+        scanOffset = 0;
+      }
+      return { block, delimiter };
     },
     tail: () => buffer.slice(offset),
     compact,
@@ -184,11 +175,11 @@ export function sseDataPayload(block: string): string | null {
   const len = block.length;
 
   while (lineStart < len) {
-    const nextNewline = block.indexOf("\n", lineStart);
-    let lineEnd = nextNewline === -1 ? len : nextNewline;
-    const nextStart = nextNewline === -1 ? len : nextNewline + 1;
-    if (lineEnd > lineStart && block.charCodeAt(lineEnd - 1) === 13) {
-      lineEnd -= 1;
+    let lineEnd = lineStart;
+    while (lineEnd < len && block.charCodeAt(lineEnd) !== 13 && block.charCodeAt(lineEnd) !== 10) lineEnd += 1;
+    let nextStart = lineEnd;
+    if (nextStart < len) {
+      nextStart += block.charCodeAt(lineEnd) === 13 && block.charCodeAt(lineEnd + 1) === 10 ? 2 : 1;
     }
 
     const lineLen = lineEnd - lineStart;
@@ -218,10 +209,19 @@ export function sseDataPayload(block: string): string | null {
   return found ? result : null;
 }
 
+/** Shared line rules for field-mutating repairs; identity paths keep the original block. */
+export function sseLineEnding(block: string): "\r\n" | "\r" | "\n" {
+  return block.match(/\r\n|\r|\n/)?.[0] as "\r\n" | "\r" | "\n" ?? "\n";
+}
+
+export function splitSseBlock(block: string): { newline: string; lines: string[] } {
+  return { newline: sseLineEnding(block), lines: block.split(/\r\n|\r|\n/) };
+}
+
 /** Replace an SSE event's data field while preserving non-data fields and newline style. */
 export function replaceSseDataPayload(block: string, payload: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const lines = block.split(/\r?\n/);
+  if (sseDataPayload(block) === payload) return block;
+  const { newline, lines } = splitSseBlock(block);
   const rewritten: string[] = [];
   let replaced = false;
   for (const line of lines) {
@@ -230,7 +230,7 @@ export function replaceSseDataPayload(block: string, payload: string): string {
       continue;
     }
     if (!replaced) {
-      rewritten.push(...payload.split(/\r?\n/).map(line => `data: ${line}`));
+      rewritten.push(...payload.split(/\r\n|\r|\n/).map(line => `data: ${line}`));
       replaced = true;
     }
   }
@@ -278,6 +278,8 @@ export function relaySseWithBlockRewrite(
   // Relays have several independent teardown paths; disposal is exactly once.
   let disposed = false;
   let cancelled = false;
+  let pendingLineFeed = false;
+  let pendingLineFeedVisible = false;
   const disposeRewrite = (): void => {
     if (disposed) return;
     disposed = true;
@@ -308,15 +310,38 @@ export function relaySseWithBlockRewrite(
     let emitted = 0;
     let next: { block: string; delimiter: string } | null;
     while (!cancelled && (next = buffer.next())) {
-      const outBlocks = rewrite(next.block);
+      // A final CR dispatches immediately. A later LF extends that same delimiter and
+      // must not become a field, or enter the next block's rewrite/drop/injection.
+      let { block, delimiter } = next;
+      if (pendingLineFeed && (block || delimiter).startsWith("\n")) {
+        if (pendingLineFeedVisible) {
+          enqueueText(controller, "\n");
+          emitted += 1;
+        }
+        if (block) block = block.slice(1);
+        else delimiter = delimiter.slice(1);
+      }
+      pendingLineFeed = delimiter.endsWith("\r");
+      const outBlocks = rewrite(block);
+      pendingLineFeedVisible = outBlocks.length > 0;
       if (cancelled) return emitted;
-      for (const outBlock of outBlocks) {
-        enqueueText(controller, outBlock + next.delimiter);
+      for (let index = 0; index < outBlocks.length; index++) {
+        // Synthetic earlier blocks need a settled delimiter; only the final one can
+        // inherit an upstream LF in a later chunk. Completing CR as CRLF is equivalent.
+        const settled = index < outBlocks.length - 1 && pendingLineFeed ? delimiter + "\n" : delimiter;
+        enqueueText(controller, outBlocks[index]! + settled);
         emitted += 1;
       }
     }
     buffer.compact();
-    const tail = flushFinal ? buffer.tail() : "";
+    let tail = flushFinal ? buffer.tail() : "";
+    if (pendingLineFeed && tail.startsWith("\n")) {
+      if (pendingLineFeedVisible) {
+        enqueueText(controller, "\n");
+        emitted += 1;
+      }
+      tail = tail.slice(1);
+    }
     if (tail.length > 0) {
       const tailBlocks = rewrite(tail);
       if (cancelled) return emitted;

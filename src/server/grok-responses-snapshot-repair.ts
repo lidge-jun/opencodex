@@ -1,7 +1,7 @@
 /** Strict terminal reconstruction selected by the Grok compatibility marker. */
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { MAX_COMPLETED_OUTPUT_ITEMS, MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES } from "./relay";
-import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { replaceSseDataPayload, splitSseBlock, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 import { isPlainObject, jsonBlock, type RetainedOutputItem } from "./responses-snapshot-codec";
 import {
   requestToolScope,
@@ -215,14 +215,13 @@ function refusedTerminalBlock(
     },
   });
   const rewritten = replaceSseDataPayload(block, payload);
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
+  const { newline, lines } = splitSseBlock(rewritten);
   let eventRewritten = false;
-  const lines = rewritten.split(/\r?\n/).map(line => {
+  return lines.map(line => {
     if (eventRewritten || !line.startsWith("event:")) return line;
     eventRewritten = true;
     return `event: ${GROK_REFUSED_TERMINAL_EVENT_TYPE}`;
-  });
-  return lines.join(newline);
+  }).join(newline);
 }
 
 /**

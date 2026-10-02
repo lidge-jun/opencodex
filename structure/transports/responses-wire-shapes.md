@@ -235,7 +235,6 @@ The restorable map is narrowed by `tool_choice` the same way `authorizedAliases`
 namespace layer: upstream still receives the whole aliased catalog, but a tool the caller
 disabled for the turn cannot be restored back into an executable client name.
 Arguments, user text, and schema property names are never rewritten.
-
 > Decision record: [ADR-0042](../decisions/ADR-0042-responses-http-sse.md)
 
 > Decision record: [ADR-0043](../decisions/ADR-0043-responses-http-sse.md)
@@ -248,7 +247,9 @@ Google wire compiler observes and reports compatibility narrowing; the Responses
 derive nor consume that report.
 
 `declaredToolNames` carries the request's tool catalog into both bridges, and it does two separate
-jobs that are separately controlled.
+jobs that are separately controlled. The passthrough guard reads the same CR/LF/CRLF event and
+field boundaries as Responses-to-Chat projection, including mixed and split line endings; the
+[shared SSE framing contract](byte-accounting.md#stream-buffer-accounting) owns that behavior.
 
 Normalization runs on every inbound wire. `normalizeDeclaredToolName` and `declaresCodeModeExec` in
 `src/types/tools.ts` read the same set to map a provider-invented `default.` namespace back to the
@@ -256,8 +257,7 @@ declared bare tool and to rewrite code-mode helper names into the declared `exec
 input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
 is expressed by a separate flag rather than by withholding it.
 
-The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so
-whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
+The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
 `normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
 `default.`-prefixed code-mode helper was admitted as `exec` (#4412) and then relayed verbatim.
 The bounded helper vocabulary includes the goal lifecycle calls that Codex advertises inside its

@@ -13,6 +13,7 @@ import {
 } from "../responses/custom-tool-compat";
 import {
   replaceSseDataPayload,
+  splitSseBlock,
   sseDataPayload,
   type SseBlockRewrite,
 } from "./sse-payload-rewrite";
@@ -22,8 +23,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function replaceSseEventName(block: string, type: string): string {
-  const newline = block.includes("\r\n") ? "\r\n" : "\n";
-  const lines = block.split(/\r?\n/);
+  const { newline, lines } = splitSseBlock(block);
   let replaced = false;
   const next = lines.map(line => {
     if (!replaced && line.startsWith("event:")) {

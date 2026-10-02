@@ -65,18 +65,26 @@ the request translator budget. Each owner releases its own reservations on compl
 cancellation or consumer closure; a buffer-limit failure terminates without another search.
 
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
-only new input, counts consumed blocks rather than remaining suffixes, and preserves LF/CRLF,
-partial-event, injection/drop, and EOF behavior. Output admission precedes its single UTF-8 encoding;
+only new input plus a three-character delimiter prefix and counts consumed blocks rather than
+remaining suffixes. CR, LF and CRLF share partial-event, injection/drop and EOF behavior.
+Output admission precedes its single UTF-8 encoding;
 failed enqueue and cancellation release the reservation without re-entering a disposed rewrite.
 Old/new buffer overlap remains charged against the same translator cap.
 
 Complete SSE blocks extract `data` fields with one indexed pass over the block rather than a
 regular-expression split and intermediate line array. Colonless `data` fields, one optional ASCII
-space after the colon, multiline joining, UTF-8 text, LF/CRLF input, and a trailing lone CR retain
-their event-stream semantics. `src/server/relay.ts` re-exports this canonical extractor instead of
-maintaining a second implementation. Empty byte results across the relay and
-`src/server/sse-frame-buffer.ts` reuse one immutable zero-length view; non-empty frame ownership,
-frame limits, cancellation, terminal detection, and wire bytes are unchanged.
+space after the colon, multiline joining, UTF-8 text and mixed CR/LF/CRLF input retain their
+event-stream semantics. Payload and event-field repairs use the shared line rules, including
+policy failures, custom tools, Copilot and Grok events; identity rewrites preserve
+original wire bytes. `src/server/relay.ts` re-exports the canonical extractor and block splitter.
+Empty byte results across the relay and `src/server/sse-frame-buffer.ts` reuse one immutable
+zero-length view; non-empty frame ownership,
+frame limits, cancellation and wire ownership remain bounded. The byte framer and inspection share
+one CR/LF/CRLF delimiter scanner; WebSocket projection uses the canonical data extractor. A terminal
+CR dispatches without awaiting EOF. A later LF extends that delimiter: byte delivery returns a
+framing-only continuation, excluded from event-count limits and the next event's byte cap;
+inspection consumes it without creating an event. The text rewrite relay keeps that continuation
+outside rewrite/drop callbacks and settles injected nonfinal CR delimiters as CRLF.
 
 `src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
 their charge/release lifecycle while it asks the pure progressive decoder in

@@ -146,7 +146,7 @@ which also decides which role that slot carries. Regression coverage is in
 `tests/responses/chat-inbound-developer-position.test.ts`, which compares the final upstream body
 on the native Chat route, a combo route and the Responses endpoint.
 
-The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
+The direct SSE relay accepts CR, LF and CRLF across arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
 upstream failures, never successful partial completions. Provider-controlled structured error
 messages are redacted before either JSON or SSE reaches the client. The native path uses the same
@@ -165,7 +165,7 @@ allowance; comments, role-only frames, empty deltas, and usage alone do not. Dow
 pauses this wait budget. A stall emits a Chat error with `upstream_stall_timeout` and logs 502;
 the non-streaming endpoint returns HTTP 502 rather than a successful partial result.
 
-`src/chat/outbound.ts` collects LF/CRLF, multiline data, and split UTF-8 through the shared SSE
+`src/chat/outbound.ts` collects CR/LF/CRLF, multiline data, and split UTF-8 through the shared SSE
 block buffer and tracks appended output bytes incrementally. A caller cancellation before a native
 terminal returns 499 / `client_cancelled`; an already accepted terminal keeps its result. Reader,
 timer, turn, and translator ownership are released through the existing lifecycle.

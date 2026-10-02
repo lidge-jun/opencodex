@@ -248,6 +248,10 @@ buffer budget, the relay reports the failure without waiting for upstream inspec
 to finish. It cancels the upstream work and emits `response.failed` followed by
 `data: [DONE]`; a budget overflow uses the `translation_buffer_limit` error code.
 
+Responses SSE accepts CR, LF and CRLF line endings, including mixed endings and CRLF split across
+network chunks. Tool validation, Chat translation, terminal inspection and WebSocket projection
+use the same event boundaries. A CR-only completion does not wait for the upstream connection to close.
+
 Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
 SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
 with a synthetic `response.failed` event followed by `data: [DONE]`. On the Responses WebSocket
