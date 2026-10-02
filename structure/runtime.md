@@ -53,7 +53,7 @@ this wire projection does not change the usage ledger.
 
 ## CLI readiness diagnostics
 
-Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged.
+Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged. `src/cli/init.ts` validates an explicit setup port as a decimal integer from 1 through 65535 before publishing the initial configuration. Only an empty answer selects 10100; malformed input exits unsuccessfully without saving.
 
 ## CLI resolve and stop contracts for embedding shells
 
