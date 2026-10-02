@@ -101,3 +101,22 @@ test("sends the persisted toggle and renders a reported proxy refusal", async ()
   expect(container.querySelector(".claude-picker-state")?.textContent).toContain("Waiting for the keychain step");
   expect(container.querySelector(".claude-picker-state code")?.textContent).toBe("ocx claude desktop picker trust");
 });
+
+
+test("starting interception stays pending and reports the occupied port", async () => {
+  let resolve!: (value: Response) => void;
+  const response = new Promise<Response>(done => { resolve = done; });
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: (url: string, init?: RequestInit) => {
+    requests.push({ url, init }); return response;
+  } });
+  await mount({ ...basePicker, listenerReady: false, effective: false, reason: "proxy_unavailable" });
+  const button = container.querySelector("button.btn") as HTMLButtonElement;
+  expect(button.textContent).toBe("Start interception");
+  await act(async () => { button.click(); });
+  expect(button.disabled).toBe(true);
+  expect(button.textContent).toBe("Starting interception…");
+  expect(requests[0]).toMatchObject({ url: "/api/claude-intercept/start", init: { method: "POST" } });
+  await act(async () => { resolve(Response.json({ ok: false, reason: "port_in_use", port: 10200 }, { status: 409 })); });
+  expect(button.disabled).toBe(false);
+  expect(container.textContent).toContain("Port 10200 is in use");
+});

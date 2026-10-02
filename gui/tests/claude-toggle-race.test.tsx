@@ -304,7 +304,7 @@ test("CLI first-party waits for one PUT and a confirmed GET", async () => {
 
 const refusalCases = [
   ["intercept_disabled", "The interception proxy is disabled."],
-  ["intercept_unavailable", "The interception proxy is not running in this process."],
+  ["intercept_unavailable", "Interception could not start."],
   ["foreign_env", "Another program owns the Claude proxy settings."],
   ["ca_unavailable", "The local certificate authority is unavailable."],
   ["unreadable", "Claude settings could not be read."],

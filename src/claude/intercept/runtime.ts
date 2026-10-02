@@ -51,7 +51,10 @@ export function claudePickerProxyPort(config: Pick<OcxConfig, "claudeCode">, pub
   return interceptPort < 65535 ? interceptPort + 1 : interceptPort - 1;
 }
 
+export type ClaudeInterceptOutcome = { ok: true; state: ClaudeInterceptState } | { ok: false; reason: "disabled" | "client_role" | "ephemeral_port" | "port_in_use" | "stopped" | "failed"; port?: number; message?: string };
+
 export interface ClaudeInterceptState {
+  pickerReason?: "port_in_use" | "failed" | null;
   proxyPort: number;
   caCertPath: string;
   /** Desktop egress proxy for picker mode; null when the picker is not wired or could not bind. */
@@ -100,6 +103,14 @@ export async function createPickerPreferenceWriter(live: OcxConfig): Promise<(va
     adoptPersistedClaudeCode(live, outcome.value);
     return true;
   };
+}
+
+export class ClaudeInterceptProxyBindError extends Error {
+  readonly code: unknown;
+  constructor(error: unknown, readonly port: number) {
+    super(error instanceof Error ? error.message : "CONNECT proxy bind failed", { cause: error });
+    this.code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  }
 }
 
 export interface StartClaudeInterceptOptions<T> {
@@ -178,13 +189,14 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
     });
   } catch (error) {
     await listener.stop(true);
-    throw error;
+    throw new ClaudeInterceptProxyBindError(error, claudeInterceptProxyPort(options.config, options.publicPort));
   }
   // Widened on purpose: assignments happen in nested awaits the catch below must still see.
   let picker = null as PickerRuntime | null;
   let pickerProxy = null as ConnectProxyHandle | null;
   let controller = null as DesktopPickerController | null;
   let pickerProxyLive = false;
+  let pickerReason: ClaudeInterceptState["pickerReason"] = null;
   try {
     if (options.loadPickerRoutes) {
       // A picker authority is process-scoped, and older releases persisted an exportable ca.key
@@ -213,9 +225,11 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
         }
       } catch (error) {
         pickerBlocked = true;
+        pickerReason = "failed";
         console.warn(`⚠ Claude Desktop picker CA cleanup deferred: ${error instanceof Error ? error.message : String(error)}`);
       }
       if (pickerBlocked) {
+        pickerReason = "failed";
         console.warn("⚠ Claude Desktop picker disabled: the previous certificate could not be untrusted");
         if (pickerProfile.kind === "applied") {
           // Keep Desktop's actual pinned egress alive without ever constructing a TLS terminator.
@@ -228,6 +242,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
             });
             pickerProxyLive = true;
           } catch (error) {
+            pickerReason = error && typeof error === "object" && "code" in error && error.code === "EADDRINUSE" ? "port_in_use" : "failed";
             console.warn(`⚠ Claude Desktop blind egress relay could not start: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
@@ -272,6 +287,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
           // Picker mode is optional: a busy port leaves the intercept pair running without it.
           // The selected profile row survives, so the next startup retries the restore once the
           // port is free again.
+          pickerReason = error && typeof error === "object" && "code" in error && error.code === "EADDRINUSE" ? "port_in_use" : "failed";
           console.warn(`⚠ Claude Desktop picker proxy could not start: ${error instanceof Error ? error.message : String(error)}`);
           await runtime.stop();
           picker = null;
@@ -318,6 +334,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
     throw error;
   }
   const state: ClaudeInterceptState = {
+    pickerReason,
     proxyPort: proxy.port,
     caCertPath: claudeInterceptCaCertPath(configDir),
     pickerProxyPort: pickerProxy?.port ?? null,

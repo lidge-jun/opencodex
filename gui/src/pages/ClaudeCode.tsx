@@ -1,3 +1,4 @@
+import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Notice, Switch } from "../ui";
 import { useI18n, useT, LOCALES, type TKey } from "../i18n/shared";
@@ -17,7 +18,7 @@ import {
 import { serializeSidecarOverride } from "./claude-code-sidecar";
 import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, type ClaudeCodeState, type MapRow } from "./claude-code-types";
 import { SmallFastModelSetting } from "./claude-code-settings";
-import { normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
+import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
 
 export { AutoConnectSetting, SmallFastModelSetting } from "./claude-code-settings";
 
@@ -198,7 +199,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
         body: JSON.stringify({ cliFirstParty: !state.cliFirstParty }),
       });
       if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { code?: string } | null;
+        const payload = await response.json().catch(() => null) as { code?: string; port?: number; bound?: number; configured?: number } | null;
         const refusalKeys = {
           intercept_disabled: "claude.firstParty.refusal.interceptDisabled",
           intercept_unavailable: "claude.firstParty.refusal.interceptUnavailable",
@@ -210,7 +211,8 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
         const key = payload?.code && payload.code in refusalKeys
           ? refusalKeys[payload.code as keyof typeof refusalKeys]
           : "claude.saveFailed";
-        throw new Error(t(key));
+        throw new Error(payload?.code && ["disabled", "client_role", "ephemeral_port", "port_in_use", "port_mismatch", "stopped", "failed"].includes(payload.code)
+          ? t(interceptReasonKey(payload.code), { port: payload.port ?? "", bound: payload.bound ?? "", configured: payload.configured ?? "" }) : t(key));
       }
       await readJsonOrThrow(response, t("claude.saveFailed"));
       await fetchCode(new AbortController().signal);
@@ -354,6 +356,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
               label={t("claude.firstParty.aria")}
             />
           </div>
+          {!state.interceptRunning && <ClaudeInterceptStart apiBase={apiBase} reason={state.interceptReason} port={state.interceptFailurePort} onStarted={() => codeResource.refresh()} />}
           {state.cliFirstParty && (
             <Notice tone="warn">{t("claude.firstParty.risk")}</Notice>
           )}

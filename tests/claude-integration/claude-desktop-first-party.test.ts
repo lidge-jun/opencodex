@@ -48,7 +48,7 @@ async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  }), url, inputConfig, deps);
+  }), url, inputConfig, { ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), ...deps }, "admin-token", undefined, { trustedLoopback: true });
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
@@ -517,7 +517,7 @@ for (const surface of ["cli", "api"] as const) {
         expect(await applyDesktop(undefined, { kind: "first-party" }, { findLiveProxyImpl: async () => null })).toMatchObject({ ok: false, reason: failure });
       } else {
         const reply = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, saved);
-        expect(reply.body.reason).toBe(failure);
+        expect(reply.body.reason).toBe(failure === "intercept_disabled" ? "disabled" : failure);
       }
       expect(inspectDesktop3pConfigLibrary({ appliedFingerprint })).toEqual(before);
     });

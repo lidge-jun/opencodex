@@ -92,7 +92,7 @@ async function dispatch(path: string, init: RequestInit = {}, deps: Parameters<t
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  }), url, persisted(), deps);
+  }), url, persisted(), { ensureClaudeIntercept: async () => ({ ok: true, state: handle ?? { proxyPort: REQUESTED_PROXY_PORT, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), ...deps }, "admin-token", undefined, { trustedLoopback: true });
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 

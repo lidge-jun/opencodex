@@ -1,3 +1,4 @@
+import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./claude-desktop-lane";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
@@ -68,6 +69,8 @@ interface DesktopFirstPartyStatus {
   applied: boolean;
   stale: boolean;
   interceptEnabled: boolean;
+  interceptReason?: string | null;
+  pickerReason?: string | null;
   interceptRunning: boolean;
   proxyPort: number;
   caCertPath: string;
@@ -604,9 +607,7 @@ export default function ClaudeDesktop({
           <span className="claude-status-health">
             {status.firstParty.interceptRunning
               ? t("claudeDesktop.firstParty.proxyRunning", { port: status.firstParty.proxyPort })
-              : status.firstParty.interceptEnabled
-                ? t("claudeDesktop.firstParty.proxyStopped", { port: status.firstParty.proxyPort })
-                : t("claudeDesktop.firstParty.interceptDisabled")}
+              : <ClaudeInterceptStart apiBase={apiBase} reason={status.firstParty.interceptReason} port={status.firstParty.proxyPort} onStarted={() => statusResource.refresh()} />}
           </span>
         )}
         {status?.health.lastRequestAt && (

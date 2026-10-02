@@ -1,3 +1,4 @@
+import { ensureManagementClaudeIntercept, interceptStartRefusal } from "./claude-intercept-routes";
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
 /**
@@ -705,6 +706,10 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
     }
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
 
+    if (body.enabled) {
+      const startRefusal = interceptStartRefusal(ctx);
+      if (startRefusal) return startRefusal;
+    }
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
     const persisted = setIntegrationEnabled("claude-desktop", body.enabled);
     if (!persisted.ok) {
@@ -748,6 +753,10 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
     }
 
     if (resolveClaudeDesktopApplyMode(current, observeClaudeDesktopMode(current)) === "first-party") {
+      const startRefusal = interceptStartRefusal(ctx);
+      if (startRefusal) return startRefusal;
+      const started = await ensureManagementClaudeIntercept(ctx);
+      if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
       // The whole switch runs under the picker lock, in today's order: env first, then gateway cleanup.
       return await runPickerTransition(current, async ops => {
         const rollback = captureDesktopFirstPartyRollback(current);
@@ -888,7 +897,10 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
 
+    const startRefusal = interceptStartRefusal(ctx);
+    if (startRefusal) return startRefusal;
     const enabled = body.enabled;
+    if (enabled && claudeCodeEnabled(config)) void ensureManagementClaudeIntercept(ctx);
     if (claudeCodeEnabled(config) === enabled) {
       return jsonResponse({
         ok: true, clientId: "claude", changed: false,
@@ -923,6 +935,8 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       }
       throw error;
     }
+
+    if (enabled) void ensureManagementClaudeIntercept(ctx);
 
     return jsonResponse({
       ok: true, clientId: "claude", changed: true,

@@ -48,6 +48,7 @@ export interface ManagementApiDeps {
   /** Bound to this server's lifecycle owner; absent in direct route tests. */
   listLowQuotaEvents?: (limit?: number) => LowQuotaEvent[];
   /** Bound Claude intercept state, injectable for isolated management-route tests. */
+  ensureClaudeIntercept?: () => Promise<import("../../claude/intercept/runtime").ClaudeInterceptOutcome>;
   getClaudeInterceptState?: typeof import("../../claude/intercept/runtime").getClaudeInterceptState;
   /** Reconciliation seam for field-scoped rollback tests. */
   reconcileClaudeFirstPartySettings?: typeof import("../../claude/first-party-settings").reconcileClaudeFirstPartySettings;
@@ -151,7 +152,7 @@ export interface ManagementApiDeps {
   codexPromptPaths?: CodexPromptPaths;
   /** Link seams are getters so the optional listener and supervisor are singletons. */
   linkSupervisor?: () => LinkSupervisor;
-  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog">;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
   readLinkStore?: () => LinkStore;
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;

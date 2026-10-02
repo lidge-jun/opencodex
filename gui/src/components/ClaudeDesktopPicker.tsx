@@ -1,3 +1,5 @@
+import ClaudeInterceptStart from "./ClaudeInterceptStart";
+import { interceptReasonKey } from "../pages/claude-code-first-party";
 import { useState } from "react";
 import { useI18n, type TKey } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
@@ -93,7 +95,7 @@ export default function ClaudeDesktopPicker({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !current.desired, persist: true }),
       });
-      let payload: { ok?: boolean; picker?: DesktopPickerStatus } | undefined;
+      let payload: { ok?: boolean; reason?: string; port?: number; picker?: DesktopPickerStatus } | undefined;
       if (response.ok) {
         payload = await readJsonOrThrow<{ ok?: boolean; picker?: DesktopPickerStatus }>(
           response,
@@ -103,11 +105,11 @@ export default function ClaudeDesktopPicker({
         // A refused enable is a useful status response (not a transport failure); 503
         // carries the controller's reason so the card can explain the missing proxy.
         try {
-          payload = await response.json() as { ok?: boolean; picker?: DesktopPickerStatus };
+          payload = await response.json() as { ok?: boolean; reason?: string; port?: number; picker?: DesktopPickerStatus };
         } catch {
           throw new Error(t("claudeDesktop.updateFailed"));
         }
-        if (!payload.picker) throw new Error(t("claudeDesktop.updateFailed"));
+        if (!payload.picker) throw new Error(t(interceptReasonKey(payload.reason), { port: payload.port ?? "" }));
       }
       if (!payload || payload.ok !== true && !payload.picker || !payload.picker || !isDesktopPickerStatus(payload.picker)) {
         throw new Error(t("claudeDesktop.updateFailed"));
@@ -123,6 +125,7 @@ export default function ClaudeDesktopPicker({
 
   return (
     <section className="claude-picker" aria-labelledby="claude-picker-title">
+      {!current.listenerReady && <ClaudeInterceptStart apiBase={apiBase} onStarted={() => { setLocalPicker(null); onUpdated?.(current); }} />}
       <div className="claude-picker-header">
         <div className="claude-picker-copy">
           <h3 id="claude-picker-title" className="claude-picker-title">{t("claudeDesktop.picker.title")}</h3>
