@@ -1,6 +1,8 @@
 /**
  * Opt-in Anthropic OAuth account pool controls (#294).
- * Experimental — shows a strong warning because the feature is not battle-tested.
+ * Experimental. The conditions it is meant for are static helper text next to the toggle,
+ * with the selection details behind a disclosure: the notice describes how to use the pool,
+ * so it is not announced as a live alert. Load and save failures keep their own messages.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
@@ -19,6 +21,9 @@ import {
 } from "../../account-pool-strategy";
 import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
 import { Select } from "../../ui";
+
+/** The public guide section that explains pool selection, failover and its limits. */
+const ANTHROPIC_POOL_GUIDE_URL = "https://opencodex.me/guides/claude-code/#claude-oauth-account-pool-experimental";
 
 const QUOTA_WINDOW_LABEL_KEYS = {
   "five-hour": "accountPool.quotaWindowFiveHour",
@@ -236,13 +241,23 @@ export default function AnthropicAccountPoolSettings({
         </button>
       </div>
 
-      <div role="alert" className="card-sub anthropic-pool-card__notice">
+      <p className="card-sub anthropic-pool-card__notice">
         {t("anthropicPool.experimentalWarning")}
-      </div>
+      </p>
 
       {accountCount < 2 && (
         <div className="card-sub" style={{ marginTop: 8 }}>{t("anthropicPool.needTwoAccounts")}</div>
       )}
+
+      <details className="anthropic-pool-card__details">
+        <summary>{t("anthropicPool.detailsSummary")}</summary>
+        <p>{t("anthropicPool.detailsEnabling")}</p>
+        <p>{t("anthropicPool.detailsFailover")}</p>
+        <p>{t("anthropicPool.detailsActivity")}</p>
+        <p>
+          <a href={ANTHROPIC_POOL_GUIDE_URL} target="_blank" rel="noreferrer">{t("anthropicPool.detailsGuide")}</a>
+        </p>
+      </details>
 
       {enabled && state && (
         <>

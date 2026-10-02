@@ -873,8 +873,10 @@ Rotation does not protect against provider enforcement; multi-account use may vi
 ### `anthropicAccountPool` (experimental)
 
 This opt-in pools multiple Anthropic OAuth accounts already stored in `auth.json`. It is off by
-default and not battle-tested. Accounts in the same organization may share quota, and automated
-rotation may trigger provider restrictions.
+default and experimental, and Anthropic has not endorsed automated account pooling. Accounts in the
+same organization may share quota, and switching accounts does not protect against provider
+restrictions. See the [Claude Code guide](/guides/claude-code/#claude-oauth-account-pool-experimental)
+for the subscription and client conditions the pool is meant for.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |

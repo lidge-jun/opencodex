@@ -39,15 +39,23 @@ add-account). By default every request uses the **active** account only.
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
 session affinity and usage-aware new-session selection across those OAuth accounts. It does
 **not** gate 429 failover: with two or more usable accounts stored, a rate-limited request moves
-to another account whether the pool is on or off, and that cannot be switched off. For **new**
+to another account whether the pool is on or off, and the toggle does not switch that off; pause
+an account to keep it out of failover. For **new**
 sessions,
 `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
 lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
 `max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
-reauthentication, or threshold, then advances. It is **off by default**, shows a GUI warning,
-and is not battle-tested — Anthropic may restrict accounts that look like automated rotation;
-rotation does not protect against provider enforcement.
+reauthentication, or threshold, then advances. It is **off by default** and experimental.
+
+The dashboard lists the conditions the pool is meant for: subscriptions you own or are authorized
+to use, the genuine Claude Code client, and a person supervising the session. Anthropic has not
+endorsed automated account pooling, accounts in one organization may share a quota (so another
+account may not add capacity), and switching accounts does not protect against provider
+enforcement. OpenCodex sends no keep-warm requests and, by default, neither refreshes Claude tokens
+nor reads usage in the background: usage is read when the dashboard, the menu bar app, or an `ocx`
+command asks for it. Thresholds are selection preferences, not usage or billing caps. This is
+product guidance, not legal advice; check Anthropic's current terms.
 
 To bind a model to particular stored Claude accounts, add ordered `anthropicAccountPool.routes` rules while the pool is enabled. Each rule has a safe `name`, a full case-sensitive `match` glob, an `accounts` array of stored account IDs, and optional `fallback` (default `false`). The first matching rule limits active, manual, affinity, strategy and 429 recovery picks to its accounts. A healthy affinity outside that rule is ignored for this request but kept for other models; the routed choice does not overwrite it. Without fallback, an empty route returns a local 401, or 429 with `Retry-After` when all its declared accounts are cooling, before contacting Anthropic. The client response does not name the route; the proxy log records `route:#<n>`, where `n` is the rule’s 1-based position. `fallback: true` uses the ordinary pool only when the route has no eligible account, including its ordinary fill-first successor order; if its stored accounts are all cooling, the returned 429 uses the earliest cooldown across that expanded pool, even if a saved route account has been removed. An unmatched model follows the existing pool policy; disabling the pool leaves saved rules inactive and restores active-account and presence-driven 429 behavior. A rule is an operator allowlist, not proof of model entitlement.
 

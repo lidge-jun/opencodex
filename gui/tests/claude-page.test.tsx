@@ -125,7 +125,7 @@ test("Add Anthropic starts Anthropic sign-in directly and shows its login link i
   const dialog = win.document.querySelector("dialog")!;
   expect(dialog.textContent).toContain("Anthropic");
   await act(async () => { (dialog.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
-  const proceed = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Continue with OAuth") as HTMLButtonElement;
+  const proceed = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Continue with Claude subscription") as HTMLButtonElement;
   await act(async () => { proceed.click(); });
   for (let tick = 0; tick < 20 && logins.length === 0; tick++) {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
@@ -217,7 +217,7 @@ test("Add Anthropic does not wait on OAuth provider discovery (cold mount, disco
   expect(dialog.textContent).toContain("Anthropic");
   await act(async () => { releaseDiscovery(); await discovery; });
   await act(async () => { (dialog.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
-  const proceed = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Continue with OAuth") as HTMLButtonElement;
+  const proceed = [...dialog.querySelectorAll("button")].find(button => button.textContent === "Continue with Claude subscription") as HTMLButtonElement;
   await act(async () => { proceed.click(); });
   for (let tick = 0; tick < 20 && logins.length === 0; tick++) {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });

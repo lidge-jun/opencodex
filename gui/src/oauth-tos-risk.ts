@@ -42,3 +42,42 @@ export function oauthTosRiskBodyKey(level: OAuthTosRiskLevel): "oauthTos.highBod
     }
   }
 }
+
+/**
+ * Every copy key the warning dialog renders, chosen in one place.
+ *
+ * Anthropic has its own set because its conditions are specific: the connection is a
+ * third-party subscription connection, the genuine Claude Code client with a person present
+ * is the intended use, and other clients are better served by an API key. The shared
+ * high/elevated titles stay as they are for every other provider.
+ */
+export type OAuthTosCopyKeys = {
+  title: "oauthTos.anthropicTitle" | ReturnType<typeof oauthTosRiskTitleKey>;
+  body: "oauthTos.anthropicBody" | ReturnType<typeof oauthTosRiskBodyKey>;
+  conditions: "oauthTos.anthropicConditions" | null;
+  saferPath: "oauthTos.anthropicSaferPath" | "oauthTos.saferPath" | null;
+  acknowledge: "oauthTos.anthropicAcknowledge" | "oauthTos.acknowledge";
+  continue: "oauthTos.anthropicContinue" | "oauthTos.continue";
+};
+
+export function oauthTosCopyKeys(providerId: string, level: OAuthTosRiskLevel): OAuthTosCopyKeys {
+  const id = providerId.trim().toLowerCase();
+  if (id === "anthropic") {
+    return {
+      title: "oauthTos.anthropicTitle",
+      body: "oauthTos.anthropicBody",
+      conditions: "oauthTos.anthropicConditions",
+      saferPath: "oauthTos.anthropicSaferPath",
+      acknowledge: "oauthTos.anthropicAcknowledge",
+      continue: "oauthTos.anthropicContinue",
+    };
+  }
+  return {
+    title: oauthTosRiskTitleKey(level),
+    body: oauthTosRiskBodyKey(level),
+    conditions: null,
+    saferPath: id === "google-antigravity" ? "oauthTos.saferPath" : null,
+    acknowledge: "oauthTos.acknowledge",
+    continue: "oauthTos.continue",
+  };
+}
