@@ -897,6 +897,11 @@ export interface ResolveCodexAuthContextOptions {
   /** Live policy owner when the routing config is a caller-specific replay snapshot. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   excludeAccountId?: string;
+  /**
+   * Accounts this logical request already sent to. Combined with `excludeAccountId`
+   * so a Codex roster walk cannot return an earlier refusal.
+   */
+  attemptedAccountIds?: ReadonlySet<string>;
   /** Resolve exactly this account without consulting or mutating Pool selection. */
   accountId?: string;
   /** Final native model selected for this request, used to select its quota group. */
@@ -1202,6 +1207,7 @@ export async function resolveCodexAuthContext(
       modelEligibleAccountIds,
       deniedModelAccountIds,
       requestOwnedMainCredential: requestScopedMainCredential,
+      attemptedAccountIds: options.attemptedAccountIds,
       // Request-scoped and deliberately absent from `sharedStateSelectionOptions`: one
       // conversation's attachments say nothing about where unrelated threads should be served.
       retainAccountForUploadedFiles: options.retainAccountForUploadedFiles === true,
@@ -1270,6 +1276,7 @@ export async function resolveCodexAuthContext(
         requestScopedMainCredential
         && fixedAccountId === undefined
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+        && options.attemptedAccountIds?.has(MAIN_CODEX_ACCOUNT_ID) !== true
       ) {
         return await resolveCallerOwnedMainContext();
       }
@@ -1292,6 +1299,7 @@ export async function resolveCodexAuthContext(
         throw new CodexMainProfileDrainingError();
       }
       if (!nativeMainReadsForbidden && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+        && options.attemptedAccountIds?.has(MAIN_CODEX_ACCOUNT_ID) !== true
         && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
         && (!modelEligibleAccountIds || modelEligibleAccountIds.has(MAIN_CODEX_ACCOUNT_ID))) {
         assertMainAccountPolicy(policy);
@@ -1411,6 +1419,7 @@ export async function resolveCodexAuthContext(
       // just as it can after an upstream rejection, without changing Pool state.
       if (requestScopedMainCredential && fixedAccountId === undefined
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+        && options.attemptedAccountIds?.has(MAIN_CODEX_ACCOUNT_ID) !== true
         && !callerIsCooledPoolAccount(headers, config, accountId)) {
         return await resolveCallerOwnedMainContext();
       }

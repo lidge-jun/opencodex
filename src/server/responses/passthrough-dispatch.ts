@@ -105,6 +105,7 @@ import {
   clearCodexModelDenialEvidence,
   recordCodexModelDenialEvidence,
 } from "../../codex/model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { codexWsSocketDeathStage, isCodexWsUpstreamResponse, readCodexWsStage } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -1108,6 +1109,9 @@ export async function preparePassthroughExchange(
     };
 
     // Keep recovery kinds in sync with the generic `recovery:` loop below.
+    // Accounts already sent by this logical request. A pre-stream refusal must not
+    // select one of them again before its cooldown is visible to the next pick.
+    const attemptedCodexPoolAccounts = new Set<string>();
     passthroughRecovery: for (;;) {
 
     if (
@@ -1574,6 +1578,7 @@ export async function preparePassthroughExchange(
         // keeps it. An earlier revision also broke here on a non-400 outcome, which no test could
         // justify because this flag already produced the identical result.
         const storedReplaySpent = codex401ReplayKind === "stored";
+        attemptedCodexPoolAccounts.add(admissionState.authCtx.accountId);
         const retry = await retryCodexPoolOnAlternateAccount({
           callerAuthHeaders,
           config,
@@ -1585,6 +1590,7 @@ export async function preparePassthroughExchange(
           firstResponse: upstreamResponse,
           outcomeStatus: poolRetryOutcome,
           sameAccountOnly: storedReplaySpent,
+          attemptedAccountIds: attemptedCodexPoolAccounts,
           upstream,
           connectMs,
           passthroughEstimate,
@@ -1613,6 +1619,23 @@ export async function preparePassthroughExchange(
           requestState.selectedForwardHeaders = retry.selectedForwardHeaders;
           // Keep subagent quota-failure health keyed to the account that actually served.
           requestState.subagentFallbackAccountId = retry.authCtx.accountId;
+          const servedAttemptId = retry.authCtx.accountId
+            ?? (retry.authCtx.kind === "main" ? MAIN_CODEX_ACCOUNT_ID : undefined);
+          const repeatedAccount = servedAttemptId !== undefined
+            && attemptedCodexPoolAccounts.has(servedAttemptId);
+          if (servedAttemptId) attemptedCodexPoolAccounts.add(servedAttemptId);
+          // The alternate's own pre-stream refusal is another roster hop, bounded by the
+          // shared send total. Stop when the hop landed on caller-owned main: that context
+          // is not a stored pool account and cannot be the input of the next rotation.
+          const rosterAuth = retry.authCtx.kind === "pool" || retry.authCtx.kind === "main-pool"
+            ? retry.authCtx
+            : undefined;
+          if (!repeatedAccount && rosterAuth && !rosterAuth.fixedAccount && !storedReplaySpent && (
+            await shouldRetryCodexPoolAccountQuota(upstreamResponse, options.abortSignal)
+            || shouldRetryCodexPoolAccountTransient(upstreamResponse)
+          )) {
+            continue passthroughRecovery;
+          }
         }
       }
     }

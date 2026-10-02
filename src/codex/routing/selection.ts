@@ -167,9 +167,11 @@ export function getEligiblePoolAccounts(
   skipFailoverReadyCandidates = false,
 ): readonly string[] {
   const excludedPlans = excludedCodexPoolPlanKeys(config);
+  const attempted = selectionOptions?.attemptedAccountIds;
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
       && account.id !== excludeId
+      && attempted?.has(account.id) !== true
       && !isCodexAccountPaused(config, account.id)
       && !isCodexAccountPlanExcluded(config, account.id, excludedPlans)
       && !isAccountNeedsReauth(account.id)
@@ -184,6 +186,7 @@ export function getEligiblePoolAccounts(
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
+    && attempted?.has(MAIN_CODEX_ACCOUNT_ID) !== true
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
     && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) || hasMainAccountRefreshGrant())
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null

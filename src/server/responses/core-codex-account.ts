@@ -392,6 +392,11 @@ export interface CodexPoolAccountRetryArgs {
    * out of budget.
    */
   sameAccountOnly?: boolean;
+  /**
+   * Accounts this logical request has already sent to. The next roster pick skips them
+   * even when a single transient failure has not cooled the earlier account yet.
+   */
+  attemptedAccountIds?: ReadonlySet<string>;
   upstream: AbortController;
   connectMs: number;
   passthroughEstimate?: number;
@@ -613,20 +618,21 @@ export async function retryCodexPoolOnAlternateAccount(
     recordUnmovedTransientOutcome();
     return { kind: "no-alternate" };
   }
-  // An account move is the guarded profile's fourth send and draws the single shared
-  // final-recovery reserve. Nothing bounded it per request before: `excludeAccountId` excludes
-  // only the account that just failed, and the caller's recovery loop can return here after the
-  // alternate fails too, so one request could walk the pool an account at a time. The permit is
-  // consumed immediately before the physical send, so a resolution that finds no alternate
-  // costs nothing.
+  // A Codex pool account change is roster rotation inside one provider, not a move
+  // between pools. `account-failover` is the one-slot cross-pool class: the first refusal
+  // would consume it and a later 429 would stop while another account in this roster still
+  // had quota. `auth-recovery` keeps the physical target key, so the shared send total is
+  // the bound and the cross-pool slot stays available. The permit is consumed immediately
+  // before the physical send, so a resolution that finds no alternate costs nothing.
   const executionBudget = isRequestExecutionBudget(args.options.sendBudget)
     ? args.options.sendBudget
     : undefined;
   let accountMovePermit: SingleUseDispatchPermit | undefined;
   if (!retryAuthCtx && executionBudget) {
     const decision = executionBudget.reserveDispatch({
-      sendClass: "account-failover",
-      targetKey: `${route.providerName}|${route.modelId}|alternate-account`,
+      sendClass: "auth-recovery",
+      targetKey: executionBudget.lastTargetKey
+        ?? `${route.providerName}|${route.modelId}|codex-pool-roster`,
     });
     if (!decision.allowed) {
       recordUnmovedTransientOutcome();
@@ -641,6 +647,7 @@ export async function retryCodexPoolOnAlternateAccount(
         "pool",
         {
           excludeAccountId: firstAuthCtx.accountId,
+          attemptedAccountIds: args.attemptedAccountIds,
           admission: options.admission,
           codexAuthPolicy: options.codexAuthPolicy,
           modelId: route.modelId,

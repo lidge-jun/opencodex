@@ -40,6 +40,14 @@ export interface CodexAccountUsabilityOptions {
    */
   retainAccountForUploadedFiles?: boolean;
   /**
+   * Accounts this logical request has already sent to.
+   *
+   * Request-local only. A Codex roster walk passes it so the next pick cannot
+   * return an account whose pre-stream refusal this request already observed.
+   * It is not a health, cooldown, or persisted eligibility rule.
+   */
+  attemptedAccountIds?: ReadonlySet<string>;
+  /**
    * Main is live for this request only because the request carries its own main bearer (#5019).
    *
    * Main may then win this request's selection, but that credential belongs to the request, not

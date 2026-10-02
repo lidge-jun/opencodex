@@ -320,6 +320,62 @@ describe("Responses account usage attribution", () => {
     });
   });
 
+  test("a second pre-stream quota refusal rotates to a third roster account", async () => {
+    await withPoolHome(async () => {
+      takeSpendHome();
+      const config = poolConfig(["pool-a", "pool-b", "pool-c"]);
+      for (const [id, usage] of [["pool-a", 10], ["pool-b", 20], ["pool-c", 30]] as const) {
+        savePoolCredential(id);
+        updateAccountQuota(id, usage);
+      }
+      const bearers: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization") ?? "";
+        bearers.push(bearer);
+        if (bearer === "Bearer pool-c-access-token") return completedResponse("pool-c-response");
+        return Response.json({ error: { message: "The usage limit has been reached" } }, {
+          status: 429,
+          headers: { "retry-after": "42" },
+        });
+      }) as typeof fetch;
+
+      const response = await handleResponses(request(), config, { model: "", provider: "" }, {});
+
+      expect(response.status).toBe(200);
+      expect(bearers).toEqual([
+        "Bearer pool-a-access-token",
+        "Bearer pool-b-access-token",
+        "Bearer pool-c-access-token",
+      ]);
+    });
+  });
+
+  test("roster rotation stops when every account refuses before output", async () => {
+    await withPoolHome(async () => {
+      takeSpendHome();
+      const config = poolConfig(["pool-a", "pool-b", "pool-c"]);
+      for (const [id, usage] of [["pool-a", 10], ["pool-b", 20], ["pool-c", 30]] as const) {
+        savePoolCredential(id);
+        updateAccountQuota(id, usage);
+      }
+      const bearers: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization") ?? "";
+        bearers.push(bearer);
+        return Response.json({ error: { message: "The usage limit has been reached" } }, { status: 429 });
+      }) as typeof fetch;
+
+      const response = await handleResponses(request(), config, { model: "", provider: "" }, {});
+
+      expect(response.status).toBe(429);
+      expect(bearers).toEqual([
+        "Bearer pool-a-access-token",
+        "Bearer pool-b-access-token",
+        "Bearer pool-c-access-token",
+      ]);
+    });
+  });
+
   test("a quota message wrapped in HTTP 502 cools the account and retries an alternate", async () => {
     await withPoolHome(async () => {
       takeSpendHome();
