@@ -492,3 +492,6 @@ Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs
 ## Routing profile lookup status
 
 `ocx route policy show <id>` exits 4 when the profile does not exist. Missing or invalid command arguments exit 2. Scripts can distinguish a missing profile from incorrect usage.
+## Upstream error details
+
+When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.

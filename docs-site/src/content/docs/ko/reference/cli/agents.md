@@ -270,3 +270,6 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 ## Routing profile lookup status
 
 `ocx route policy show <id>`는 프로필이 없으면 종료 코드 4를 반환합니다. 명령 인수가 빠졌거나 잘못되면 2를 반환하므로 스크립트에서 두 경우를 구별할 수 있습니다.
+## Upstream error details
+
+업스트림 오류 응답에 여러 메시지 필드가 있으면 기존 우선순위에서 처음 발견한 비어 있지 않은 문자열을 사용합니다. 빈 값이나 잘못된 형식의 필드 때문에 유효한 후순위 진단이 사라지지 않습니다.
