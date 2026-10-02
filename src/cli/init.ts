@@ -11,6 +11,14 @@ import { deriveInitProviders } from "../providers/derive";
 import { pinSponsorsWithinKind } from "../providers/sponsor-order";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
+/** Parse a setup TCP port; only an empty answer selects the default. */
+export function parseInitPort(raw: string): number | null {
+  const text = raw.trim();
+  if (!text) return 10100;
+  const value = /^\d+$/.test(text) ? Number(text) : NaN;
+  return Number.isInteger(value) && value >= 1 && value <= 65535 ? value : null;
+}
+
 class InitCancelledError extends Error {
   constructor(readonly exitCode: 1 | 130) {
     super(exitCode === 130 ? "Setup cancelled." : "stdin reached EOF while waiting for input. Re-run `ocx init` in an interactive terminal.");
@@ -111,6 +119,7 @@ export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): 
   } catch { /* cleanup is best-effort; never block init on backup housekeeping */ }
 }
 
+/** Create a first configuration interactively, preserving existing files and refusing invalid input. */
 export async function runInit(): Promise<void> {
   const initial = observeInitialConfigState();
   if (initial === "exists") {
@@ -195,7 +204,12 @@ export async function runInit(): Promise<void> {
     }
 
     const portStr = await prompt.ask("\nProxy port [10100]: ");
-    const port = parseInt(portStr, 10) || 10100;
+    const port = parseInitPort(portStr);
+    if (port === null) {
+      console.error("Proxy port must be a whole decimal number from 1 to 65535. No config was saved.");
+      process.exitCode = 1;
+      return;
+    }
 
     initializeProviderModelSelection(providerName, providerConfig);
     const config: OcxConfig = {
