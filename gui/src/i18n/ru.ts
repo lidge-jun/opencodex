@@ -1028,7 +1028,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "Скорость декодирования (оценка)",
   "logs.detail.reason.ttft_missing": "Для этого запроса не записано время до первого токена, поэтому измерять нечего.",
-  "logs.detail.reason.decode_window_too_short": "Окно после первого токена длилось меньше секунды — слишком мало для оценки скорости декодирования.",
+  "logs.detail.reason.decode_window_too_short": "Измеренное окно вывода длилось меньше секунды — слишком мало для оценки скорости декодирования.",
   "logs.detail.costTotal": "Эквивалент по прайс-листу",
   "logs.detail.totalTokens": "Всего токенов",
   "logs.detail.matchedKey": "Совпавший ключ цены",

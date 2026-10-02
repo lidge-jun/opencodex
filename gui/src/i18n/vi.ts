@@ -1049,7 +1049,7 @@ export const vi: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "Tốc độ decode (ước tính)",
   "logs.detail.reason.ttft_missing": "Không ghi nhận thời gian đến token đầu tiên (time-to-first-token) cho request này, nên không có cửa sổ decode nào để đo lường.",
-  "logs.detail.reason.decode_window_too_short": "Cửa sổ sau token đầu tiên nhỏ hơn một giây, quá ngắn để ước tính tốc độ decode.",
+  "logs.detail.reason.decode_window_too_short": "Cửa sổ đầu ra đo được nhỏ hơn một giây, quá ngắn để ước tính tốc độ decode.",
   "logs.detail.costTotal": "Tương đương giá niêm yết",
   "logs.detail.totalTokens": "Tổng số tokens",
   "logs.detail.matchedKey": "Khoá giá trùng khớp (Matched price key)",

@@ -1050,7 +1050,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "디코드 속도(추정)",
   "logs.detail.reason.ttft_missing": "이 요청은 첫 토큰까지 걸린 시간이 기록되지 않아서 측정할 디코드 구간이 없어요.",
-  "logs.detail.reason.decode_window_too_short": "첫 토큰 이후 구간이 1초도 안 돼서 디코드 속도를 추정하기엔 너무 짧아요.",
+  "logs.detail.reason.decode_window_too_short": "측정된 출력 구간이 1초도 안 돼서 디코드 속도를 추정하기엔 너무 짧아요.",
   "logs.detail.costTotal": "정가 환산치",
   "logs.detail.totalTokens": "전체 토큰",
   "logs.detail.matchedKey": "매칭된 가격 키",

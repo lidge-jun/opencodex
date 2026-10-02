@@ -1055,7 +1055,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "Çözme hızı (tahmini)",
   "logs.detail.reason.ttft_missing": "Bu istek için ilk token süresi kaydedilmediğinden ölçülecek bir çözme aralığı yok.",
-  "logs.detail.reason.decode_window_too_short": "İlk token sonrasındaki aralık bir saniyenin altındaydı; çözme hızını tahmin etmek için fazla kısa.",
+  "logs.detail.reason.decode_window_too_short": "Ölçülen çıktı aralığı bir saniyenin altındaydı; çözme hızını tahmin etmek için fazla kısa.",
   "logs.detail.costTotal": "Liste fiyatı eşdeğeri",
   "logs.detail.totalTokens": "Toplam jeton",
   "logs.detail.matchedKey": "Eşleşen anahtar",

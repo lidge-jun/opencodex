@@ -952,7 +952,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "デコード速度（推定）",
   "logs.detail.reason.ttft_missing": "このリクエストでは最初のトークンまでの時間が記録されていないため、測定できるデコード区間がありません。",
-  "logs.detail.reason.decode_window_too_short": "最初のトークン以降の区間が1秒未満で、デコード速度を推定するには短すぎます。",
+  "logs.detail.reason.decode_window_too_short": "計測された出力区間が1秒未満で、デコード速度を推定するには短すぎます。",
   "logs.detail.costTotal": "定価相当額",
   "logs.detail.totalTokens": "合計トークン",
   "logs.detail.matchedKey": "一致した価格キー",

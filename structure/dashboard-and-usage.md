@@ -189,7 +189,6 @@ current physical response contribution, preserving prior sends on the same key w
 repeated inspections twice. Consumers sum the flat attempts once and keep subscription quota
 observations separate from token or API-equivalent cost totals.
 
-
 `src/server/hub-usage.ts` serves `GET /v1/usage` on hubs for an explicit configured data key. The authenticated key selects the aggregate; query parameters cannot select an API-key identity. Unscoped environment/admin credentials and loopback bypass are not admitted. The response projects only this client's numeric totals, provider/model/day rows and incomplete-history metadata through `src/remote/hub-usage.ts`; accounts, raw records and key IDs are omitted. Unknown fields are stripped at every object boundary and the serialized body is capped at 1 MiB.
 
 Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
@@ -555,7 +554,6 @@ enabling it takes effect without a restart.
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.
 
-
 ## Usage history and model identity
 
 `src/server/request-log.ts` preserves upstream `servedModel` independently of route-derived
@@ -571,6 +569,8 @@ Rows also carry the observed protocol path (`protocolTrace`), persisted in `usag
 re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and
 `src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page.
 [Protocol Paths](data-planes/protocol-paths.md) owns its derivation.
+
+Rows may also carry `genStartMs` and `lastOutputMs`, an observed request-relative pair recorded by `src/server/request-log-generation-window.ts` from the Responses and Anthropic SSE taps: the first output item or content block (reasoning included) to the last output delta. They are proxy observation times, not provider-internal token timing, and `src/usage/log.ts` keeps them only as a pair of nonnegative finite values with `lastOutputMs >= genStartMs`. `decodeTokPerSecondResult` in `src/server/management/shared.ts` prefers that window when the pair is valid and otherwise falls back to the post-TTFT window (`durationMs - firstOutputMs`); both keep the one-second minimum, the `ttft_missing` / `decode_window_too_short` unavailable reasons and `estimated: true`, so a short measured window is still an estimate rather than a provider decode benchmark. The end-to-end tok/s column is unchanged, attempts carry no generation window of their own, and the request-history view does not present one.
 
 Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete
 selector; exact-match filtering uses the same idempotent encoding. The derived index rebuilds when its

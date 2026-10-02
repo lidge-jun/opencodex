@@ -829,7 +829,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "解碼速率（估算）",
   "logs.detail.reason.ttft_missing": "此請求沒有記錄第一個 token 的時間，因此沒有可測量的解碼區間。",
-  "logs.detail.reason.decode_window_too_short": "第一個 token 之後的區間不到一秒，太短，無法估算解碼速率。",
+  "logs.detail.reason.decode_window_too_short": "測得的輸出區間不到一秒，太短，無法估算解碼速率。",
   "logs.detail.costTotal": "標價折算",
   "logs.detail.totalTokens": "Token 總數",
   "logs.detail.matchedKey": "符合的 jawcode 鍵",

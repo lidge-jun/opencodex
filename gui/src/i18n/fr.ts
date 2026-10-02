@@ -1050,7 +1050,7 @@ export const fr: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "Débit de décodage (est.)",
   "logs.detail.reason.ttft_missing": "Aucun délai jusqu’au premier token n’a été enregistré pour cette requête, il n’y a donc pas de fenêtre de décodage à mesurer.",
-  "logs.detail.reason.decode_window_too_short": "La fenêtre après le premier token durait moins d’une seconde, ce qui est trop court pour estimer un débit de décodage.",
+  "logs.detail.reason.decode_window_too_short": "La fenêtre de sortie mesurée durait moins d’une seconde, ce qui est trop court pour estimer un débit de décodage.",
   "logs.detail.costTotal": "Équivalent au tarif catalogue",
   "logs.detail.totalTokens": "Nombre total de jetons",
   "logs.detail.matchedKey": "Clé de tarif correspondante",

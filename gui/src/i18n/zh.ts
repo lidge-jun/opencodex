@@ -1023,7 +1023,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "解码速率（估算）",
   "logs.detail.reason.ttft_missing": "该请求没有记录首个 token 的时间，因此没有可测量的解码区间。",
-  "logs.detail.reason.decode_window_too_short": "首个 token 之后的区间不足一秒，太短，无法估算解码速率。",
+  "logs.detail.reason.decode_window_too_short": "测得的输出区间不足一秒，太短，无法估算解码速率。",
   "logs.detail.costTotal": "标价折算",
   "logs.detail.totalTokens": "Token 总数",
   "logs.detail.matchedKey": "匹配的价格键",

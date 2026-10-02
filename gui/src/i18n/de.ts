@@ -1011,7 +1011,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "Dekodierrate (geschätzt)",
   "logs.detail.reason.ttft_missing": "Für diese Anfrage wurde keine Zeit bis zum ersten Token erfasst, es gibt also kein Dekodierfenster zum Messen.",
-  "logs.detail.reason.decode_window_too_short": "Das Fenster nach dem ersten Token lag unter einer Sekunde und ist zu kurz für eine Schätzung der Dekodierrate.",
+  "logs.detail.reason.decode_window_too_short": "Das gemessene Ausgabefenster lag unter einer Sekunde und ist zu kurz für eine Schätzung der Dekodierrate.",
   "logs.detail.costTotal": "Listenpreis-Äquivalent",
   "logs.detail.totalTokens": "Tokens gesamt",
   "logs.detail.matchedKey": "Zugeordneter Preisschlüssel",

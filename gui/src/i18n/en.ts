@@ -1069,7 +1069,7 @@ export const en = {
   "logs.detail.ttft": "TTFT",
   "logs.detail.decodeTokPerSec": "Decode rate (est.)",
   "logs.detail.reason.ttft_missing": "No time-to-first-token was recorded for this request, so there is no decode window to measure.",
-  "logs.detail.reason.decode_window_too_short": "The window after the first token was under a second, which is too short to estimate a decode rate from.",
+  "logs.detail.reason.decode_window_too_short": "The measured output window was under a second, which is too short to estimate a decode rate from.",
   "logs.detail.costTotal": "List-price equivalent",
   "logs.detail.totalTokens": "Total tokens",
   "logs.detail.matchedKey": "Matched price key",

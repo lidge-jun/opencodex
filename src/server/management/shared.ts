@@ -129,10 +129,11 @@ export function tokPerSecondResult(entry: Pick<MetricSource, "durationMs" | "usa
 export const MIN_DECODE_WINDOW_MS = 1_000;
 
 /**
- * Estimated DECODE throughput: output tokens over the window after the first token (#4038).
+ * Estimated DECODE throughput: output tokens over the measured output window (#4038): the generation window when
+ * recorded, otherwise the window after the first token.
  *
- * Strictly additive. `tokensPerSecond`, `tokPerSecondResult`, `RequestLogEntry` and
- * `usage.jsonl` are untouched, and the end-to-end rate beside it keeps meaning exactly what it
+ * Strictly additive. `tokensPerSecond` and `tokPerSecondResult` are untouched, rows only gain the
+ * optional window pair, and the end-to-end rate beside it keeps meaning exactly what it
  * has always meant — it is documented as end-to-end, so this is a missing metric rather than a
  * miscalculated one.
  *
