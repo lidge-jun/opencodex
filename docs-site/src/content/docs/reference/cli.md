@@ -156,3 +156,7 @@ refreshes the update-notification cache in a detached process, and
 implementation details, not stable user-facing commands. The dashboard records the worker PID,
 recovers an active job whose worker died, treats older PID-less active records as stale after ten
 minutes, and protects a live worker from concurrent updates.
+
+## Windows JSON configuration files
+
+`ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.

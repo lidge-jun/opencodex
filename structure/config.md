@@ -528,7 +528,7 @@ it owns the refusal as well as the request. `runtimeBaseUrl` resolves the live l
 states that the listener serves only the machine routes, points custom-model and other management
 edits at the hub the machine is connected to, and gives the on-machine alternative: edit
 `customModels` in `config.json`, then run `ocx sync`. The status is also the honest exit code, since
-`runCliAction` maps 404 to exit 4 and would otherwise report a missing record.
+`runCliAction` maps 404 to exit 4 and would otherwise report a missing record. `src/cli/config-command.ts` accepts one leading UTF-8 BOM when parsing validate/import input from a file or stdin. JSON syntax and schema validation still run before persistence; BOM characters inside string values remain data.
 
 A 404 body carrying both `method` and `path` is rendered as the route that listener does not serve,
 so any not-served-here answer stays legible rather than printing a bare token. `ocx models edit` in

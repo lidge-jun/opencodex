@@ -394,6 +394,7 @@
     "cli-codex-log-guard-protection.test.ts": "cli",
     "cli-codex-log-guard.test.ts": "cli",
     "cli-companion.test.ts": "cli",
+    "cli-config-bom.test.ts": "cli",
     "cli-config-command.test.ts": "cli",
     "cli-config-show-client.test.ts": "cli",
     "cli-connect-readiness.test.ts": "cli",

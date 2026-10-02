@@ -40,3 +40,7 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 `ocx --version`, `ocx -v`, `ocx version`은 스크립트가 읽기 좋은 한 줄짜리 버전을 출력하고 종료합니다.
 
 일반 도움말에는 두 개의 디스패치 대상이 의도적으로 빠져 있습니다. `__refresh-version [preview]`는 분리된 프로세스에서 업데이트 알림 캐시를 새로 고치고, `__gui-update-worker <job-id> [latest|preview] [restart]`는 대시보드 업데이트 작업을 실행합니다. 이들은 구현 세부 사항일 뿐이며 안정적인 사용자 명령이 아닙니다. 대시보드는 worker PID를 기록하고, worker가 죽은 활성 작업은 복구하며, PID가 없는 오래된 활성 기록은 10분 뒤 오래된 것으로 취급하고, 살아 있는 worker를 동시 업데이트로부터 보호합니다.
+
+## Windows JSON configuration files
+
+`ocx config validate <file>`과 `ocx config import <file> --yes`는 선행 BOM이 있는 UTF-8 JSON도 읽습니다. 표준 입력(`-`)에도 적용되므로 Windows PowerShell이나 편집기의 UTF-8 내보내기를 사용할 수 있습니다. UTF-16은 지원하지 않습니다.
