@@ -50,3 +50,6 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 ## Windows JSON configuration files
 
 `ocx config validate <file>`과 `ocx config import <file> --yes`는 선행 BOM이 있는 UTF-8 JSON도 읽습니다. 표준 입력(`-`)에도 적용되므로 Windows PowerShell이나 편집기의 UTF-8 내보내기를 사용할 수 있습니다. UTF-16은 지원하지 않습니다.
+## Default alias listing
+
+`ocx alias --json`은 `ocx alias list --json`과 같습니다. `--json`은 명시한 alias 작업의 앞이나 뒤에 둘 수 있습니다.

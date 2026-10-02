@@ -135,6 +135,7 @@
   "anthropic-account-pause.test.ts": "adapters/anthropic",
   "anthropic-account-threshold.test.ts": "adapters/anthropic",
   "anthropic-combo-account-cooldown.test.ts": "adapters/anthropic",
+  "cli-alias-json.test.ts": "cli",
   "cli-anthropic-account-threshold.test.ts": "cli",
     "anthropic-model-routes.test.ts": "adapters/anthropic",
   "anthropic-agentrouter-language-framing.test.ts": "adapters/anthropic",

@@ -166,3 +166,6 @@ Integer options such as `--limit` require decimal whole numbers within JavaScrip
 ## Windows JSON configuration files
 
 `ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.
+## Default alias listing
+
+`ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.
