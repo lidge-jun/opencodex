@@ -74,10 +74,22 @@ bundled binary of the discovered bundle; if that bundle has no app-server binary
 Before writing the launcher, `launch` also checks that the bundle and its
 app-server binary are owned by you or root, are not writable by group or others,
 and pass strict code-signature verification under OpenAI's team ID
-(`2DC432GLL2`). A bundle that fails any of these is refused, so a copy placed by
-another account cannot be made to run inside your session. The launcher file is
+(`2DC432GLL2`). A bundle that fails any of these checks is refused, including
+one owned by another account. The launcher file is
 written to a temporary file and renamed into place; an existing symbolic link at
 that path is replaced, not followed.
+
+`restore` applies the same ownership, permissions, and signature checks to the
+bundle and its main app executable before quitting or opening it. It works with
+the experimental flag off and without a bundled app-server binary. If trust
+verification or relaunch fails, the existing launcher is kept for recovery.
+
+Both commands also check the folders containing the bundle up to the filesystem
+root. Folders owned by another account, symbolic links, and ordinary group- or
+world-writable parents are refused. Root-owned administrator-group installation
+folders and trusted sticky folders retain their normal permissions behavior.
+These are ownership, POSIX-permission, and signature checks; native ACL and
+volume ownership-policy behavior has not been verified.
 
 This integration installs no certificate, network listener, PAC, or background
 watcher. It does not log the app's messages or environment. Status reports whether

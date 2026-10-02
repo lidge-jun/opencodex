@@ -101,23 +101,26 @@ CODEX_CLI_PATH launcher: ${app.shim ? "yes" : "no"}`);
       console.error("ChatGPT (com.openai.codex) was not found; install or open it once, then retry.");
       return 1;
     }
+    let binary: string | undefined;
     if (sub === "launch") {
       if (config.chatgptDesktop?.appServerShim !== true) {
         console.error('Experimental shim disabled; set chatgptDesktop.appServerShim: true before launching.');
         return 1;
       }
-      const binary = resolveChatgptCodexBinary(install.root);
+      binary = resolveChatgptCodexBinary(install.root) ?? undefined;
       if (!binary) {
         console.error(`No bundled app-server binary was found in ${install.root}; the shim cannot launch this build.`);
         return 1;
       }
-      const untrusted = untrustedChatgptBundleReason(install.root, binary);
-      if (untrusted) {
-        console.error(`Refusing to launch the shim: ${untrusted}.`);
-        return 1;
-      }
-      writeChatgptShimLauncher(undefined, binary);
     }
+    // Both relaunch paths execute the discovered bundle. Restore validates the app
+    // shell without requiring an app-server binary or the experimental opt-in flag.
+    const untrusted = untrustedChatgptBundleReason(install.root, binary);
+    if (untrusted) {
+      console.error(`Refusing to ${sub === "launch" ? "launch the shim" : "restore ChatGPT"}: ${untrusted}.`);
+      return 1;
+    }
+    if (binary) writeChatgptShimLauncher(undefined, binary);
     if (!(await quitApp(install, launcher))) {
       console.error("ChatGPT did not quit; quit it manually and retry.");
       return 1;

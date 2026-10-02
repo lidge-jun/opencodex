@@ -49,8 +49,14 @@ OpenAI's. It writes the mode-0755 executable through an exclusive temp file and 
 rename (never through a symbolic link), quits the bundle by id, waits for this user's
 instance to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH.
 The launcher itself exits 127 with a stderr hint when the recorded binary is gone.
-Restore relaunches without
-that override and removes the launcher only after open succeeds; when no
+Restore uses the same trust policy for the bundle and its main app executable before
+quit or open. Both relaunch paths check ancestor ownership and POSIX replacement permissions
+through the filesystem root. Ancestors must be owned by this user or root; group/other write
+is accepted only for trusted sticky ancestors or root-owned, non-world-writable containers
+whose group matches the local directory service's admin group. An unreadable admin-group lookup
+does not grant that exception. These checks do not attest ACL or mount-policy restrictions.
+Restore does not require the experimental flag or a bundled
+app-server binary. It relaunches without that override and removes the launcher only after open succeeds; when no
 `com.openai.codex` bundle is found it removes the launcher, relaunches nothing and
 exits 1. Status reports
 the experimental flag, launcher presence, and the verified bundle process's override
