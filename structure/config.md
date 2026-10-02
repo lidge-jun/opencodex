@@ -528,7 +528,7 @@ it owns the refusal as well as the request. `runtimeBaseUrl` resolves the live l
 states that the listener serves only the machine routes, points custom-model and other management
 edits at the hub the machine is connected to, and gives the on-machine alternative: edit
 `customModels` in `config.json`, then run `ocx sync`. The status is also the honest exit code, since
-`runCliAction` maps 404 to exit 4 and would otherwise report a missing record.
+`runCliAction` maps 404 to exit 4 and would otherwise report a missing record. Shared integer options in `src/cli/runtime-api.ts` accept decimal safe integers with optional comma/underscore separators between digits and apply each caller's minimum. Blank, hexadecimal, exponential, fractional and unsafe values fail before management requests.
 
 A 404 body carrying both `method` and `path` is rendered as the route that listener does not serve,
 so any not-served-here answer stays legible rather than printing a bare token. `ocx models edit` in

@@ -160,3 +160,6 @@ minutes, and protects a live worker from concurrent updates.
 ## Capability argument validation
 
 `ocx capabilities` rejects unknown arguments, repeated flags and blank `--route` values with exit 64. A valid route with no declared capability exits 4.
+## Integer option values
+
+Integer options such as `--limit` require decimal whole numbers within JavaScript safe-integer bounds. Digit separators such as `1_000` and `1,000` are accepted. Empty values, hexadecimal, exponent notation and fractions are rejected before a request is sent.
