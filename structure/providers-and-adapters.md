@@ -284,6 +284,15 @@ healthy request can retry; stable missing files still cache as empty. Symlinked 
 directories pass through canonical confinement: inside-cwd targets load, outside targets
 do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
 
+## OpenGateway chat provider
+
+The `opengateway` key preset uses the OpenAI Chat adapter at
+`https://apis.opengateway.ai/v1`. Sionic AI operates the gateway. Registry-owned live
+discovery refreshes the public `/v1/models` catalog and retains active Chat Completions or Responses
+rows; public discovery does not establish key validity. Sionic-served
+`deepseek/deepseek-v4.1-flash-ultrafast` and `z-ai/glm-5.3-flash-ultrafast` are listed first.
+Keys are created at `https://opengateway.ai/api-keys`.
+
 ## TokenLab chat provider
 
 The `tokenlab` key preset uses the existing OpenAI Chat adapter at

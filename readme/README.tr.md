@@ -377,7 +377,7 @@ gönderilmez. Ayrıntılar: [kendi barındırılan karar modeli](https://opencod
 
 <!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT girişi ya da API anahtarı), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
-(yerel + Cloud), Cursor (deneysel) ve her OpenAI uyumlu uç nokta — ayrıca DeepSeek, Groq, OpenRouter,
+(yerel + Cloud), Cursor (deneysel) ve her OpenAI uyumlu uç nokta — ayrıca DeepSeek, Groq, OpenRouter, OpenGateway,
 Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen Cloud, Qoder Global ve CN
 (resmî PAT + CLI), SiliconFlow ve daha fazlası. Tam liste: `ocx init` ya da
 [sağlayıcı belgeleri](https://opencodex.me/tr/guides/providers/).

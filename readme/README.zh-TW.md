@@ -355,7 +355,7 @@ JEV Combo 也可以改用自架的決策模型，例如無需金鑰的 Ollama `t
 <!-- sponsors:main-first-mention -->
 OpenAI（ChatGPT 登入或 API key）、Anthropic、Google Gemini、xAI、Kimi、Azure OpenAI、Ollama
 （本機 + Cloud）、Cursor（實驗性），以及所有 OpenAI 相容端點——再加上 DeepSeek、
-Groq、OpenRouter、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、
+Groq、OpenRouter、OpenGateway、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、
 Qwen Cloud、Qoder Global 與 CN（官方 PAT + CLI）、SiliconFlow 等等。完整清單：`ocx init` 或
 [供應商文件](https://opencodex.me/zh-tw/guides/providers/)。
 

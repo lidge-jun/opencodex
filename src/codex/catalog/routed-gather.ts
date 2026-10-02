@@ -528,7 +528,13 @@ async function gatherRoutedModelsUncached(
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);
-  all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+  // Preserve declaratively ordered discovery (and cold-start seed order); other presets
+  // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
+  const orderedProviders = new Set(activeProviders.filter(({ name, provider }) =>
+    resolveProviderModelDiscovery(name, provider).spec?.preferFirst?.length).map(({ name }) => name));
+  all.sort((a, b) => (a.provider === b.provider
+    ? orderedProviders.has(a.provider) ? 0 : a.id.localeCompare(b.id)
+    : a.provider.localeCompare(b.provider)));
   // Provider-derived rows keyed by their Codex-facing slug: a custom override replaces the row
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));

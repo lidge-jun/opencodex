@@ -386,7 +386,7 @@ Combo JEV может вместо этого обращаться к самос�
 <!-- sponsors:main-first-mention -->
 OpenAI (вход ChatGPT или API-ключ), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (локально + Cloud), Cursor (экспериментально) и любой OpenAI-совместимый endpoint — плюс DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global и CN (официальный PAT + CLI), SiliconFlow и другие. Полный список: `ocx init` или
 [документация по провайдерам](https://opencodex.me/ru/guides/providers/).
 
