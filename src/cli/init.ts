@@ -119,6 +119,7 @@ export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): 
   } catch { /* cleanup is best-effort; never block init on backup housekeeping */ }
 }
 
+/** Create a first configuration interactively, preserving existing files and refusing invalid input. */
 export async function runInit(): Promise<void> {
   const initial = observeInitialConfigState();
   if (initial === "exists") {
