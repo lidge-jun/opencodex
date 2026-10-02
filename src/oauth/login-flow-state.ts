@@ -151,6 +151,17 @@ function reapLoginFlows(provider: string): void {
 /** A code-display flow the user never completes must stop accepting pastes. */
 export const CODE_LOGIN_TTL_MS = 10 * 60_000;
 
+/**
+ * Record a just-admitted flow under its id and return its paste deadline (code mode only).
+ * Lives here rather than in `startLoginFlow` to keep `src/oauth/index.ts` under the size ratchet.
+ */
+export function recordStartedLoginFlow(provider: string, flowId: string, codeMode: boolean): number | undefined {
+  clearManualCodeSlot(flowId);
+  const expiresAt = codeMode ? Date.now() + CODE_LOGIN_TTL_MS : undefined;
+  loginState.set(flowId, { done: false, provider, flowId, ...(codeMode ? { mode: "code" as const, expiresAt } : {}) });
+  return expiresAt;
+}
+
 export class CodeLoginUnsupportedError extends Error {
   constructor(provider: string) {
     super(`${provider} has no code-display login`);

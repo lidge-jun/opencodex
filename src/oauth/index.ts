@@ -55,7 +55,7 @@ import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
-import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CODE_LOGIN_TTL_MS, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginState, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
+import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
 export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
 export type { LoginCodeError, LoginFlowState } from "./login-flow-state";
 import { randomUUID } from "node:crypto";
@@ -186,11 +186,7 @@ export interface LoginOpts {
    * listener (#3366). Ignored by every other provider.
    */
   flow?: ChatGPTLoginFlow;
-  /**
-   * Code-display login: bind no callback server, advertise the provider's hosted code page as
-   * the redirect, and complete from a pasted code. Only providers with `codeRedirectUri` accept
-   * it; `startLoginFlow` rejects the rest rather than falling back to localhost.
-   */
+  /** Code-display login: no callback server; completes from a pasted code (needs `codeRedirectUri`). */
   codeMode?: boolean;
 }
 
@@ -220,10 +216,7 @@ interface OAuthProviderDef {
    * overrides this. Default when unset here: "lazy-only".
    */
   defaultRefreshPolicy?: RefreshPolicy;
-  /**
-   * Provider-hosted redirect that DISPLAYS the authorization code instead of redirecting to a
-   * local port. Its presence is what makes `codeMode` available for the provider.
-   */
+  /** Provider-hosted page that DISPLAYS the code; its presence enables `codeMode`. */
   codeRedirectUri?: string;
 }
 
@@ -277,10 +270,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("xai"),
   },
   anthropic: {
-    login: (ctrl, opts) => loginAnthropic(ctrl, {
-      importLocal: opts?.forceLogin ? "off" : "fallback",
-      codeMode: opts?.codeMode === true,
-    }),
+    login: (ctrl, opts) => loginAnthropic(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback", codeMode: opts?.codeMode === true }),
     refresh: refreshAnthropicToken,
     codeRedirectUri: ANTHROPIC_CODE_REDIRECT_URI,
     providerConfig: oauthConfig("anthropic"),
@@ -1916,14 +1906,7 @@ export async function startLoginFlow(
   // The flow id is the key of every map below. Callers that own one (the management route, the
   // codex auth API) supply it so a later paste can be pinned to this exact attempt.
   const flowId = lifecycle?.flowId ?? randomUUID();
-  clearManualCodeSlot(flowId);
-  const expiresAt = opts?.codeMode ? Date.now() + CODE_LOGIN_TTL_MS : undefined;
-  loginState.set(flowId, {
-    done: false,
-    provider,
-    flowId,
-    ...(opts?.codeMode ? { mode: "code" as const, expiresAt } : {}),
-  });
+  const expiresAt = recordStartedLoginFlow(provider, flowId, opts?.codeMode === true);
   const abort = new AbortController();
   loginAbort.set(flowId, { controller: abort, provider });
   if (provider === "kiro") kiroLoginSettling.add(provider);
