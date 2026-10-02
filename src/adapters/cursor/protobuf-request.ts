@@ -1509,6 +1509,10 @@ function conversationTurns(
   return turns;
 }
 
+/**
+ * Select the active user/developer text, recovering it from raw history during tool continuations.
+ * Falls back to the latest tool text when no nonempty user/developer history is available.
+ */
 export function activePromptText(request: CursorRunRequest): string {
   const last = request.messages.at(-1);
   if (last?.role === "user" || last?.role === "developer") return last.content;

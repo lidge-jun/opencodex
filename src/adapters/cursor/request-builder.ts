@@ -385,6 +385,7 @@ export function cursorClientThreadOwner(parsed: OcxParsedRequest): string | unde
   return parsed._clientThreadId?.trim() || parsed._cursorClientThreadId?.trim() || undefined;
 }
 
+/** Append length-prefixed UTF-8 bytes so adjacent digest fields cannot share an encoding. */
 function updateFramed(hash: ReturnType<typeof createHash>, value: string): void {
   const bytes = Buffer.from(value, "utf8");
   const length = Buffer.allocUnsafe(4);
@@ -410,6 +411,10 @@ export function cursorInstructionDigest(parsed: OcxParsedRequest): string {
   return hash.digest("hex");
 }
 
+/**
+ * Hash instructions and the covered message prefix to validate checkpoint history lineage.
+ * Includes message roles as well as text so identical content in different roles cannot match.
+ */
 export function cursorCoveredPrefixDigest(parsed: OcxParsedRequest, coveredMessageCount: number): string {
   const hash = createHash("sha256").update("ocx:cursor:prefix:");
   updateFramed(hash, cursorInstructionDigest(parsed));
