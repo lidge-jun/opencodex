@@ -55,10 +55,12 @@ export function captureAnthropicClientIdentity(headers: Headers): AnthropicClien
 }
 
 /** Called only after the builder verifies a first-party destination. Unknown/forged handles do nothing. */
-export function applyAnthropicClientIdentity(headers: Record<string, string>, identity: AnthropicClientIdentity | undefined): void {
+export function applyAnthropicClientIdentity(headers: Record<string, string>, identity: AnthropicClientIdentity | undefined, operatorHeaders?: Readonly<Record<string, string>>): void {
   const values = identity && bundles.get(identity);
   if (!values) return;
+  const configured = new Set(Object.keys(operatorHeaders ?? {}).map(name => name.toLowerCase()));
   for (const [name, value] of Object.entries(values)) {
+    if (configured.has(name.toLowerCase())) continue;
     for (const existing of Object.keys(headers)) {
       if (existing.toLowerCase() === name.toLowerCase()) delete headers[existing];
     }

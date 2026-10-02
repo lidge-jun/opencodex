@@ -58,6 +58,12 @@ describe("Anthropic serving-account metadata", () => {
       expect(() => buildAnthropicMessagesPassthroughRequest({ ...provider, headers }, "m", source, undefined, { providerAccountUuid: B })).toThrow("serving credential was overridden");
     }
   });
+  test("OAuth rejects provider credential overrides without a provider UUID", () => {
+    for (const headers of [{ Authorization: "Bearer fixture-other" }, { authorization: "Bearer fixture-other" }, { "X-API-Key": "fixture-other" }]) {
+      expect(() => buildAnthropicMessagesPassthroughRequest({ ...provider, headers }, "m", source)).toThrow("serving credential was overridden");
+    }
+    expect(buildAnthropicMessagesPassthroughRequest(provider, "m", source).headers.Authorization).toBe("Bearer fixture-access");
+  });
   test("key-auth first-party and compatible hosts preserve caller metadata", () => {
     for (const baseUrl of ["https://api.anthropic.com", "https://anthropic.example"]) {
       const built = buildAnthropicMessagesPassthroughRequest({ ...provider, authMode: "key", baseUrl }, "m", source, undefined, { providerAccountUuid: B });

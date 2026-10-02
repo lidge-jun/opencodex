@@ -83,8 +83,17 @@ describe("observed Claude Code identity", () => {
   });
   test("operator identity header spellings do not duplicate observed fields", () => {
     const built = build(captureAnthropicClientIdentity(new Headers(observed)), { headers: { "user-agent": "fixture-operator", "x-claude-code-session-id": OTHER } });
-    expect(new Headers(built.headers).get("user-agent")).toBe(UA);
-    expect(new Headers(built.headers).get("x-claude-code-session-id")).toBe(SESSION);
+    expect(new Headers(built.headers).get("user-agent")).toBe("fixture-operator");
+    expect(new Headers(built.headers).get("x-claude-code-session-id")).toBe(OTHER);
+    expect(Object.keys(built.headers).filter(name => name.toLowerCase() === "user-agent")).toHaveLength(1);
+    expect(Object.keys(built.headers).filter(name => name.toLowerCase() === "x-claude-code-session-id")).toHaveLength(1);
+  });
+  test("operator headers win case-insensitively while unconfigured identity fields survive", () => {
+    const headers = { "USER-AGENT": "fixture-operator", "X-Stainless-Package-Version": "8.8.8", "x-app": "fixture-app" };
+    const built = new Headers(build(captureAnthropicClientIdentity(new Headers(observed)), { headers }).headers);
+    for (const [name, value] of Object.entries(headers)) expect(built.get(name)).toBe(value);
+    expect(built.get("x-claude-code-session-id")).toBe(SESSION);
+    expect(built.get("x-stainless-runtime-version")).toBe("22.1.0");
   });
   test("generated Responses adapter traffic keeps its existing compatibility fingerprint", async () => {
     const parsed = { modelId: "m", stream: false, options: {}, context: { messages: [{ role: "user", content: "fixture" }], systemPrompt: [] } } as unknown as OcxParsedRequest;

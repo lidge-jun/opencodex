@@ -320,10 +320,15 @@ SDK markers are required. Optional allowlisted SDK and request-id fields retain 
 Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
 authority. The handle stores its headers privately in a WeakMap and serializes without them.
 The native builder applies it only for first-party Anthropic, independently of bearer/UUID
-selection. Its observed identity wins over configured identity headers without duplicate spelling;
-caller credentials, proxy/hop headers, arbitrary SDK names and betas are never part of the bundle.
+selection. Operator `provider.headers` names take precedence case-insensitively over the observed
+identity bundle without duplicate spelling; unconfigured names retain the observed client values.
+Caller credentials, proxy/hop headers, arbitrary SDK names and betas are never part of the bundle.
 These are compatibility observations, not authorization or proof of client provenance. Missing
 identity, generated Responses, caller-forward and compatible destinations keep their contracts.
+The accepted native first-party behavior preserves one genuine Claude Code session id and its
+metadata device/session components across pooled accounts, matching a genuine client on a manual
+account switch. Consequently, accounts serving that session are linkable upstream. Traffic without
+a genuine client identity retains per-credential synthesized session ids.
 `tests/adapters/anthropic/anthropic-client-identity.test.ts` and
 `tests/claude-integration/messages-native-oauth.test.ts` cover header continuity through refresh
 and account switch, destination isolation, bounded parsing and credential exclusion.
@@ -344,7 +349,8 @@ Claude Code identity block and declared client tool names under the OAuth prefix
 `metadata.user_id.account_uuid` with the provider UUID captured alongside the native binding.
 The local pool id is never used; malformed, absent and unknown metadata stays unchanged.
 Every rebuild starts from the source body; the binding also checks UUID equality before send.
-Conflicting provider credential headers fail before dispatch when the binding carries a UUID.
+Conflicting provider credential headers fail before dispatch on every OAuth build, including
+builds without a provider UUID.
 Key-auth and caller-forward requests retain their metadata. The answer's
 `tool_use` names are mapped back for exactly those names. A 401 or 429 is answered as the bridge
 answers an unpooled account: no refresh replay, no same-token replay, no rotation.

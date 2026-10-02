@@ -214,14 +214,18 @@ export function buildAnthropicMessagesPassthroughRequest(
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
   else applyAnthropicKeyAuth(headers, provider);
   // Operator-configured provider headers apply exactly as the adapter applies them.
-  if (provider.headers) Object.assign(headers, provider.headers);
-  if (oauth && options.providerAccountUuid !== undefined) {
+  if (provider.headers) {
+    const configured = new Set(Object.keys(provider.headers).map(name => name.toLowerCase()));
+    for (const name of Object.keys(headers)) if (configured.has(name.toLowerCase())) delete headers[name];
+    Object.assign(headers, provider.headers);
+  }
+  if (oauth) {
     const wireHeaders = new Headers(headers);
     if (wireHeaders.get("authorization") !== `Bearer ${provider.apiKey}` || wireHeaders.has("x-api-key")) {
       throw new Error("native OAuth serving credential was overridden by provider headers");
     }
   }
-  if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity);
+  if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity, provider.headers);
   const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {
