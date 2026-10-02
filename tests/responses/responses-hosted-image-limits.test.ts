@@ -27,13 +27,43 @@ for (const format of ['json', 'terminal', 'snapshot'] as const) {
   }
 }
 
-test('duplicate failed items cannot multiply retained metadata in a JSON snapshot', () => {
+test('the reported oversized repeated failed-item snapshot is refused', () => {
   const rewrite = factory();
   const output = Array.from({ length: 256 }, (_, index) => ({ ...failed,
     ...(index === 0 ? { internal_chat_message_metadata_passthrough: { value: 'x'.repeat(256 * 1024) } } : {}),
   }));
   try {
     expect(() => rewrite.json(JSON.stringify({ output }))).toThrow();
+    expect(existsSync(home.path('artifacts'))).toBe(false);
+  } finally { rewrite.dispose?.(); }
+});
+
+test('failed lifecycle reuse charges metadata once per distinct identity', () => {
+  const rewrite = factory();
+  const metadata = { value: 'x'.repeat(60 * 1024) };
+  const image = (index: number) => ({ ...failed, id: 'retained_' + index,
+    internal_chat_message_metadata_passthrough: metadata });
+  try {
+    const first = image(0);
+    const emitted = [
+      { type: 'response.output_item.added', output_index: 0, item: { ...first, status: 'in_progress' } },
+      { type: 'response.output_item.done', output_index: 0, item: first },
+      { type: 'response.completed', response: { output: [first] } },
+    ].flatMap(event => rewrite(block(event))).map(value => JSON.parse(value.split('data: ')[1]!));
+    const done = emitted.find(event => event.type === 'response.output_item.done').item;
+    expect(done.internal_chat_message_metadata_passthrough).toEqual(metadata);
+    expect(emitted.at(-1).response.output[0]).toEqual(done);
+    expect(emitted.filter(event => event.type === 'response.output_item.done')).toHaveLength(1);
+    // Sixteen unique items retain about 960 KiB. Recharging lifecycle repeats would overflow.
+    expect(() => {
+      for (let index = 1; index < 16; index++) {
+        rewrite(block({ type: 'response.output_item.done', output_index: index, item: image(index) }));
+      }
+    }).not.toThrow();
+    // Seventeen still fit (including identity/envelope bytes); eighteen exceed the 1 MiB cap.
+    expect(() => { rewrite(block({ type: 'response.output_item.done', output_index: 16, item: image(16) })); }).not.toThrow();
+    expect(() => { rewrite(block({ type: 'response.output_item.done', output_index: 17, item: image(17) })); })
+      .toThrow('hosted image result exceeds local display limits');
     expect(existsSync(home.path('artifacts'))).toBe(false);
   } finally { rewrite.dispose?.(); }
 });
