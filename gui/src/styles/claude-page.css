@@ -119,6 +119,22 @@
   font-size: var(--text-control);
 }
 
+/* ClaudeInterceptStart renders "reason [Start]" as one status span; lay it out as a row. */
+.claude-intercept-start > [role="status"] {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
+.claude-intercept-start .btn {
+  flex-shrink: 0;
+}
+
 /* Badge-sized skeleton; the block itself brings the shared shimmer. */
 .claude-status-pending.data-surface-skeleton__block {
   display: inline-block;

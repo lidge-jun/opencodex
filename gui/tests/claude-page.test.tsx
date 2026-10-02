@@ -30,7 +30,7 @@ beforeEach(() => {
       : url.endsWith("/api/oauth/providers") ? { providers: ["anthropic"] }
       : url.endsWith("/api/native-integrations") ? { clients: [{ clientId: "claude", desiredEnabled: false, disableBlocked: null }] }
       : url.endsWith("/api/config") ? { providers: configured ? { anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } } : {}, port: 10100 }
-      : url.includes("/api/oauth/accounts?") ? { accounts: [{ id: "test-account", email: "test@example.invalid", active: true, quotaMode: "probe" }], activeAccountId: "test-account" }
+      : url.includes("/api/oauth/accounts?") ? { accounts: [{ id: "test-account", email: "test@example.test", active: true, quotaMode: "probe" }], activeAccountId: "test-account" }
       : url.endsWith("/api/claude-desktop/status") ? { firstParty: { interceptRunning: false, interceptEnabled: false, proxyPort: 10102 } } : {};
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
@@ -157,4 +157,38 @@ test("Settings shows the Claude connection read-only; the switch lives on Code",
   expect(panel.querySelector("code")?.textContent).toBe("10102");
   expect([...panel.querySelectorAll("button")].some(button => button.textContent === "Change on Code tab")).toBe(true);
   expect(reads.some(url => url.endsWith("/api/native-integrations/claude"))).toBe(false);
+});
+
+test("Settings starts stopped interception in place and re-reads status", async () => {
+  let running = false;
+  const starts: string[] = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/claude-intercept/start") && init?.method === "POST") {
+      starts.push(url); running = true;
+      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.endsWith("/api/claude-desktop/status")) {
+      return new Response(JSON.stringify({ firstParty: { interceptRunning: running, interceptEnabled: true, proxyPort: running ? 10102 : 10200, interceptReason: running ? null : "port_in_use", interceptFailurePort: running ? undefined : 10102 } }), { headers: { "Content-Type": "application/json" } });
+    }
+    return previousFetch(input, init);
+  }) as typeof fetch;
+  const container = win.document.createElement("div"); win.document.body.append(container);
+  root = createRoot(container as unknown as HTMLElement);
+  await act(async () => { root!.render(<LanguageProvider><Claude apiBase="" /></LanguageProvider>); });
+  const panel = container.querySelector("#claude-panel-settings")!;
+  const slot = panel.querySelector("[data-claude-intercept-start-slot]")!;
+  expect(slot.textContent).toContain("Port 10102 is in use.");
+  // The port row names the port the failed start tried, not the settings-env fallback.
+  expect(panel.querySelector("code")?.textContent).toBe("10102");
+  expect(slot.textContent?.toLowerCase()).not.toContain("restart");
+  const start = [...slot.querySelectorAll("button")].find(button => button.textContent === "Start interception") as HTMLButtonElement;
+  await act(async () => { start.click(); });
+  for (let tick = 0; tick < 50 && panel.querySelector("[data-claude-intercept-start-slot]"); tick++) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  }
+  expect(starts.length).toBe(1);
+  expect(panel.querySelector("[data-claude-intercept-start-slot]")).toBeNull();
+  expect(panel.textContent).toContain("Running");
 });

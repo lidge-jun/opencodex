@@ -1,11 +1,21 @@
 import { Notice } from "../ui";
+import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
 import { useT } from "../i18n/shared";
 import { navigateHash } from "../hash-routing";
 import { useDataSurface } from "../data-surface";
 import { readJsonOrThrow } from "../fetch-json";
 import { loadNativeIntegrations } from "./integrations/native-api";
 
-type InterceptStatus = { firstParty?: { interceptEnabled: boolean; interceptRunning: boolean; proxyPort: number } };
+type InterceptStatus = {
+  firstParty?: {
+    interceptEnabled: boolean;
+    interceptRunning: boolean;
+    proxyPort: number;
+    /** Why the last start attempt failed (#6428); null when nothing failed. */
+    interceptReason?: string | null;
+    interceptFailurePort?: number;
+  };
+};
 
 /** Value not known yet: the shared skeleton block at badge size, so rows do not jump. */
 function Pending() {
@@ -28,6 +38,11 @@ export default function ClaudeSettings({ apiBase, active }: { apiBase: string; a
   { enabled: active, isEmpty: () => false, pollMs: 30_000 });
   const connection = native.state.data;
   const firstParty = desktop.state.data?.firstParty;
+  // While stopped, the status falls back to the port in Claude's settings env; the port the
+  // failed start tried is the one the reason below names, so show that one.
+  const interceptPort = firstParty && !firstParty.interceptRunning && firstParty.interceptFailurePort !== undefined
+    ? firstParty.interceptFailurePort
+    : firstParty?.proxyPort;
   const openCode = () => navigateHash("claude/code");
   return (
     <div className="claude-settings">
@@ -75,10 +90,19 @@ export default function ClaudeSettings({ apiBase, active }: { apiBase: string; a
             <span className="title">{t("claude.interceptPort")}</span>
             <span className="desc">{t("claude.interceptPortDesc")}</span>
           </div>
-          <div className="setting-controls">{firstParty ? <code className="claude-settings-port">{firstParty.proxyPort}</code> : <Pending />}</div>
+          <div className="setting-controls">{firstParty ? <code className="claude-settings-port">{interceptPort}</code> : <Pending />}</div>
         </div>
-        {/* Follow-up integration slot: ClaudeInterceptStart is supplied by the intercept branch. */}
-        <div data-claude-intercept-start-slot />
+        {/* Stopped interception starts in place; a success re-reads the status above. */}
+        {firstParty && !firstParty.interceptRunning && (
+          <div className="setting-row claude-intercept-start" data-claude-intercept-start-slot>
+            <ClaudeInterceptStart
+              apiBase={apiBase}
+              reason={firstParty.interceptReason}
+              port={interceptPort}
+              onStarted={() => desktop.refresh()}
+            />
+          </div>
+        )}
       </div>
       <div className="card">
         <div className="setting-row">
