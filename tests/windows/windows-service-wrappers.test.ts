@@ -330,6 +330,38 @@ test.skipIf(process.platform !== "win32")("cmd waits when Bun disappears between
   }
 });
 
+test("Bun readiness guard precedes launch and preserves its retry block", async () => {
+  const { buildWindowsServiceScript } = await import("../../src/service/windows-taskxml");
+  const { REAL_BUN_MIN_BYTES } = await import("../../src/lib/bun-binary-validator.mjs");
+  const guard = [
+    'set "OCX_BUN_BYTES="',
+    'for %%F in ("%OCX_BUN%") do set "OCX_BUN_BYTES=%%~zF"',
+    'if not defined OCX_BUN_BYTES goto bun_not_ready',
+    `if %OCX_BUN_BYTES% LSS ${REAL_BUN_MIN_BYTES} goto bun_not_ready`,
+  ];
+  // Render and inspect strings only: no generated command or service is executed.
+  for (const cli of ["C:\\ocx\\src\\cli\\index.ts", null]) {
+    const lines = buildWindowsServiceScript({ bun: "C:\\ocx\\bun.exe", bunRuntimeSource: "bundled", cli }, 10100, []).split("\r\n");
+    const launch = cli
+      ? '"%OCX_BUN%" "%OCX_CLI%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1'
+      : '"%OCX_BUN%" start --port 10100 >>"%OCX_SERVICE_LOG%" 2>&1';
+    const guardAt = lines.indexOf(guard[0]!);
+    const launchAt = lines.indexOf(launch);
+    expect(guardAt).toBeGreaterThan(0);
+    expect(lines.filter(line => line === guard[0])).toHaveLength(1);
+    expect(lines.slice(guardAt, guardAt + guard.length)).toEqual(guard);
+    expect(launchAt).toBeGreaterThan(guardAt + guard.length - 1);
+    const retryAt = lines.indexOf(":bun_not_ready");
+    expect(retryAt).toBeGreaterThan(launchAt);
+    expect(lines.slice(retryAt, retryAt + 4)).toEqual([
+      ':bun_not_ready',
+      '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] bundled Bun is not ready (%OCX_BUN_BYTES% bytes, npm placeholder or mid-install); waiting for its postinstall, retrying in 5s - if this persists, reinstall opencodex with bun scripts allowed',
+      'ping -n 6 127.0.0.1 >nul',
+      'goto loop',
+    ]);
+  }
+});
+
 test("backup success logging never expands a filesystem-derived backup name", async () => {
   const { buildWindowsServiceScript } = await import("../../src/service/windows-taskxml");
   const batch = buildWindowsServiceScript({ bun: "C:\\ocx\\bun.exe", bunRuntimeSource: "bundled", cli: "C:\\ocx\\src\\cli\\index.ts" }, 10100, []);
