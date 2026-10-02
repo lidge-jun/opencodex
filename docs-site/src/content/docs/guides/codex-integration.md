@@ -225,6 +225,27 @@ caller, including one that posts them directly, and a model turn records no hist
 opencodex decides this by reading Codex own config itself, so the switch does not depend on the
 injected URL or on anything a client sends, and turning it off takes effect without a restart.
 
+### Hosted image results in Codex App
+
+When a routed Responses provider returns a completed hosted `image_generation_call`
+with base64 image data, opencodex saves the validated image under its local
+`artifacts/` directory and delivers a final assistant image message to a locally
+connected Codex client. The image stays outside the collapsible progress section.
+This applies to streaming and non-streaming Responses, without another generation
+request or a change to the selected provider.
+
+When a client replays these generated image messages as assistant history, opencodex
+replaces its generated local image links with opaque artifact references before
+forwarding that history. This protects the display paths without changing the image
+message already shown in the app. It does not redact unrelated user-supplied paths.
+
+This display compatibility requires loopback admission and a recognized Codex client.
+Remote and generic API clients retain the provider's hosted response format.
+Partial previews and URL-only results are not rendered by this compatibility layer.
+Artifacts use the existing retention limit, so save images you want to keep before
+older files are pruned. An invalid image or a failed local write produces a visible
+failure message instead of a broken image link.
+
 ### Built-in image generation (`image_gen`)
 
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension

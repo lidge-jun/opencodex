@@ -72,17 +72,17 @@ symbols for compatibility, but new lifecycle-only callers import the process-sta
 
 Replacing config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
 process-wide temp sequence, symlink target resolution, no-follow directory-entry replacement for
-externally writable integration directories, real-home test guard, owner manifest,
-Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
-must not replace it with a local temp-and-rename shortcut. Publication failures in
+externally writable integration directories, real-home test guard, owner manifest, Windows ACL hardening,
+scrub-before-unlink failure path, and explicit residual-temp errors. A caller must not replace it with a local temp-and-rename shortcut. Publication failures in
 `src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch). `src/config/live-reconcile.ts` adopts committed model discovery and disabled selectors together with their scoped live merge baselines. A later manual enable therefore removes the automatic disable instead of having a stale three-way merge restore it. Unrelated live config baselines are not advanced by that adoption.
 
-Windows hardening there is applied once per write, not once per harden call. Both calls stay
+Owner-registry publication first refuses a directory symlink, applies POSIX mode `0700`, and requires `hardenSecretDir` for the locator directory. On Windows the default secret-directory ACL grants the current owner full control before removing inherited and broad-user access, without elevated-stage reader grants. A hardening failure skips this best-effort publication before any pointer is written.
+
+Windows hardening in the atomic writer is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the
 `src/lib/windows-secret-acl.ts` success memo: after the content write the writer re-asserts that the
 path still resolves to the object its descriptor holds, then re-attributes the memo to that same
-object so the freshness the data write moved does not read as a replacement. A different object, or
-one that cannot be observed, retires the memo and the pre-rename call performs the full sequence.
+object so the freshness the data write moved does not read as a replacement. A different or unobservable object retires the memo and the pre-rename call performs the full sequence.
 
 > Decision record: [ADR-0016](decisions/ADR-0016-config-surface.md)
 
@@ -516,7 +516,7 @@ described in [Responses transport](transports/responses.md), not upstream policy
 
 ## Codex Pool low-quota protection
 
-`codexPool.lowQuotaProtection` is opt-in, requires a 1–100 threshold and a selected action/window when enabled, covers pool accounts only and is independent of proactive switching and the main account’s 98% hard lock. `src/codex/low-quota-protection.ts` pauses in live `pausedCodexAccountIds` before selection, then coalesces a deferred config save with bounded retry and shutdown flush. Fresh accepted observations reach `src/codex/low-quota-observer.ts`; credits-only and expired windows do not act. Manual resume suppresses repause across currently qualifying window episodes; a new reset boundary or below-threshold reading re-arms the policy, but never automatically resumes an account. A timed-out in-flight save remains pending until its eventual success or failure; queued work is cancelled at owner close. An unsuccessful save does not survive restart. The default alert is log-and-API only and records `logged`, not notification delivery.
+`codexPool.lowQuotaProtection` is opt-in, requires a 1–100 threshold and a selected action/window when enabled, covers pool accounts only and is independent of proactive switching and the main account’s per-window hard lock (`codexMainAccountHardLockThresholds`, short/long integers 80–100 defaulting to 90/98, owned by [OpenAI accounts](providers/openai-accounts.md)). `src/codex/low-quota-protection.ts` pauses in live `pausedCodexAccountIds` before selection, then coalesces a deferred config save with bounded retry and shutdown flush. Fresh accepted observations reach `src/codex/low-quota-observer.ts`; credits-only and expired windows do not act. Manual resume suppresses repause across currently qualifying window episodes; a new reset boundary or below-threshold reading re-arms the policy, but never automatically resumes an account. A timed-out in-flight save remains pending until its eventual success or failure; queued work is cancelled at owner close. An unsuccessful save does not survive restart. The default alert is log-and-API only and records `logged`, not notification delivery.
 
 ## Management-backed CLI commands need a management plane
 
@@ -597,4 +597,4 @@ so wrong types and unknown nested fields are rejected rather than silently saved
 `apiSurfaces` and `protocols` on `src/types/config.ts` are parsed by `src/protocols/settings.ts` only; [Protocol Paths](data-planes/protocol-paths.md#settings) owns their schema handling, meaning and the one writer (`PATCH /api/protocols/settings`), including why closing Messages also writes `claudeCode.enabled` through `commitClaudeCodeBlock` (`src/claude/claude-code-block.ts`, the sentinel-stamping block writer every management route uses).
 
 Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
-Proxy activation and credential-safe CLI output follow [Proxy Configuration](config-proxy.md).
+Proxy activation and credential-safe CLI output follow [Proxy Configuration](config-proxy.md). The experimental `chatgptDesktop` leaf accepts only optional boolean `appServerShim`, default off. Malformed reads disable this leaf; live writes reject malformed values and unknown keys. Its activation and local executable boundary follow [ChatGPT Desktop](clients/chatgpt-desktop.md).

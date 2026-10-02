@@ -9,6 +9,7 @@ import Grok from "./Grok";
 import CursorIntegrationPage from "./integrations/CursorIntegrationPage";
 import IntegrationsOverview from "./integrations/IntegrationsOverview";
 import AsideProfilesPage from "./integrations/AsideProfilesPage";
+import LazyCodexRoleModels from "./integrations/LazyCodexRoleModels";
 import FileIntegrationPage, {
   type FileIntegrationClientId,
 } from "./integrations/FileIntegrationPage";
@@ -192,6 +193,7 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
                 >
                   {t("integrations.codex.openService")}
                 </button>
+                <LazyCodexRoleModels apiBase={apiBase} active={active} />
               </section>
             )}
             {definition.id === "claude" && <Claude apiBase={apiBase} active={active} />}

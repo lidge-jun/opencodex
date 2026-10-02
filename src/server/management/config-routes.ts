@@ -1,3 +1,7 @@
+import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { resolveMainAccountHardLockThresholds } from "../../codex/main-account-hard-lock";
+import { getMainAccountExternalUsageWarning } from "../../codex/main-account-external-usage";
+import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
 import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
@@ -363,7 +367,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means on by default: the GUI renders a switch enabled unless explicit false.
       fastRows: config.fastRows !== false,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
-      mainAccountHardLock: getMainAccountHardLockStatus(config),
+      mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
+        externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
@@ -467,6 +472,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ultraFastTier?: unknown;
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
+      codexMainAccountHardLockThresholds?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
@@ -483,12 +489,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.ultraFastTier === undefined
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
+      && body.codexMainAccountHardLockThresholds === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined
       && body.compactionRecovery === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -514,6 +521,24 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexMainAccountHardLock !== undefined && typeof body.codexMainAccountHardLock !== "boolean") {
       return jsonResponse({ error: "codexMainAccountHardLock boolean is required" }, 400);
+    }
+    let hardLockThresholds: OcxConfig["codexMainAccountHardLockThresholds"];
+    if (body.codexMainAccountHardLockThresholds !== undefined) {
+      const value = body.codexMainAccountHardLockThresholds;
+      if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).length === 0
+        || Object.keys(value).some(key => key !== "short" && key !== "long")
+        || Object.values(value).some(percent => typeof percent !== "number" || !Number.isInteger(percent)
+          || percent < MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT || percent > 100)) {
+        return jsonResponse({ error: "codexMainAccountHardLockThresholds requires integer short/long percentages from 80 to 100" }, 400);
+      }
+      // A partial body updates one window and keeps the other stored value.
+      hardLockThresholds = { ...config.codexMainAccountHardLockThresholds,
+        ...(value as NonNullable<OcxConfig["codexMainAccountHardLockThresholds"]>) };
+      const defaults = resolveMainAccountHardLockThresholds(undefined);
+      if ((hardLockThresholds.short ?? defaults.short) > (hardLockThresholds.long ?? defaults.long)) {
+        return jsonResponse({ error: "codexMainAccountHardLockThresholds short must not exceed long" }, 400);
+      }
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
@@ -586,6 +611,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
       fastRows: config.fastRows,
       hasFastRows: Object.hasOwn(config, "fastRows"),
+      codexMainAccountHardLockThresholds: config.codexMainAccountHardLockThresholds,
+      hasCodexMainAccountHardLockThresholds: Object.hasOwn(config, "codexMainAccountHardLockThresholds"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
@@ -630,6 +657,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.fastRows === true) deleteConfigTopLevelKey(config, "fastRows");
       // Inverted from the pair above because the default is on (#5694): off is the persisted
       // decision, so it writes `false`, while on deletes the key and returns to the default.
+      if (hardLockThresholds !== undefined) config.codexMainAccountHardLockThresholds = { ...hardLockThresholds };
       if (body.codexMainAccountHardLock === false) config.codexMainAccountHardLock = false;
       else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
@@ -684,6 +712,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasFastRows) {
         config.fastRows = previousSettings.fastRows;
       } else deleteConfigTopLevelKey(config, "fastRows");
+      if (previousSettings.hasCodexMainAccountHardLockThresholds) {
+        config.codexMainAccountHardLockThresholds = previousSettings.codexMainAccountHardLockThresholds;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountHardLockThresholds");
       if (previousSettings.hasCodexMainAccountHardLock) {
         config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
       } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
@@ -752,7 +783,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // phases as "Off" while the server kept them.
       memoryModels: config.memoryModels ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
-      mainAccountHardLock: getMainAccountHardLockStatus(config),
+      mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
+        externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       startupHealth: await readStartupHealthSnapshot(config),
     });
   }

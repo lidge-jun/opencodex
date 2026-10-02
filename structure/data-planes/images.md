@@ -16,6 +16,44 @@ Codex Spark exception; standalone Images retain the separate relay contract belo
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
+## Hosted Responses image display
+
+For loopback-admitted Codex Responses clients,
+`src/server/responses-hosted-image-display.ts` projects hosted `image_generation_call`
+results into assistant messages with `phase: final_answer` and Markdown links to local
+artifacts. The final phase keeps the image outside collapsible progress output.
+`src/server/responses/passthrough-delivery.ts` applies this projection after continuation
+observers, on the client branch only, for SSE, JSON and JSON synthesized into SSE.
+The SSE projection emits consistent message lifecycle events and terminal snapshots,
+suppresses replaced hosted-image progress frames, and adjusts numeric sequence numbers
+for inserted or removed events, identically in both relay shapes.
+Hosted items in the continuation cache retain their upstream representation; other
+client rewrites keep their existing cache policy. Generic, remotely admitted and non-Responses
+clients do not receive this filesystem projection. Individual image item events without
+a string item id or a valid non-negative integer output index pass through without
+allocating display state, so unidentified items cannot collide at a synthetic index.
+
+Full-history assistant messages can replay the display Markdown without their generated
+item ids. At Responses request preparation and at the remote compaction handler
+(`src/server/responses/compact.ts`), exact generated links become opaque artifact HTTP
+references before routing, helper dispatch and the upstream compact request. A link
+matches when its target, as a plain path or `file://` URL with either separator and dot
+segments resolved, names an `img-codex-<uuid>` image directly inside the current
+artifact directory; on macOS and Windows the comparison also ignores letter case. This
+does not read files and still applies after artifact pruning; unrelated paths, nested
+directories, user messages and tool payloads retain their original content. Local display
+uses filesystem links because remote Markdown media has a separate client safety gate;
+HTTP references here are for upstream context, not a claim of desktop HTTP rendering.
+
+Image data must pass the shared base64, format and byte-budget checks in
+`src/images/artifacts.ts`. Files use random names, exclusive creation and mode 0600;
+the artifact directory uses mode 0700 on creation. Per-response display state is capped
+at 128 image items, with the existing 50 MiB per-image and 100 MiB aggregate decoded
+limits. Exceeding the item cap returns HTTP 502 before streaming or a failed SSE
+terminal after streaming has started. Retention runs after the batch. Failed or invalid results produce a bounded
+display message without reflecting payloads or filesystem errors. URL results and
+partial-image previews are not downloaded or rendered by this projection.
+
 ## Standalone Images
 
 Codex's local `image_gen.imagegen` tool makes a second Images request after the model calls it:

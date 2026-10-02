@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getMainAccountHardLockStatus, isMainAccountHardLocked } from "../../src/codex/main-account-hard-lock";
+import { getMainAccountHardLockStatus, isMainAccountHardLocked, type MainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -35,18 +35,24 @@ function observe(quota: Omit<StoredAccountQuota, "updatedAt">): void {
   setAccountQuotaFromParsed("__main__", quota, undefined, writer);
 }
 
+/** Exact status contract (absent resetAt included); `window` is covered by the thresholds suite. */
+function expectPolicy(actual: MainAccountHardLockStatus, expected: Omit<MainAccountHardLockStatus, "thresholds">): void {
+  const rest: Partial<MainAccountHardLockStatus> = { ...actual };
+  delete rest.window;
+  expect(rest).toEqual({ thresholds: { short: 90, long: 98 }, ...expected });
+}
+
 describe("identity-bound main-account hard-lock policy", () => {
   test("an explicit opt-out preserves admission even at 100", () => {
     observe({ weeklyPercent: 100 });
     // The key is default-on since #5694: absent means enabled, only `false` opts out.
-    expect(getMainAccountHardLockStatus({}, now)).toEqual({ enabled: true, state: "blocked" });
+    expectPolicy(getMainAccountHardLockStatus({}, now), { enabled: true, state: "blocked" });
     expect(isMainAccountHardLocked({ codexMainAccountHardLock: false }, now)).toBe(false);
-    expect(getMainAccountHardLockStatus({ codexMainAccountHardLock: false }, now))
-      .toEqual({ enabled: false, state: "off" });
+    expectPolicy(getMainAccountHardLockStatus({ codexMainAccountHardLock: false }, now), { enabled: false, state: "off" });
   });
 
   test("unknown is not a fabricated empty or exhausted quota", () => {
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "unknown" });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "unknown" });
     setAccountQuotaFromParsed("__main__", { weeklyPercent: 100 });
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe("unknown");
   });
@@ -63,14 +69,14 @@ describe("identity-bound main-account hard-lock policy", () => {
 
   test("reset times accept seconds and milliseconds but recovery requires fresh evidence", () => {
     observe({ weeklyPercent: 99, weeklyResetAt: (now + 60_000) / 1000, shortPercent: 100, shortResetAt: now + 120_000 });
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked", resetAt: now + 120_000 });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "blocked", resetAt: now + 120_000 });
     expect(getMainAccountHardLockStatus(enabled, now + 60_000).state).toBe("blocked");
-    expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "blocked" });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now + 120_000), { enabled: true, state: "blocked" });
     observe({ shortPercent: 0 });
     // Weekly99 still blocks on its own after the 5h window reads 0.
     expect(getMainAccountHardLockStatus(enabled, now + 120_000).state).toBe("blocked");
     observe({ weeklyPercent: 0 });
-    expect(getMainAccountHardLockStatus(enabled, now + 120_000)).toEqual({ enabled: true, state: "ready" });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now + 120_000), { enabled: true, state: "ready" });
   });
 
   test.each([
@@ -110,7 +116,7 @@ describe("identity-bound main-account hard-lock policy", () => {
 
   test("one missing reset prevents a false scheduled-unlock promise", () => {
     observe({ weeklyPercent: 99, monthlyPercent: 99, monthlyResetAt: now + 60_000 });
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked" });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "blocked" });
     expect(isMainAccountHardLocked(enabled, now + 24 * 60 * 60_000)).toBe(true);
   });
 
@@ -118,7 +124,7 @@ describe("identity-bound main-account hard-lock policy", () => {
     observe({ [field]: 98 });
     expect(isMainAccountHardLocked(enabled, now)).toBe(true);
     observe({ [field]: 0 });
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "ready" });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "ready" });
     observe({ [field]: 98 });
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
   });
@@ -128,7 +134,7 @@ describe("identity-bound main-account hard-lock policy", () => {
     { shortPercent: 99, weeklyPercent: 20, state: "blocked" },
     { shortPercent: 97, weeklyPercent: 98, state: "blocked" },
     { shortPercent: 20, weeklyPercent: 100, state: "blocked" },
-    { shortPercent: 97, weeklyPercent: 97.99, state: "ready" },
+    { shortPercent: 89.99, weeklyPercent: 97.99, state: "ready" },
   ])("5h $shortPercent / weekly $weeklyPercent is $state: either window at 98 blocks alone", ({ state, ...usage }) => {
     observe({ ...usage, shortWindowSeconds: 18_000 });
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe(state);
@@ -136,7 +142,7 @@ describe("identity-bound main-account hard-lock policy", () => {
 
   test("the lock holds until every blocking window reads lower", () => {
     observe({ shortPercent: 99, shortWindowSeconds: 18_000, shortResetAt: now / 1000, weeklyPercent: 100 });
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked" });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "blocked" });
     observe({ shortPercent: 0 });
     expect(getMainAccountHardLockStatus(enabled, now).state).toBe("blocked");
     observe({ weeklyPercent: 97 });
@@ -147,9 +153,9 @@ describe("identity-bound main-account hard-lock policy", () => {
 
   test("a blocked status reports the latest reset among the blocking windows only", () => {
     observe({ shortPercent: 99, shortResetAt: now + 60_000, weeklyPercent: 98, weeklyResetAt: now + 600_000 });
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked", resetAt: now + 600_000 });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "blocked", resetAt: now + 600_000 });
     observe({ shortPercent: 99, shortResetAt: now + 60_000, weeklyPercent: 40, weeklyResetAt: now + 600_000 });
-    expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked", resetAt: now + 60_000 });
+    expectPolicy(getMainAccountHardLockStatus(enabled, now), { enabled: true, state: "blocked", resetAt: now + 60_000 });
   });
 
   test("an unknown 5h reading neither hides a weekly block nor blocks alone", () => {

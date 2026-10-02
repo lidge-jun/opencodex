@@ -1,3 +1,4 @@
+import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
 import type { PoolQuotaWriter } from "./quota-types";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -69,7 +70,7 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { extractAccountId, extractEmail } from "../oauth/chatgpt";
 import {
-  MAIN_ACCOUNT_HARD_LOCK_PERCENT,
+  resolveMainAccountHardLockThresholds,
   getMainAccountHardLockStatus,
   isMainAccountHardLockEnabled,
   isMainAccountHardLocked,
@@ -510,11 +511,11 @@ export class CodexAccountCooldownError extends Error {
 export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
   readonly resetAt?: number;
 
-  constructor(resetAt?: number) {
+  constructor(resetAt?: number, thresholds = resolveMainAccountHardLockThresholds(undefined)) {
     super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
     this.name = "CodexMainAccountHardLockError";
     this.resetAt = resetAt;
-    this.message = `Codex main account is blocked by the ${MAIN_ACCOUNT_HARD_LOCK_PERCENT}% main-account quota policy.`
+    this.message = `Codex main account is blocked by the main-account quota policy (5h ≥ ${thresholds.short}%, weekly ≥ ${thresholds.long}%).`
       + " Choose another account, wait for quota to reset, or disable codexMainAccountHardLock in Settings.";
   }
 }
@@ -577,7 +578,7 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 }
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
-  "codexMainAccountHardLock" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
+  "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
 >>;
 
 interface CodexAuthMaterializationOptions {
@@ -700,10 +701,14 @@ export function unwrapUpstreamRetryEvidenceError(error: unknown): unknown {
   return error;
 }
 
-function assertMainAccountPolicy(config: Pick<OcxConfig, "codexMainAccountHardLock"> | undefined): void {
-  if (!config) return;
-  const status = getMainAccountHardLockStatus(config);
-  if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt);
+function assertMainAccountPolicy(config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds"> | undefined): void {
+  if (config) {
+    const status = getMainAccountHardLockStatus(config);
+    if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
+  }
+  // Only an admitted request is opencodex's own use of the main account. Counting a refused one
+  // would hide outside usage from the warning exactly while the lock is holding.
+  noteMainAccountActivity();
 }
 
 /** No auth-file I/O: an unsigned claim alone never identifies a caller as stored main. */

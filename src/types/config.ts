@@ -495,6 +495,8 @@ export interface OcxClientConnectionConfig {
 }
 
 export interface OcxConfig {
+  /** Experimental macOS app-server stdout shim; absent or false disables it. */
+  chatgptDesktop?: { appServerShim?: boolean };
   port: number;
   /** Runtime topology role. Absence preserves the historical standalone behavior. */
   runtimeRole?: OcxRuntimeRole;
@@ -576,13 +578,15 @@ export interface OcxConfig {
    */
   ultraFastTier?: boolean;
   /**
-   * Stop new identity-matched main-account requests at observed 98% usage (#5694).
+   * Stop new identity-matched main-account requests at configured window usage (#5694).
    *
    * On by default: an absent key and `true` both enable it, and only an explicit `false`
    * opts out. While it blocks, the main account's Luna Reserve cannot activate, so an operator
    * who wants Reserve has to turn the setting off rather than delete the key.
    */
   codexMainAccountHardLock?: boolean;
+  /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
+  codexMainAccountHardLockThresholds?: { short?: number; long?: number };
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -651,6 +655,11 @@ export interface OcxConfig {
    * reject the whole role file as an unknown field (#1190).
    */
   subagentModelFallbackByModel?: Record<string, string[]>;
+  /**
+   * Capability tier of named models for Codex role auto-assign, overriding its price-rank
+   * classification. Models no list names and no price covers are never proposed.
+   */
+  codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
   /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
@@ -1344,6 +1353,21 @@ export interface OcxComboConfig {
   nativeAlias?: boolean;
   /** Display-only label for the public catalog row. Required for native aliases. */
   displayName?: string;
+  /**
+   * `strategy: "jev"` only: provider id of the decision service. Omitted or `"jev"` uses the
+   * canonical TypeSafe endpoint; any other id must name a configured `adapter: "jev-decision"`
+   * row, such as a self-hosted Ollama `tev1` endpoint. That row's baseUrl is the full decision
+   * endpoint and only its own apiKey is sent there.
+   */
+  decisionProvider?: string | null;
+  /** JEV only: an ordinary model route for decisions; null explicitly clears management input. */
+  decisionModel?: string | null;
+  /**
+   * `strategy: "jev"` only: decision deadline in milliseconds before failing open to the first
+   * eligible target. Default 4000; range 1000..120000. Raise it for a self-hosted decision model
+   * whose first call may include a cold model load.
+   */
+  decisionTimeoutMs?: number;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";

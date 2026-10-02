@@ -58,6 +58,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.responsesEndpoint",
   // Provider proper nouns (Taiwan keeps the English brand; "火山方舟" is Mainland usage)
   "provider.name.volcengine",
+  // JEV decision method named after the TypeSafe product.
+  "cws.jev.backend.typesafe",
   // A literal filename, not prose: AGENTS.md is the file Codex reads from the
   // working directory, and Taiwan renders it the same way every other locale does.
   "codexSet.layer.agents-md",

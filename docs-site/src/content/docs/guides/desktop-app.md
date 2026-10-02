@@ -59,6 +59,11 @@ it from the tray or launch the app again.
 Use the tray's **Open dashboard** or **Open in browser** action to move between the
 embedded dashboard and your normal browser. The tray also provides update checks.
 
+On Windows, approving **Take over** allows up to 90 seconds of startup work for the existing
+runtime to stop safely, ownership to transfer, and the bundled runtime to start. Time spent
+deciding at the prompt does not count toward this limit. Keep the app open while it finishes;
+if it fails, use **Retry** to resolve the current runtime again.
+
 On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
 
 ## Startup safety on macOS

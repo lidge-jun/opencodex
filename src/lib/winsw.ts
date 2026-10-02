@@ -179,8 +179,16 @@ export async function ensureWinswBinary(fetchImpl: typeof fetch = fetch): Promis
   return exe;
 }
 
+/** SCM round-trips are sub-second on a healthy system; a wedged service controller must not block a guarded stop forever — a killed command still classifies fail-closed. */
+const SERVICE_COMMAND_TIMEOUT_MS = 15_000;
+/** `stopwait` outlasts the SCM `<stoptimeout>` (20s in the generated service definition) plus overhead; still bounded so a wedged SCM cannot hang the CLI. */
+const SERVICE_STOPWAIT_TIMEOUT_MS = 40_000;
+
 function runWinsw(args: string[]): string {
-  return execFileSync(winswExePath(), args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+  const timeoutMs = args[0] === "stopwait" ? SERVICE_STOPWAIT_TIMEOUT_MS : SERVICE_COMMAND_TIMEOUT_MS;
+  return execFileSync(winswExePath(), args, {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: timeoutMs,
+  }).trim();
 }
 
 /** `install /p` prompts for the service-account password on the console — stdin must be inherited. */
@@ -191,13 +199,14 @@ function runWinswInteractive(args: string[]): void {
         + "Run `ocx service install --native` from an elevated Command Prompt or PowerShell window, not a hidden or piped session.",
     );
   }
+  // Unbounded by design: the service-account password prompt waits on the user.
   execFileSync(winswExePath(), args, { stdio: "inherit" });
 }
 
 function scQc(): string {
   const sc = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "sc.exe");
   return execFileSync(existsSync(sc) ? sc : "sc.exe", ["qc", WINSW_SERVICE_ID], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -269,7 +278,7 @@ function scExePath(): string {
 
 function queryScmForService(): string {
   return execFileSync(scExePath(), ["query", WINSW_SERVICE_ID], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -370,9 +379,9 @@ export function uninstallWinswService(): void {
       }
       if (probe === true) {
         try {
-          execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+          execFileSync(scExePath(), ["stop", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS });
         } catch { /* not running */ }
-        execFileSync(scExePath(), ["delete", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+        execFileSync(scExePath(), ["delete", WINSW_SERVICE_ID], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: SERVICE_COMMAND_TIMEOUT_MS });
       }
     }
     return;

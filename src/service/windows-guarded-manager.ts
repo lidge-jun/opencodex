@@ -59,6 +59,13 @@ export interface WindowsGuardedManagerDeps {
   winProcs?: () => WindowsProcessEntry[] | null;
   winTaskXml?: () => string;
   winTaskState?: () => WindowsTaskState;
+  /**
+   * Presence re-probe, invoked only on the failure paths that cannot tell a
+   * DELETED registration from an unreadable one. Absence is the one answer
+   * that changes the verdict — a registration that is gone can respawn
+   * nothing; "present" and "unknown" both stay unknown.
+   */
+  winTaskProbe?: () => WindowsSchedulerTaskProbe;
   winService?: () => WindowsWinswServiceInfo | null;
   winRegistrationOurs?: (xml: string, expectedUserIds: readonly string[] | null) => boolean;
   winTaskUserIds?: () => readonly string[] | null;
@@ -122,6 +129,18 @@ export function windowsProcessList(): WindowsProcessEntry[] | null {
 }
 
 /**
+ * The PowerShell behind windowsScheduledTaskState — exported so the folder scope
+ * is reviewable. `-TaskName` alone is a folder-AGNOSTIC name filter: a same-named
+ * task in any folder answers the query (and several answers leave `.State` an
+ * array that reads as "unknown"), while every `/tn` operation the caller runs is
+ * root-folder scoped. `-TaskPath '\'` pins the read to the root registration.
+ */
+export function windowsScheduledTaskStateQuery(taskName: string): string {
+  return "(Get-ScheduledTask -TaskName '" + taskName.replace(/'/g, "''")
+    + "' -TaskPath '\\' -ErrorAction Stop).State";
+}
+
+/**
  * The registered task's RUNNING state, read through Get-ScheduledTask whose State
  * values are enum names and therefore locale-independent — parsing schtasks table
  * output was rejected earlier because its values are localized.
@@ -129,9 +148,7 @@ export function windowsProcessList(): WindowsProcessEntry[] | null {
 export function windowsScheduledTaskState(taskName = TASK): WindowsTaskState {
   if (process.platform !== "win32") return "unknown";
   try {
-    const output = runPowerShell(
-      "(Get-ScheduledTask -TaskName '" + taskName.replace(/'/g, "''") + "' -ErrorAction Stop).State",
-    ).trim();
+    const output = runPowerShell(windowsScheduledTaskStateQuery(taskName)).trim();
     if (/^running$/i.test(output)) return "running";
     if (/^(ready|disabled)$/i.test(output)) return "not-running";
     return "unknown";
@@ -229,6 +246,9 @@ function resolveWindowsDeps(deps: WindowsGuardedManagerDeps, live: boolean): Res
       throw new Error("Windows task query is unavailable in this context");
     }),
     winTaskState: deps.winTaskState ?? (live ? () => windowsScheduledTaskState() : () => "unknown"),
+    winTaskProbe: deps.winTaskProbe ?? (live
+      ? () => probeWindowsSchedulerTask()
+      : () => ({ status: "unknown", detail: "the Task Scheduler probe is unavailable in this context" })),
     winService: deps.winService ?? (live ? () => windowsWinswServiceInfo() : () => null),
     winRegistrationOurs: deps.winRegistrationOurs ?? ((xml, expectedUserIds) =>
       windowsTaskRegistrationIsOurs(xml, expectedUserIds, (deps.winLauncherPath ?? windowsLauncherVbsPath)())),
@@ -367,12 +387,6 @@ function inspectWindowsSchedulerManager(
   approvedPid: number,
   io: ResolvedWindowsDeps,
 ): GuardedManagerTarget {
-  let xml: string;
-  try {
-    xml = io.winTaskXml();
-  } catch {
-    return unknown("the Task Scheduler registration could not be read");
-  }
   const processes = io.winProcs();
   if (processes === null) return unknown("the Windows process list could not be read");
   const paths = wrapperPaths(io);
@@ -381,16 +395,34 @@ function inspectWindowsSchedulerManager(
   if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
     return unknown("a possible scheduler wrapper has an unreadable command line");
   }
+  // A registration that cannot run anything owes only the stray-wrapper check.
+  // That covers BOTH a not-running task and a task proven deleted between the
+  // caller's presence probe and this inspection: in either case nothing
+  // registered can respawn the proxy, while a surviving wrapper still can —
+  // schtasks /end would report success on the inert task and leave it alive.
+  const inertVerdict = (): GuardedManagerTarget => strays.length === 0
+    ? { kind: "absent" }
+    : unknown("a surviving scheduler wrapper could not be tied to the registered task");
   const state = io.winTaskState();
-  if (state === "unknown") return unknown("the registered task's running state could not be proven");
-  if (state === "not-running") {
-    // A task with no running instance owes nothing ONLY when no wrapper survives.
-    // A live wrapper outside a task instance — whether it parents the approved
-    // PID or not — is unaccounted supervision: schtasks /end would report success
-    // on the inert task while the wrapper stayed alive to respawn the proxy.
-    return strays.length === 0
-      ? { kind: "absent" }
-      : unknown("a surviving scheduler wrapper could not be tied to the registered task");
+  if (state === "unknown") {
+    // Missing vs unreadable: the state query also fails for a task deleted
+    // between probes. A re-probe that proves absence is the inert verdict; a
+    // registration that persists or stays unanswerable keeps failing closed.
+    return io.winTaskProbe().status === "absent"
+      ? inertVerdict()
+      : unknown("the registered task's running state could not be proven");
+  }
+  if (state === "not-running") return inertVerdict();
+  // Only the running path needs the registered definition: an unreadable
+  // registration cannot prove the task is ours, but it must not hold an
+  // otherwise-provable inert verdict unknown.
+  let xml: string;
+  try {
+    xml = io.winTaskXml();
+  } catch {
+    return io.winTaskProbe().status === "absent"
+      ? inertVerdict()
+      : unknown("the Task Scheduler registration could not be read");
   }
   if (!io.winRegistrationOurs(xml, io.winTaskUserIds())) {
     return unknown("the registered task is not a recognized OpenCodex definition");
@@ -520,8 +552,17 @@ export function observeWindowsGuardedManagerStopped(
   if (native === "started") return "active";
   if (scheduler.status === "present") {
     const state = (deps.winTaskState ?? (live ? () => windowsScheduledTaskState() : () => "unknown"))();
-    if (state === "unknown") return "unknown";
     if (state === "running") return "active";
+    if (state === "unknown") {
+      // The state read also fails for a task deleted between the presence probe
+      // and this observation. A registration that is GONE cannot respawn
+      // anything, so re-probe before failing closed — only a persisting or
+      // unanswerable task stays unknown. Proven absence still owes the
+      // unreadable-former-manager check below.
+      if ((deps.scheduler ?? probeWindowsSchedulerTask)().status !== "absent") {
+        return "unknown";
+      }
+    }
   }
   if (deps.formerManagerPid !== undefined && unreadableWrappersOfManager(deps.formerManagerPid, procs).length > 0) {
     return "unknown";

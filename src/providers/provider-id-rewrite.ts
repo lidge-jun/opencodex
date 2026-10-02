@@ -19,8 +19,8 @@ export interface ProviderRewriteResult {
  * Re-point every config reference from one provider id to another.
  *
  * Three shapes exist and the difference matters: routed model strings
- * (`"<provider>/<model>"`), bare provider ids (`customModels[].provider`,
- * `combos[*].targets[].provider`, `routingProfiles[*].candidates[].provider`),
+ * (`"<provider>/<model>"`, including `combos[*].decisionModel`), bare provider ids (`customModels[].provider`,
+ * `combos[*].targets[].provider`, `combos[*].decisionProvider`, `routingProfiles[*].candidates[].provider`),
  * and keys that ARE provider ids or routes (`providerContextCaps`,
  * `claudeCode.desktopProfile.assignments`). A rewrite that handles only the
  * first leaves an orphaned context cap and — worse — a combo target or routing
@@ -106,11 +106,18 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
     }
   }
   for (const combo of Object.values(config.combos ?? {})) {
+    const decisionModel = route(typeof combo.decisionModel === "string" ? combo.decisionModel.trim() : combo.decisionModel);
+    if (decisionModel) combo.decisionModel = decisionModel;
     for (const target of combo.targets ?? []) {
       if (target.provider === from) {
         target.provider = to;
         changed += 1;
       }
+    }
+    // A JEV Combo's decision service is validated against configured providers too.
+    if (typeof combo.decisionProvider === "string" && combo.decisionProvider.trim() === from) {
+      combo.decisionProvider = to;
+      changed += 1;
     }
   }
 

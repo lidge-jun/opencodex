@@ -28,6 +28,11 @@ for the exact model and recovery scope.
 
 ## Claude OAuth account pool (experimental)
 
+Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
+response headers on streaming, JSON and upstream-error responses, so compatible Claude Code
+statusLine consumers can read the provider's quota observations. Missing observations are
+not filled with invented values. This relay does not change account selection or retry behavior.
+
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
 add-account). By default every request uses the **active** account only.
 
@@ -198,7 +203,7 @@ working. OpenCodex only writes two variables into the `env` block of `~/.claude/
 }
 ```
 
-Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels.
+Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 
 :::note[Windows system proxy (Clash, v2rayN, corporate proxies)]
 When a Windows system proxy is on, Claude Desktop hands it to the Code tab as `HTTPS_PROXY`, and
@@ -295,9 +300,10 @@ Turn on the CLI switch in Claude → Code, or run `ocx claude config set --first
 Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
 The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged until restart; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. Only when interception is eligible does stopped advise starting opencodex and broken advise `ocx ensure` or restart. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
-- Model discovery (`/model` → "From gateway") is not available; Claude Code only queries
-  `GET /v1/models` on a configured gateway. Bind a built-in Anthropic model id to a route
-  (`ocx claude desktop bind`, above), use `modelMap`, or type an alias directly.
+- Gateway discovery (`/model` → "From gateway") is not used, because Claude Code only queries
+  `GET /v1/models` on a configured gateway. Routed models reach the picker another way; see
+  [Model picker in the CLI](#model-picker-in-the-cli). You can also bind a built-in Anthropic
+  model id to a route (`ocx claude desktop bind`, above) or use `modelMap`.
 - `ANTHROPIC_SMALL_FAST_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` are chosen by the CLI before the
   request is sent; set them in `settings.json` yourself if a sidecar or subagent should use a
   mapped id.
@@ -306,6 +312,23 @@ The UI distinguishes uncertainty about whether settings still point at its proxy
   process reaches OpenCodex directly and the proxy simply sees no traffic from it.
 - Claude Code honours `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` as documented for corporate proxies;
   a CLI release that stops doing so would stop routing, not break login.
+
+#### Model picker in the CLI
+
+With the CLI first-party switch on and Claude routing enabled, start a new `claude` and open
+`/model`. Your opencodex models appear next to the Claude models from your account, labelled
+like "Grok 4.7 (xai)" and described with their route (`opencodex · xai/grok-4.7`). Picking one
+routes that session to the model, just like a binding.
+
+- Only new `claude` sessions pick up the list. Restart any session that was already running when
+  you turned the switch on or off.
+- Claude Code saves the list for about an hour. Turning the switch on or off, and `ocx ensure`,
+  clear that saved copy, so the next `claude` launch fetches a fresh one. If the routed models
+  are missing (the first launch after OpenCodex starts can miss them while models are still being
+  discovered), run `ocx ensure` and restart `claude`.
+- The rows use Claude-style ids (for example `claude-opus-4-8-…`), because the CLI only offers
+  ids shaped like Claude models. Claude Desktop's Code tab is unaffected; it keeps using
+  [first-party bindings](#use-opencodex-models-from-the-desktop-code-tab-first-party-bindings).
 
 ## Claude Desktop profile (gateway mode)
 

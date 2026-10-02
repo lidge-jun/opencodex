@@ -135,6 +135,71 @@ describe("windows guarded manager target", () => {
     expect(target).toEqual({ kind: "absent" });
   });
 
+  test("an unreadable registration does not block the absent verdict for an inert task", () => {
+    // The XML belongs to the running path: a not-running task owes only the
+    // stray-wrapper check, so a registration read that fails (ACL, torn publish,
+    // localized /xml) must not hold the takeover unknown forever.
+    let xmlReads = 0;
+    const target = inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: {
+        winTaskState: () => "not-running" as const,
+        winProcs: () => [proc(2, 0, "svchost.exe"), proc(42, 2, "bun start")],
+        winTaskXml: () => { xmlReads++; throw new Error("denied"); },
+      },
+    }));
+    expect(target).toEqual({ kind: "absent" });
+    expect(xmlReads).toBe(0);
+  });
+
+  test("a task deleted between probes reads absent instead of unknown", () => {
+    // Missing vs unreadable: the state query cannot answer for a task that no
+    // longer exists. A re-probe that proves absence means nothing registered
+    // can respawn — the surviving-wrapper check alone decides.
+    const target = inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: {
+        winTaskState: () => "unknown" as const,
+        winTaskProbe: () => schedulerAbsent(),
+        winProcs: () => [proc(2, 0, "svchost.exe"), proc(42, 2, "bun start")],
+      },
+    }));
+    expect(target).toEqual({ kind: "absent" });
+  });
+
+  test("a deleted task with a surviving wrapper still stays unknown", () => {
+    const target = inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: {
+        winTaskState: () => "unknown" as const,
+        winTaskProbe: () => schedulerAbsent(),
+        winProcs: () => SUPERVISED,
+      },
+    }));
+    expect(target.kind).toBe("unknown");
+  });
+
+  test("an unprovable state for a persisting task stays unknown", () => {
+    for (const winTaskProbe of [schedulerPresent, schedulerUnknown]) {
+      const target = inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+        win: {
+          winTaskState: () => "unknown" as const,
+          winTaskProbe,
+          winProcs: () => [proc(2, 0, "svchost.exe")],
+        },
+      }));
+      expect(target.kind).toBe("unknown");
+    }
+  });
+
+  test("a torn XML read on a deleted task still resolves absent when clean", () => {
+    const target = inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: {
+        winTaskXml: () => { throw new Error("file not found"); },
+        winTaskProbe: () => schedulerAbsent(),
+        winProcs: () => [proc(2, 0, "svchost.exe")],
+      },
+    }));
+    expect(target).toEqual({ kind: "absent" });
+  });
+
   test("an unreadable wrapper in the approved proxy's ancestry blocks pre-stop absence and binding", () => {
     // proxy 42 <- wscript 20 whose command line CIM could not read <- svchost 2
     const unreadable = [proc(2, 0, "svchost.exe"), proc(20, 2, null, "wscript.exe"), proc(42, 20, "bun C:\\pkg\\src\\cli\\index.ts start")];
@@ -309,6 +374,40 @@ describe("windows post-stop manager observation", () => {
       winScriptPath: () => CMD,
       winLauncherPath: () => VBS,
     })).toBe("inactive");
+  });
+
+  test("a task deleted between the presence probe and the state read reports inactive", () => {
+    // A registration that is GONE cannot respawn anything — the unprovable
+    // state read must re-probe presence before failing closed, or a deleted
+    // task bricks every subsequent takeover with manager-still-active.
+    let probes = 0;
+    expect(observeWindowsGuardedManagerStopped({
+      scheduler: () => { probes++; return probes === 1 ? schedulerPresent() : schedulerAbsent(); },
+      winsw: winswAbsent,
+      winTaskState: () => "unknown",
+      winProcs: () => [proc(2, 0, "svchost.exe")],
+    })).toBe("inactive");
+    expect(probes).toBe(2);
+  });
+
+  test("a deleted task still owes the unreadable former-manager check", () => {
+    let probes = 0;
+    expect(observeWindowsGuardedManagerStopped({
+      scheduler: () => { probes++; return probes === 1 ? schedulerPresent() : schedulerAbsent(); },
+      winsw: winswAbsent,
+      winTaskState: () => "unknown",
+      winProcs: () => [proc(2, 0, "svchost.exe"), proc(20, 2, null, "wscript.exe")],
+      formerManagerPid: 20,
+    })).toBe("unknown");
+  });
+
+  test("an unprovable state on a persisting task stays unknown", () => {
+    expect(observeWindowsGuardedManagerStopped({
+      scheduler: schedulerPresent,
+      winsw: winswAbsent,
+      winTaskState: () => "unknown",
+      winProcs: () => [proc(2, 0, "svchost.exe")],
+    })).toBe("unknown");
   });
 
   test("a running task or surviving wrapper is still active", () => {

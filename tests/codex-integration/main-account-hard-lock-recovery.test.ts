@@ -681,7 +681,7 @@ describe("main hard-lock background recovery", () => {
     } }));
     await runMainAccountHardLockRecovery(config());
     expect(calls).toEqual([whamUrl]);
-    expect(getMainAccountHardLockStatus(config())).toEqual({ enabled: true, state: "ready" });
+    expect(getMainAccountHardLockStatus(config())).toMatchObject({ enabled: true, state: "ready" });
     expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
     expect(getMainPolicyQuota()?.weeklyPercent).toBe(35);
     expect(getNativeMainProfileRequestCount()).toBe(0);
@@ -692,7 +692,7 @@ describe("main hard-lock background recovery", () => {
     const calls = fetchWith(async () => usage(percent));
     const cfg = config();
     await fetchMainAccountInfo(true);
-    expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "blocked" });
+    expect(getMainAccountHardLockStatus(cfg)).toMatchObject({ enabled: true, state: "blocked" });
     percent = 0;
     let afterTick: (() => void) | undefined;
     const registration = spyOn(sweeper, "registerStateSweepAfterTick").mockImplementation(entry => {
@@ -707,7 +707,7 @@ describe("main hard-lock background recovery", () => {
       await runMainAccountHardLockRecovery(cfg);
       expect(timer).not.toHaveBeenCalled();
       expect(calls).toEqual([whamUrl, whamUrl]);
-      expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "ready" });
+      expect(getMainAccountHardLockStatus(cfg)).toMatchObject({ enabled: true, state: "ready" });
       expect(getNativeMainProfileRequestCount()).toBe(0);
     } finally {
       registration.mockRestore();
@@ -794,7 +794,7 @@ describe("main hard-lock background recovery", () => {
       expect(isAccountNeedsReauth(MAIN)).toBe(true);
       expect(calls).toEqual([tokenUrl]);
       expect(getMainPolicyQuota()).toEqual(retained);
-      expect(getMainAccountHardLockStatus(config())).toEqual({ enabled: true, state: "blocked" });
+      expect(getMainAccountHardLockStatus(config())).toMatchObject({ enabled: true, state: "blocked" });
       expect(getNativeMainProfileRequestCount()).toBe(0);
     } finally {
       response.resolve(Response.json(refreshed));
@@ -844,7 +844,7 @@ describe("main hard-lock background recovery", () => {
     expect(cooldown).not.toBeNull();
     fetchWith(async () => usage());
     await runMainAccountHardLockRecovery(cfg);
-    expect(getMainAccountHardLockStatus(cfg)).toEqual({ enabled: true, state: "ready" });
+    expect(getMainAccountHardLockStatus(cfg)).toMatchObject({ enabled: true, state: "ready" });
     expect(cfg.pausedCodexAccountIds).toEqual([MAIN]);
     expect(getCodexQuotaHealthSnapshot(MAIN, "shared", now)).toEqual(cooldown);
   });

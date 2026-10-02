@@ -13,6 +13,7 @@ import type { MainDeviceReauthState } from "./use-main-device-reauth";
 import { LoginHint } from "./login-url-block";
 import type { NoticeTone } from "../ui";
 import { navigateHash } from "../hash-routing";
+import { hardLockThresholds } from "../hooks/useCodexAccountPool";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -203,12 +204,13 @@ export function CodexAccountPoolMainCard({
       {policy?.enabled && (
         <div className={`codex-main-hard-lock-status${hardLocked ? " is-blocked" : ""}`}>
           <p role="status">{t(hardLocked ? "codexAuth.mainHardLockBlocked"
-            : policy.state === "ready" ? "codexAuth.mainHardLockMonitoring" : "codexAuth.mainHardLockUnknown")}</p>
+            : policy.state === "ready" ? "codexAuth.mainHardLockMonitoring" : "codexAuth.mainHardLockUnknown", hardLockThresholds(policy.thresholds))}</p>
           {onManageMainHardLock
             ? <button type="button" className="link-btn" onClick={onManageMainHardLock}>{t("codexAuth.mainHardLockManage")}</button>
             : <button type="button" className="link-btn" onClick={() => navigateHash("codex-set")}>{t("codexAuth.mainHardLockManage")}</button>}
         </div>
       )}
+      {policy?.externalUsage && <div className="codex-main-hard-lock-status is-blocked"><p role="status">{t("codexAuth.mainExternalUsageWarning")}</p></div>}
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}

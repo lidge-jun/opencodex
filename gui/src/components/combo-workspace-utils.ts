@@ -1,4 +1,36 @@
+import {
+  type ComboDraftError,
+  type ComboItem,
+  JEV_DECISION_ISSUE_LABEL_KEYS,
+  jevDecisionProviderIssue,
+} from "../combo-workspace-data";
+import type { TFn } from "../i18n/shared";
+import {
+  type JevDecisionRow,
+  JEV_DECISION_TIMEOUT_MAX_MS,
+  JEV_DECISION_TIMEOUT_MIN_MS,
+} from "../jev-decision-service";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
+
+/** Localized validation message, with the bounds or the decision-service reason filled in. */
+export function comboDraftErrorText(
+  t: TFn,
+  code: ComboDraftError,
+  draft: ComboItem,
+  providers: Readonly<Record<string, JevDecisionRow>>,
+): string {
+  if (code === "invalidDecisionTimeout") {
+    return t("cws.err.invalidDecisionTimeout", { min: JEV_DECISION_TIMEOUT_MIN_MS, max: JEV_DECISION_TIMEOUT_MAX_MS });
+  }
+  if (code === "invalidDecisionProvider") {
+    const issue = jevDecisionProviderIssue(draft.decisionProvider, providers) ?? "missing";
+    return t("cws.err.invalidDecisionProvider", {
+      name: draft.decisionProvider ?? "",
+      reason: t(JEV_DECISION_ISSUE_LABEL_KEYS[issue]),
+    });
+  }
+  return t(`cws.err.${code}`);
+}
 
 export function enabledProviders(providers: ProviderOption[]): ProviderOption[] {
   return providers

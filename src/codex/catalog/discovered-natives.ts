@@ -21,6 +21,7 @@ export const DISCOVERED_NATIVE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
  */
 export const DISCOVERED_NATIVE_RENEW_INTERVAL_MS = 60 * 60 * 1000;
 const FILE_NAME = "discovered-native-models.json";
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 export interface DiscoveredNativeModel {
   slug: string;
@@ -34,6 +35,13 @@ let loadedPath: string | undefined;
 let models: DiscoveredNativeModel[] = [];
 let fingerprint = "[]";
 let generation = 0;
+
+function containsLoneSurrogate(value: unknown): boolean {
+  if (typeof value === "string") return LONE_SURROGATE.test(value);
+  if (Array.isArray(value)) return value.some(containsLoneSurrogate);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).some(([key, child]) => LONE_SURROGATE.test(key) || containsLoneSurrogate(child));
+}
 
 /** Validate untrusted roster rows without filesystem effects; keep upstream capability metadata. */
 export function validateDiscoveredNativeRows(rows: unknown): Record<string, unknown>[] {
@@ -56,8 +64,10 @@ export function validateDiscoveredNativeRows(rows: unknown): Record<string, unkn
     try {
       const serialized = JSON.stringify(row);
       if (Buffer.byteLength(serialized, "utf8") > DISCOVERED_NATIVE_MAX_ROW_BYTES) continue;
+      const cloned = JSON.parse(serialized) as Record<string, unknown>;
+      if (containsLoneSurrogate(cloned)) continue;
       if (accepted.size >= DISCOVERED_NATIVE_MAX_ROWS && !accepted.has(row.slug)) continue;
-      accepted.set(row.slug, JSON.parse(serialized) as Record<string, unknown>);
+      accepted.set(row.slug, cloned);
     } catch { /* Cyclic/non-JSON rows cannot be persisted or sent to Codex. */ }
   }
   return [...accepted.values()];
