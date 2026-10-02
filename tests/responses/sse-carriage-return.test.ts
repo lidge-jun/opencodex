@@ -32,6 +32,41 @@ describe("SSE line ending compatibility", () => {
   test("preserves non-newline data immediately after a split CR", async () => {
     expect(await collect(["data: one\r", "data: two\r", "\r"])).toEqual([{ kind: "event", data: "one\ntwo" }]);
   });
+  test("counts a CRLF split between chunks as one line ending", async () => {
+    // A second line ending here would be a blank line and dispatch "a" and "b" as two events.
+    expect(await collect(["data: a\r", "\ndata: b\r\n\r\n"])).toEqual([{ kind: "event", data: "a\nb" }]);
+    expect(await collect(["data: a\r", "", "\ndata: b\r", "\n\r", "\n"])).toEqual([{ kind: "event", data: "a\nb" }]);
+  });
+  test("treats LF followed by CR as two line endings", async () => {
+    expect(await collect(["data: a\n\rdata: b\n\n"])).toEqual([{ kind: "event", data: "a" }, { kind: "event", data: "b" }]);
+  });
+  test.each(["\n", "\r", "\r\n"])("decodes many %j records from one chunk", async ending => {
+    const count = 500;
+    const wire = Array.from({ length: count }, (_, index) => `data: {"n":${index}}${ending}${ending}`).join("");
+    const records = await collect([wire]);
+    expect(records).toHaveLength(count);
+    expect(records.at(-1)).toEqual({ kind: "event", data: `{"n":${count - 1}}` });
+  });
+  test("keeps a UTF-8 code point split next to a CR delimiter", async () => {
+    const bytes = new TextEncoder().encode("data: 한\r\r");
+    const source = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(bytes.slice(0, 7));
+      controller.enqueue(bytes.slice(7, 9));
+      controller.enqueue(bytes.slice(9));
+      controller.close();
+    } });
+    const budget = createTranslatorBudget();
+    try {
+      const records = [];
+      for await (const event of decodeServerSentEvents(source, { translatorBudget: budget })) records.push(event);
+      expect(records).toEqual([{ data: "한" }]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally { budget.dispose(); }
+  });
+  test("ends a data line at a raw CR but keeps an escaped CR in JSON", async () => {
+    expect(await collect(["data: a\rb\n\n"])).toEqual([{ kind: "event", data: "a" }]);
+    expect(await collect(['data: {"t":"a\\rb"}\r\n\r\n'])).toEqual([{ kind: "event", data: '{"t":"a\\rb"}' }]);
+  });
   test("dispatches a CR-delimited event while the upstream remains open", async () => {
     const budget = createTranslatorBudget();
     let controller!: ReadableStreamDefaultController<Uint8Array>;

@@ -284,6 +284,11 @@ export async function* decodeServerSentEvents(
     decoded: string,
   ): AsyncGenerator<ServerSentEvent | SseRecord> {
     let offset = 0;
+    // Cached positions of the next CR and LF at or after `offset`, found with the native search so
+    // every stream keeps linear scanning. -1 means this decoded string has none left; it is never
+    // searched again, which keeps LF-only and CR-only chunks linear too.
+    let nextCr = decoded.indexOf("\r");
+    let nextLf = decoded.indexOf("\n");
     while (offset < decoded.length) {
       if (skipLineFeed) {
         skipLineFeed = false;
@@ -292,9 +297,9 @@ export async function* decodeServerSentEvents(
           continue;
         }
       }
-      let newline = offset;
-      while (newline < decoded.length && decoded[newline] !== "\n" && decoded[newline] !== "\r") newline++;
-      if (newline === decoded.length) newline = -1;
+      if (nextCr >= 0 && nextCr < offset) nextCr = decoded.indexOf("\r", offset);
+      if (nextLf >= 0 && nextLf < offset) nextLf = decoded.indexOf("\n", offset);
+      const newline = nextCr < 0 ? nextLf : nextLf < 0 ? nextCr : Math.min(nextCr, nextLf);
       if (newline < 0) {
         appendLine(decoded, offset, decoded.length);
         return;
