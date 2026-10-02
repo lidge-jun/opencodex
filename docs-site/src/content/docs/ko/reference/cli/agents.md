@@ -263,3 +263,7 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 ### 연결된 클라이언트의 사용량
 
 `ocx usage`는 등록된 데이터 키로 허브에서 이 클라이언트의 사용량만 읽습니다. 출력에는 허브 출처와 키 범위가 표시됩니다. 기간·모델·공급자 필터와 `--since`/`--until`, `--json`을 그대로 사용할 수 있습니다. 계정별 내역과 다른 클라이언트 기록은 반환하지 않습니다. 허브가 응답하지 않거나 이 기능을 지원하지 않으면 오류를 알립니다. 로컬 기록으로 대신 표시하지 않습니다. 구형 허브라면 허브를 업데이트하세요.
+
+## Routing profile lookup status
+
+`ocx route policy show <id>`는 프로필이 없으면 종료 코드 4를 반환합니다. 명령 인수가 빠졌거나 잘못되면 2를 반환하므로 스크립트에서 두 경우를 구별할 수 있습니다.

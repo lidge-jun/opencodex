@@ -430,6 +430,7 @@
   "cli-resolve.test.ts": "cli",
   "cli-restart-health.test.ts": "cli",
   "cli-restore-back.test.ts": "cli",
+  "cli-route-policy-not-found.test.ts": "cli",
   "cli-start-auxiliary-bind.test.ts": "cli",
   "cli-start-journal-order.test.ts": "cli",
   "sibling-home-client-sync.test.ts": "cli",
