@@ -71,6 +71,7 @@ interface DesktopFirstPartyStatus {
   interceptEnabled: boolean;
   interceptReason?: string | null;
   pickerReason?: string | null;
+  pickerFailurePort?: number;
   interceptRunning: boolean;
   proxyPort: number;
   caCertPath: string;
@@ -636,6 +637,7 @@ export default function ClaudeDesktop({
             apiBase={apiBase}
             picker={status.firstParty.picker}
             pickerReason={status.firstParty.pickerReason}
+            pickerFailurePort={status.firstParty.pickerFailurePort}
             onUpdated={() => void statusResource.refresh()}
           />
         )

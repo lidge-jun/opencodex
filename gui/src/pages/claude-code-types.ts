@@ -34,6 +34,7 @@ export interface ClaudeCodeState {
   desktopFirstParty: boolean;
   interceptReason?: string | null;
   pickerReason?: string | null;
+  pickerFailurePort?: number;
   interceptFailurePort?: number;
   interceptRunning: boolean;
   interceptEligible: boolean;

@@ -20,10 +20,10 @@ export async function ensureManagementClaudeIntercept(ctx: ManagementContext): P
   return state ? { ok: true, state } : { ok: false, reason: "failed" };
 }
 
-export function interceptStatus(ctx: ManagementContext): { interceptReason: string | null; pickerReason: string | null; interceptFailurePort?: number } {
+export function interceptStatus(ctx: ManagementContext): { interceptReason: string | null; pickerReason: string | null; pickerFailurePort?: number; interceptFailurePort?: number } {
   const outcome = ctx.deps.linkListener?.()?.claudeInterceptOutcome?.();
   const state = (ctx.deps.getClaudeInterceptState ?? getClaudeInterceptState)();
-  return { ...(outcome && !outcome.ok ? { interceptFailurePort: outcome.port } : {}), interceptReason: outcome && !outcome.ok ? outcome.reason : null, pickerReason: state?.pickerReason ?? null };
+  return { ...(outcome && !outcome.ok ? { interceptFailurePort: outcome.port } : {}), interceptReason: outcome && !outcome.ok ? outcome.reason : null, pickerReason: state?.pickerReason ?? null, pickerFailurePort: state?.pickerFailurePort };
 }
 
 export async function handleClaudeInterceptRoutes(ctx: ManagementContext): Promise<Response | null> {

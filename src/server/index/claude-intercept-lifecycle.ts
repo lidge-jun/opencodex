@@ -64,7 +64,7 @@ export function createClaudeInterceptLifecycle<T>(): ClaudeInterceptLifecycle<T>
   let startupPending = false;
   let retryAfterStartup = false;
   let observed: ClaudeDesktopModeObservation | undefined;
-  const stateOf = (bound: ClaudeInterceptHandle<T>) => ({ proxyPort: bound.proxyPort, caCertPath: bound.caCertPath, pickerProxyPort: bound.pickerProxyPort, pickerReason: bound.pickerReason ?? null });
+  const stateOf = (bound: ClaudeInterceptHandle<T>) => ({ proxyPort: bound.proxyPort, caCertPath: bound.caCertPath, pickerProxyPort: bound.pickerProxyPort, pickerReason: bound.pickerReason ?? null, pickerFailurePort: bound.pickerFailurePort });
   let outcome: ClaudeInterceptOutcome | null = null;
   const ensure = (): Promise<ClaudeInterceptOutcome> => {
     if (stopped) return Promise.resolve(outcome = { ok: false, reason: "stopped" });

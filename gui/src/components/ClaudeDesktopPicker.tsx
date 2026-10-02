@@ -75,9 +75,11 @@ export default function ClaudeDesktopPicker({
   picker,
   onUpdated,
   pickerReason,
+  pickerFailurePort,
 }: {
   apiBase: string;
   pickerReason?: string | null;
+  pickerFailurePort?: number;
   picker: DesktopPickerStatus;
   onUpdated?: (picker: DesktopPickerStatus) => void;
 }) {
@@ -127,7 +129,7 @@ export default function ClaudeDesktopPicker({
 
   return (
     <section className="claude-picker" aria-labelledby="claude-picker-title">
-      {!current.listenerReady && pickerReason && <span role="status">{t(interceptReasonKey(pickerReason), { port: "" })}</span>}
+      {!current.listenerReady && pickerReason && <span role="status">{t(interceptReasonKey(pickerReason === "port_in_use" && !pickerFailurePort ? "failed" : pickerReason), { port: pickerFailurePort ?? "" })}</span>}
       {!current.listenerReady && !pickerReason && <ClaudeInterceptStart apiBase={apiBase} onStarted={() => { setLocalPicker(null); onUpdated?.(current); }} />}
       <div className="claude-picker-header">
         <div className="claude-picker-copy">

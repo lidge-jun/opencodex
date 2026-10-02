@@ -12,11 +12,14 @@ import type { OcxConfig } from "../../src/types";
 let root: string;
 let previousHome: string | undefined;
 let previousClaude: string | undefined;
+let previousDesktop: string | undefined;
 const owners: Array<ReturnType<typeof createClaudeInterceptLifecycle>> = [];
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-intercept-demand-"));
   previousHome = process.env.OPENCODEX_HOME;
   previousClaude = process.env.CLAUDE_CONFIG_DIR;
+  previousDesktop = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(root, "desktop");
   process.env.OPENCODEX_HOME = root;
   process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
 });
@@ -24,6 +27,7 @@ afterEach(async () => {
   for (const owner of owners.splice(0)) await owner.stop();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousClaude;
+  if (previousDesktop === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR; else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktop;
   rmSync(root, { recursive: true, force: true });
 });
 function config(): OcxConfig {
@@ -205,4 +209,26 @@ test("ensure arriving during null startup joins it before starting with the live
   expect(lifecycle.ensure()).toBe(pending);
   expect((await pending).ok).toBe(true);
   expect(binds).toBe(2);
+});
+
+
+test("native Claude toggle reports an intercept startup refusal", async () => {
+  const live = config(); saveConfig(live);
+  const url = new URL("http://127.0.0.1:10100/api/native-integrations/claude");
+  const response = await handleManagementAPI(new Request(url, {
+    method: "PUT", headers: { Host: url.host, "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true }),
+  }), url, live, { ensureClaudeIntercept: async () => ({ ok: false, reason: "port_in_use" }) },
+    "admin-token", undefined, { trustedLoopback: true });
+  expect(response!.status).toBe(200);
+  expect(await response!.json()).toMatchObject({ ok: true, desiredEnabled: true, interceptReason: "port_in_use" });
+});
+
+test("Desktop status exposes the picker bind port separately from the CONNECT port", async () => {
+  const live = config(); saveConfig(live);
+  const url = new URL("http://127.0.0.1:10100/api/claude-desktop/status");
+  const response = await handleManagementAPI(new Request(url, { headers: { Host: url.host } }), url, live,
+    { getClaudeInterceptState: () => ({ proxyPort: 10200, caCertPath: join(root, "ca.crt"), pickerProxyPort: null, pickerReason: "port_in_use", pickerFailurePort: 10300 }) },
+    "admin-token", undefined, { trustedLoopback: true });
+  expect(response!.status).toBe(200);
+  expect((await response!.json()).firstParty).toMatchObject({ pickerReason: "port_in_use", pickerFailurePort: 10300 });
 });

@@ -618,6 +618,7 @@ describe("startClaudeIntercept wiring", () => {
         pickerPlatform: "darwin",
       });
       expect(handle?.pickerProxyPort).toBeNull();
+      expect(handle).toMatchObject({ pickerReason: "port_in_use", pickerFailurePort: pickerPort });
       expect(getClaudePickerRuntime()).toBeNull();
       expect(squatter.listening).toBe(true);
       expect(inspectDesktopPickerProfile({ configDir: root, platform: "darwin" })).toEqual(profileBefore);
@@ -762,6 +763,7 @@ describe("startClaudeIntercept wiring", () => {
     try {
       first = await startClaudeIntercept(startOpts());
       expect(first?.pickerProxyPort).toBeNull();
+      expect(first).toMatchObject({ pickerReason: "port_in_use", pickerFailurePort: pickerPort });
       // The main pair still serves, and the applied selection is durable evidence for a retry.
       expect(await connectStatusLine(port, "api.anthropic.com")).toContain("200");
       expect(inspectDesktopPickerProfile({ configDir: root, platform: "darwin" }).kind).toBe("applied");

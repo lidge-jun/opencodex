@@ -933,8 +933,11 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       throw error;
     }
 
-    const interceptReason = enabled && interceptStartRefusal(ctx) ? "intercept_start_forbidden" : null;
-    if (enabled && !interceptReason) await ensureManagementClaudeIntercept(ctx);
+    let interceptReason = enabled && interceptStartRefusal(ctx) ? "intercept_start_forbidden" : null;
+    if (enabled && !interceptReason) {
+      const outcome = await ensureManagementClaudeIntercept(ctx);
+      if (!outcome.ok) interceptReason = outcome.reason;
+    }
 
     return jsonResponse({
       ok: true, clientId: "claude", changed: true,

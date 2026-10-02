@@ -124,10 +124,20 @@ test("starting interception stays pending and reports the occupied port", async 
 test("picker failure reports the reason without offering an ineffective main-pair start", async () => {
   await act(async () => {
     root = createRoot(container);
-    root.render(<LanguageProvider><ClaudeDesktopPicker apiBase="" picker={{ ...basePicker, listenerReady: false, effective: false, reason: "proxy_unavailable" }} pickerReason="port_in_use" /></LanguageProvider>);
+    root.render(<LanguageProvider><ClaudeDesktopPicker apiBase="" picker={{ ...basePicker, listenerReady: false, effective: false, reason: "proxy_unavailable" }} pickerReason="port_in_use" pickerFailurePort={10300} /></LanguageProvider>);
   });
-  expect(container.textContent).toContain("port");
+  expect(container.textContent).toContain("Port 10300 is in use");
   expect(container.textContent).not.toContain("Start interception");
   expect(container.querySelector("[role=status]")).not.toBeNull();
   expect(requests).toHaveLength(0);
+});
+
+
+test("picker bind failure with unknown port uses a complete fallback message", async () => {
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><ClaudeDesktopPicker apiBase="" picker={{ ...basePicker, listenerReady: false }} pickerReason="port_in_use" /></LanguageProvider>);
+  });
+  expect(container.textContent).toContain("Interception could not start.");
+  expect(container.textContent).not.toContain("Port  is in use");
 });
