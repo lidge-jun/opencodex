@@ -4,7 +4,7 @@ import { handleObserveCommand } from "../../src/cli/observe";
 const report = { range: "30d", summary: { requests: 12, totalTokens: 120 },
   models: Array.from({ length: 12 }, (_, i) => ({ model: "model-" + String(i).padStart(2, "0"), provider: "local", requests: 1, totalTokens: 10 })) };
 describe("usage human model limit", () => {
-  test.each([[[], 10], [["--top", "2"], 2], [["--top", "12"], 12]] as [string[], number][])("applies %j locally", async (flags, expected) => {
+  test.each([[[], 10], [["--top", "1"], 1], [["--top", "2"], 2], [["--top", "12"], 12], [["--top", "1000"], 12]] as [string[], number][])("applies %j locally", async (flags, expected) => {
     const out = spyOn(console, "log").mockImplementation(() => {});
     let url = "";
     try {

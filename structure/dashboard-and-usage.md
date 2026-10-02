@@ -166,7 +166,7 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `src/cli/usage-report.ts` renders ten model rows by default. `src/cli/observe.ts` accepts `--top` from 1 through 1000 for human usage output only; truncation is local, preserves server ranking and totals, and never changes the API query or JSON payload.
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload.
 
 ### Upstream key account attribution
 
@@ -201,7 +201,7 @@ The response retains its preset range discriminator for compatibility and explic
 the existing 366-day cap. GUI custom reports bypass the held preset/session cache.
 Both dashboard and CLI reject a custom report unless the server echoes `customWindow: true`
 and the exact requested numeric `since` and `until`. An older daemon that silently returns a
-preset report cannot supply totals labelled with the requested custom interval.
+preset report cannot supply totals labelled with the requested custom interval. `src/cli/usage-report.ts` renders ten model rows by default. `ocx usage --top <n>` and `ocx observe usage --top <n>` accept 1 through 1000 for human output only; truncation is local, preserves server ranking and totals, and never changes the API query or JSON payload.
 
 Resetting a manual model price keeps the map, even when temporarily empty, through persistence
 reconciliation. This removes only the requested entry and preserves sibling rates independently

@@ -99,6 +99,7 @@ function table(header: string[], rows: string[][]): string[] {
   return [line(header), ...rows.map(line)];
 }
 
+/** Describe the report interval and filters with terminal-safe text. */
 function describeScope(data: UsageReportInput): string {
   const interval = data.customWindow && typeof data.since === "number" && typeof data.until === "number"
     ? `custom ${new Date(data.since).toISOString()} to ${new Date(data.until).toISOString()} (inclusive)`

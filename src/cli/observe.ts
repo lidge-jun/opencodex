@@ -144,6 +144,7 @@ async function rebuildIndex(argv: string[], deps: RuntimeApiDeps): Promise<void>
   }
 }
 
+/** Report request-history indexing state without changing the index. */
 async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -161,6 +162,7 @@ async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> 
   }
 }
 
+/** Fetch a validated usage report and apply an optional model-row limit only to human output. */
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -224,6 +226,7 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0], top));
 }
 
+/** Print a read-only management diagnostic in the selected human or JSON format. */
 async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
