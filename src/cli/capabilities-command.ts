@@ -45,6 +45,7 @@ function renderHuman(caps: readonly Capability[], includeHead: boolean): void {
   }
 }
 
+/** Render declared capabilities; reject invalid arguments with 64 and report unmatched routes with 4. */
 export async function runCapabilities(argv: string[]): Promise<number> {
   const args = [...argv];
   const json = takeFlag(args, "--json");
