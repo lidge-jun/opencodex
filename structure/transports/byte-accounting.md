@@ -103,9 +103,11 @@ truncates diagnostic text at UTF-8 code-point boundaries without allocating arra
 byte sizing retains TextEncoder's coercion behavior for legacy non-string runtime callers.
 These optimizations do not add request queues, retry policies, or RSS-based admission gates.
 
-Zed's buffered response collector charges each delegated event before retaining it and releases
-owned events when collection fails. Its translated stream is cancelled on early exit for every
-provider family; the Responses delegate releases partial text and usage collectors on every exit.
+The buffered collector in `src/adapters/zed.ts` charges each delegated event before retaining it
+and releases owned events when collection fails. Its translated stream is cancelled on early exit
+for every provider family. `src/adapters/openai-responses/passthrough.ts` releases partial text and
+usage collectors on every exit, and compaction ciphertext unless its lease transfers with the
+`done` event. Zed releases that source ciphertext lease if the collector cannot retain `done`.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
