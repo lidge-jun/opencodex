@@ -117,7 +117,7 @@ function quotaHeaders(fiveHour: string, weekly: string): Record<string, string> 
 function limited(fiveHour = "1", weekly = "0.61"): Response {
   return Response.json({ type: "error", error: { type: "rate_limit_error", message: "synthetic quota exhausted" } }, {
     status: 429,
-    headers: { ...quotaHeaders(fiveHour, weekly), "retry-after": "30" },
+    headers: { ...quotaHeaders(fiveHour, weekly), "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" },
   });
 }
 

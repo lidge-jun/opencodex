@@ -355,6 +355,58 @@ test("a persisted snapshot waits for the restarted process's registry build befo
   expect(builds).toBe(1);
 });
 
+test("a persisted snapshot from a retired provider setup is rebuilt before answering", async () => {
+  const configDir = tempDir("ocx-cli-picker-reconfig-");
+  installRegistry();
+  const before = createCliCatalogProvider({
+    configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: async () => ROUTES,
+  });
+  expect(await before(catalogRequest(CLI_UA), "model_selector")).toHaveLength(3);
+  // The operator replaced every provider: none of the persisted rows decode any more.
+  const next: PickerRouteInput = { nativeSlugs: [], routedModels: [{ provider: "moonshot", id: "kimi-for-coding" }] };
+  installRegistry(next);
+  const after = createCliCatalogProvider({
+    configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: async () => next,
+  });
+  const rows = await after(catalogRequest(CLI_UA), "model_selector");
+  expect(rows?.map(row => row.route)).toEqual(["moonshot/kimi-for-coding"]);
+});
+
+test("one catalog request never waits past a single cold-wait deadline", async () => {
+  const configDir = tempDir("ocx-cli-picker-deadline-");
+  installRegistry();
+  const seed = createCliCatalogProvider({ configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: async () => ROUTES });
+  expect(await seed(catalogRequest(CLI_UA), "model_selector")).toHaveLength(3);
+  buildDesktop3pRegistry([], []);
+  const slow = createCliCatalogProvider({
+    configDir, desiredClients: () => BOTH, coldWaitMs: 120, registryReady: () => true,
+    ensureRegistry: () => new Promise<never>(() => {}), loadRoutes: () => new Promise<never>(() => {}),
+  });
+  const started = performance.now();
+  expect(await slow(catalogRequest(CLI_UA), "model_selector")).toEqual([]);
+  expect(performance.now() - started).toBeLessThan(220);
+});
+
+test("a failed registry build keeps the last good snapshot instead of persisting an empty one", async () => {
+  const configDir = tempDir("ocx-cli-picker-keep-");
+  installRegistry();
+  const seed = createCliCatalogProvider({ configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: async () => ROUTES });
+  const rows = await seed(catalogRequest(CLI_UA), "model_selector");
+  expect(rows).toHaveLength(3);
+  // The restarted process's build fails: it resolves (cooldown) and leaves the registry empty.
+  buildDesktop3pRegistry([], []);
+  let loads = 0;
+  const failing = createCliCatalogProvider({
+    configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: async () => { loads++; return ROUTES; },
+  });
+  expect(await failing(catalogRequest(CLI_UA), "model_selector")).toEqual([]);
+  expect(loads).toBe(0);
+  // Once the registry is back, the persisted rows answer again.
+  installRegistry();
+  const recovered = createCliCatalogProvider({ configDir, desiredClients: () => BOTH, ensureRegistry: async () => {}, loadRoutes: () => new Promise<never>(() => {}) });
+  expect(await recovered(catalogRequest(CLI_UA), "model_selector")).toEqual(rows!);
+});
+
 test("a persisted row is retired when its alias now decodes to a different route", () => {
   installRegistry();
   const [sol] = buildCliPickerModels(ROUTES);

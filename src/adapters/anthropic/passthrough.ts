@@ -8,8 +8,8 @@
  *
  * Authority: only the provider's own credential is ever placed on the request — a configured
  * key, or (PF-10) the access token of the OAuth account the lane resolved, which is sent only to
- * `api.anthropic.com`. The one caller header this builder sees is `anthropic-beta`, handed over
- * explicitly and reduced to `beta-allowlist.ts`; no other caller header is read here at all. The
+ * `api.anthropic.com`. Caller betas are reduced to `beta-allowlist.ts`; a bounded opaque
+ * CLI identity handle carries only observed compatibility headers for first-party destinations. The
  * caller-forward passthrough in `src/server/claude-messages.ts` is the only place a caller's
  * Anthropic credential may travel, and it does not come through here.
  *
@@ -27,6 +27,8 @@ import {
   applyAnthropicOAuthAuth,
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
+import { applyAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
+import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 
 /**
@@ -75,6 +77,10 @@ export interface AnthropicMessagesPassthroughRequest {
 export interface AnthropicMessagesPassthroughOptions {
   /** The caller's `anthropic-beta` header, handed over by the ingress. */
   callerAnthropicBeta?: string | null;
+  /** Provider UUID captured with the serving OAuth credential; never a local account slot id. */
+  providerAccountUuid?: string;
+  /** Internal request-local handle; never part of the serialized Messages body. */
+  clientIdentity?: AnthropicClientIdentity;
 }
 
 /** The allowlisted copy of `body` with `model` set to the wire model. Shallow: nothing is cloned. */
@@ -201,12 +207,25 @@ export function buildAnthropicMessagesPassthroughRequest(
       : "anthropic provider requires a non-empty apiKey (authMode: key)");
   }
   const url = resolveAnthropicMessagesUrl(provider);
-  const { wireBody, strippedOpaqueState, oauthToolNames } = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const native = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const { strippedOpaqueState, oauthToolNames } = native;
+  const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
   else applyAnthropicKeyAuth(headers, provider);
   // Operator-configured provider headers apply exactly as the adapter applies them.
-  if (provider.headers) Object.assign(headers, provider.headers);
+  if (provider.headers) {
+    const configured = new Set(Object.keys(provider.headers).map(name => name.toLowerCase()));
+    for (const name of Object.keys(headers)) if (configured.has(name.toLowerCase())) delete headers[name];
+    Object.assign(headers, provider.headers);
+  }
+  if (oauth) {
+    const wireHeaders = new Headers(headers);
+    if (wireHeaders.get("authorization") !== `Bearer ${provider.apiKey}` || wireHeaders.has("x-api-key")) {
+      throw new Error("native OAuth serving credential was overridden by provider headers");
+    }
+  }
+  if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity, provider.headers);
   const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {

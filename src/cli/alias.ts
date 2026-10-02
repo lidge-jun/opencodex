@@ -12,10 +12,11 @@ function selector(value: string): { provider: string; model?: string } {
   return slash < 0 ? { provider: value } : { provider: value.slice(0, slash), model: value.slice(slash + 1) };
 }
 
+/** Manage model aliases, consuming JSON output selection before the default list action. */
 export async function handleAliasCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const args = [...argv];
-  const action = (args.shift() ?? "list").toLowerCase();
   const wantsJson = takeFlag(args, "--json");
+  const action = (args.shift() ?? "list").toLowerCase();
   if (action === "list") {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest<Record<string, unknown>>("/api/aliases", {}, deps);

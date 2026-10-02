@@ -1,3 +1,4 @@
+import type { TKey } from "../i18n/shared";
 import type { ClaudeCodeState } from "./claude-code-types";
 
 export const FIRST_PARTY_PROXY_STATUSES = [
@@ -48,4 +49,16 @@ export function selectFirstPartyNotice(
   if (state.sharedProxy === "none" && state.cliFirstParty) return "notApplied";
   if (state.sharedProxy === "live" && state.desktopFirstParty !== state.cliFirstParty) return "shared";
   return null;
+}
+
+export function interceptReasonKey(reason: string | null | undefined): TKey {
+  switch (reason) {
+    case "disabled": return "claude.intercept.reason.disabled";
+    case "client_role": return "claude.intercept.reason.client_role";
+    case "ephemeral_port": return "claude.intercept.reason.ephemeral_port";
+    case "port_in_use": return "claude.intercept.reason.port_in_use";
+    case "port_mismatch": return "claude.intercept.reason.port_mismatch";
+    case "stopped": return "claude.intercept.reason.stopped";
+    default: return "claude.intercept.reason.failed";
+  }
 }

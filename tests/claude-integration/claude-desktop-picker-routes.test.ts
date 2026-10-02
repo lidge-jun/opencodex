@@ -84,6 +84,9 @@ async function startPicker(saved: OcxConfig, onDispatch?: (req: Request) => Resp
   const boundPorts = [handle.listener.port, handle.proxyPort, handle.pickerProxyPort];
   expect(boundPorts.every(port => typeof port === "number" && Number.isInteger(port) && port > 0)).toBe(true);
   expect(new Set(boundPorts).size).toBe(boundPorts.length);
+  const committed = persisted();
+  committed.claudeCode = { ...committed.claudeCode, intercept: { ...committed.claudeCode?.intercept, port: handle.proxyPort } };
+  writeFileSync(join(root, "config.json"), JSON.stringify(committed));
   return handle.pickerProxyPort;
 }
 
@@ -92,7 +95,7 @@ async function dispatch(path: string, init: RequestInit = {}, deps: Parameters<t
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  }), url, persisted(), deps);
+  }), url, persisted(), { ensureClaudeIntercept: async () => ({ ok: true, state: handle ?? { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), ...deps }, "admin-token", undefined, { trustedLoopback: true });
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 

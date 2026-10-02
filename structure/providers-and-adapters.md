@@ -2,8 +2,10 @@
 
 Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
+Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
+
 Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
-An Anthropic 429 or classified pre-output account 403 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling for 429 is skipped only after the matching account cooldown is present.
+A shared-quota Anthropic 429 or classified pre-output account 403 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling for 429 is skipped only after the matching account cooldown is present.
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
 
@@ -78,7 +80,7 @@ the [bounded ingestion contract](transports/inventory.md#bounded-response-ingest
 
 Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
 only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
-Anthropic usage flights replace older joinable transports when recovery requires a fresh read. `src/providers/quota/anthropic-cooldown-recovery.ts` fences successful, empty, and rejected results by credential and cooldown generation before cache publication. Live account quota entries retain that currentness predicate; routing and account-list readers reject a superseded entry before its TTL expires. Persisted and header-only observations carry no live probe predicate of their own.
+Anthropic usage flights replace older joinable transports when recovery requires a fresh read. `src/providers/quota/anthropic-cooldown-recovery.ts` fences successful, empty, and rejected results by credential and cooldown generation before cache publication. Live account quota entries retain that currentness predicate; routing and account-list readers reject a superseded entry before its TTL expires. Header-only family observations carry a private credential-generation fence and their own thirty-minute clock. Active non-enumerating probes retain absent families; authoritative limits enumeration retires them. Persisted observations carry no live probe predicate of their own.
 Per-account quota flights also retain their starting cooldown generation through token resolution. A stale token failure returns unavailable to its caller without replacing the cache row or its timestamp; a joined flight rechecks ownership before returning.
 
 MiniMax and MiniMax CN Coding Plan quota in `src/providers/quota/vendor-probes-key.ts` uses the

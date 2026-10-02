@@ -1,0 +1,145 @@
+/* ============================================================================
+   Claude page — one page head and tab strip; panels reuse card/setting-row
+   vocabulary from styles.css. Uses only design tokens; adds no gradients of its
+   own (pending values reuse the shared .data-surface-skeleton__block).
+   ============================================================================ */
+
+/* The Code workspace asks .main-inner for 1200px, and it stays mounted (hidden) after a
+   visit. Inside the Claude page every tab keeps the default .main-inner column from
+   styles.css (980px) — the same column Codex Set uses — so the page never changes width. */
+.main-inner:has(.claude-page .claudecode-workspace-shell) {
+  max-width: 980px;
+}
+
+.claude-page .page-tabs {
+  margin-bottom: var(--space-5);
+}
+
+.claude-panel-lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  max-width: var(--prose-measure);
+}
+
+/* ── Account tab: Anthropic's Accounts content (ProviderAuthPanel) ── */
+
+/* Signed out, the login row is the next step, so it comes before the pool card. */
+.claude-page .pwi-auth-body:has(> .pwi-auth-status-row .pwi-auth-dot--off) > .anthropic-pool-card {
+  order: 1;
+}
+
+/* Status text and its Login button share one line. */
+.claude-page .pwi-auth-status-row > .pwi-auth-actions {
+  margin-top: 0;
+}
+
+.claude-account-empty {
+  padding: var(--space-12) var(--space-5);
+}
+
+.claude-account-empty p {
+  max-width: 48ch;
+  margin: 0 auto var(--space-4);
+  text-wrap: balance;
+}
+
+.claude-account-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.claude-account-empty .btn svg {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  color: currentColor;
+}
+
+/* The pending login's URL and paste field read left-aligned, like everywhere else. */
+.claude-account-empty-hint {
+  max-width: 560px;
+  margin: var(--space-4) auto 0;
+  text-align: left;
+}
+
+.claude-account-empty-hint svg {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+/* ── Code tab ── */
+.claudecode-connection-card {
+  margin-bottom: var(--space-4);
+}
+
+/* A Select wrapper is as wide as its min-width; its trigger is not. Right-align the trigger
+   so selects, switches and inputs end on one edge. */
+.claudecode-workspace-shell .setting-controls > .custom-select {
+  text-align: right;
+}
+
+/* ── Desktop tab: one sticky status row carries applied state, save state and actions ── */
+.claude-page .claude-status-bar {
+  position: sticky;
+  top: 12px;
+  z-index: 8;
+  flex-wrap: wrap;
+  padding: 6px 8px 6px 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.claude-page .claude-status-bar > .claude-status-health {
+  margin-left: 0;
+}
+
+.claude-status-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
+/* ── Settings tab ── */
+.claude-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.claude-settings > .notice {
+  margin-bottom: 0;
+}
+
+.claude-settings-port {
+  font-family: var(--font-code);
+  font-size: var(--text-control);
+}
+
+/* ClaudeInterceptStart renders "reason [Start]" as one status span; lay it out as a row. */
+.claude-intercept-start > [role="status"] {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
+.claude-intercept-start .btn {
+  flex-shrink: 0;
+}
+
+/* Badge-sized skeleton; the block itself brings the shared shimmer. */
+.claude-status-pending.data-surface-skeleton__block {
+  display: inline-block;
+  width: 64px;
+  min-height: 0;
+  height: 20px;
+  border-radius: var(--radius-pill);
+}

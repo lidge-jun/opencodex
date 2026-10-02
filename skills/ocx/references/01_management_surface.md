@@ -1062,6 +1062,20 @@ JSON mode: `payload`.
 
 - `status` reads the route; `set` writes only submitted fields. Enabling first-party requires a running Claude intercept.
 
+### `ocx claude intercept start`
+
+Start the local Claude interception pair on demand.
+
+| Method | Route |
+|---|---|
+| POST | `/api/claude-intercept/start` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the management response as JSON. |
+
+JSON mode: `payload`.
+
 ### `ocx claude desktop bind`
 
 First-party: serve a Claude Desktop Code tab picker model with an opencodex route.
@@ -1301,6 +1315,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 72
-- of those, state-changing: 41
+- declared capabilities: 73
+- of those, state-changing: 42
 - head-resolved invocations: 2

@@ -1150,6 +1150,8 @@ If the new OAuth credential's authenticated usage lookup confirms an exhausted 5
 
 In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits directly below Week. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported; the bar indicates availability, not a percentage, because no total credit limit is supplied. Hiding credits changes display only, and a new login waits for its own observation.
 
+When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its weekly or monthly window (only monthly on 30-day plans) or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
+
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
 ### Cancelling main-account device reauthentication
@@ -1541,3 +1543,7 @@ The process exits 0 only if all four live scenarios pass, 1 otherwise, and 2 for
 invalid arguments or missing credentials. This is a **wire diagnostic**, not an
 end-to-end Codex App/CLI interface test, live certification or instruction to enable
 the experimental feature for production work.
+
+## Streaming line endings
+
+The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even when a delimiter spans network chunks. This allows compatible providers to stream events without requiring LF-only framing.

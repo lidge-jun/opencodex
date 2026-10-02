@@ -39,15 +39,23 @@ add-account). By default every request uses the **active** account only.
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
 session affinity and usage-aware new-session selection across those OAuth accounts. It does
 **not** gate 429 failover: with two or more usable accounts stored, a rate-limited request moves
-to another account whether the pool is on or off, and that cannot be switched off. For **new**
+to another account whether the pool is on or off, and the toggle does not switch that off; pause
+an account to keep it out of failover. For **new**
 sessions,
 `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
 lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
 `max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
-reauthentication, or threshold, then advances. It is **off by default**, shows a GUI warning,
-and is not battle-tested — Anthropic may restrict accounts that look like automated rotation;
-rotation does not protect against provider enforcement.
+reauthentication, or threshold, then advances. It is **off by default** and experimental.
+
+The dashboard lists the conditions the pool is meant for: subscriptions you own or are authorized
+to use, the genuine Claude Code client, and a person supervising the session. Anthropic has not
+endorsed automated account pooling, accounts in one organization may share a quota (so another
+account may not add capacity), and switching accounts does not protect against provider
+enforcement. OpenCodex sends no keep-warm requests and, by default, neither refreshes Claude tokens
+nor reads usage in the background: usage is read when the dashboard, the menu bar app, or an `ocx`
+command asks for it. Thresholds are selection preferences, not usage or billing caps. This is
+product guidance, not legal advice; check Anthropic's current terms.
 
 To bind a model to particular stored Claude accounts, add ordered `anthropicAccountPool.routes` rules while the pool is enabled. Each rule has a safe `name`, a full case-sensitive `match` glob, an `accounts` array of stored account IDs, and optional `fallback` (default `false`). The first matching rule limits active, manual, affinity, strategy and 429 recovery picks to its accounts. A healthy affinity outside that rule is ignored for this request but kept for other models; the routed choice does not overwrite it. Without fallback, an empty route returns a local 401, or 429 with `Retry-After` when all its declared accounts are cooling, before contacting Anthropic. The client response does not name the route; the proxy log records `route:#<n>`, where `n` is the rule’s 1-based position. `fallback: true` uses the ordinary pool only when the route has no eligible account, including its ordinary fill-first successor order; if its stored accounts are all cooling, the returned 429 uses the earliest cooldown across that expanded pool, even if a saved route account has been removed. An unmatched model follows the existing pool policy; disabling the pool leaves saved rules inactive and restores active-account and presence-driven 429 behavior. A rule is an operator allowlist, not proof of model entitlement.
 
@@ -123,7 +131,7 @@ native `claude` binary instead, so the command stays useful with routing off:
 | Where routing is off | What happens |
 | --- | --- |
 | `claudeCode.enabled: false` in config | Native launch, with a notice that routing is disabled |
-| The running proxy reports `enabled: false` from `GET /api/claude-code` | Native launch, with a notice to restart the service after re-enabling |
+| The running proxy reports `enabled: false` from `GET /api/claude-code` | Native launch; re-enabling starts interception on demand |
 | `claudeCode.enabled` absent or `true` | Routed through the proxy, unchanged |
 
 Only an explicit `false` triggers the fallback, so a proxy predating the field stays routed. A
@@ -298,7 +306,7 @@ next request; Desktop does not need a restart.
 
 Turn on the CLI switch in Claude → Code, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
 Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
-The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged until restart; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. Only when interception is eligible does stopped advise starting opencodex and broken advise `ocx ensure` or restart. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
+The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
 - Gateway discovery (`/model` → "From gateway") is not used, because Claude Code only queries
   `GET /v1/models` on a configured gateway. Routed models reach the picker another way; see

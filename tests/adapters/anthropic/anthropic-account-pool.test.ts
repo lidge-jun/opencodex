@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +16,6 @@ import {
   parseAccountPoolQuotaWindow,
   resolveAnthropicAccountForSession,
   resetAnthropicRoutingForManualSelection,
-  rotateAnthropicAccountOn429,
   getAnthropicPoolAccessSnapshot,
   promoteAnthropicActiveAccount,
   anthropicSessionAffinitySizeForTests,

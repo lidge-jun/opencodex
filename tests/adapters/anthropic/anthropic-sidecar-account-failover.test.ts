@@ -72,7 +72,7 @@ beforeAll(async () => {
       adapter: ProviderAdapter;
       incomingMeta: IncomingMeta;
       fetchForRequest: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof fetch;
-      on429?: (retryAfter: string | null) => Promise<
+      on429?: (retryAfter: string | null, headers: Headers, parsed: OcxParsedRequest, response: Response) => Promise<
         { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null
       >;
     }) => {
@@ -84,7 +84,7 @@ beforeAll(async () => {
       expect(refused.status).toBe(429);
       const retryAfter = refused.headers.get("retry-after");
       await refused.body?.cancel();
-      const rotated = await args.on429?.(retryAfter);
+      const rotated = await args.on429?.(retryAfter, refused.headers, args.parsed, refused);
       if (!rotated) throw new Error("Anthropic sidecar did not rotate after 429");
       // Unwrapped exactly as the real loop does. This seam drives the PRODUCTION rotator
       // (`rotateSidecarProviderOn429`), so it is the one place the Anthropic arm's kind is
@@ -160,6 +160,7 @@ test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooli
               status: 429,
               headers: {
                 "retry-after": "30",
+                "anthropic-ratelimit-unified-5h-status": "rejected",
                 "anthropic-ratelimit-unified-5h-utilization": "1",
                 "anthropic-ratelimit-unified-7d-utilization": "0.61",
               },

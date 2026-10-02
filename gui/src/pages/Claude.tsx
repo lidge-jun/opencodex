@@ -1,161 +1,74 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useState } from "react";
 import ClaudeCode from "./ClaudeCode";
 import ClaudeDesktop from "./ClaudeDesktop";
-import { navigateHash, normalizeHashPath } from "../hash-routing";
+import Providers from "./Providers";
+import ClaudeSettings from "./claude-settings";
+import ClaudeAccountEmpty from "./claude-account-empty";
+import { CLAUDE_TABS, readClaudeTab, selectClaudeTab, claudeTabKeyDown, type ClaudeTab } from "./claude-tab";
 import { useT } from "../i18n/shared";
+import { normalizeHashPath } from "../hash-routing";
+import { readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache } from "../session-list-cache";
+import "../styles/claude-page.css";
 
-type ClaudeTab = "code" | "desktop";
+const TAB_LABELS = { account: "claude.tabAccount", code: "claude.tabCode", desktop: "claude.tabDesktop", settings: "claude.tabSettings" } as const;
 
-const CODE_HASH = "integrations/claude";
-const DESKTOP_HASH = "integrations/claude/desktop";
-
-/** Desktop is a route of its own, so a reload or a shared link opens on it. */
-function readClaudeTab(hash = typeof window !== "undefined" ? window.location.hash : ""): ClaudeTab {
-  return normalizeHashPath(hash) === DESKTOP_HASH ? "desktop" : "code";
-}
-
-function readCachedDesktopPort(apiBase: string): number | null {
-  const cached = readSessionListCache<{ data?: { port?: number } }>(`ocx.claude-desktop.v1:${apiBase}`);
-  return typeof cached?.data?.port === "number" ? cached.data.port : null;
-}
-
+/**
+ * One stable page head and tab strip; panels carry no titles of their own.
+ * Account is the Providers page scoped to Anthropic's Accounts content and mounts only while
+ * selected, so its roster poll stops with the tab. Code/Desktop/Settings latch on first visit
+ * to keep drafts, and gate their own reads on `active`.
+ */
 export default function Claude({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
-  const [tab, setTab] = useState<ClaudeTab>(readClaudeTab);
   const t = useT();
-  const codeTabRef = useRef<HTMLButtonElement>(null);
-  const desktopTabRef = useRef<HTMLButtonElement>(null);
-  // Seed Desktop's port subtitle from session cache so the intro above the Code/Desktop
-  // strip does not wait on the first status paint after a tab hop. Live updates from
-  // Desktop win while they match the current apiBase; a base change falls back to cache.
-  const seededDesktopPort = readCachedDesktopPort(apiBase);
-  const [liveDesktopPort, setLiveDesktopPort] = useState<{ base: string; port: number | null } | null>(null);
-  const desktopPort = liveDesktopPort?.base === apiBase ? liveDesktopPort.port : seededDesktopPort;
-  const desktopSettled = liveDesktopPort?.base === apiBase;
-  // Skip no-op writes: an unstable callback + always-new object would loop with Desktop's effect.
-  const setDesktopPort = useCallback((port: number | null) => {
-    setLiveDesktopPort((prev) => {
-      if (prev?.base === apiBase && prev.port === port) return prev;
-      return { base: apiBase, port };
-    });
-  }, [apiBase]);
+  const [hash, setHash] = useState(window.location.hash);
+  const [hasAnthropic, setHasAnthropic] = useState(() => Boolean(readSessionListCache<{ providers?: { anthropic?: unknown } }>(`ocx.providers.config.v1:${apiBase}`)?.providers?.anthropic));
+  const [tab, setTab] = useState(() => readClaudeTab(window.location.hash, hasAnthropic));
+  const [mounted, setMounted] = useState<ReadonlySet<ClaudeTab>>(() => new Set([readClaudeTab(window.location.hash, hasAnthropic)]));
+  if (!mounted.has(tab)) setMounted(new Set([...mounted, tab]));
 
-  /*
-   * Back/Forward across the inner selection has to move the panel too. The
-   * outer Integrations strip owns `integrations/claude`, but Desktop's nested
-   * hash is read here — otherwise history would change the URL and leave the
-   * inner panel showing Code.
-   */
   useEffect(() => {
-    const syncFromHash = () => setTab(readClaudeTab());
-    window.addEventListener("hashchange", syncFromHash);
-    window.addEventListener("popstate", syncFromHash);
+    const sync = () => { setHash(window.location.hash); setTab(readClaudeTab(window.location.hash, hasAnthropic)); };
+    window.addEventListener("hashchange", sync);
+    window.addEventListener("popstate", sync);
     return () => {
-      window.removeEventListener("hashchange", syncFromHash);
-      window.removeEventListener("popstate", syncFromHash);
+      window.removeEventListener("hashchange", sync);
+      window.removeEventListener("popstate", sync);
     };
-  }, []);
-
-  const selectTab = (next: ClaudeTab) => {
-    // `navigateHash` is a no-op for the current hash, so reselecting the same
-    // inner tab adds no history entry.
-    navigateHash(next === "desktop" ? DESKTOP_HASH : CODE_HASH);
-    setTab(next);
-    // preventScroll: focusing the tab must not scroll the page — otherwise the
-    // Code/Desktop panels' different header heights make the tab strip jump.
-    window.requestAnimationFrame(() => {
-      (next === "code" ? codeTabRef : desktopTabRef).current?.focus({ preventScroll: true });
-    });
-  };
-
-  const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      event.preventDefault();
-      selectTab(tab === "code" ? "desktop" : "code");
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      selectTab("code");
-    } else if (event.key === "End") {
-      event.preventDefault();
-      selectTab("desktop");
-    }
-  };
-
+  }, [hasAnthropic]);
+  useEffect(() => {
+    if (!active || normalizeHashPath(window.location.hash) !== "claude") return;
+    const controller = new AbortController();
+    void fetch(`${apiBase}/api/config`, { signal: controller.signal }).then(response => readJsonOrThrow<{ providers?: { anthropic?: unknown } }>(response)).then(config => {
+      if (controller.signal.aborted) return;
+      const configured = Boolean(config?.providers?.anthropic);
+      setHasAnthropic(configured);
+      if (normalizeHashPath(window.location.hash) === "claude") setTab(readClaudeTab(window.location.hash, configured));
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [apiBase, active, hash]);
+  const shown = (value: ClaudeTab) => tab === value || (value !== "account" && mounted.has(value));
   return (
     <section className="claude-page">
-      {/* Title/subtitle sit above the Code/Desktop strip so the page reads title → selector → body. */}
-      <div className="claude-page-intro">
-        <div className="page-head">
-          <h2>{tab === "code" ? t("claude.pageTitle") : t("claudeDesktop.title")}</h2>
+      <div className="page-head"><h2>{t("nav.claude")}</h2></div>
+      <p className="page-sub">{t("claude.pageSub")}</p>
+      <div className="page-tabs" role="tablist" aria-label={t("nav.claude")}>
+        {CLAUDE_TABS.map(value => (
+          <button key={value} type="button" role="tab" id={`claude-tab-${value}`}
+            aria-selected={tab === value} aria-controls={`claude-panel-${value}`}
+            tabIndex={tab === value ? 0 : -1}
+            className={`page-tab${tab === value ? " page-tab--active" : ""}`}
+            onClick={() => selectClaudeTab(value)} onKeyDown={claudeTabKeyDown}>{t(TAB_LABELS[value])}</button>
+        ))}
+      </div>
+      {CLAUDE_TABS.map(value => shown(value) && (
+        <div key={value} role="tabpanel" id={`claude-panel-${value}`} aria-labelledby={`claude-tab-${value}`} hidden={tab !== value} className="claude-panel">
+          {value === "account" && <Providers key={apiBase} apiBase={apiBase} scopeProvider="anthropic" scopeEmpty={login => <ClaudeAccountEmpty apiBase={apiBase} provider="anthropic" login={login} />} />}
+          {value === "code" && <ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === value} />}
+          {value === "desktop" && <ClaudeDesktop key={apiBase} apiBase={apiBase} active={active && tab === value} />}
+          {value === "settings" && <ClaudeSettings key={apiBase} apiBase={apiBase} active={active && tab === value} />}
         </div>
-        {tab === "code" ? (
-          <p className="page-sub">{t("claude.subtitle")}</p>
-        ) : (
-          <p className="page-sub">
-            {desktopPort != null
-              ? t("claudeDesktop.subtitle", { port: desktopPort })
-              : desktopSettled
-                ? t("claudeDesktop.loadFail")
-                : t("claudeDesktop.loading")}
-          </p>
-        )}
-      </div>
-
-      <div className="claude-tabs" role="tablist" aria-label={t("claude.tabsLabel")}>
-        <button
-          type="button"
-          role="tab"
-          ref={codeTabRef}
-          aria-selected={tab === "code"}
-          aria-controls="claude-code-panel"
-          id="claude-code-tab"
-          className={tab === "code" ? "active" : ""}
-          tabIndex={tab === "code" ? 0 : -1}
-          onKeyDown={handleTabKey}
-          onClick={() => selectTab("code")}
-        >
-          {t("claude.tabCode")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          ref={desktopTabRef}
-          aria-selected={tab === "desktop"}
-          aria-controls="claude-desktop-panel"
-          id="claude-desktop-tab"
-          className={tab === "desktop" ? "active" : ""}
-          tabIndex={tab === "desktop" ? 0 : -1}
-          onKeyDown={handleTabKey}
-          onClick={() => selectTab("desktop")}
-        >
-          {t("claude.tabDesktop")}
-        </button>
-      </div>
-
-      {/* Both stay mounted so draft/UI state survives tab switches; Desktop pauses polls while hidden. */}
-      <div
-        id="claude-code-panel"
-        role="tabpanel"
-        aria-labelledby="claude-code-tab"
-        hidden={tab !== "code"}
-      >
-        {/* Mounted while hidden so drafts survive a tab switch, but `active` keeps it from
-            fetching for a panel nobody is looking at — mirroring Desktop below. */}
-        <ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === "code"} />
-      </div>
-      <div
-        id="claude-desktop-panel"
-        role="tabpanel"
-        aria-labelledby="claude-desktop-tab"
-        hidden={tab !== "desktop"}
-      >
-        <ClaudeDesktop
-          key={apiBase}
-          apiBase={apiBase}
-          active={active && tab === "desktop"}
-          onPortChange={setDesktopPort}
-        />
-      </div>
+      ))}
     </section>
   );
 }

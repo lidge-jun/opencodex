@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../../helpers/anthropic-shared-quota";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +7,7 @@ import { clearPoolRotationState } from "../../../src/codex/pool-rotation";
 import { subscribeAccountSelections } from "../../../src/lib/account-selection-events";
 import { effectiveAnthropicAccountThreshold, parseAnthropicAccountThreshold } from "../../../src/oauth/anthropic-account-threshold";
 import { bindAnthropicSessionAffinity, clearAnthropicAccountPoolState, promoteAnthropicActiveAccount,
-  resetAnthropicRoutingForManualSelection, resolveAnthropicAccountForSession, rotateAnthropicAccountOn429 } from "../../../src/oauth/anthropic-routing";
+  resetAnthropicRoutingForManualSelection, resolveAnthropicAccountForSession,} from "../../../src/oauth/anthropic-routing";
 import { captureOAuthAccountSelection, getAccountCredential, getAccountSet, removeAccount, replaceProviderAccountSet,
   saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount, setAnthropicAccountThreshold } from "../../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";

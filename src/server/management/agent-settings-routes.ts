@@ -1,3 +1,4 @@
+import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus } from "./claude-intercept-routes";
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { randomUUID } from "node:crypto";
@@ -1138,6 +1139,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         }
       }
       if (desktopMode === "first-party") {
+        const refusal = interceptStartRefusal(ctx);
+        if (refusal) return refusal;
+        const started = await ensureManagementClaudeIntercept(ctx);
+        if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
+        const { claudeInterceptProxyPort } = await import("../../claude/intercept/runtime");
+        const configured = claudeInterceptProxyPort(config, config.port ?? 10100);
+        if (started.state.proxyPort !== configured) return jsonResponse({ ok: false, code: "port_mismatch", bound: started.state.proxyPort, configured }, 409);
         const { setIntegrationEnabled } = await import("../../codex/desired-state");
         const desired = setIntegrationEnabled("claude-desktop", true);
         if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
@@ -1323,6 +1331,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         stale: firstPartySeen.stale,
         interceptEnabled: firstPartySeen.interceptEnabled,
         interceptRunning: intercept !== null,
+        ...interceptStatus(ctx),
         proxyPort: intercept?.proxyPort ?? firstPartySeen.proxyPort,
         caCertPath: firstPartySeen.caCertPath,
         // What the running proxy routes with right now (live config), not the file on disk.
@@ -1495,6 +1504,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       cliFirstParty: config.claudeCode?.cliFirstParty === true,
       cliFirstPartyApplied: config.claudeCode?.cliFirstParty === true && sharedProxy === "live",
       desktopFirstParty: desired.desktop,
+      ...interceptStatus(ctx),
       interceptEligible: eligible,
       interceptRunning: bound !== null && eligible,
       sharedProxy,
@@ -1564,14 +1574,17 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
-      const bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
+      let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
       if (body.cliFirstParty) {
-        if (!claudeInterceptEnabled(config)) return jsonResponse({ error: "Claude intercept is disabled", code: "intercept_disabled" }, 409);
-        if (bound === null) return jsonResponse({ error: "Claude intercept is unavailable", code: "intercept_unavailable" }, 409);
+        const startRefusal = interceptStartRefusal(ctx);
+        if (startRefusal) return startRefusal;
+        const started = await ensureManagementClaudeIntercept(ctx);
+        if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
+        bound = started.state;
         const targetPort = claudeInterceptProxyPort(config, config.port ?? 10100);
         if (targetPort !== bound.proxyPort) return jsonResponse({
-          error: `Claude intercept port mismatch (configured ${targetPort}, bound ${bound.proxyPort}); restart needed`,
-          code: "intercept_unavailable",
+          error: `Claude intercept port mismatch (configured ${targetPort}, bound ${bound.proxyPort})`,
+          code: "port_mismatch", bound: bound.proxyPort, configured: targetPort,
         }, 409);
         let inspection: ReturnType<typeof inspectDesktopFirstParty>["settings"];
         try { inspection = inspectDesktopFirstParty(config).settings; }
@@ -1583,7 +1596,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       try { if (body.cliFirstParty) restoreSettings = captureDesktopFirstPartyRollback(config); }
       catch { return jsonResponse({ error: "Claude settings are unreadable", code: "unreadable" }, 500); }
       type FirstPartyMutation =
-        | { refusal: { error: string; code: "intercept_disabled" | "intercept_unavailable" } }
+        | { refusal: { error: string; code: "disabled" | "port_mismatch"; bound?: number; configured?: number } }
         | { claudeCode: OcxConfig["claudeCode"]; previous: { present: boolean; value: boolean };
             pinnedMode: "first-party" | "gateway" | undefined; retainedAmbiguous: boolean };
       let outcome: ReturnType<typeof mutatePersistedConfig<FirstPartyMutation>>;
@@ -1591,11 +1604,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         outcome = mutatePersistedConfig<FirstPartyMutation>(persisted => {
         if (body.cliFirstParty) {
           if (!claudeInterceptEnabled(persisted)) return { changed: false, value: {
-            refusal: { error: "Claude intercept is disabled", code: "intercept_disabled" as const } } };
+            refusal: { error: "Claude intercept is disabled", code: "disabled" as const } } };
           const persistedPort = claudeInterceptProxyPort(persisted, persisted.port ?? 10100);
           if (bound === null || persistedPort !== bound.proxyPort) return { changed: false, value: {
-            refusal: { error: `Claude intercept port mismatch (configured ${persistedPort}, bound ${bound?.proxyPort ?? "none"}); restart needed`,
-              code: "intercept_unavailable" as const } } };
+            refusal: { error: `Claude intercept port mismatch (configured ${persistedPort}, bound ${bound?.proxyPort ?? "none"})`,
+              code: "port_mismatch" as const, bound: bound?.proxyPort, configured: persistedPort } } };
         }
         const before = structuredClone(persisted);
         const previous = { present: Object.hasOwn(persisted.claudeCode ?? {}, "cliFirstParty"),

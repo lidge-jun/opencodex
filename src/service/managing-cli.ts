@@ -26,6 +26,13 @@ import {
 import type { ServiceInstallState } from "./state";
 
 const VERSION_PROBE_TIMEOUT_MS = 5000;
+/**
+ * A `--version` spawn is the only evidence for a PATH shim; a transient timeout or a
+ * busy cold start turns an unchanged manager into `unknown`, which flips both the
+ * takeover answer and the compatibility token the next resolve compares. One bounded
+ * retry keeps the observation stable while remaining fail-closed on a real failure.
+ */
+const VERSION_PROBE_ATTEMPTS = 2;
 
 export interface ManagingCliDeps {
   /** Environment to scan PATH/PATHEXT in. Defaults to `process.env`. */
@@ -52,12 +59,12 @@ function versionFromOutput(stdout: string): string | null {
   return null;
 }
 
-function probeVersion(
+function probeVersionOnce(
   executable: string,
   args: readonly string[],
   deps: Required<Pick<ManagingCliDeps, "spawn" | "platform" | "env">>,
+  identity: string,
 ): ManagingCliObservation {
-  const identity = [executable, ...args].join(" ");
   let result: SpawnSyncReturns<string>;
   try {
     const windowsShim =
@@ -65,10 +72,17 @@ function probeVersion(
     if (windowsShim && [executable, ...args].some(part => /[&|<>^%!"()]/.test(part))) {
       return { status: "unknown", reason: "the selected Windows command shim invocation cannot be probed safely" };
     }
+    // cmd /c re-parses the remainder of its command line: with more than one quoted
+    // part it strips the outer quotes and truncates at the first space, so every part
+    // must be quoted individually inside one wrapping pair, passed verbatim.
+    const shimCommand = `"${[executable, ...args, "--version"].map(part => `"${part}"`).join(" ")}"`;
     result = deps.spawn(
       windowsShim ? (deps.env?.ComSpec ?? "cmd.exe") : executable,
-      windowsShim ? ["/c", executable, ...args, "--version"] : [...args, "--version"],
-      { timeout: VERSION_PROBE_TIMEOUT_MS, encoding: "utf8", stdio: "pipe", windowsHide: true },
+      windowsShim ? ["/c", shimCommand] : [...args, "--version"],
+      {
+        timeout: VERSION_PROBE_TIMEOUT_MS, encoding: "utf8", stdio: "pipe",
+        windowsHide: true, ...(windowsShim ? { windowsVerbatimArguments: true } : {}),
+      },
     ) as SpawnSyncReturns<string>;
   } catch (error) {
     return {
@@ -89,6 +103,22 @@ function probeVersion(
   return version === null
     ? { status: "unknown", reason: `${identity} --version printed no semver` }
     : { status: "observed", version, identity };
+}
+
+function probeVersion(
+  executable: string,
+  args: readonly string[],
+  deps: Required<Pick<ManagingCliDeps, "spawn" | "platform" | "env">>,
+): ManagingCliObservation {
+  const identity = [executable, ...args].join(" ");
+  let observation = probeVersionOnce(executable, args, deps, identity);
+  // One bounded retry, Windows only (the platform the flake family was verified on):
+  // a single shim-timeout answer must not flip the fingerprint of an unchanged CLI.
+  const attempts = deps.platform === "win32" ? VERSION_PROBE_ATTEMPTS : 1;
+  for (let attempt = 1; observation.status !== "observed" && attempt < attempts; attempt += 1) {
+    observation = probeVersionOnce(executable, args, deps, identity);
+  }
+  return observation;
 }
 
 /**

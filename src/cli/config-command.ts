@@ -159,14 +159,16 @@ function setPath(root: Record<string, unknown>, path: string, value: unknown, re
   else current[leaf] = value;
 }
 
+/** Interpret config-set input as JSON when valid, otherwise preserve it as a string. */
 function parseValue(raw: string): unknown {
   try { return JSON.parse(raw); }
   catch { return raw; }
 }
 
+/** Accept one UTF-8 BOM from Windows JSON files or piped input. */
 function loadInput(path: string): unknown {
   const raw = path === "-" ? readFileSync(0, "utf8") : readFileSync(path, "utf8");
-  try { return JSON.parse(raw); }
+  try { return JSON.parse(raw.replace(/^\uFEFF/, "")); }
   catch { throw new CliUsageError(`invalid JSON in ${path}`); }
 }
 

@@ -168,8 +168,6 @@
 .integration-plan-changes code { font-family: var(--font-code); overflow-wrap: anywhere; }
 
 /* The Claude Code connection switch, relocated out of the sidebar. */
-.claudecode-connection-head { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
-.claudecode-connection-head .switch { margin-left: auto; }
 
 /* Cursor tab: a read-only companion page — detection, the two gateway values, last-seen, and the model table. */
 .cursor-page { display: flex; flex-direction: column; gap: 14px; }

@@ -1193,7 +1193,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
 
   if (snapshot) {
     if (guardedStep?.effect === "approval-changed") {
-      return approvalChanged();
+      return approvalChanged(guardedStep.detail);
     }
     if (guardedStep?.effect === "manager-still-active") {
       return managerStillActive(record.service, record);

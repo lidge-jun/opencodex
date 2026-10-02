@@ -10,8 +10,8 @@
  * key selection, key failover and 429 replay, connection policy — so nothing the Responses
  * pipeline enforces is bypassed.
  *
- * Authority. This lane reads no caller header. The ingress hands over one value, the caller's
- * `anthropic-beta`, which the builder reduces to an allowlist. The caller-forward passthrough in
+ * Authority. The ingress hands over caller `anthropic-beta` for allowlisting and an opaque
+ * observed CLI identity handle for first-party compatibility. Neither grants credential authority. The caller-forward passthrough in
  * `claude-messages.ts` (the caller's own Anthropic credential) is a different branch decided
  * before this one, and nothing here can reach it or be reached from it.
  *
@@ -67,6 +67,7 @@ import type { OcxProviderTransport } from "../providers/xai-transport";
 import { preservesPhysicalComboProvider, resolveComboId } from "../combos";
 import { captureRouteStaticPolicy, routeModel, type RouteResult } from "../router";
 import { POLICY_NAMESPACE, resolvePolicyProfileId } from "../routing/profile";
+import type { AnthropicClientIdentity } from "../adapters/anthropic/client-identity";
 import type { OcxConfig, OcxProviderConfig, OcxUsage } from "../types";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import {
@@ -145,9 +146,10 @@ export interface HandleNativeMessagesOptions {
   selector?: NativeMessagesSelector;
   /**
    * The caller's `anthropic-beta` header, handed over by the ingress. The builder keeps only
-   * allowlisted values; no other caller header reaches this lane.
+   * allowlisted values. Client identity is a separate bounded opaque handle.
    */
   callerAnthropicBeta?: string | null;
+  clientIdentity?: AnthropicClientIdentity;
 }
 
 type FinishLog = (status: number, message?: string, meta?: FinalRequestLogMeta) => void;
@@ -410,6 +412,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, "anthropic");
     const built = buildAnthropicMessagesPassthroughRequest(activeProvider, route.modelId, body, config, {
       callerAnthropicBeta: options.callerAnthropicBeta,
+      providerAccountUuid: oauthBinding?.providerAccountUuid,
+      clientIdentity: options.clientIdentity,
     });
     if (built.strippedOpaqueState && rejectUnrepresentable) throw new NativeOpaqueStateRefusal();
     if (built.droppedBetas) addProtocolEntryReason(logCtx, "anthropic-beta-dropped");

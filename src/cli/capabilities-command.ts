@@ -45,14 +45,15 @@ function renderHuman(caps: readonly Capability[], includeHead: boolean): void {
   }
 }
 
+/** Render declared capabilities; reject invalid arguments with 64 and report unmatched routes with 4. */
 export async function runCapabilities(argv: string[]): Promise<number> {
   const args = [...argv];
   const json = takeFlag(args, "--json");
   const mutatingOnly = takeFlag(args, "--mutating-only");
   const route = takeValueFlag(args, "--route");
 
-  if (route !== undefined && route.length === 0) {
-    console.error("Usage: ocx capabilities --route <path>");
+  if (args.length > 0 || (route !== undefined && route.trim().length === 0)) {
+    console.error("Usage: ocx capabilities [--json] [--mutating-only] [--route <path>]");
     return 64;
   }
 

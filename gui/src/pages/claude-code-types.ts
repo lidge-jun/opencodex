@@ -32,6 +32,10 @@ export interface ClaudeCodeState {
   cliFirstParty: boolean;
   cliFirstPartyApplied: boolean;
   desktopFirstParty: boolean;
+  interceptReason?: string | null;
+  pickerReason?: string | null;
+  pickerFailurePort?: number;
+  interceptFailurePort?: number;
   interceptRunning: boolean;
   interceptEligible: boolean;
   sharedProxy: "none" | "live" | "stopped" | "disabled" | "broken" | "foreign" | "local" | "unknown";

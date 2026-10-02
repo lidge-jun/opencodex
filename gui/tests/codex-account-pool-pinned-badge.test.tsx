@@ -66,6 +66,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     pauseUpdatingId: null,
     priorityUpdatingId: null,
     autoSwitchUpdatingId: null,
+    creditsAfterLimitUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -74,6 +75,8 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
     setAccountAutoSwitchThreshold: async () => ({ ok: true }),
+    setAccountCreditsAfterLimit: async () => ({ ok: true }),
+    setAllCreditsAfterLimit: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: true }),
@@ -314,7 +317,7 @@ test("account cards show custom threshold controls only when enabled", async () 
   expect(inheritedCard.textContent).toContain("Custom account threshold");
   expect(inheritedCard.textContent).not.toContain("Global 95%");
   expect(inheritedCard.querySelector('input[type="number"]')).toBeNull();
-  const inheritedToggle = inheritedCard.querySelector<HTMLButtonElement>('button[aria-pressed="false"]');
+  const inheritedToggle = inheritedCard.querySelector<HTMLButtonElement>('.codex-account-auto-switch button[aria-pressed="false"]');
   expect(inheritedToggle).not.toBeNull();
   expect(inheritedToggle!.disabled).toBe(false);
 
@@ -410,7 +413,7 @@ test("account threshold override cannot persist the seed before global threshold
   }));
 
   const inheritedCard = cardFor("pool@example.test");
-  const toggle = inheritedCard.querySelector<HTMLButtonElement>('button[aria-pressed="false"]');
+  const toggle = inheritedCard.querySelector<HTMLButtonElement>('.codex-account-auto-switch button[aria-pressed="false"]');
   expect(toggle).not.toBeNull();
   expect(toggle!.disabled).toBe(true);
 

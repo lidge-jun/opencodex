@@ -1,3 +1,4 @@
+import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
 import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isLocalUpstream } from "../../lib/local-upstream";
@@ -994,8 +995,8 @@ export async function prepareAdapterExchange(
       ) {
         const nextAccountId = await rotateAnthropicAccountOnResponse(upstreamResponse, {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          decision: transportState.anthropicRouteDecision, signal: upstream.signal,
-          canRetry: transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
         if (!nextAccountId) break;
         try {
@@ -1427,6 +1428,7 @@ export async function prepareAdapterExchange(
           status: upstreamResponse.status,
           message,
           upstreamRetryAfter,
+          includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
       return formatErrorResponse(
         upstreamResponse.status,

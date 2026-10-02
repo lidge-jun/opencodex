@@ -200,6 +200,7 @@ export function takeOption(args: string[], flag: string): string | undefined {
   return value;
 }
 
+/** Consume one boolean option using the supported on/off synonyms; reject other values. */
 export function takeBooleanOption(args: string[], flag: string): boolean | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
@@ -208,11 +209,13 @@ export function takeBooleanOption(args: string[], flag: string): boolean | undef
   throw new CliUsageError(`${flag} must be on or off`);
 }
 
+/** Parse a decimal safe integer, allowing separators only between digits. */
 export function takeIntegerOption(args: string[], flag: string, options: { min?: number } = {}): number | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
-  const value = Number(raw.replace(/[_,]/g, ""));
-  if (!Number.isInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
+  const decimal = raw.trim();
+  const value = /^[+-]?\d+(?:[_,]\d+)*$/.test(decimal) ? Number(decimal.replace(/[_,]/g, "")) : NaN;
+  if (!Number.isSafeInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
     throw new CliUsageError(`${flag} must be an integer${options.min !== undefined ? ` >= ${options.min}` : ""}`);
   }
   return value;
