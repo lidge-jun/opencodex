@@ -97,8 +97,9 @@ On Windows, the generated-wrapper check accepts package installs that invoke the
 A standalone wrapper that invokes `start` directly must carry the generated protocol and runtime
 markers, one quoted `OCX_BUN` assignment, and no `OCX_CLI` assignment in either quoting form.
 Its executable lines and control-flow order must match the standalone script emitted by
-`src/service/windows-taskxml.ts` or the exact preceding backup-log variant retained for read-only
-upgrade recognition. The generator never emits that legacy variant. Added jumps, exits, calls,
+`src/service/windows-taskxml.ts` or exact prior forms retained for read-only upgrade recognition:
+the preceding backup-log variant and the forms before the Bun-placeholder size gate, with either
+old or fixed backup logging. The generator never emits those legacy variants. Added jumps, exits, calls,
 labels, altered logging commands, or partially combined variants make the probe unknown.
 When Task Scheduler reports a registered task, the probe also requires its action to contain exactly
 one Exec with the generated `wscript.exe` command and exact `/b /nologo` launcher arguments.
