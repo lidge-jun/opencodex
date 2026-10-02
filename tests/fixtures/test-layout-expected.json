@@ -1783,6 +1783,7 @@
   "update-tray-handoff.test.ts": "update",
   "update-tree-ownership.test.ts": "update",
   "upstream-connect-error.test.ts": "server",
+  "upstream-error-message-fallback.test.ts": "lib",
   "upstream-http-error.test.ts": "adapters",
   "upstream-http-version.test.ts": "server",
   "upstream-reachability.test.ts": "codex-integration",
