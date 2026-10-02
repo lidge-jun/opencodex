@@ -175,9 +175,14 @@ export function classifyLoginCodeError(error: unknown): LoginCodeError {
       : "invalid_or_expired_code";
   }
   const name = error instanceof Error ? error.name : "";
-  // fetch() reports a dead network as TypeError and its own deadline as TimeoutError.
-  if (name === "TimeoutError" || name === "AbortError" || error instanceof TypeError) {
-    return "provider_unreachable";
+  if (name === "TimeoutError" || name === "AbortError") return "provider_unreachable";
+  // fetch() reports a dead network as a TypeError, but so does any bug in this code. Bun tags
+  // the network kind with a string `code` (`ConnectionRefused`, `ENOTFOUND`, ...) and Node puts
+  // one on `cause`; a plain programming TypeError carries neither, and must not be reported to
+  // the user as "Anthropic is unreachable".
+  if (error instanceof TypeError) {
+    const code = (error as { code?: unknown }).code ?? (error as { cause?: { code?: unknown } }).cause?.code;
+    if (typeof code === "string" && code !== "") return "provider_unreachable";
   }
   return "invalid_or_expired_code";
 }

@@ -232,6 +232,22 @@ describe("ocx provider", () => {
     }
   });
 
+  // `--code` is the OAuth code-display mode. Codex has none, and account-auth owns a valued
+  // `--code <code>` of its own, so forwarding would read the provider name as the code.
+  test.each([["--code", "codex"], ["codex", "--code"], ["--code", "openai"]])(
+    "login %s %s refuses code mode for Codex and points at --device",
+    (a, b) => {
+      const { dir } = freshConfig({});
+      try {
+        const result = runCli(["login", a, b], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ocx account login codex --device");
+      } finally {
+        removeTreeWithRetry(dir);
+      }
+    },
+  );
+
   test("provider add custom provider requires --adapter and --base-url", () => {
     const { dir } = freshConfig();
     try {

@@ -369,6 +369,14 @@ const commandRunners: Record<string, CommandRunner> = {
     // a second noun. Everything else stays on the local OAuth/API-key path.
     const { isCodexAccountLoginName, handleAccountAuthCommand } = await import("./account-auth");
     if (isCodexAccountLoginName(positional[0] ?? "")) {
+      // `--code` here means the OAuth code-display mode, which Codex does not have. Forwarding it
+      // is worse than ignoring it: account-auth has its own valued `--code <code>`, so
+      // `ocx login --code codex` would read "codex" as the authorization code. Codex's headless
+      // path is the device-code login.
+      if (codeMode) {
+        console.error("Codex has no code-display login. For a headless host use: ocx account login codex --device");
+        return 1;
+      }
       // null means "unknown subcommand", which "login" never is; the coalesce exists because
       // the shared signature serves callers that do pass an unknown one.
       const code = await handleAccountAuthCommand("login", loginArgs, { findLiveProxy: deps.findLiveProxy });

@@ -15,7 +15,7 @@ import {
   waitForLoginSettled,
 } from "../../src/oauth";
 import { getAccountSet, removeCredential, resetOAuthReauthReconcileStateForTests } from "../../src/oauth/store";
-import { loginFlowKeys, loginState, resetOAuthFlowReconcileStateForTests } from "../../src/oauth/login-flow-state";
+import { admitLoginFlow, classifyLoginCodeError, loginFlowKeys, loginState, resetOAuthFlowReconcileStateForTests } from "../../src/oauth/login-flow-state";
 import { ANTHROPIC_CODE_REDIRECT_URI, AnthropicOAuthFlow } from "../../src/oauth/anthropic";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
@@ -659,6 +659,44 @@ describe("OAuth code-display login", () => {
     // And the provider-only surface acts on its own flow, not whichever was newest overall.
     expect(getLoginStatus("anthropic").flowId).toBe("flow-anthropic");
     expect(getLoginStatus("xai").flowId).toBe("flow-xai");
+  });
+
+  // The same isolation on the three mutating surfaces, each of which ran through the unbracketed
+  // filter: admission, cancellation and clearing. Every assertion here fails with the old
+  // precedence, because xai's rows then answer anthropic's lookups and vice versa.
+  test("admission, cancellation and clearing never cross providers", () => {
+    // A callback-mode xai login in flight must not block an anthropic code login as an overlap.
+    loginState.set("flow-xai", { done: false, provider: "xai", flowId: "flow-xai" });
+    expect(() => admitLoginFlow("anthropic", true)).not.toThrow();
+
+    // The per-provider cap counts only that provider's rows: a full xai table admits anthropic.
+    for (let i = 0; i < 64; i++) loginState.set(`xai-done-${i}`, { done: true, provider: "xai", flowId: `xai-done-${i}` });
+    expect(() => admitLoginFlow("anthropic", true)).not.toThrow();
+
+    // A flow id belonging to another provider is refused, and the other provider's flow survives.
+    loginState.set("flow-anthropic", { done: false, provider: "anthropic", flowId: "flow-anthropic" });
+    expect(cancelLoginFlow("xai", "flow-anthropic")).toBe(false);
+    expect(loginState.get("flow-anthropic")?.done).toBe(false);
+
+    // Clearing one provider drops only its own rows.
+    clearLoginState("xai");
+    expect(loginFlowKeys("xai")).toEqual([]);
+    expect(loginFlowKeys("anthropic")).toEqual(["flow-anthropic"]);
+    clearLoginState("anthropic");
+  });
+
+  // A TypeError is how fetch() reports a dead network, but it is also what any bug throws. Only
+  // the network kind carries a `code` (Bun: on the error, Node: on `cause`), so only that one may
+  // tell the user Anthropic is unreachable.
+  test("only a network TypeError is classified as provider_unreachable", () => {
+    const network = Object.assign(new TypeError("Unable to connect."), { code: "ConnectionRefused" });
+    const dns = Object.assign(new TypeError("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    const node = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
+    expect(classifyLoginCodeError(network)).toBe("provider_unreachable");
+    expect(classifyLoginCodeError(dns)).toBe("provider_unreachable");
+    expect(classifyLoginCodeError(node)).toBe("provider_unreachable");
+    expect(classifyLoginCodeError(Object.assign(new Error("deadline"), { name: "TimeoutError" }))).toBe("provider_unreachable");
+    expect(classifyLoginCodeError(new TypeError("Cannot read properties of undefined"))).not.toBe("provider_unreachable");
   });
 
   test("the callback flow's paste route keeps its original accept-only contract", async () => {
