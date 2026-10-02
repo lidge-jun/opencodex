@@ -326,8 +326,9 @@ Caller credentials, proxy/hop headers, arbitrary SDK names and betas are never p
 These are compatibility observations, not authorization or proof of client provenance. Missing
 identity, generated Responses, caller-forward and compatible destinations keep their contracts.
 The accepted native first-party behavior preserves one genuine Claude Code session id and its
-metadata device/session components across pooled accounts, matching a genuine client on a manual
-account switch. Consequently, accounts serving that session are linkable upstream. Traffic without
+metadata device/session components across token refresh and an eligible unpooled account switch,
+matching a genuine client on a manual account switch. Consequently, accounts serving that session
+are linkable upstream. Pooled accounts stay on the Responses bridge described below. Traffic without
 a genuine client identity retains per-credential synthesized session ids.
 `tests/adapters/anthropic/anthropic-client-identity.test.ts` and
 `tests/claude-integration/messages-native-oauth.test.ts` cover header continuity through refresh
