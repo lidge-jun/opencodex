@@ -295,8 +295,8 @@ placement the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicB
 builder never mutates its input. A dropped field has no name in the feature vocabulary, so it
 records no feature effect.
 
-Caller betas. The only caller header the lane receives is `anthropic-beta`, which the ingress
-hands over explicitly; `Authorization` and `x-api-key` never reach the provider.
+Caller betas. The ingress hands over `anthropic-beta` explicitly; caller `Authorization` and
+`x-api-key` never reach the managed provider.
 `src/adapters/anthropic/beta-allowlist.ts` keeps a value only when it is on the list for the
 destination's class and re-emits it in the list's own spelling: `interleaved-thinking-2025-05-14`
 for `api.anthropic.com`, nothing for an Anthropic-compatible host. Proxy-owned betas (the OAuth
@@ -313,6 +313,20 @@ dropped, a message left empty dropped) and the trace gains `opaque-state-strippe
 `feature-unrepresentable` + `opaque-state-stripped`), and a rebuild that would strip mid-request
 fails closed. Because the source body is never mutated, each build — including one after a key
 re-selection moves to another domain — decides from the full envelope copy the lane was given.
+
+Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI bundle
+on an opaque request-local handle: CLI-class UA plus valid session UUID, `X-App: cli`, JS and Node
+SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
+Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
+authority. The handle stores its headers privately in a WeakMap and serializes without them.
+The native builder applies it only for first-party Anthropic, independently of bearer/UUID
+selection. Its observed identity wins over configured identity headers without duplicate spelling;
+caller credentials, proxy/hop headers, arbitrary SDK names and betas are never part of the bundle.
+These are compatibility observations, not authorization or proof of client provenance. Missing
+identity, generated Responses, caller-forward and compatible destinations keep their contracts.
+`tests/adapters/anthropic/anthropic-client-identity.test.ts` and
+`tests/claude-integration/messages-native-oauth.test.ts` cover header continuity through refresh
+and account switch, destination isolation, bounded parsing and credential exclusion.
 
 OAuth. Behind `managedMessagesNativeOAuth`, which `resolveProtocolSettings` treats as off unless
 `managedMessagesNative` is on. Only the `anthropic` provider the OAuth store serves, only to

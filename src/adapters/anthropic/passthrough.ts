@@ -8,8 +8,8 @@
  *
  * Authority: only the provider's own credential is ever placed on the request — a configured
  * key, or (PF-10) the access token of the OAuth account the lane resolved, which is sent only to
- * `api.anthropic.com`. The one caller header this builder sees is `anthropic-beta`, handed over
- * explicitly and reduced to `beta-allowlist.ts`; no other caller header is read here at all. The
+ * `api.anthropic.com`. Caller betas are reduced to `beta-allowlist.ts`; a bounded opaque
+ * CLI identity handle carries only observed compatibility headers for first-party destinations. The
  * caller-forward passthrough in `src/server/claude-messages.ts` is the only place a caller's
  * Anthropic credential may travel, and it does not come through here.
  *
@@ -27,6 +27,7 @@ import {
   applyAnthropicOAuthAuth,
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
+import { applyAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
 import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 
@@ -78,6 +79,8 @@ export interface AnthropicMessagesPassthroughOptions {
   callerAnthropicBeta?: string | null;
   /** Provider UUID captured with the serving OAuth credential; never a local account slot id. */
   providerAccountUuid?: string;
+  /** Internal request-local handle; never part of the serialized Messages body. */
+  clientIdentity?: AnthropicClientIdentity;
 }
 
 /** The allowlisted copy of `body` with `model` set to the wire model. Shallow: nothing is cloned. */
@@ -218,6 +221,7 @@ export function buildAnthropicMessagesPassthroughRequest(
       throw new Error("native OAuth serving credential was overridden by provider headers");
     }
   }
+  if (domain?.firstPartyAnthropic) applyAnthropicClientIdentity(headers, options.clientIdentity);
   const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {

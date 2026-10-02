@@ -85,6 +85,7 @@ import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
+import { captureAnthropicClientIdentity } from "../adapters/anthropic/client-identity";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import {
   isApiAuthRequired,
@@ -1202,7 +1203,8 @@ async function handleClaudeMessagesWithBudget(
     return await handleNativeMessages({
       req, config, logCtx, ...(logIds ? { logIds } : {}),
       route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
-      // The one caller header the native lane is given; the builder allowlists it.
+      // Compatibility identity is an opaque request-local handle, separate from credentials.
+      clientIdentity: captureAnthropicClientIdentity(req.headers),
       callerAnthropicBeta: req.headers.get("anthropic-beta"),
     });
   }

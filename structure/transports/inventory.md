@@ -375,3 +375,5 @@ is left to the HTTP agent, which may pool or destroy it.
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](responses-failover.md#compaction-routing-overrides) selects a target before the existing native compact or routed Responses transport is resolved.
+
+First-party managed native Messages retain the [serving UUID and observed CLI identity contract](../data-planes/protocol-paths.md#managed-native-messages). Identity headers do not authorize credentials or extend their destination scope.

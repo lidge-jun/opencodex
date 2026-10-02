@@ -8,7 +8,11 @@ const B = "22222222-2222-4222-8222-222222222222";
 const identity = { device_id: "fixture-device", session_id: "fixture-session", account_uuid: A };
 const source = {
   metadata: { user_id: JSON.stringify(identity), extra: "fixture" },
-  messages: [{ role: "user", content: `account_uuid: ${A}` }],
+  messages: [
+    { role: "user", content: `account_uuid: ${A}` },
+    { role: "assistant", content: [{ type: "tool_use", name: "fixture", id: "toolu_fixture", input: { account_uuid: A } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fixture", content: { account_uuid: A } }] },
+  ],
   tools: [{ name: "fixture", input_schema: { account_uuid: A } }],
 };
 const provider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "fixture-access" } as OcxProviderConfig;
