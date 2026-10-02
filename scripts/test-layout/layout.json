@@ -122,6 +122,7 @@
     "always-on-429-failover.test.ts": "routing",
     "ambiguous-resend-composition.test.ts": "lib",
     "ambiguous-resend-gate.test.ts": "lib",
+    "anthropic-account-metadata.test.ts": "adapters/anthropic",
     "anthropic-account-pool.test.ts": "adapters/anthropic",
     "anthropic-account-pause-outbound.test.ts": "adapters/anthropic",
     "anthropic-account-pause.test.ts": "adapters/anthropic",

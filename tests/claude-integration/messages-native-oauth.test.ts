@@ -303,6 +303,21 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(serialized).not.toContain(SIGNATURE);
   });
 
+  test("physical send binds metadata to the UUID in the serving credential, never the local slot", async () => {
+    const [id] = await seed(1);
+    const uuid = "22222222-2222-4222-8222-222222222222";
+    await saveAccountCredential("anthropic", id!, { ...credential(0), accountId: uuid });
+    const metadata = { user_id: JSON.stringify({ account_uuid: "11111111-1111-4111-8111-111111111111", device_id: "fixture-device", session_id: "fixture-session" }) };
+    const { response } = await send(fixtureConfig(), { ...BODY, stream: false, metadata });
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${credential(0).access}`);
+    const wire = sent[0]!.body.metadata as typeof metadata;
+    expect(JSON.parse(wire.user_id)).toEqual({ account_uuid: uuid, device_id: "fixture-device", session_id: "fixture-session" });
+    expect(wire.user_id).not.toContain(id!);
+    expect(JSON.parse(metadata.user_id).account_uuid).not.toBe(uuid);
+  });
+
   test("a JSON answer maps the tool name back too", async () => {
     await seed(1);
     const { response, text } = await send(fixtureConfig(), { ...BODY, stream: false });

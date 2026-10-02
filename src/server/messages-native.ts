@@ -410,6 +410,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, "anthropic");
     const built = buildAnthropicMessagesPassthroughRequest(activeProvider, route.modelId, body, config, {
       callerAnthropicBeta: options.callerAnthropicBeta,
+      providerAccountUuid: oauthBinding?.providerAccountUuid,
     });
     if (built.strippedOpaqueState && rejectUnrepresentable) throw new NativeOpaqueStateRefusal();
     if (built.droppedBetas) addProtocolEntryReason(logCtx, "anthropic-beta-dropped");

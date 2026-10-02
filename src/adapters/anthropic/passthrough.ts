@@ -27,6 +27,7 @@ import {
   applyAnthropicOAuthAuth,
   resolveAnthropicMessagesUrl,
 } from "../anthropic";
+import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 
 /**
@@ -75,6 +76,8 @@ export interface AnthropicMessagesPassthroughRequest {
 export interface AnthropicMessagesPassthroughOptions {
   /** The caller's `anthropic-beta` header, handed over by the ingress. */
   callerAnthropicBeta?: string | null;
+  /** Provider UUID captured with the serving OAuth credential; never a local account slot id. */
+  providerAccountUuid?: string;
 }
 
 /** The allowlisted copy of `body` with `model` set to the wire model. Shallow: nothing is cloned. */
@@ -201,12 +204,20 @@ export function buildAnthropicMessagesPassthroughRequest(
       : "anthropic provider requires a non-empty apiKey (authMode: key)");
   }
   const url = resolveAnthropicMessagesUrl(provider);
-  const { wireBody, strippedOpaqueState, oauthToolNames } = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const native = anthropicMessagesNativeWireBody(provider, modelId, body);
+  const { strippedOpaqueState, oauthToolNames } = native;
+  const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
   else applyAnthropicKeyAuth(headers, provider);
   // Operator-configured provider headers apply exactly as the adapter applies them.
   if (provider.headers) Object.assign(headers, provider.headers);
+  if (oauth && options.providerAccountUuid !== undefined) {
+    const wireHeaders = new Headers(headers);
+    if (wireHeaders.get("authorization") !== `Bearer ${provider.apiKey}` || wireHeaders.has("x-api-key")) {
+      throw new Error("native OAuth serving credential was overridden by provider headers");
+    }
+  }
   const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible");
   mergeAnthropicBetaHeader(headers, betas.betas);
   return {

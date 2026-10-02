@@ -325,7 +325,13 @@ dispatch by the same steps that transport takes for an unpooled route (capture t
 resolve the active snapshot, commit against the capture) and re-checks the binding before every
 physical send, re-resolving through the same owner if it moved. Planning and `count_tokens` read
 config and the read-only account set only; nothing selects, refreshes or writes. The body gets the
-Claude Code identity block and declared client tool names under the OAuth prefix; the answer's
+Claude Code identity block and declared client tool names under the OAuth prefix.
+`src/adapters/anthropic/account-metadata.ts` copy-on-write aligns a valid JSON-string
+`metadata.user_id.account_uuid` with the provider UUID captured alongside the native binding.
+The local pool id is never used; malformed, absent and unknown metadata stays unchanged.
+Every rebuild starts from the source body; the binding also checks UUID equality before send.
+Conflicting provider credential headers fail before dispatch when the binding carries a UUID.
+Key-auth and caller-forward requests retain their metadata. The answer's
 `tool_use` names are mapped back for exactly those names. A 401 or 429 is answered as the bridge
 answers an unpooled account: no refresh replay, no same-token replay, no rotation.
 
