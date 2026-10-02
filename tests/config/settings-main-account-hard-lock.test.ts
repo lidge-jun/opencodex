@@ -48,7 +48,7 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-describe("main-account 98 percent setting", () => {
+describe("main-account hard-lock setting", () => {
   test("GET reports the default-on lock without a stored key", async () => {
     const response = await request(config());
     expect(await response!.json()).toMatchObject({
@@ -115,5 +115,41 @@ describe("main-account 98 percent setting", () => {
     expect(loaded.codexMainAccountHardLock).toBeUndefined();
     const response = await request(loaded);
     expect(await response!.json()).toMatchObject({ codexMainAccountHardLock: true });
+  });
+  test("PUT thresholds persists and GET projects effective values", async () => {
+    const cfg = config();
+    const response = await request(cfg, { codexMainAccountHardLockThresholds: { short: 85, long: 95 } });
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ mainAccountHardLock: { thresholds: { short: 85, long: 95 } } });
+    expect(loadConfig().codexMainAccountHardLockThresholds).toEqual({ short: 85, long: 95 });
+    expect(await (await request(cfg))!.json()).toMatchObject({ mainAccountHardLock: { thresholds: { short: 85, long: 95 } } });
+  });
+  test.each([null, [], 90, {}, { short: 79 }, { long: 101 }, { short: 90.5 }, { long: "95" },
+    { short: 96, long: 95 }, { short: 99 }, { long: 85 }, { extra: 90 }].map(value => [value]))(
+    "invalid thresholds %j reject before any settings mutation", async thresholds => {
+      const cfg = config();
+      const response = await request(cfg, { codexMainAccountHardLock: false, codexMainAccountHardLockThresholds: thresholds });
+      expect(response!.status).toBe(400);
+      expect(cfg.codexMainAccountHardLock).toBeUndefined();
+      expect(cfg.codexMainAccountHardLockThresholds).toBeUndefined();
+    });
+  test("threshold save failure restores absent and present objects exactly", async () => {
+    for (const previous of [undefined, { short: 85, long: 95 }]) {
+      const cfg = config();
+      if (previous) cfg.codexMainAccountHardLockThresholds = previous;
+      await expect(request(cfg, { codexMainAccountHardLockThresholds: { short: 90, long: 100 } }, {
+        saveConfigPreservingClaudeCode: () => { throw new Error("fixture save failure"); },
+      })).rejects.toThrow("fixture save failure");
+      expect(cfg.codexMainAccountHardLockThresholds).toBe(previous);
+      expect(Object.hasOwn(cfg, "codexMainAccountHardLockThresholds")).toBe(previous !== undefined);
+    }
+  });
+  test("partial thresholds keep the stored sibling and validate against it", async () => {
+    const cfg = config();
+    cfg.codexMainAccountHardLockThresholds = { short: 85, long: 92 };
+    expect((await request(cfg, { codexMainAccountHardLockThresholds: { short: 93 } }))!.status).toBe(400);
+    expect(cfg.codexMainAccountHardLockThresholds).toEqual({ short: 85, long: 92 });
+    expect((await request(cfg, { codexMainAccountHardLockThresholds: { short: 88 } }))!.status).toBe(200);
+    expect(cfg.codexMainAccountHardLockThresholds).toEqual({ short: 88, long: 92 });
   });
 });

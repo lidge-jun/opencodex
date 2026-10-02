@@ -334,6 +334,11 @@ export function resolveDesktop3pAlias(alias: string): string | null {
   return desktop3pRegistry.get(alias) ?? null;
 }
 
+/** Number of decodable aliases in the installed registry (0 before the first build). */
+export function desktop3pRegistrySize(): number {
+  return desktop3pRegistry.size;
+}
+
 /** Exact registered and identity-preserving catalog IDs precede synthetic syntax. */
 export function isKnownDesktop3pModelId(id: string): boolean {
   return desktop3pRegistry.has(id) || desktop3pRealAnthropicIds.has(id);

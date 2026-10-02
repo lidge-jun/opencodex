@@ -7,8 +7,8 @@ import { dirname } from "node:path";
 import { nativeOpenAiContextWindow, type NativeContextLimitsInput } from "../../codex/catalog";
 import type { OcxClaudeDesktopProfile } from "../../types";
 import { aliasForRoute, claudeCodeNativeAlias } from "../alias";
-import { AUTO_CONTEXT_OFF, withOneMillionMarker } from "../context-windows";
-import { displayModelId, type Desktop3pRoutedModel } from "../desktop-3p";
+import { AUTO_CONTEXT_OFF, stripOneMillionMarker, withOneMillionMarker } from "../context-windows";
+import { activeDesktop3pAlias, displayModelId, resolveDesktop3pAlias, type Desktop3pRoutedModel } from "../desktop-3p";
 import { reconcileDesktopProfile, renderDesktopProfile, type DesktopProfileModel } from "../desktop-profile";
 import type { PickerModelEntry } from "./picker-bootstrap";
 
@@ -19,7 +19,8 @@ export interface PickerRouteInput {
   nativeContextCap?: NativeContextLimitsInput;
 }
 
-export function buildPickerModels(input: PickerRouteInput): PickerModelEntry[] {
+/** Candidate routes in the gateway profile's order and with its labels. */
+function renderPickerCandidates(input: PickerRouteInput): DesktopProfileModel[] {
   const candidates: DesktopProfileModel[] = [
     ...input.nativeSlugs.map(id => {
       const contextWindow = nativeOpenAiContextWindow(id, input.nativeContextCap);
@@ -35,25 +36,62 @@ export function buildPickerModels(input: PickerRouteInput): PickerModelEntry[] {
       ...(contextWindow === undefined ? {} : { contextWindow }),
     })),
   ];
-  const rendered = input.profile
+  return input.profile
     ? renderDesktopProfile(reconcileDesktopProfile(input.profile, candidates), candidates)
     : candidates;
+}
+
+function splitRoute(route: string): { provider: string; id: string } {
+  const slash = route.indexOf("/");
+  return { provider: route.slice(0, slash), id: route.slice(slash + 1) };
+}
+
+/** Desktop runners do not inherit the proxy's compaction env: mark only real >=1M windows. */
+function pickerSelector(alias: string, contextWindow: number | undefined): string {
+  return withOneMillionMarker(alias, contextWindow === undefined ? {} : { [alias]: contextWindow }, AUTO_CONTEXT_OFF)!;
+}
+
+export function buildPickerModels(input: PickerRouteInput): PickerModelEntry[] {
+  const rendered = renderPickerCandidates(input);
   const out: PickerModelEntry[] = [];
   const seen = new Set<string>();
   for (const model of rendered) {
-    const slash = model.route.indexOf("/");
-    const provider = model.route.slice(0, slash);
-    const id = model.route.slice(slash + 1);
+    const { provider, id } = splitRoute(model.route);
     if (provider === "anthropic" && id.startsWith("claude-")) continue;
     const alias = provider === "native" ? claudeCodeNativeAlias(id) : aliasForRoute(provider, id);
     if (!alias || seen.has(alias)) continue;
     seen.add(alias);
-    // Desktop runners do not inherit the proxy's compaction env: mark only real >=1M windows.
-    const selector = withOneMillionMarker(alias, model.contextWindow === undefined ? {} : { [alias]: model.contextWindow }, AUTO_CONTEXT_OFF)!;
-    out.push({ id: selector, name: model.label,
+    out.push({ id: pickerSelector(alias, model.contextWindow), name: model.label,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) });
   }
   return out;
+}
+
+/**
+ * Rows for the Claude Code CLI's `cc` catalog. The CLI only offers Claude-shaped ids, so each route
+ * uses its Desktop 3P registry alias, and only one the registry decodes back to the same route: an
+ * id the router cannot resolve is never advertised. Real Anthropic rows are already in the catalog.
+ */
+export function buildCliPickerModels(input: PickerRouteInput): PickerModelEntry[] {
+  const out: PickerModelEntry[] = [];
+  const seen = new Set<string>();
+  for (const model of renderPickerCandidates(input)) {
+    const { provider, id } = splitRoute(model.route);
+    if (provider === "anthropic" && id.startsWith("claude-")) continue;
+    const alias = activeDesktop3pAlias(provider, id);
+    if (seen.has(alias) || resolveDesktop3pAlias(alias) !== model.route) continue;
+    seen.add(alias);
+    out.push({ id: pickerSelector(alias, model.contextWindow), name: model.label,
+      description: `opencodex · ${model.route}`, route: model.route,
+      ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) });
+  }
+  return out;
+}
+
+/** Rows whose alias still decodes to the route it was minted for: the registry can be rebuilt after a snapshot was taken. */
+export function routableCliPickerModels(models: readonly PickerModelEntry[]): PickerModelEntry[] {
+  return models.filter(model => model.route !== undefined
+    && resolveDesktop3pAlias(stripOneMillionMarker(model.id)) === model.route);
 }
 
 export interface PickerModelSnapshot {
@@ -68,11 +106,17 @@ function parseSnapshot(value: unknown): { models: PickerModelEntry[]; builtAt: n
   if (typeof candidate.builtAt !== "number" || !Number.isFinite(candidate.builtAt) || !Array.isArray(candidate.models)) return null;
   if (!candidate.models.every(model => model && typeof model === "object"
     && typeof model.id === "string" && typeof model.name === "string"
-    && (model.contextWindow === undefined || typeof model.contextWindow === "number"))) return null;
+    && (model.contextWindow === undefined || typeof model.contextWindow === "number")
+    && (model.description === undefined || typeof model.description === "string")
+    && (model.route === undefined || typeof model.route === "string"))) return null;
   return { models: candidate.models as PickerModelEntry[], builtAt: candidate.builtAt };
 }
 
-export function createPickerModelSnapshot(load: () => Promise<PickerRouteInput>, persistPath?: string): PickerModelSnapshot {
+export function createPickerModelSnapshot(
+  load: () => Promise<PickerRouteInput>,
+  persistPath?: string,
+  build: (input: PickerRouteInput) => PickerModelEntry[] = buildPickerModels,
+): PickerModelSnapshot {
   let snapshot: { models: PickerModelEntry[]; builtAt: number } | null = null;
   if (persistPath) {
     try { snapshot = parseSnapshot(JSON.parse(readFileSync(persistPath, "utf8")) as unknown); } catch { /* No usable prior snapshot. */ }
@@ -82,7 +126,7 @@ export function createPickerModelSnapshot(load: () => Promise<PickerRouteInput>,
     if (pending) return pending;
     pending = (async () => {
       try {
-        const models = buildPickerModels(await load());
+        const models = build(await load());
         const next = { models, builtAt: Date.now() };
         if (persistPath) {
           mkdirSync(dirname(persistPath), { recursive: true, mode: 0o700 });

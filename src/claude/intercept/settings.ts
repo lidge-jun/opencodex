@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFile } from "../../config/atomic-write";
 import { claudeConfigDir } from "../auth-detect";
+import { invalidateClaudeCodeServedCatalog } from "./cli-catalog";
 
 /**
  * Claude Code `settings.json` env block for intercept mode.
@@ -115,6 +116,8 @@ function writeSettings(path: string, doc: SettingsDoc): void {
   // The managed env embeds the proxy token, so the file must stay owner-only:
   // atomicWriteFile applies the real NTFS ACL on Windows where chmod is a no-op.
   atomicWriteFile(path, `${JSON.stringify(doc, null, 2)}\n`);
+  // Whether Claude Code reaches the proxy just changed, so its cached /model list is stale.
+  invalidateClaudeCodeServedCatalog(dirname(path));
 }
 
 export type ClaudeInterceptSettingsWrite =

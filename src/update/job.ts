@@ -238,9 +238,8 @@ async function waitForGhostListenClear(
 }
 
 function packageLauncherPath(): string {
-  // This module lives at src/update/job.ts — the launcher is <pkg-root>/bin/ocx.mjs.
-  // After `npm install -g`, import.meta.url can still point at npm's renamed temp
-  // tree (`@bitkyc08/.opencodex-*`). Prefer the live package path when that happens.
+  // The launcher is <pkg-root>/bin/ocx.mjs. After `npm install -g`, import.meta.url
+  // can still point at npm's renamed temp tree — prefer the live package path then.
   const fromMeta = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "ocx.mjs");
   if (!/[\\/]\.opencodex-/i.test(fromMeta) && existsSync(fromMeta)) return fromMeta;
   const live = fromMeta.replace(/[\\/]@bitkyc08[\\/]\.opencodex-[^\\/]+/i, `${sep}@bitkyc08${sep}opencodex`);
@@ -470,17 +469,16 @@ export function restartCommand(
   const startArgs = pinPort
     ? [launcher, "start", "--port", String(Math.trunc(port))]
     : [launcher, "start"];
-  // Default to the in-place refresh: `install` always registers, while repair reuses a healthy
-  // Windows scheduler definition and re-registers only when the live definition is stale.
+  // Default to repair, which reuses a healthy registration and re-registers only a stale one.
   const svcArgs = serviceInstalled ? [launcher, ...(serviceArgs ?? ["service", "repair"])] : startArgs;
   if (usesNodeLauncher(installer)) {
     const bin = nodeBin();
     const args = svcArgs;
     return { mode, bin, args, display: formatCommand(bin, args) };
   }
-  // bun/source installs: restart via the current runtime executable + package launcher (both real
-  // .exe files), NOT the `ocx.cmd` shim. Spawning a `.cmd` shell-less throws EINVAL on Windows
-  // Node/Bun ≥18.20/20.12 (CVE-2024-27980 hardening) — the same class the npm path (nodeBin) avoids.
+  // bun/source installs restart via the runtime executable + package launcher (real
+  // .exe files), not `ocx.cmd` — shell-less `.cmd` spawn throws EINVAL on Windows
+  // (CVE-2024-27980 hardening), the same class the npm path avoids.
   const bin = process.execPath;
   const args = svcArgs;
   return { mode, bin, args, display: formatCommand(bin, args) };
@@ -873,9 +871,8 @@ export function summarizeCommandOutput(
   const parts: string[] = [];
   parts.push(signal ? `terminated by ${signal}` : `exit ${status ?? "null"}`);
 
-  // Read npm's own named fields rather than reproducing its text. This is what makes a failed
-  // update diagnosable again: `code: E404 · 404: 404 Not Found - GET https://registry...` tells
-  // a user exactly what happened, and none of it can be a local path.
+  // Read npm's own named fields rather than reproducing its text — `code: E404 ·
+  // 404: ...` tells a user exactly what happened and none of it can be a local path.
   const fields = npmDiagnosticFields(`${stderr}\n${stdout}`);
   if (fields.length > 0) parts.push(...fields);
 
@@ -1001,6 +998,13 @@ export interface RestartIo {
    * to a direct proxy start so dashboard updates never leave /healthz dead.
    */
   serviceViableFn?: () => boolean;
+  /**
+   * Free the ownership-mutation lease before a service-manager-mediated start that
+   * cannot join it (#5760); wired by runUpdateRestartWithOwnershipLease.
+   */
+  releaseForServiceManagerFn?: () => void;
+  /** Re-acquire the lease for the direct-start fallthrough, then re-run the veto; a notice stops the restart. */
+  reacquireForDirectStartFn?: () => { readonly notice: string; readonly failed: boolean } | null;
   probeProxy?: (port: number, hostname?: string) => Promise<boolean>;
   /** Richer /healthz read for update-correlated restart evidence (pid + version). */
   probeProxyIdentity?: (port: number, hostname?: string) => Promise<RestartProxyIdentity | null>;
@@ -1031,7 +1035,7 @@ export interface RestartIo {
     job: UpdateJobState,
     captured?: { port: number; hostname: string; oldPid?: number },
     io?: RestartIo,
-  ) => Promise<void>;
+  ) => Promise<false | void>;
   /**
    * PIDs currently LISTENing on the captured port. Used to widen the post-update
    * kill allowlist beyond the pre-update PID (Windows often leaves a respawned
@@ -1055,9 +1059,8 @@ export interface RestartIo {
  * window: being wrong here costs one extra start attempt; being wrong the other way
  * leaves the user with no proxy at all.
  *
- * It runs AFTER the child's own 20s install probe (SERVICE_INSTALL_HEALTH_MS on
- * macOS/Linux), so a reinstall that exits 0 but never serves spends up to 45s before
- * the fallback — inside RESTART_TIMEOUT_MS of 60s. That is why this is 25s, not more.
+ * It runs AFTER the child's own 20s install probe, so a reinstall that exits 0 but
+ * never serves spends up to 45s before the fallback — inside the 60s restart budget.
  */
 export const SERVICE_RECOVERY_HEALTH_MS = 25_000;
 
@@ -1095,12 +1098,11 @@ async function restartAfterUpdate(
   job: UpdateJobState,
   captured?: { port: number; hostname: string; oldPid?: number },
   io: RestartIo = {},
-): Promise<void> {
+): Promise<false | void> {
   const serviceInstalled = (io.serviceInstalledFn ?? isServiceInstalled)();
   const config = loadConfig();
-  // The stop-first update flow has already cleared pid/runtime state by the time we run,
-  // so the pre-update capture (taken before the update command) is the authoritative
-  // port to wait on; config is only the cold-start fallback.
+  // Stop-first update already cleared pid/runtime state, so the pre-update capture is
+  // the authoritative port to wait on; config is only the cold-start fallback.
   const port = captured?.port ?? config.port ?? 10100;
   const hostname = captured?.hostname ?? config.hostname ?? "127.0.0.1";
   const oldPid = typeof captured?.oldPid === "number" && captured.oldPid > 0
@@ -1119,10 +1121,9 @@ async function restartAfterUpdate(
   const listPids = io.listListenPidsFn ?? listListenPids;
   const verifyOcx = io.verifyOcxFn ?? verifyPidIdentity;
   const aliveFn = io.isAliveFn ?? isProcessAlive;
-  // Pre-update PID plus any ocx still LISTENing on the captured port. After a
-  // stop-first package-manager self-update Windows often leaves a respawned bun/node child
-  // that is not the captured PID; treating it as protected blocks reclaim and
-  // the direct-start fallback never binds.
+  // Pre-update PID plus any ocx still LISTENing on the captured port: a self-update
+  // often leaves a respawned bun/node child that is not the captured PID, and
+  // treating it as protected blocks reclaim so the direct start never binds.
   const reclaimKillAllowlist = (): number[] => {
     const allow = new Set<number>();
     if (oldPid != null) allow.add(oldPid);
@@ -1137,30 +1138,24 @@ async function restartAfterUpdate(
     intervalMs: 100,
     scanIntervalMs: 500,
     killOcxHolders: true,
-    // Windows scheduler wrappers can mint a *new* bun PID during the wait; keep
-    // killing every ocx listener on this port, not only the pre-wait snapshot.
-    // npm rename trees under `@bitkyc08/.opencodex-*` are classified as ocx by
-    // isOcxStartCommandLine — never kill unknown foreign claimants on this port.
+    // Scheduler wrappers mint new ocx PIDs during the wait — kill every ocx
+    // listener, not only the pre-wait snapshot; foreign claimants stay protected.
     killAllOcxOnPort: true,
     onlyKillPids,
   });
 
   if (serviceInstalled) {
     // schtasks /end often leaves the hidden cmd/wscript wrapper alive; its :loop
-    // respawns `ocx start` a few seconds later and races port reclaim. End the
-    // task again and best-effort kill those wrappers before we touch the socket.
+    // respawns `ocx start` a few seconds later and races port reclaim, so end the
+    // task again and kill those wrappers before touching the socket, then reclaim it
+    // for wrappers that bake `--port`.
     stopWindowsServiceWrappersBestEffort();
-    // Stop-first update already unloaded the service; reclaim the socket, then
-    // reinstall wrappers that bake `--port`.
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
     let skipServiceInstall = false;
-    // This skip existed because refresh ran `ocx service install`, whose Windows path always
-    // registers. `service repair` normally reuses the live task and can refresh a stale
-    // definition through its guarded create/elevation path, so the install-only skip no longer
-    // applies and would leave the common dashboard update with stale service assets.
-    //
-    // Only a caller that still passes install argv keeps the old behavior.
+    // `service repair` reuses the live task and refreshes a stale definition through
+    // its guarded create/elevation path, so the old install-only skip no longer
+    // applies; only a caller that still passes install argv keeps that behavior.
     const refreshRegisters = (svcArgs ?? []).includes("install");
     if ((io.platform ?? process.platform) === "win32" && process.env.OCX_SERVICE === "1" && refreshRegisters) {
       updateJob(job, {}, "Skipping service re-registration from the non-elevated update worker; falling back to a direct proxy start.");
@@ -1183,13 +1178,17 @@ async function restartAfterUpdate(
         ? liveScan.pids.filter(pid => pid !== process.pid && aliveFn(pid))
         : null;
       if (liveAfter !== null && liveAfter.length === 0) {
-        // Non-elevated `service install` will UAC-fail anyway; skip straight to
-        // the direct-start fallthrough instead of burning another minute on it.
+        // Non-elevated `service install` will UAC-fail anyway; go straight to the
+        // direct-start fallthrough instead of burning another minute on it.
         updateJob(job, {}, "Skipping service reinstall after reclaim timeout with no live holders; falling back to a direct proxy start.");
         skipServiceInstall = true;
       }
     }
     if (!skipServiceInstall) {
+      // `service repair` re-activates a manager whose `ocx start` child is not a
+      // process descendant and cannot join this lease; held through its serving
+      // wait, the lease makes that child die at the acquire deadline (#5760).
+      io.releaseForServiceManagerFn?.();
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(Math.trunc(port));
       let serviceOk = false;
@@ -1211,13 +1210,9 @@ async function restartAfterUpdate(
               + "Run 'ocx service status', then 'ocx service repair' by hand.",
             );
           }
-          // The refresh that just failed was `ocx service repair` (serviceReinstallArgs).
-          // It normally reuses a healthy registration, but a stale definition may have tried
-          // guarded re-registration/elevation. Advising `install` here would unconditionally
-          // send the user to re-registration — a UAC prompt on
-          // Windows and a possible WinSW-to-scheduler backend switch — to fix a service
-          // that is already registered. Point at the same command that failed so its
-          // output explains why, on every platform.
+          // The refresh that just failed was `ocx service repair`. Advising `install`
+          // here would send the user to re-registration (UAC, possible WinSW backend
+          // switch) for a service that is already registered; name the failed command.
           updateJob(
             job,
             {},
@@ -1230,13 +1225,10 @@ async function restartAfterUpdate(
         else process.env.OCX_BAKE_PORT = prevBake;
       }
       if (serviceOk) {
-        // Exit 0 is not enough, and neither is `viable`. Registration state cannot
-        // distinguish a serving supervisor from one that registered and bound nothing:
-        // `launchctl list` reports both, and `schtasks` reports a task whose child
-        // exited immediately. Since WP2 the child asserts the port itself on
-        // macOS/Linux, but Windows still reports success from registration alone, a
-        // flapping supervisor can satisfy one probe, and the child may be an older CLI.
-        // Ask the port before skipping the fallback this branch exists to protect.
+        // Registration state cannot distinguish a serving supervisor from one that
+        // registered and bound nothing — `launchctl list` reports both, `schtasks`
+        // reports a task whose child exited immediately, a flapping supervisor can
+        // satisfy one probe — so ask the port before skipping the fallback.
         const viable = (io.serviceViableFn ?? isServiceViable)();
         if (viable) {
           if (await serviceRestartServed(job, port, hostname, io)) return;
@@ -1256,9 +1248,13 @@ async function restartAfterUpdate(
         }
       }
     }
-    // Fall through to the direct proxy start below so the update never leaves the
-    // proxy stopped when the service reinstall could not run or did not leave a
-    // viable supervisor.
+  }
+
+  // The service refresh ran outside the lease; take it back so the veto and the kills/start below stay serialized.
+  const restartVeto = io.reacquireForDirectStartFn?.();
+  if (restartVeto) {
+    updateJob(job, restartVeto.failed ? { status: "failed", restarted: false, error: restartVeto.notice } : { status: "succeeded", restarted: false }, restartVeto.notice);
+    return false;
   }
 
   const pid = readPid();
@@ -1272,9 +1268,8 @@ async function restartAfterUpdate(
     }
   }
   if (serviceInstalled) stopWindowsServiceWrappersBestEffort();
-  // Reclaim the captured port before the pinned start. Spawning `--port` while the old
-  // socket is still busy is how Windows updates used to fail health checks (or hop).
-  // killAllOcxOnPort covers wrapper-respawned bun PIDs minted during the wait.
+  // Reclaim before the pinned start: spawning `--port` while the old socket is busy
+  // is how updates used to fail health checks or hop ports.
   const directAllow = reclaimKillAllowlist();
   const freed = await waitFn(port, hostname, reclaimOptsFor(directAllow));
   if (!freed) {
@@ -1459,7 +1454,7 @@ export function restartAfterUpdateForTests(
   job: UpdateJobState,
   captured: { port: number; hostname: string; oldPid?: number },
   io: RestartIo,
-): Promise<void> {
+): Promise<false | void> {
   return restartAfterUpdate(job, captured, io);
 }
 
@@ -1734,7 +1729,7 @@ export async function finishGuiUpdateRestart(
     }
   }
   const restartFn = io.restartAfterUpdateFn ?? restartAfterUpdate;
-  await restartFn(job, captured, io);
+  if ((await restartFn(job, captured, io)) === false) return false;
   if (!usesNodeLauncher(installer)) {
     // Bun/source: health alone remains enough unless a richer identity probe is supplied.
     if (!io.probeProxyIdentity) return confirmRestartedProxy(job, captured, io);
@@ -1975,9 +1970,14 @@ export async function runGuiUpdateWorker(
     }
 
     if (restart) {
-      const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async () => {
+      const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async lease => {
         job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");
-        return finishGuiUpdateRestart(job!, captured, check.installer, { ...io.restartIo, packageLauncherPathFn: () => activeLauncher });
+        return finishGuiUpdateRestart(job!, captured, check.installer, {
+          ...io.restartIo,
+          releaseForServiceManagerFn: lease.releaseForServiceManager,
+          reacquireForDirectStartFn: lease.reacquireForDirectStart,
+          packageLauncherPathFn: () => activeLauncher,
+        });
       });
       if (outcome.kind === "veto") { updateJob(job, { status: "succeeded", restarted: false }, outcome.notice); return; }
       if (!outcome.value) return;

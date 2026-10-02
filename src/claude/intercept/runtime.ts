@@ -4,6 +4,7 @@ import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
 import type { ClaudeFirstPartyDesired } from "../first-party-settings";
 import { classifyInterceptClient, interceptRouteFor } from "./client-class";
+import { createCliCatalogProvider } from "./cli-picker";
 import { CLAUDE_INTERCEPT_HOSTS, isBrowserConnect, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
 import { startClaudeInterceptListener } from "./listener";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocalInterceptLeaf } from "./local-ca";
@@ -160,6 +161,10 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
     dispatch: options.dispatch,
     ...(options.desiredClients ? { route: (req: Request) =>
       interceptRouteFor(classifyInterceptClient(req.headers.get("user-agent")), options.desiredClients!()) } : {}),
+    // The CLI's /model catalog (cli-picker.ts): wired from the routes alone, never from Desktop picker state.
+    ...(options.loadPickerRoutes && options.desiredClients ? { cliCatalog: createCliCatalogProvider({
+      configDir, loadRoutes: options.loadPickerRoutes, desiredClients: options.desiredClients,
+    }) } : {}),
     upstreamBase: options.config.claudeCode?.anthropicBaseUrl,
     ...(options.maxRequestBodySize !== undefined ? { maxRequestBodySize: options.maxRequestBodySize } : {}),
   });
