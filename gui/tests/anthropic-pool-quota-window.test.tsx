@@ -208,7 +208,7 @@ describe("Anthropic account pool quota window", () => {
     expect(windowTrigger(drainedHost).disabled).toBe(false);
   });
 
-  test("threshold zero says proactive switching is off, not all quota routing", async () => {
+  test("threshold zero says healthy sessions stay put, not that quota routing stops", async () => {
     stubPool({
       enabled: true,
       autoSwitchThreshold: 0,
@@ -218,9 +218,9 @@ describe("Anthropic account pool quota window", () => {
     });
     const host = await mountPool();
 
-    expect(host.textContent).toContain("Proactive usage-based switching is off");
-    // The stage that still runs must be named, and the window must still be identified.
-    expect(host.textContent).toContain("new-session selection");
+    expect(host.textContent).toContain("Usage thresholds do not move an existing healthy session or a healthy active account");
+    // The stages that still run must be named, along with the window that still governs them.
+    expect(host.textContent).toContain("during refusal recovery, the account with the lowest usage (Weekly bar) is chosen");
     // "429 recovery" is deliberately NOT named as a benefit of the enabled state any more:
     // reactive failover stopped being something this toggle controls, so advertising it here
     // would send an operator to the EXPERIMENTAL pool for something they already have

@@ -14,7 +14,8 @@ export type Page =
   | "remote"
   | "remote-workspace"
   | "codex-set"
-  | "integrations";
+  | "integrations"
+  | "claude";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
@@ -29,6 +30,7 @@ export const VALID_PAGES = new Set<Page>([
   "remote-workspace",
   "codex-set",
   "integrations",
+  "claude",
 ]);
 
 export function readPageFromHash(hash?: string): Page {
@@ -53,8 +55,8 @@ export function readPageFromHash(hash?: string): Page {
   // the destination page here keeps the initial hook state aligned until the
   // resolver replaces the hash with the exact nested destination.
   if (pageId === ("api" as Page)
-    || pageId === ("claude" as Page)
     || pageId === ("grok" as Page)) return "integrations";
+  if (raw === "integrations/claude" || raw === "integrations/claude/desktop") return "claude";
   return VALID_PAGES.has(pageId) ? pageId : "dashboard";
 }
 
@@ -140,6 +142,7 @@ export const QUERY_HASH_PATHS: readonly string[] = ["providers", "models/compati
 
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
+    || (page === "claude" && ["claude/account", "claude/code", "claude/desktop", "claude/settings"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "usage" && rawHash === "usage/companion")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
@@ -199,7 +202,8 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
 
   /* Legacy top-level integration pages. */
   if (rawHash === "api") return { page: "integrations", replaceTo: "integrations/keys" };
-  if (rawHash === "claude") return { page: "integrations", replaceTo: "integrations/claude" };
+  if (rawHash === "integrations/claude") return { page: "claude", replaceTo: "claude/code" };
+  if (rawHash === "integrations/claude/desktop") return { page: "claude", replaceTo: "claude/desktop" };
   if (rawHash === "grok") return { page: "integrations", replaceTo: "integrations/grok" };
 
   // Legacy deep link from the removed dual-layout era.

@@ -28,6 +28,8 @@ export interface OptionalListenerStartContext<T> {
 }
 
 export interface OptionalListenerSet<T> {
+  ensureClaudeIntercept(): ReturnType<ClaudeInterceptLifecycle<T>["ensure"]>;
+  claudeInterceptOutcome(): ReturnType<ClaudeInterceptLifecycle<T>["lastOutcome"]>;
   ingressOf(server: Server<T>): ServerIngress | undefined;
   linkRouteAllowed(url: URL, req: Request): boolean;
   linkAdmissionKeyIds(): ReadonlySet<string>;
@@ -68,6 +70,8 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
   let supervisorStop: (() => Promise<void>) | undefined;
 
   return {
+    ensureClaudeIntercept: () => claudeIntercept.ensure(),
+    claudeInterceptOutcome: () => claudeIntercept.lastOutcome(),
     ingressOf(server) {
       if (linkListener.ownsListener(server)) return "hub-link";
       if (claudeIntercept.ownsListener(server)) return "claude-intercept";

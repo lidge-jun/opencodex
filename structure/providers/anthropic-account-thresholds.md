@@ -24,8 +24,14 @@ the weekly five-hour exhaustion guard. Unknown source usage does not force a swi
 reset-aware last-good normalization remains the freshness authority. Known below-threshold
 candidates are preferred; unknown and all-drained sets retain the legacy ranking/fallback.
 Thresholds are preferences, not exclusions: model routes do not widen merely because candidates
-are drained. Manual/affinity and identity-less RR/fill-first priorities remain unchanged;
+are drained. Manual/affinity and identity-less RR/fill-first priorities remain subject to the requested
+model's shared/family exhaustion evidence; unrelated family windows cannot displace them.
 round-robin is not usage-driven. With pooling disabled, reactive recovery ignores stored policy.
 Pause, reauthentication, cooldown and credential admission continue to take precedence over zero.
 
 > Decision record: [ADR-6014](../decisions/ADR-6014-anthropic-account-threshold.md)
+
+Model-scoped weekly evidence follows the [family admission contract](anthropic-account-pool.md#family-weekly-admission).
+The configured quota window still determines the shared usage preference, with the requested
+family's weekly counter also contributing to that preference. Numeric all-drained fallback
+continues to exist; a fresh explicit upstream family rejection excludes only that family.

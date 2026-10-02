@@ -157,6 +157,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/claude-code", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/claude-desktop", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/claude-desktop/first-party-bindings", module: "server/management/agent-settings-routes", mutates: true },
+  // server/management/claude-intercept-routes
+  { method: "POST", path: "/api/claude-intercept/start", module: "server/management/claude-intercept-routes", mutates: true },
+
   // server/management/claude-desktop-picker-routes
   { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
   { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },

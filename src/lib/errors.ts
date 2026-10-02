@@ -18,7 +18,7 @@ export const ENCRYPTED_FUNCTION_OUTPUT_REJECTION =
  */
 export const SEND_BUDGET_EXHAUSTED_CODE = "request_send_budget_exhausted";
 
-/** Canonical human-readable message paths used by Responses upstream failures. */
+/** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const json = payload as {
@@ -31,14 +31,14 @@ export function upstreamErrorMessageFromPayload(payload: unknown): string | unde
       incomplete_details?: { message?: unknown };
     };
   };
-  const message = json.error?.message
-    ?? json.last_error?.message
-    ?? json.response?.error?.message
-    ?? json.response?.incomplete_details?.message
+  const messages = [json.error?.message,
+    json.last_error?.message,
+    json.response?.error?.message,
+    json.response?.incomplete_details?.message,
     // The Responses stream error event carries a flat message (type/code/message),
     // unlike the response.failed envelope the branches above already cover.
-    ?? (json.type === "error" ? json.message : undefined);
-  return typeof message === "string" ? message : undefined;
+    json.type === "error" ? json.message : undefined];
+  return messages.find((message): message is string => typeof message === "string" && message.trim().length > 0);
 }
 
 /** OpenAI / Codex hard block for high-risk cybersecurity activity (HTTP 400 or mid-stream). */

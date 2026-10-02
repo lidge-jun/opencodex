@@ -184,7 +184,7 @@ test("CLI-on refuses a disabled intercept without mutation", async () => {
     });
     const first = await put();
     expect(first.status).toBe(409);
-    expect(await first.json()).toMatchObject({ code: "intercept_disabled" });
+    expect(await first.json()).toMatchObject({ code: "disabled" });
     expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
     const settingsPath = join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
     expect(existsSync(settingsPath)).toBe(false);
@@ -234,7 +234,7 @@ test("CLI-on rechecks a drifted persisted port under the config lock", async () 
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cliFirstParty: true }),
     });
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "intercept_unavailable" });
+    expect(await response.json()).toMatchObject({ code: "port_mismatch" });
     expect(readFileSync(configPath, "utf8")).toBe(configBytes);
     expect(existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null).toBe(settingsBefore);
     expect(existsSync(tokenPath) ? readFileSync(tokenPath, "utf8") : null).toBe(tokenBefore);

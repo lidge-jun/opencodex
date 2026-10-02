@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
 /**
  * 429 credential failover is a safety net, not a routing policy.
  *
@@ -25,7 +26,6 @@ import {
   hasAnthropicFailoverQuorum,
   isAnthropicAccountPoolEnabled,
   resolveAnthropicAccountForSession,
-  rotateAnthropicAccountOn429,
 } from "../../src/oauth/anthropic-routing";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";

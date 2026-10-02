@@ -79,6 +79,7 @@ const OAUTH_HEADERS = {
   "authorization": "Bearer sk-ant-oat01-tst",
   "user-agent": "claude-cli/2.1.200",
   "x-app": "cli",
+  "x-claude-code-session-id": "44444444-4444-4444-8444-444444444444",
 };
 
 function claudeBody(): Record<string, unknown> {
@@ -121,6 +122,7 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
     expect(hit.headers.get("anthropic-beta")).toBe(OAUTH_HEADERS["anthropic-beta"]);
     expect(hit.headers.get("user-agent")).toBe("claude-cli/2.1.200");
     expect(hit.headers.get("x-app")).toBe("cli");
+    expect(hit.headers.get("x-claude-code-session-id")).toBe(OAUTH_HEADERS["x-claude-code-session-id"]);
     // Body untouched: thinking signature, cache_control, max_tokens all intact.
     expect(hit.body).toEqual(claudeBody());
 

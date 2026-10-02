@@ -144,6 +144,11 @@ These paths still use the internal Responses bridge or are not covered:
 - `previous_response_id`, `store`, `background`, and compaction stay Responses features.
 - Adapters whose wire is none of the three APIs (Gemini, Kiro, Cursor, and others) are translated
   through the IR with no feature claims.
+- Managed native Messages to first-party Anthropic preserve a coherent observed Claude Code CLI
+  user agent, session UUID and allowlisted SDK headers across token refresh and account selection.
+  Credential placement remains proxy-owned and beta allowlisting still applies. Missing or invalid
+  identity uses the existing compatibility headers; compatible hosts and generated Responses retain
+  their current behavior. Headers alone do not authorize requests or establish official support.
 - Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth covers only an
   unpooled account; a pooled account set stays on the bridge.
 - The managed native Messages path forwards a caller's `anthropic-beta` values only from a short

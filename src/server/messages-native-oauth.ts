@@ -55,6 +55,8 @@ function isRec(value: unknown): value is Rec {
 export interface NativeOAuthBinding {
   readonly selection: Selection;
   readonly snapshot: OAuthAccessSnapshot;
+  /** Anthropic account UUID from the same stored generation, distinct from snapshot.accountId. */
+  readonly providerAccountUuid?: string;
 }
 
 /** The selection moved or became pooled while it was being resolved. Maps to a 409 retry. */
@@ -95,7 +97,9 @@ export async function resolveNativeOAuthBinding(config: OcxConfig): Promise<Nati
         expectedCredentialGeneration: candidate.generation,
       })) continue;
       if (pooled(config)) break;
-      const binding = { selection: committed, snapshot: candidate };
+      const row = getAccountCredentialWithStatus(PROVIDER, candidate.accountId);
+      if (!row || credentialGeneration(row.credential) !== candidate.generation) continue;
+      const binding = { selection: committed, snapshot: candidate, providerAccountUuid: row.credential.accountId };
       if (nativeOAuthBindingIsCurrent(binding)) return binding;
     }
     // Re-read after a lost commit or a health change during credential resolution.
@@ -114,7 +118,8 @@ export function nativeOAuthBindingIsCurrent(binding: NativeOAuthBinding): boolea
     && selected?.revision === binding.selection.revision
     && !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
     && !getAnthropicAccountHealthSnapshot(binding.snapshot.accountId)
-    && credentialGeneration(row.credential) === binding.snapshot.generation;
+    && credentialGeneration(row.credential) === binding.snapshot.generation
+    && row.credential.accountId === binding.providerAccountUuid;
 }
 
 /** Map a `tool_use` block's wire name back to the caller's name; other blocks are untouched. */

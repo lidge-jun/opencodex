@@ -485,3 +485,15 @@ backup can restore the configuration; store exported files as secrets.
 `ocx usage` reads the connected hub with this client's enrolled data key. Human output identifies the hub source and client-key scope; `--json` returns the same scoped data. Range, surface, provider/model filters and custom `--since`/`--until` bounds remain available. Account breakdowns and other clients' records are not shared. An old or unavailable hub produces an explicit error instead of substituting local usage; upgrade the hub if it does not support this read.
 
 The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key` with a configured client key. Environment-wide and admin keys are refused. It accepts `range`, `surface`, `provider`, `model`, `since`, and `until`; unknown/repeated options and caller-selected key IDs are rejected. Oversized skipped rows retain the explicit incomplete-history warning.
+
+## Explain a listed request
+
+Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Rows without an ID or with control characters in their ID omit the field instead of displaying a different lookup key. JSON and JSONL output retain their existing schema.
+
+## Routing profile lookup status
+
+`ocx route policy show <id>` exits 4 when the profile does not exist. Missing or invalid command arguments exit 2. Scripts can distinguish a missing profile from incorrect usage.
+
+## Upstream error details
+
+When an upstream error envelope contains several message fields, OpenCodex uses the first nonblank string in its established priority order. Empty or malformed fields no longer hide a valid fallback diagnostic.

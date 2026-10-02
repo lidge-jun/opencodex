@@ -873,8 +873,10 @@ Rotation does not protect against provider enforcement; multi-account use may vi
 ### `anthropicAccountPool` (experimental)
 
 This opt-in pools multiple Anthropic OAuth accounts already stored in `auth.json`. It is off by
-default and not battle-tested. Accounts in the same organization may share quota, and automated
-rotation may trigger provider restrictions.
+default and experimental, and Anthropic has not endorsed automated account pooling. Accounts in the
+same organization may share quota, and switching accounts does not protect against provider
+restrictions. See the [Claude Code guide](/guides/claude-code/#claude-oauth-account-pool-experimental)
+for the subscription and client conditions the pool is meant for.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -892,11 +894,20 @@ helper fails locally before any provider request; it does not silently use an ac
 route. When the main request works but image description or web search fails, check the helper's
 configured model and the accounts eligible for that model's route.
 
-When enabled, 429 records a cooldown and may rotate within the request. The cooldown length comes
-from a usable `Retry-After`, otherwise from the latest valid reset time among rate-limit windows
-Anthropic reports as `rejected`, including weekly windows. Valid upstream deadlines are not
-shortened to a fixed cooldown ceiling; non-finite or unrepresentable deadlines are ignored.
-A refusal with no usable deadline falls back to a 60-second default backoff. Affinity is process-local
+Shared-quota 429s (rejected shared 5h/7d windows) cool the serving account and may recover
+on an eligible sibling. Retry-After wins, otherwise the latest valid rejected reset is used,
+with a 60-second default when no deadline is usable. A transient rate throttle pauses only
+that account's admission, preserves affinity, and permits one short same-account retry plus
+at most one sibling detour per request. A headerless 429 permits at most one short retry on
+the same account, leaves account health intact, and adds no synthetic Retry-After. These
+retries share the physical-send budget and stop on cancellation or committed streamed output.
+Default single-account behavior is unchanged. The requested model's shared 5-hour/weekly and
+family weekly evidence determine its pool admission. A Fable-only rejection keeps Sonnet
+eligible on the same account. Passive Fable evidence ages out after thirty minutes or its
+known reset and is revalidated by one serving request at a time. Usage thresholds remain
+soft preferences with an all-drained fallback; these controls are not hard usage or billing caps.
+Active usage probes preserve absent family windows unless the response authoritatively enumerates limits.
+Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
 

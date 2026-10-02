@@ -62,3 +62,45 @@ No eligible replacement preserves the upstream 403; generic 401 handling is unch
 Reactive recovery also works with proactive pooling disabled when multiple accounts are stored.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-quota-dispatch.test.ts`.
+
+## Classified 429 admission
+
+`src/oauth/anthropic-rate-limit-policy.ts` classifies trusted unified headers before
+`src/oauth/anthropic-account-refusal.ts` changes health. Shared 5h/7d rejection or an
+aggregate unified rejection without a family-specific rejection cools only the sending
+credential's account, including the final budget refusal. An aggregate-only refusal uses
+its unified reset or the sixty-second default; Retry-After retains precedence. Family-only
+rejection does not assert shared exhaustion. A transient Retry-After pauses account admission
+without clearing affinity; a request gets one same-account wait up to one second and at most
+one eligible sibling detour. Timer rounding at the captured retry deadline permits that
+retry, while a concurrent admission-pause extension still blocks it. Headerless/invalid-hint
+refusals get at most one short same-account
+retry and never cool the roster or invent a client Retry-After. Main, pre-output continuation
+and sidecars share the request-local allowance and physical-send budget. Cancellation,
+ambiguous-send markers, replaced credentials and committed streaming output forbid replay.
+Default single-account users acquire no new retry or admission pause.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.
+
+## Family weekly admission
+
+`src/providers/quota/anthropic-family-headers.ts` attributes 7d_oi only to fixture-confirmed
+Fable 5 models. It preserves independent shared and model windows, including rejection-only
+family evidence only on HTTP 429, without advancing the usage-probe clock. Other response
+statuses retain soft utilization without creating a hard family refusal.
+`src/oauth/anthropic-model-quota.ts` reads shared 5h/weekly and only the requested family's scoped weekly. Manual, affinity,
+strategy, reactive selection and physical dispatch use that model. A family-only refusal
+preserves unrelated sessions and account-wide health. Numeric thresholds stay soft: zero
+and the all-drained fallback remain preferences, with no hard billing cap introduced.
+
+Passive family evidence expires after thirty minutes or its known reset. An expired
+exclusion admits one request-driven revalidation send at a time, released at response
+headers or error, without a background probe. An owned 2xx retires the requested family
+exclusion even without family headers, restoring concurrent sends. Family mutations use a
+separate generation fence: a newer family observation preserves its own evidence while an
+in-flight usage probe may still recover shared cooldown and publish shared utilization.
+Credential replacement discards old passive ownership. Active non-enumerating probes preserve absent family windows; an authoritative
+limits array retires absent families. Shared rejection and family rejection keep independent
+resets, so Fable must wait for both relevant windows while Sonnet need only wait for shared quota.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-model-weekly-admission.test.ts`.

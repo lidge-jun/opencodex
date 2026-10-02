@@ -25,6 +25,7 @@ function carriesTranslatableWords(value: string): boolean {
 }
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
+  "nav.claude", // Product name.
   // Units, symbols, protocol values, machine labels, and product names.
   "integrations.cursor.noControl",
   "uptime.hour",

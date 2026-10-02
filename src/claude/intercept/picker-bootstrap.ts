@@ -9,6 +9,10 @@ export interface PickerModelEntry {
   id: string;
   name: string;
   contextWindow?: number;
+  /** Row description; Desktop entries never carry one, so their rows keep the stripped template. */
+  description?: string;
+  /** The route an alias was minted for (CLI rows), so a later registry rebuild can be re-checked. */
+  route?: string;
 }
 
 export const BOOTSTRAP_MAX_ENCODED_BYTES = 4 * 1024 * 1024;
@@ -44,8 +48,19 @@ export type PickerInjectionOutcome =
 export const PICKER_SURFACE_IDS = ["ccd", "code"] as const;
 /** Surface names the log may print; anything else from the body is counted, never echoed. */
 const KNOWN_SURFACE_IDS = new Set(["ccd", "code", "cc", "ccr", "cowork", "chat", "design"]);
+const TEMPLATE_STRIPPED_KEYS = ["disabled", "disabled_reason", "badge", "tooltip", "description", "fast_mode"];
 
-function injectIntoSurface(surface: Record<string, unknown>, models: readonly PickerModelEntry[]): number | string {
+/** Which surfaces to rewrite and which extra template keys to drop; the defaults are Desktop's. */
+export interface PickerInjectionOptions {
+  surfaces?: readonly string[];
+  extraStrippedKeys?: readonly string[];
+}
+
+function injectIntoSurface(
+  surface: Record<string, unknown>,
+  models: readonly PickerModelEntry[],
+  stripped: readonly string[],
+): number | string {
   if (!Array.isArray(surface.models)) return "no_models";
   const entries = surface.models as unknown[];
   const template = entries.map(record).find(entry =>
@@ -63,9 +78,9 @@ function injectIntoSurface(surface: Record<string, unknown>, models: readonly Pi
     if (model.contextWindow === undefined) delete copy.context_window;
     else copy.context_window = model.contextWindow;
     for (const key of Object.keys(copy)) {
-      if (["disabled", "disabled_reason", "badge", "tooltip", "description", "fast_mode"].includes(key)
-        || /version/i.test(key)) delete copy[key];
+      if (stripped.includes(key) || /version/i.test(key)) delete copy[key];
     }
+    if (model.description !== undefined) copy.description = model.description;
     entries.push(copy);
     existing.add(model.id);
     added++;
@@ -77,13 +92,16 @@ export function injectPickerModels(
   bootstrap: unknown,
   models: readonly PickerModelEntry[],
   explain?: (outcome: PickerInjectionOutcome) => void,
+  options: PickerInjectionOptions = {},
 ): number {
   const unchanged = (reason: string): number => { explain?.({ kind: "unchanged", reason }); return 0; };
   const surfaces = record(bootstrap)?.model_selector_config;
   if (!Array.isArray(surfaces)) return unchanged("no_model_selector_config");
   const rows = surfaces.map(record);
+  const surfaceIds: readonly unknown[] = options.surfaces ?? PICKER_SURFACE_IDS;
+  const stripped = [...TEMPLATE_STRIPPED_KEYS, ...(options.extraStrippedKeys ?? [])];
   const targets = rows.filter((entry): entry is Record<string, unknown> =>
-    entry !== null && (PICKER_SURFACE_IDS as readonly unknown[]).includes(entry.id));
+    entry !== null && surfaceIds.includes(entry.id));
   if (targets.length === 0) {
     // Only known surface names reach the log; any other body-derived value is counted.
     const known = rows.flatMap(entry => typeof entry?.id === "string" && KNOWN_SURFACE_IDS.has(entry.id) ? [entry.id] : []);
@@ -93,7 +111,7 @@ export function injectPickerModels(
   let added = 0;
   const skipped: string[] = [];
   for (const surface of targets) {
-    const result = injectIntoSurface(surface, models);
+    const result = injectIntoSurface(surface, models, stripped);
     if (typeof result === "number") added += result;
     else skipped.push(`${String(surface.id)}:${result}`);
   }

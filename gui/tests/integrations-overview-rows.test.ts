@@ -340,8 +340,8 @@ test("an unsettled file list renders unknown rows instead of dropping them", () 
 test("each row points at its own tab", () => {
   const rows = buildOverviewRows(sources({ clientsSettled: false }));
   expect(rowById(rows, "codex").hash).toBe("integrations/codex");
-  expect(rowById(rows, "claude").hash).toBe("integrations/claude");
-  expect(rowById(rows, "claudeDesktop").hash).toBe("integrations/claude/desktop");
+  expect(rowById(rows, "claude").hash).toBe("claude/code");
+  expect(rowById(rows, "claudeDesktop").hash).toBe("claude/desktop");
   expect(rowById(rows, "grok").hash).toBe("integrations/grok");
   expect(rowById(rows, "hermes").hash).toBe("integrations/hermes");
   expect(rowById(rows, "omp").hash).toBe("integrations/omp");

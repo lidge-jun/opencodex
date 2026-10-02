@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
 /**
  * Anthropic OAuth on the managed native Messages lane (PF-10) against an in-process transport.
  * With `managedMessagesNative` and `managedMessagesNativeOAuth` on, an unpooled Anthropic OAuth
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
-import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum, formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot, rotateAnthropicAccountOn429 } from "../../src/oauth/anthropic-routing";
+import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum, formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot,} from "../../src/oauth/anthropic-routing";
 import { getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey } from "../../src/codex/upstream-host-health";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
@@ -160,11 +161,11 @@ const CALLER_HEADERS = {
   "anthropic-beta": `${ALLOWED_BETA},${UNKNOWN_BETA}`,
 };
 
-async function send(config: OcxConfig, body: Record<string, unknown>) {
+async function send(config: OcxConfig, body: Record<string, unknown>, identityHeaders: Record<string, string> = {}) {
   const requestId = `pf10-oauth-${crypto.randomUUID()}`;
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST",
-    headers: { "content-type": "application/json", ...CALLER_HEADERS },
+    headers: { "content-type": "application/json", ...CALLER_HEADERS, ...identityHeaders },
     body: JSON.stringify(body),
   }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
   const text = await response.text();
@@ -301,6 +302,58 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(serialized).not.toContain("synthetic-anthropic-access-0");
     expect(serialized).not.toContain(UNKNOWN_BETA);
     expect(serialized).not.toContain(SIGNATURE);
+  });
+
+  test("genuine client identity survives credential refresh and selected account switch", async () => {
+    const ids = await seed(2);
+    await markAccountNeedsReauth("anthropic", ids[1]!, true);
+    const uuidA = "11111111-1111-4111-8111-111111111111";
+    const uuidB = "22222222-2222-4222-8222-222222222222";
+    await saveAccountCredential("anthropic", ids[0]!, { ...credential(0), accountId: uuidA });
+    const headers = {
+      "User-Agent": "claude-cli/2.1.282 (external, cli)", "X-App": "cli",
+      "X-Claude-Code-Session-Id": "33333333-3333-4333-8333-333333333333",
+      "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node", "X-Stainless-Package-Version": "9.9.9",
+    };
+    const metadata = { user_id: JSON.stringify({ account_uuid: uuidA, device_id: "fixture-device", session_id: "fixture-session" }) };
+    const cfg = fixtureConfig();
+    forgetAnthropicFailoverQuorum();
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    const refreshed = "fixture-refreshed-access";
+    await saveAccountCredential("anthropic", ids[0]!, { ...credential(0), accountId: uuidA, access: refreshed });
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    await markAccountNeedsReauth("anthropic", ids[0]!, true);
+    await saveAccountCredential("anthropic", ids[1]!, { ...credential(1), accountId: uuidB });
+    await markAccountNeedsReauth("anthropic", ids[1]!, false);
+    await setActiveAccount("anthropic", ids[1]!);
+    forgetAnthropicFailoverQuorum();
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([
+      `Bearer ${credential(0).access}`, `Bearer ${refreshed}`, `Bearer ${credential(1).access}`,
+    ]);
+    expect(sent.map(entry => JSON.parse((entry.body.metadata as typeof metadata).user_id).account_uuid)).toEqual([uuidA, uuidA, uuidB]);
+    for (const entry of sent) {
+      for (const [name, value] of Object.entries(headers)) expect(entry.headers.get(name)).toBe(value);
+      expect(entry.headers.has("x-api-key")).toBe(false);
+      expect(entry.headers.get("anthropic-beta")).not.toContain(UNKNOWN_BETA);
+      expect(entry.body).not.toHaveProperty("clientIdentity");
+    }
+    expect(JSON.parse(metadata.user_id).account_uuid).toBe(uuidA);
+  });
+
+  test("physical send binds metadata to the UUID in the serving credential, never the local slot", async () => {
+    const [id] = await seed(1);
+    const uuid = "22222222-2222-4222-8222-222222222222";
+    await saveAccountCredential("anthropic", id!, { ...credential(0), accountId: uuid });
+    const metadata = { user_id: JSON.stringify({ account_uuid: "11111111-1111-4111-8111-111111111111", device_id: "fixture-device", session_id: "fixture-session" }) };
+    const { response } = await send(fixtureConfig(), { ...BODY, stream: false, metadata });
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${credential(0).access}`);
+    const wire = sent[0]!.body.metadata as typeof metadata;
+    expect(JSON.parse(wire.user_id)).toEqual({ account_uuid: uuid, device_id: "fixture-device", session_id: "fixture-session" });
+    expect(wire.user_id).not.toContain(id!);
+    expect(JSON.parse(metadata.user_id).account_uuid).not.toBe(uuid);
   });
 
   test("a JSON answer maps the tool name back too", async () => {
