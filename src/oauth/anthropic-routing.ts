@@ -15,6 +15,7 @@
  * backoff. Classified entitlement/billing 403s use a ten-minute default cooldown.
  * Token refresh failures retain the existing store needsReauth policy.
  */
+import { anthropicRatePauseUntil, clearAnthropicRatePauses, classifyAnthropic429, anthropicRetryAfterMs, pauseAnthropicRateAdmission } from "./anthropic-rate-limit-policy";
 import { createHash } from "node:crypto";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, credentialGeneration, getAccountSet, getAccountCredential, getAccountCredentialWithStatus } from "./store";
 import type { OAuthAccessSnapshot } from "./index";
@@ -271,6 +272,7 @@ export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {
 /** Test / logout helper. */
 export function clearAnthropicAccountPoolState(): void {
   upstreamHealth.clear();
+  clearAnthropicRatePauses();
   clearAnthropicCooldownGenerations();
   sessionAffinity.clear();
   manualPreference = undefined;
@@ -354,7 +356,7 @@ export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
   return set.accounts
     .filter(account =>
       account.paused !== true && account.needsReauth !== true
-      && !isCooled(account.id, now)
+      && !isCooled(account.id, now) && !anthropicRatePauseUntil(account.id, now)
       && isPoolCredentialUsable(account.id, now))
     .map(account => account.id);
 }
@@ -563,7 +565,7 @@ function pickNextFillFirstAnthropicAccount(
   return fallback ?? ordered[0] ?? null;
 }
 
-function pickAlternateAnthropicAccount(
+export function pickAlternateAnthropicAccount(
   config: OcxConfig,
   excludeId: string,
   now: number,
@@ -720,7 +722,7 @@ export function resolveAnthropicAccountForSession(
   if (!isAnthropicAccountPoolEnabled(config)) {
     const active = set.accounts.find(account => account.id === set.activeAccountId);
     // Disabled proactive rotation does not authorize a paused slot or an entirely cooled pool.
-    if (active?.paused || isCooled(set.activeAccountId, now)) {
+    if (active?.paused || isCooled(set.activeAccountId, now) || anthropicRatePauseUntil(set.activeAccountId, now)) {
       return { accountId: eligible[0] ?? null, reason: eligible.length > 0 ? "only-eligible" : "none" };
     }
     return { accountId: set.activeAccountId, reason: "pool-disabled" };
@@ -946,6 +948,15 @@ export function recordAnthropicAccountRefusal(
   if (!isAnthropicAccountPoolEnabled(config) && !hasAnthropicFailoverQuorum(now)
     && !getAccountCredentialWithStatus(PROVIDER, failedAccountId)?.paused) return false;
 
+  if (status === 429) {
+    const headers = rateLimitHeaders ?? new Headers();
+    const kind = classifyAnthropic429({ get: name => name === "retry-after" ? retryAfterHeader ?? null : headers.get(name) }, now);
+    if (kind !== "shared-quota") {
+      if (kind === "transient-rate") pauseAnthropicRateAdmission(failedAccountId, now + (anthropicRetryAfterMs(retryAfterHeader, now) ?? 100));
+      return false;
+    }
+  }
+
   // Retry-After first: it is the header written FOR this decision. The rejected window's
   // reset is the fallback, because a 429 that omits Retry-After still carries it -- and
   // without that fallback such a refusal cools for the 60s default and the exhausted
@@ -1020,7 +1031,8 @@ export function commitAnthropicSelectionRouting(
       && Date.now() - bound.lastUsedAt <= AFFINITY_IDLE_TTL_MS
       && eligibleAtCommit.includes(bound.accountId)
       && !routeCandidates(eligibleAtCommit, options.routeDecision).includes(bound.accountId);
-    if (!preserveExcludedAffinity) bindAnthropicSessionAffinity(options.sessionKey, accountId);
+    const preservePausedAffinity = bound && anthropicRatePauseUntil(bound.accountId) !== undefined;
+    if (!preserveExcludedAffinity && !preservePausedAffinity) bindAnthropicSessionAffinity(options.sessionKey, accountId);
   }
   if (manualPreference === undefined || (manualPreference?.accountId === expectedSelection.accountId
     && manualPreference.revision === expectedSelection.revision)) manualPreference = null;

@@ -62,3 +62,18 @@ No eligible replacement preserves the upstream 403; generic 401 handling is unch
 Reactive recovery also works with proactive pooling disabled when multiple accounts are stored.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-quota-dispatch.test.ts`.
+
+## Classified 429 admission
+
+`src/oauth/anthropic-rate-limit-policy.ts` classifies trusted unified headers before
+`src/oauth/anthropic-account-refusal.ts` changes health. Shared 5h/7d rejection cools
+only the sending credential's account, including the final budget refusal. Family-only
+rejection does not assert shared exhaustion. A transient Retry-After pauses account admission
+without clearing affinity; a request gets one same-account wait up to one second and at most
+one eligible sibling detour. Headerless/invalid-hint refusals get at most one short same-account
+retry and never cool the roster or invent a client Retry-After. Main, pre-output continuation
+and sidecars share the request-local allowance and physical-send budget. Cancellation,
+ambiguous-send markers, replaced credentials and committed streaming output forbid replay.
+Default single-account users acquire no new retry or admission pause.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.

@@ -396,9 +396,9 @@ export function createAdapterContinuations(
       ) {
         const nextAccountId = await rotateAnthropicAccountOnResponse(response, {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          decision: transportState.anthropicRouteDecision, signal: upstream.signal,
-          canRetry: transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-          allowAccountRefusal,
+          requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+          allowAccountRefusal, allow429Recovery: allowAccountRefusal,
         });
         if (nextAccountId) {
           try {

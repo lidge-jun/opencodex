@@ -270,7 +270,7 @@ export async function executeResponsesSidecars(
       const nextAccountId = await rotateAnthropicAccountOnResponse(
         originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
+          requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
           canRetry: hop.allowed && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
       if (!nextAccountId) {
