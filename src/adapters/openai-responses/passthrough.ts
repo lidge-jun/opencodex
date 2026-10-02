@@ -8,7 +8,7 @@ import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
 import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
-import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
   CODEX_FORWARD_BASE_URL,
@@ -689,13 +689,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // completed snapshot so text is never double-counted.
         const text = snapshot || doneText || deltas;
         if (text) yield { type: "text_delta", text };
-        // The bridge owns the raw ciphertext lease once it receives done.
-        ciphertextTransferred = true;
-        yield {
+        const done: AdapterEvent = {
           type: "done",
           ...(usage ? { usage } : {}),
           ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
         };
+        // Exact event ownership survives buffered collection without charging a second copy.
+        transferCompactionCiphertextLease(done, budget, compactionEncryptedContentBytes);
+        ciphertextTransferred = true;
+        yield done;
       } finally {
         budget.releaseRetained(
           deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes

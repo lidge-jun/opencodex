@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createZedAdapter, type ZedProvider } from "../../src/adapters/zed";
 import { createTranslatorBudget, releaseTranslatedEvent, TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { clearZedCaches } from "../../src/providers/zed";
+import { buildResponseJSON } from "../../src/bridge";
 import { parseRequest } from "../../src/responses/parser";
 
 const families: ZedProvider[] = ["anthropic", "google", "open_ai", "x_ai"];
@@ -90,6 +91,18 @@ describe("Zed Responses ciphertext failure ownership", () => {
   const completed = JSON.stringify({ event: { type: "response.completed", response: {
     output: [{ type: "compaction", encrypted_content: "fixture-ciphertext" }],
   } } }) + "\n";
+  test("successful ciphertext collection transfers both leases through buffered output", async () => {
+    const adapter = await configuredAdapter("open_ai");
+    const budget = createTranslatorBudget();
+    try {
+      const events = await adapter.parseResponse!(new Response(completed), budget);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify(events)) + Buffer.byteLength("fixture-ciphertext"));
+      const result = buildResponseJSON(events, "fixture-model", { compaction: true, translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      expect(output).toEqual([expect.objectContaining({ encrypted_content: "fixture-ciphertext" })]);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify(output[0])));
+    } finally { budget.dispose(); }
+  });
   test("read failure after a completed snapshot releases ciphertext with no done owner", async () => {
     const adapter = await configuredAdapter("open_ai");
     const budget = createTranslatorBudget();

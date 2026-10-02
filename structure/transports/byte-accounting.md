@@ -107,7 +107,13 @@ The buffered collector in `src/adapters/zed.ts` charges each delegated event bef
 and releases owned events when collection fails. Its translated stream is cancelled on early exit
 for every provider family. `src/adapters/openai-responses/passthrough.ts` releases partial text and
 usage collectors on every exit, and compaction ciphertext unless its lease transfers with the
-`done` event. Zed releases that source ciphertext lease if the collector cannot retain `done`.
+`done` event. The ciphertext lease is bound to the event object and its budget separately from
+serialized-event retention; an uncharged ciphertext field never releases another owner's bytes.
+Zed releases that source lease if collection fails. The SSE bridge releases both source leases
+after each consumed or discarded event, including cancellation before its first pull, late events,
+and processing failure. Buffered bridging keeps ciphertext charged through output admission and
+releases all source leases on success or failure. Output retention remains independently charged.
+`tests/responses/compaction-event-ownership.test.ts` covers those transitions and unrelated owners.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

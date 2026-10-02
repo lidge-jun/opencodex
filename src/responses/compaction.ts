@@ -15,6 +15,25 @@
  * routed models get a short "history was compacted" note instead.
  */
 
+import type { TranslatorBudget } from "../lib/translator-budget";
+
+const ciphertextLeases = new WeakMap<object, { budget: TranslatorBudget; bytes: number }>();
+
+/** Attach an already-charged parser ciphertext lease to its exact terminal event. */
+export function transferCompactionCiphertextLease(event: object, budget: TranslatorBudget, bytes: number): void {
+  if (bytes === 0) return;
+  if (ciphertextLeases.has(event)) throw new Error("compaction ciphertext lease is already transferred");
+  ciphertextLeases.set(event, { budget, bytes });
+}
+
+/** Release only this event's transferred ciphertext lease, once and for its owning budget. */
+export function releaseCompactionCiphertextLease(event: object, budget: TranslatorBudget): void {
+  const lease = ciphertextLeases.get(event);
+  if (!lease || lease.budget !== budget) return;
+  ciphertextLeases.delete(event);
+  budget.releaseRetained(lease.bytes, { kind: "retained_collectors" });
+}
+
 export const OCX_COMPACTION_PREFIX = "ocx1:";
 
 export const OCX_NATIVE_REPLAY_RECOVERY_NOTE =

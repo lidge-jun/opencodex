@@ -6,6 +6,7 @@ import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createTranslatorBudget, releaseTranslatedEvent, retainTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
+import { releaseCompactionCiphertextLease } from "../responses/compaction";
 import { redactSecretString } from "../lib/redact";
 import {
   normalizeZedProvider,
@@ -379,17 +380,17 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
           try {
             retainTranslatedEvent(event, budget, events.at(-1));
           } catch (error) {
-            // A refused Responses done event never transfers its source ciphertext lease.
-            if (delegate?.provider === "open_ai" && event.type === "done" && event.compactionEncryptedContent) {
-              budget.releaseRetained(Buffer.byteLength(event.compactionEncryptedContent), { kind: "retained_collectors" });
-            }
+            releaseCompactionCiphertextLease(event, budget);
             throw error;
           }
           events.push(event);
         }
         return events;
       } catch (error) {
-        for (const event of events) releaseTranslatedEvent(event, budget);
+        for (const event of events) {
+          releaseTranslatedEvent(event, budget);
+          releaseCompactionCiphertextLease(event, budget);
+        }
         throw error;
       }
     },

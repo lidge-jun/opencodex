@@ -69,7 +69,7 @@ The Responses proxy does not treat transcript growth as repository progress. It 
 boundaries, response items, tool names and payloads, adapter events, retained bytes, and elapsed
 silence. It cannot observe the client's workspace or prove whether a successful tool result changed
 repository state. Consequently, the active-turn and session-lane gates are concurrency admission
-limits, the translator budget is a live retained-byte limit, the response-state caps are cache
+limits, the translator budget follows [live retained-byte ownership](byte-accounting.md#stream-buffer-accounting), the response-state caps are cache
 retention limits, and the stall watchdog is a silence limit. None is a cumulative continuation or
 semantic no-progress budget.
 
