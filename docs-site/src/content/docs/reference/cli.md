@@ -156,3 +156,7 @@ refreshes the update-notification cache in a detached process, and
 implementation details, not stable user-facing commands. The dashboard records the worker PID,
 recovers an active job whose worker died, treats older PID-less active records as stale after ten
 minutes, and protects a live worker from concurrent updates.
+
+## Default alias listing
+
+`ocx alias --json` is equivalent to `ocx alias list --json`. The output flag can precede or follow an explicit alias action.

@@ -14,8 +14,8 @@ function selector(value: string): { provider: string; model?: string } {
 
 export async function handleAliasCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const args = [...argv];
-  const action = (args.shift() ?? "list").toLowerCase();
   const wantsJson = takeFlag(args, "--json");
+  const action = (args.shift() ?? "list").toLowerCase();
   if (action === "list") {
     rejectArgs(args, USAGE);
     const result = await runtimeRequest<Record<string, unknown>>("/api/aliases", {}, deps);
