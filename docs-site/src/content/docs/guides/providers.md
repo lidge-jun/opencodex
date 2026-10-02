@@ -340,6 +340,27 @@ Two cases behave differently, and it is worth knowing which you are in:
 Device-code providers never open a browser from the proxy in either case: they show a code and a
 verification URL to open wherever you are signed in.
 
+### Headless Claude login (code-display mode)
+
+For Anthropic there is a cleaner path than pasting a dead redirect: the **code-display** login.
+Anthropic redirects to its own page and shows a `code#state` string instead of calling back to the
+proxy, so nothing needs to reach `127.0.0.1` on the proxy's host.
+
+```bash
+ocx login anthropic --code
+```
+
+Over the management API, start with `POST /api/oauth/login` and `{"provider":"anthropic","mode":"code"}`;
+the response carries a `flowId` and an `expiresAt` (10 minutes). Submit the pasted string to
+`POST /api/oauth/login/code` with that `flowId`. The answer is the result of the token exchange —
+`{"ok":true,"account":…}` or `{"ok":false,"error":…}` — so a hosted caller with a single paste box
+knows whether the login actually worked. A wrong paste leaves the flow open for another try.
+
+Only `anthropic` supports this mode; other providers answer `code_mode_unsupported`. Several code
+logins can be in flight at once, each pinned to its `flowId`, but they all write the same account
+store: the most recent successful one becomes the active Claude account. This is meant for one
+operator on a headless host, not for isolating unrelated users on a shared instance.
+
 ### Multiple OAuth accounts
 
 OAuth providers whose credentials include a stable account id or email can keep more than one

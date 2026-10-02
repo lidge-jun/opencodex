@@ -107,7 +107,17 @@ ocx login xai
 ocx login anthropic
 ocx login orcarouter-oauth # browser consent + S256 PKCE
 ocx login orcarouter       # paste an existing API key
+ocx login anthropic --code # headless: no browser, no local port
 ```
+
+`--code` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
+callback (containers, remote servers). The command prints an authorization URL; approve it in any
+browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
+is bound and no browser is launched. Only `anthropic` supports it today; any other provider exits
+with the list of providers that do. For Codex accounts use the device-code login instead,
+`ocx account login codex --device` — `ocx login codex --code` is refused rather than passed on.
+The paste window is 10 minutes. A successful login becomes the provider's active account, exactly
+like a browser login.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned

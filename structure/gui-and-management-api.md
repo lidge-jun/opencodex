@@ -329,6 +329,9 @@ provider grant) instead of cancelling a still-valid grant at the browser-flow bu
 
 > Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md)
 
+Headless `mode: "code"` logins (flow ownership, expiry, single-operator store):
+[OAuth code-display login](providers/oauth-code-display-login.md).
+
 ### Claude Desktop picker management
 
 `GET /api/claude-desktop/picker` returns `200 { ok: true, picker }`, where `picker` is the
