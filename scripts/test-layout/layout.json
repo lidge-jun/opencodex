@@ -450,6 +450,7 @@
     "cli-update-badge.test.ts": "cli",
     "cli-usage-hub.test.ts": "cli",
     "cli-usage-report.test.ts": "cli",
+    "cli-usage-top.test.ts": "cli",
     "cli-version-skew.test.ts": "cli",
     "client-catalog-compatibility.test.ts": "clients",
     "client-config-export-new-clients.test.ts": "config",

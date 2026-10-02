@@ -208,6 +208,7 @@ Token and estimated-cost report over a time range.
 | `--until` | string | Inclusive end: epoch milliseconds or full ISO datetime with timezone; requires --since. |
 | `--provider` | string | Restrict to one provider. |
 | `--model` | string | Restrict to one model id. |
+| `--top` | number | Show 1-1000 model rows in human output (default 10); incompatible with --json. |
 | `--json` | boolean | Emit the usage report as JSON. |
 
 JSON mode: `payload`.

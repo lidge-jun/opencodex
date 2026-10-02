@@ -537,6 +537,7 @@ export const CAPABILITIES: readonly Capability[] = [
       { name: "--until", value: "string", summary: "Inclusive end: epoch milliseconds or full ISO datetime with timezone; requires --since." },
       { name: "--provider", value: "string", summary: "Restrict to one provider." },
       { name: "--model", value: "string", summary: "Restrict to one model id." },
+      { name: "--top", value: "number", summary: "Show 1-1000 model rows in human output (default 10); incompatible with --json." },
       { name: "--json", value: "boolean", summary: "Emit the usage report as JSON." },
     ],
     mutates: false,

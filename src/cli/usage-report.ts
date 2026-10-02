@@ -110,7 +110,8 @@ function describeScope(data: UsageReportInput): string {
   return terminalText(parts.join(", "));
 }
 
-export function formatUsageReport(data: UsageReportInput): string[] {
+/** Render usage totals and a bounded model table without modifying the API payload. */
+export function formatUsageReport(data: UsageReportInput, modelLimit = MAX_MODEL_ROWS): string[] {
   const summary = data.summary ?? {};
   const lines: string[] = [describeScope(data), ""];
   if (data.source === "hub" && data.scope === "client") {
@@ -184,7 +185,7 @@ export function formatUsageReport(data: UsageReportInput): string[] {
   const models = (data.models ?? []).filter(row => row.requests > 0);
   if (models.length > 0) {
     lines.push("");
-    const shown = models.slice(0, MAX_MODEL_ROWS);
+    const shown = models.slice(0, modelLimit);
     lines.push(...table(
       ["MODEL", "PROVIDER", "REQUESTS", "TOKENS", "EST. COST"],
       shown.map(row => [row.model ?? "-", row.provider, count(row.requests), count(row.totalTokens), usd(row.estimatedCostUsd)]),

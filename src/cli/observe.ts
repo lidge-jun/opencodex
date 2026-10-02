@@ -27,7 +27,7 @@ const USAGE = `Usage:
   ocx logs index-status
   ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
       [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>]
-      [--provider <name>] [--model <id>] [--json]
+      [--provider <name>] [--model <id>] [--top <1-1000>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -164,6 +164,10 @@ async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> 
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
+  const top = takeIntegerOption(args, "--top", { min: 1 });
+  if (top !== undefined && (top > 1000 || wantsJson)) {
+    throw new CliUsageError("--top must be 1-1000 and cannot be combined with --json", USAGE);
+  }
   const range = takeOption(args, "--range") ?? "30d";
   const surface = takeOption(args, "--surface") ?? "all";
   const provider = takeOption(args, "--provider");
@@ -217,7 +221,7 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   // renderer during --json and let its assumptions affect a path that is meant
   // to bypass it entirely.
   if (wantsJson) printData(result, true);
-  else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0]));
+  else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0], top));
 }
 
 async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promise<void> {
