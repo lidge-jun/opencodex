@@ -58,6 +58,10 @@ the JEV credential are excluded. It owns the joint target/effort choice map, str
 validation, canonical `jev-latest` destination, default four-second deadline, no-redirect policy, bounded response,
 and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
 answers fail open to the first eligible target; no response can escape the configured choice map.
+The direct TypeSafe and System One decision destinations are checked against the parent API key's
+resolved provider/model scope before reading decision credentials or extracting state. A denied
+optional decision uses the existing fail-open inference target without sending a decision request;
+management probes and unrestricted admissions retain their existing behavior.
 Telemetry never retains extracted state or credentials.
 
 The optional `targets[].modelProfile` note is validated at the Combo management input

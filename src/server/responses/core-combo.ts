@@ -3,6 +3,7 @@ import {
   isDeclaredReasoningEffort,
   resolveEffortAtOrBelow,
 } from "../../reasoning-effort";
+import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -572,6 +573,9 @@ export async function executeComboResponses(
         candidates: choices.map(choice => choice.candidate),
         fallback,
         config,
+        isDestinationAllowed: (providerName, modelId) => routeAllowedByScope(
+          resolveAdmissionModelScope(config, options.admission), { providerName, modelId },
+        ),
         ...(combo.decisionProvider ? { decisionProvider: combo.decisionProvider } : {}),
         ...(combo.decisionModel
           ? {

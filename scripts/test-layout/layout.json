@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "jev-decision-scope.test.ts": "server",
     "claude-intercept-on-demand.test.ts": "claude-integration",
     "main-account-hard-lock-thresholds.test.ts": "codex-integration",
     "main-account-external-usage.test.ts": "codex-integration",
