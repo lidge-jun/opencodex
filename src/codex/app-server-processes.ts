@@ -385,8 +385,10 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
       const commandLine = argv.join(" ").trim();
       if (!commandLine) continue;
       out.push({ pid, commandLine, executable: argv[0], uid: processUid });
-    } catch {
-      /* process exited mid-scan */
+    } catch (error) {
+      // Only disappearance proves a process exited mid-scan. Permission/I/O
+      // failures leave the table incomplete and must reach fail-closed callers.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
   }
   return out;
