@@ -45,6 +45,9 @@ describe("Claude account pool toggle copy", () => {
       const source = await Bun.file(path).text();
       expect(valueOf(source, "anthropicPool.enabledDesc"), path).not.toContain("429");
       expect(valueOf(source, "anthropicPool.enabledNoProactiveDesc"), path).not.toContain("429");
+      expect(valueOf(source, "anthropicPool.enabledFillFirstDesc"), path).not.toContain("429");
+      expect(valueOf(source, "anthropicPool.enabledFillFirstNoThresholdDesc"), path).not.toContain("429");
+      expect(valueOf(source, "anthropicPool.enabledRoundRobinDesc"), path).not.toContain("429");
     }
   });
 

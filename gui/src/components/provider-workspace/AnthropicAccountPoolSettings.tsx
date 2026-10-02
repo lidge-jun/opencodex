@@ -39,6 +39,32 @@ type PoolState = {
   quotaWindow: AccountPoolQuotaWindow;
 };
 
+/**
+ * The enabled status line names only what the selected strategy actually reads
+ * (src/oauth/anthropic-routing.ts). Round-robin rotates new sessions and refusal recovery
+ * through the ring and reads no usage, threshold or window. Fill-first drains the active
+ * account to its threshold in the window, then advances in stable order; at threshold 0 it
+ * stays until cooldown or sign-in. Quota keeps a healthy active account under the threshold
+ * and otherwise, and during recovery, picks the lowest usage in the window.
+ */
+function enabledStatus(
+  t: ReturnType<typeof useT>,
+  strategy: AccountPoolStrategy,
+  threshold: number,
+  quotaWindow: AccountPoolQuotaWindow,
+): string {
+  const window = t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]);
+  if (strategy === "round-robin") return t("anthropicPool.enabledRoundRobinDesc");
+  if (strategy === "fill-first") {
+    return threshold === 0
+      ? t("anthropicPool.enabledFillFirstNoThresholdDesc")
+      : t("anthropicPool.enabledFillFirstDesc", { threshold, window });
+  }
+  return threshold === 0
+    ? t("anthropicPool.enabledNoProactiveDesc", { window })
+    : t("anthropicPool.enabledDesc", { threshold, window });
+}
+
 export default function AnthropicAccountPoolSettings({
   apiBase,
   accountCount,
@@ -209,14 +235,7 @@ export default function AnthropicAccountPoolSettings({
               : loading
                 ? t("common.loading")
                 : enabled
-                  ? threshold === 0
-                    ? t("anthropicPool.enabledNoProactiveDesc", {
-                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                      })
-                    : t("anthropicPool.enabledDesc", {
-                        threshold,
-                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                      })
+                  ? enabledStatus(t, strategy, threshold, quotaWindow)
                   : t("anthropicPool.disabledDesc")}
           </div>
         </div>

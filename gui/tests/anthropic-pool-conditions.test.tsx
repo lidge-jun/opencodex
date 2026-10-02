@@ -53,7 +53,7 @@ afterEach(async () => {
   await testWindow.happyDOM?.close?.();
 });
 
-type Settings = { enabled: boolean; autoSwitchThreshold?: number };
+type Settings = { enabled: boolean; autoSwitchThreshold?: number; strategy?: string; quotaWindow?: string };
 
 /** GET answers with settings (or fails); PUT answers per the supplied status. */
 function stubPool(get: Settings | "fail", putStatus = 200): { puts: number } {
@@ -161,7 +161,62 @@ describe("Claude account pool conditions", () => {
   });
 });
 
+describe("the enabled status line follows the selected strategy", () => {
+  // Mirrors src/oauth/anthropic-routing.ts: round-robin rotates through the ring and reads no
+  // usage (pickUnboundStrategyAccount / pickAlternateAnthropicAccount), fill-first drains the
+  // active account to its threshold, and quota ranks by the window.
+  const status = (host: HTMLElement) => host.querySelector(".card-row .card-sub")?.textContent ?? "";
+
+  for (const threshold of [80, 0]) {
+    test("round-robin names no usage window or threshold (threshold " + threshold + ")", async () => {
+      stubPool({ enabled: true, strategy: "round-robin", autoSwitchThreshold: threshold, quotaWindow: "weekly" });
+      const host = await mount(2);
+      expect(status(host)).toBe(DICTS.en["anthropicPool.enabledRoundRobinDesc"]);
+      expect(status(host)).not.toContain("Weekly bar");
+      expect(status(host)).not.toContain(threshold + "%");
+      expect(status(host)).not.toContain("Usage thresholds do not move");
+    });
+  }
+
+  test("fill-first names the drain threshold and window, or neither at threshold 0", async () => {
+    stubPool({ enabled: true, strategy: "fill-first", autoSwitchThreshold: 70, quotaWindow: "weekly" });
+    const drained = await mount(2);
+    expect(status(drained)).toContain("until it reaches 70% (Weekly bar)");
+    expect(status(drained)).toContain("next account in order");
+
+    stubPool({ enabled: true, strategy: "fill-first", autoSwitchThreshold: 0, quotaWindow: "weekly" });
+    const sticky = await mount(2);
+    expect(status(sticky)).toBe(DICTS.en["anthropicPool.enabledFillFirstNoThresholdDesc"]);
+    expect(status(sticky)).not.toContain("Weekly bar");
+  });
+
+  test("quota keeps naming the threshold and window it ranks by", async () => {
+    stubPool({ enabled: true, strategy: "quota", autoSwitchThreshold: 80, quotaWindow: "five-hour" });
+    const host = await mount(2);
+    expect(status(host)).toContain("under 80% (5-hour bar)");
+
+    stubPool({ enabled: true, strategy: "quota", autoSwitchThreshold: 0, quotaWindow: "five-hour" });
+    const zero = await mount(2);
+    expect(status(zero)).toContain("the account with the lowest usage (5-hour bar) is chosen");
+  });
+});
+
 describe("every locale carries the same pool claims", () => {
+  test("each strategy's status line keeps the placeholders its claim depends on", () => {
+    for (const { code } of LOCALES) {
+      const dict = DICTS[code];
+      // Round-robin reads no usage, threshold or window, so its line may name none of them.
+      expect(dict["anthropicPool.enabledRoundRobinDesc"], code).not.toContain("{window}");
+      expect(dict["anthropicPool.enabledRoundRobinDesc"], code).not.toContain("{threshold}");
+      expect(dict["anthropicPool.enabledFillFirstDesc"], code).toContain("{threshold}");
+      expect(dict["anthropicPool.enabledFillFirstDesc"], code).toContain("{window}");
+      expect(dict["anthropicPool.enabledFillFirstNoThresholdDesc"], code).not.toContain("{threshold}");
+      expect(dict["anthropicPool.enabledFillFirstNoThresholdDesc"], code).not.toContain("{window}");
+      expect(dict["anthropicPool.enabledNoProactiveDesc"], code).toContain("{window}");
+      expect(dict["anthropicPool.enabledNoProactiveDesc"], code).not.toContain("{threshold}");
+    }
+  });
+
   const KEYS = [
     "anthropicPool.experimentalWarning",
     "anthropicPool.disabledDesc",
@@ -202,4 +257,3 @@ describe("every locale carries the same pool claims", () => {
     expect(DICTS.ko["anthropicPool.detailsFailover"]).toContain("일시 중지");
   });
 });
-

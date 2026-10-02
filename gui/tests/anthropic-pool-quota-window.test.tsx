@@ -218,9 +218,9 @@ describe("Anthropic account pool quota window", () => {
     });
     const host = await mountPool();
 
-    expect(host.textContent).toContain("Usage thresholds do not move an existing healthy session");
-    // The stages that still run must be named, along with what still governs them.
-    expect(host.textContent).toContain("New sessions and refusal recovery still follow the selected pool strategy and quota window");
+    expect(host.textContent).toContain("Usage thresholds do not move an existing healthy session or a healthy active account");
+    // The stages that still run must be named, along with the window that still governs them.
+    expect(host.textContent).toContain("during refusal recovery, the account with the lowest usage (Weekly bar) is chosen");
     // "429 recovery" is deliberately NOT named as a benefit of the enabled state any more:
     // reactive failover stopped being something this toggle controls, so advertising it here
     // would send an operator to the EXPERIMENTAL pool for something they already have
