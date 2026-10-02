@@ -635,6 +635,7 @@ export default function ClaudeDesktop({
             key={`${status.firstParty.picker.reason}:${status.firstParty.picker.desired}:${status.firstParty.picker.effective}:${status.firstParty.picker.models}:${status.firstParty.picker.hint ?? ""}`}
             apiBase={apiBase}
             picker={status.firstParty.picker}
+            pickerReason={status.firstParty.pickerReason}
             onUpdated={() => void statusResource.refresh()}
           />
         )

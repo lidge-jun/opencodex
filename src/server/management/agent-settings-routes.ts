@@ -1143,6 +1143,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         if (refusal) return refusal;
         const started = await ensureManagementClaudeIntercept(ctx);
         if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
+        const { claudeInterceptProxyPort } = await import("../../claude/intercept/runtime");
+        const configured = claudeInterceptProxyPort(config, config.port ?? 10100);
+        if (started.state.proxyPort !== configured) return jsonResponse({ ok: false, code: "port_mismatch", bound: started.state.proxyPort, configured }, 409);
         const { setIntegrationEnabled } = await import("../../codex/desired-state");
         const desired = setIntegrationEnabled("claude-desktop", true);
         if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
@@ -1571,10 +1574,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
-      const startRefusal = interceptStartRefusal(ctx);
-      if (startRefusal) return startRefusal;
       let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
       if (body.cliFirstParty) {
+        const startRefusal = interceptStartRefusal(ctx);
+        if (startRefusal) return startRefusal;
         const started = await ensureManagementClaudeIntercept(ctx);
         if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
         bound = started.state;

@@ -639,3 +639,16 @@ test("the status routes never mint the proxy token", async () => {
   expect(list.status).toBe(200);
   expect(existsSync(claudeInterceptProxyTokenPath(root))).toBe(false);
 });
+
+test("first-party apply and native enable refuse a changed configured port before writing env", async () => {
+  const live = config({ claudeCode: { desktopMode: "first-party", intercept: { port: 10300 } } });
+  writeFileSync(join(root, "config.json"), JSON.stringify(live));
+  for (const [path, body] of [["/api/claude-desktop/apply", { mode: "first-party" }], ["/api/native-integrations/claude-desktop", { enabled: true }]] as const) {
+    const result = await dispatch(path, { method: path.endsWith("apply") ? "POST" : "PUT", body: JSON.stringify(body) }, live);
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe("port_mismatch");
+    expect(result.body.bound).toBe(10200);
+    expect(result.body.configured).toBe(10300);
+    expect(existsSync(join(claudeDir, "settings.json"))).toBe(false);
+  }
+});

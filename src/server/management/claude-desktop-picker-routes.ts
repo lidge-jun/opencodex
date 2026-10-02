@@ -77,9 +77,9 @@ export async function handleClaudeDesktopPickerRoutes(ctx: ManagementContext): P
     }
     const body = parsePickerBody(raw);
     if (typeof body === "string") return jsonResponse({ error: body }, 400);
-    const refusal = interceptStartRefusal(ctx);
-    if (refusal) return refusal;
     if (body.enabled) {
+      const refusal = interceptStartRefusal(ctx);
+      if (refusal) return refusal;
       const started = await ensureManagementClaudeIntercept(ctx);
       if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
     }

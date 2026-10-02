@@ -155,7 +155,7 @@ test("CLI first-party save starts a previously unbound pair", async () => {
   expect(binds).toBe(2);
 });
 
-test("every triggering mutation refuses remote management ingress and data-plane authority", async () => {
+test("remote management never starts interception; routing intent can still persist", async () => {
   for (const [path, method, body] of [
     ["/api/claude-code", "PUT", { cliFirstParty: true }],
     ["/api/claude-desktop/apply", "POST", { mode: "first-party" }],
@@ -171,7 +171,11 @@ test("every triggering mutation refuses remote management ingress and data-plane
         headers: { Host: url.host, "Content-Type": "application/json" }, body: JSON.stringify(body),
       }), url, live, { ensureClaudeIntercept: async () => { calls++; return { ok: false, reason: "failed" }; } },
         principal, undefined, { trustedLoopback: loopback });
-      expect(response!.status).toBe(403);
+      if (path === "/api/native-integrations/claude") {
+        expect(response!.status).toBe(200);
+        expect((await response!.json()).interceptReason).toBe("intercept_start_forbidden");
+        expect(loadConfig().claudeCode?.enabled).toBe(true);
+      } else expect(response!.status).toBe(403);
       expect(calls).toBe(0);
       expect(loadConfig().claudeCode?.cliFirstParty).toBeUndefined();
     }

@@ -7,7 +7,7 @@ import { handleAccessCommand } from "../../src/cli/access";
 import { handleAgentCommand } from "../../src/cli/agent";
 import { handleComboCommand } from "../../src/cli/combo";
 import { handleConfigCommand } from "../../src/cli/config-command";
-import { handleClientIntegrationCommand, handleGrokCommand } from "../../src/cli/integrations";
+import { handleClientIntegrationCommand, handleGrokCommand, handleClaudeInterceptCommand } from "../../src/cli/integrations";
 import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
 import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
@@ -538,6 +538,7 @@ describe("headless GUI parity CLI", () => {
       // the Claude flag flips through `ocx claude config` — so a dedicated
       // `ocx integration native` verb would duplicate existing commands rather
       // than add a capability. Listed so the sweep stays exhaustive.
+      ["/api/claude-intercept/start", "ocx claude intercept start"],
       ["/api/native-integrations", "(none — GUI-only)"],
       // #3417: the dashboard's native main login disclosure reads and writes the same
       // routes as `ocx account main` — list/doctor, register, switch and recover — so the
@@ -1699,4 +1700,13 @@ describe("ownership recovery advice does not assume injection is enabled", () =>
       } finally { log.mockRestore(); }
     });
   }
+});
+
+test("Claude intercept start uses the management POST and preserves refusal exit status", async () => {
+  const success = fakeRuntime();
+  expect(await handleClaudeInterceptCommand(["start", "--json"], success.deps)).toBe(0);
+  expect(success.requests).toEqual([{ path: "/api/claude-intercept/start", method: "POST", body: null }]);
+  const refused = fakeRuntime(() => Response.json({ ok: false, reason: "port_in_use" }, { status: 409 }));
+  expect(await handleClaudeInterceptCommand(["start", "--json"], refused.deps)).not.toBe(0);
+  expect(refused.requests).toHaveLength(1);
 });

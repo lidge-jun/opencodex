@@ -120,3 +120,14 @@ test("starting interception stays pending and reports the occupied port", async 
   expect(button.disabled).toBe(false);
   expect(container.textContent).toContain("Port 10200 is in use");
 });
+
+test("picker failure reports the reason without offering an ineffective main-pair start", async () => {
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><ClaudeDesktopPicker apiBase="" picker={{ ...basePicker, listenerReady: false, effective: false, reason: "proxy_unavailable" }} pickerReason="port_in_use" /></LanguageProvider>);
+  });
+  expect(container.textContent).toContain("port");
+  expect(container.textContent).not.toContain("Start interception");
+  expect(container.querySelector("[role=status]")).not.toBeNull();
+  expect(requests).toHaveLength(0);
+});

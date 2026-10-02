@@ -960,6 +960,10 @@ const commandRunners: Record<string, CommandRunner> = {
       if (exitCode !== 0) return exitCode;
       return 0;
     }
+    if (deps.args[1] === "intercept") {
+      const { handleClaudeInterceptCommand } = await import("./integrations");
+      return await handleClaudeInterceptCommand(deps.args.slice(2));
+    }
     if (deps.args[1] === "config") {
       const { handleClaudeConfigCommand } = await import("./integrations");
       return await handleClaudeConfigCommand(deps.args.slice(2));

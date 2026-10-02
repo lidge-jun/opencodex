@@ -6,7 +6,7 @@ Sidebar: Dashboard, Codex, **Claude** (new, directly under Codex), Providers, �
 tab inside Integrations is removed and its hashes redirect: `#integrations/claude` → `#claude/code`,
 `#integrations/claude/desktop` → `#claude/desktop`.
 
-Page shaped like Codex Set (page-tabs, hash-routed, lazy-mounted exclusive panels, keyboard arrows):
+Page shaped like Codex Set (page-tabs, hash-routed, panels mounted on first visit and kept mounted while inactive, keyboard arrows):
 
 | Tab | Hash | Content |
 | --- | --- | --- |
@@ -24,4 +24,3 @@ One primary action per tab. Empty/disabled states explain why and link to the ac
 
 lint:gui, build:gui, GUI tests for tab routing/redirects, i18n completeness (all locales), screenshots of each tab in light/dark
 for the PR and a UI review by an inherited-model subagent.
-

@@ -95,6 +95,7 @@ export interface NativeToggleEnvelope {
   desiredEnabled: boolean;
   /** Present when the outcome needs more than success/failure to be honest. */
   reason?: string;
+  interceptReason?: string | null;
   artifacts?: CodexNativeRestoreResult["artifacts"];
 }
 
@@ -706,10 +707,6 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
     }
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
 
-    if (body.enabled) {
-      const startRefusal = interceptStartRefusal(ctx);
-      if (startRefusal) return startRefusal;
-    }
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
     const persisted = setIntegrationEnabled("claude-desktop", body.enabled);
     if (!persisted.ok) {
@@ -757,6 +754,9 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
       if (startRefusal) return startRefusal;
       const started = await ensureManagementClaudeIntercept(ctx);
       if (!started.ok) return jsonResponse({ ...started, code: started.reason }, 409);
+      const { claudeInterceptProxyPort } = await import("../../claude/intercept/runtime");
+      const configured = claudeInterceptProxyPort(current, current.port ?? 10100);
+      if (started.state.proxyPort !== configured) return jsonResponse({ ok: false, code: "port_mismatch", bound: started.state.proxyPort, configured }, 409);
       // The whole switch runs under the picker lock, in today's order: env first, then gateway cleanup.
       return await runPickerTransition(current, async ops => {
         const rollback = captureDesktopFirstPartyRollback(current);
@@ -897,10 +897,7 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
 
-    const startRefusal = interceptStartRefusal(ctx);
-    if (startRefusal) return startRefusal;
     const enabled = body.enabled;
-    if (enabled && claudeCodeEnabled(config)) void ensureManagementClaudeIntercept(ctx);
     if (claudeCodeEnabled(config) === enabled) {
       return jsonResponse({
         ok: true, clientId: "claude", changed: false,
@@ -936,13 +933,15 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       throw error;
     }
 
-    if (enabled) void ensureManagementClaudeIntercept(ctx);
+    const interceptReason = enabled && interceptStartRefusal(ctx) ? "intercept_start_forbidden" : null;
+    if (enabled && !interceptReason) await ensureManagementClaudeIntercept(ctx);
 
     return jsonResponse({
       ok: true, clientId: "claude", changed: true,
       state: enabled ? "current" : "absent",
       desiredEnabled: enabled,
       message: enabled ? "Claude inbound enabled" : "Claude inbound disabled",
+      interceptReason,
     } satisfies NativeToggleEnvelope);
   }
 
