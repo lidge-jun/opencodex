@@ -39,6 +39,7 @@ async function list(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   );
 }
 
+/** Show an existing routing profile, distinguishing malformed usage from a missing record. */
 async function show(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const id = args.shift();
