@@ -354,10 +354,9 @@ axis that outranks every source here, so it is where a deliberate text-only over
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
 
-Roster additions share the blind spot when the vendor's `/models` omits the new id (MiniMax-M3.1-Flash-Preview):
-`src/providers/stale-model-roster-migration.ts` replaces a saved roster only while it is byte-for-byte the previous
-seed, filling the added id's window and default effort only inside records the row already has, in the same startup
-pass; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) keeps it in the live catalog.
+When `/models` omits MiniMax-M3.1-Flash-Preview, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog.
+
+Both MiniMax Coding Plan presets declare `text` and `image` for M3 and M3.1 in `src/providers/registry/model-seeds.ts`; registry enrichment fills missing saved declarations, so id-only live rows enable the Combo image switch when every target supports images. Explicit overrides still win; video is outside Codex's catalog input enum.
 
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row

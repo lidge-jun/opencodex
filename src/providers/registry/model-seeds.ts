@@ -172,6 +172,11 @@ export const MINIMAX_REASONING_SPLIT_MODELS = MINIMAX_MODELS_BEFORE_M31;
 export const MINIMAX_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   MINIMAX_MODELS.map(id => [id, id === "MiniMax-M3" || id === MINIMAX_M31_FLASH_PREVIEW ? 1_000_000 : 204_800]),
 );
+/** MiniMax's OpenAI-compatible M3 endpoints accept image_url; keep video off Codex's input enum. */
+export const MINIMAX_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "MiniMax-M3": ["text", "image"],
+  [MINIMAX_M31_FLASH_PREVIEW]: ["text", "image"],
+};
 export const MINIMAX_M3_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /** Identity efforts on the wire; no map, so none omits the field instead of disabling thinking. */
 export const MINIMAX_M31_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];

@@ -8,6 +8,7 @@
   "desktop-app-server-shim-launcher.test.ts": "clients",
   "desktop-chatgpt-config.test.ts": "clients",
   "owner-registry-acl.test.ts": "config",
+  "minimax-combo-image-input.test.ts": "providers",
   "claude-devin-output-order.test.ts": "claude-integration",
   "codex-config-preservation.test.ts": "codex-integration",
     "codex-credits.test.ts": "codex-integration",
