@@ -185,6 +185,16 @@ Those controls still have no owner, so there is no image-publish workflow or off
 The scheduler wrapper retries child exits, including zero, after five seconds. Only the
 opt-in CLI stay-out code ends it successfully; missing Bun/CLI paths still exit with
 installation error 3. Explicit service stop terminates the wrapper itself.
+Before launching, the wrapper applies the bundled-Bun size gate (`REAL_BUN_MIN_BYTES`). An
+in-place npm install extracts `bun/bin/bun.exe` as a small placeholder and replaces it only when
+bun's postinstall runs later; executing the placeholder exits 216 and, interactively, raises a
+modal 16-bit dialog. A Bun file below the gate, or one whose size cannot be read because it
+vanished after the exist check, logs `bundled Bun is not ready` and is re-checked every five
+seconds without being executed, so the service starts once the postinstall lands. A Bun path
+that is already missing at the exist check keeps the unchanged `bun_missing` path: backup
+restore, then installation error 3. If the postinstall never runs (scripts blocked), the
+wrapper keeps waiting and logging; reinstalling with `--allow-scripts=bun` (or running the
+package's `bun/install.js`) is the recovery, and the next pass starts without a service repair.
 Timestamp expansion in the scheduler wrapper stays outside parenthesized batch
 blocks so locale dates containing parentheses cannot abort prelaunch checks or
 transactional-backup recovery. Delayed expansion stays disabled to preserve
@@ -335,6 +345,8 @@ Invariants:
 - `bin/ocx.mjs` resolves the bundled binary via `require.resolve("bun/package.json")` and a size gate
   (`>= 1 MB`) that rejects the ~450-byte placeholder stub left by `--ignore-scripts`/pnpm; it then
   lazy-runs `install.js` and execs `src/cli/index.ts` under Bun, propagating exit code and signal.
+  The Windows service wrapper applies the same gate before each launch and waits on a placeholder
+  instead of executing it ([Windows service wrapper](#windows-service-wrapper-and-incomplete-updates)).
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
   postinstall, and `"engines": { "node": ">=18" }` (Bun is no longer a user prerequisite).
 - The plain-Node launcher owns `OPENCODEX_BUN_PATH` selection before Bun can load project dotenv and

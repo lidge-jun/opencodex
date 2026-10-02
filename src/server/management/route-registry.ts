@@ -121,6 +121,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/codex-auth/accounts/alias", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause-exhausted", module: "codex/auth-api/routes", mutates: true },
+  { method: "PUT", path: "/api/codex-auth/accounts/credits", module: "codex/auth-api/routes", mutates: true, exempt: { reason: "deferred-verb", why: "The credits switches ship on the dashboard Codex Auth header first; `ocx config set creditCodexAccountIds` covers scripted use until an account verb exists.", owner: "#6334 follow-up", ownerDoc: "structure/codex-account-controls.md" } },
   { method: "PUT", path: "/api/codex-auth/accounts/priority", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api/routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/auto-switch", module: "codex/auth-api/routes", mutates: true },

@@ -679,6 +679,7 @@ manager. Its routes are:
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
+| `PUT /api/codex-auth/accounts/credits` | Allow or stop spending ChatGPT credits after the usage limit. Body `{ id, creditsAfterLimit }` for one account, including `__main__`: true adds the id to `creditCodexAccountIds`, false removes it. Body `{ all }` for the global switch: true lists `__main__` and every pool account, false clears the list. Applies to the next selection. | 400 invalid id or non-boolean value; 404 missing account |
 | `PUT /api/settings` with `codexQuotaAutoRefresh: { id, window, enabled }` | Enable or disable 5-hour or weekly automatic window activation for one account | 400 invalid id/window/state; 404 missing account; 409 unavailable window |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Clear runtime cooldown for one account or all accounts | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused/legacy-row conflict |

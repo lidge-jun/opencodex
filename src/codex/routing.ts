@@ -99,7 +99,7 @@ import {
   getPoolAccountPlanForSelection,
   hasCodexQuotaHeadroom,
   hasCodexSharedStateQuotaHeadroom,
-  isCodexAccountPlanExcluded,
+  isCodexAccountRotationExcluded,
   isCodexAccountSelectable,
   isHealthySharedCodexSelection,
   isUnknownUsage,
@@ -293,7 +293,7 @@ function isTransientOnlyAffinityBlock(
   if (!isThreadAffinityGenerationLive(entry)) return false;
   if (hasUnrecoveredCodexQuotaRefusal(entry.accountId, quotaScope)) return false;
   if (isCodexAccountPaused(config, entry.accountId)) return false;
-  if (isCodexAccountPlanExcluded(config, entry.accountId)) return false;
+  if (isCodexAccountRotationExcluded(config, entry.accountId, now, selectionOptions)) return false;
   if (!isCodexAccountUsable(config, entry.accountId, selectionOptions)) return false;
   if (getCodexQuotaHealthSnapshot(entry.accountId, quotaScope, now) !== null) return false;
   if (isCodexQuotaAvoided(entry.accountId, quotaScope, now)) return false;
@@ -812,7 +812,7 @@ export function previewCodexAccountForRequest(
     else if (
       hasConfiguredPoolAccount(config, active, selectionOptions)
       && !isCodexAccountPaused(config, active)
-      && !isCodexAccountPlanExcluded(config, active)
+      && !isCodexAccountRotationExcluded(config, active, now, selectionOptions)
     ) return active;
     else return null;
   }
@@ -1190,7 +1190,7 @@ export function resolveCodexAccountForThreadDetailed(
     } else if (
       hasConfiguredPoolAccount(config, active, selectionOptions)
       && !isCodexAccountPaused(config, active)
-      && !isCodexAccountPlanExcluded(config, active)
+      && !isCodexAccountRotationExcluded(config, active, now, selectionOptions)
     ) {
       return { status: "selected", accountId: active, affinity: affinityAfterRelease(threadId, releaseReason) };
     } else {

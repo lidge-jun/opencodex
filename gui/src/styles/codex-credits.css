@@ -27,3 +27,17 @@
   font-size: var(--text-label);
   color: var(--muted);
 }
+
+/* Credit spending (#6334): one global switch beside the credits display. The mixed knob matches
+   the quota auto-refresh control on the same page; per-account switches live in each card's
+   "more" disclosure. */
+.codex-credit-spend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+.codex-credit-spend .toggle[aria-pressed="mixed"] .toggle-knob { transform: translate(8px, -50%); }
+.codex-account-credits { display: inline-flex; align-items: center; gap: 7px; }
+.codex-account-credits__label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
+.codex-account-credits__toggle { transform: scale(.8); transform-origin: center; margin-inline: -3px; }

@@ -506,7 +506,7 @@ const KNOWN_AFFINITY_MOVES = new Set<NonNullable<PersistedUsageEntry["affinity"]
 ]);
 const KNOWN_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["affinityReason"]>>([
   "healthy", "quota_headroom", "quota_refusal", "transient", "transient_hold_expired",
-  "unusable", "paused", "plan_excluded", "cooldown", "quota_avoided", "generation",
+  "unusable", "paused", "plan_excluded", "credits_off", "cooldown", "quota_avoided", "generation",
   "expired", "model_lane",
 ]);
 const KNOWN_CONVERSATION_STATE_SCRUBS = new Set<NonNullable<PersistedUsageEntry["conversationStateScrub"]>>([

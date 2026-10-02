@@ -4,6 +4,7 @@ import { TASK, windowsServiceScriptPath, windowsLauncherVbsPath, windowsTaskXmlP
 import { windowsWscript } from "./windows-scheduler";
 import { join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "../lib/bun-runtime";
+import { REAL_BUN_MIN_BYTES } from "../lib/bun-binary-validator.mjs";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
@@ -54,6 +55,10 @@ function taskXmlRunLevelAcceptable(principal: string): boolean {
   return value === "leastprivilege" || value === "highestavailable";
 }
 
+/**
+ * Batch wrapper the scheduled task runs: restarts the proxy on exit, restores a transactional-update
+ * backup when the install is gone, and waits while bundled Bun is still npm's placeholder.
+ */
 export function buildWindowsServiceScript(
   entry = cliEntry(),
   port = resolveServiceListenPort(),
@@ -103,6 +108,15 @@ export function buildWindowsServiceScript(
     ")",
     // Locale dates can contain parentheses. Keep timestamp expansion outside blocks.
     'if not exist "%OCX_BUN%" goto bun_missing',
+    // An in-place npm install extracts the bun package's tiny placeholder before its postinstall
+    // swaps in the real binary. Executing it fails with exit 216 and, in an interactive session,
+    // a modal "Unsupported 16-Bit Application" dialog that blocks this loop until dismissed.
+    // The install can also remove the file between the exist check and this read; an empty size
+    // would turn the comparison into a syntax error that ends the wrapper.
+    'set "OCX_BUN_BYTES="',
+    'for %%F in ("%OCX_BUN%") do set "OCX_BUN_BYTES=%%~zF"',
+    'if not defined OCX_BUN_BYTES goto bun_not_ready',
+    `if %OCX_BUN_BYTES% LSS ${REAL_BUN_MIN_BYTES} goto bun_not_ready`,
     cli ? 'if not exist "%OCX_CLI%" (' : null,
     cli ? "  call :restore_backup" : null,
     cli ? ")" : null,
@@ -118,6 +132,10 @@ export function buildWindowsServiceScript(
     ":stopped",
     "endlocal",
     "exit /b 0",
+    ":bun_not_ready",
+    '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] bundled Bun is not ready (%OCX_BUN_BYTES% bytes, npm placeholder or mid-install); waiting for its postinstall, retrying in 5s - if this persists, reinstall opencodex with bun scripts allowed',
+    "ping -n 6 127.0.0.1 >nul",
+    "goto loop",
     ":bun_missing",
     '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] installation is incomplete: bundled Bun is missing; reinstall opencodex, then run ocx service repair',
     "exit /b 3",
