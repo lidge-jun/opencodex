@@ -58,10 +58,14 @@ export function createCliCatalogProvider(options: CliCatalogProviderOptions): (r
     }
     const current = snapshot.current();
     if (!current) return null;
-    // A persisted snapshot can outlive the registry it was built against (a restart starts with an
-    // empty one): wait, within the same bound, for the shared build before re-checking, since an
-    // empty answer here is what the CLI would cache for the next hour.
-    if (routableCliPickerModels(current.models).length < current.models.length) await bounded(ensureRegistry());
-    return routableCliPickerModels(current.models);
+    // A persisted snapshot can outlive the registry it was built against: a restart starts with an
+    // empty registry, and a provider change retires routes the snapshot still lists. An answer
+    // missing those rows is what the CLI would cache for the next hour, so first wait (within the
+    // same bound) for the shared registry build, and if rows still do not decode, rebuild the
+    // snapshot from the current routes before answering.
+    const stale = (models: readonly PickerModelEntry[]): boolean => routableCliPickerModels(models).length < models.length;
+    if (stale(current.models)) await bounded(ensureRegistry());
+    if (stale(snapshot.current()!.models)) await bounded(snapshot.refresh());
+    return routableCliPickerModels(snapshot.current()!.models);
   };
 }
