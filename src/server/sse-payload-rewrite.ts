@@ -88,6 +88,7 @@ export function createSseBlockBuffer(
   append(fragment: string): void;
   next(): { block: string; delimiter: string } | null;
   tail(): string;
+  isEmpty(): boolean;
   compact(): void;
   clear(): void;
 } {
@@ -156,6 +157,7 @@ export function createSseBlockBuffer(
       return { block, delimiter };
     },
     tail: () => buffer.slice(offset),
+    isEmpty: () => offset === buffer.length,
     compact,
     clear() {
       budget.releaseRetained(bufferBytes, scope);
@@ -310,38 +312,23 @@ export function relaySseWithBlockRewrite(
     let emitted = 0;
     let next: { block: string; delimiter: string } | null;
     while (!cancelled && (next = buffer.next())) {
-      // A final CR dispatches immediately. A later LF extends that same delimiter and
-      // must not become a field, or enter the next block's rewrite/drop/injection.
-      let { block, delimiter } = next;
-      if (pendingLineFeed && (block || delimiter).startsWith("\n")) {
-        if (pendingLineFeedVisible) {
-          enqueueText(controller, "\n");
-          emitted += 1;
-        }
-        if (block) block = block.slice(1);
-        else delimiter = delimiter.slice(1);
-      }
-      pendingLineFeed = delimiter.endsWith("\r");
+      const { block, delimiter } = next;
+      // A CR followed by buffered text is already settled; only an end-of-buffer CR
+      // can still receive the LF that extends its delimiter in the next fragment.
+      pendingLineFeed = delimiter.endsWith("\r") && buffer.isEmpty();
       const outBlocks = rewrite(block);
       pendingLineFeedVisible = outBlocks.length > 0;
       if (cancelled) return emitted;
       for (let index = 0; index < outBlocks.length; index++) {
         // Synthetic earlier blocks need a settled delimiter; only the final one can
         // inherit an upstream LF in a later chunk. Completing CR as CRLF is equivalent.
-        const settled = index < outBlocks.length - 1 && pendingLineFeed ? delimiter + "\n" : delimiter;
+        const settled = index < outBlocks.length - 1 && delimiter.endsWith("\r") ? delimiter + "\n" : delimiter;
         enqueueText(controller, outBlocks[index]! + settled);
         emitted += 1;
       }
     }
     buffer.compact();
-    let tail = flushFinal ? buffer.tail() : "";
-    if (pendingLineFeed && tail.startsWith("\n")) {
-      if (pendingLineFeedVisible) {
-        enqueueText(controller, "\n");
-        emitted += 1;
-      }
-      tail = tail.slice(1);
-    }
+    const tail = flushFinal ? buffer.tail() : "";
     if (tail.length > 0) {
       const tailBlocks = rewrite(tail);
       if (cancelled) return emitted;
@@ -355,6 +342,23 @@ export function relaySseWithBlockRewrite(
       buffer.clear();
     }
     return emitted;
+  };
+
+  const appendFragment = (controller: ReadableStreamDefaultController<Uint8Array>, fragment: string): number => {
+    let continuation = false;
+    if (pendingLineFeed && fragment.length > 0) {
+      continuation = fragment.startsWith("\n");
+      pendingLineFeed = false;
+      if (continuation) fragment = fragment.slice(1);
+    }
+    // Consume a late LF before scanning, so it cannot pair with a new LF to create
+    // a phantom empty callback. Any following line ending stays in the input buffer.
+    buffer.append(fragment);
+    if (continuation && pendingLineFeedVisible) {
+      enqueueText(controller, "\n");
+      return 1;
+    }
+    return 0;
   };
 
   return new ReadableStream<Uint8Array>({
@@ -371,7 +375,7 @@ export function relaySseWithBlockRewrite(
           // after its disposal (#893 review).
           if (cancelled) return;
           if (done) {
-            buffer.append(decoder.decode());
+            appendFragment(controller, decoder.decode());
             emitProcessedBlocks(controller, true);
             if (cancelled) return;
             buffer.clear();
@@ -379,8 +383,8 @@ export function relaySseWithBlockRewrite(
             controller.close();
             return;
           }
-          buffer.append(decoder.decode(value, { stream: true }));
-          const emitted = emitProcessedBlocks(controller);
+          const continuation = appendFragment(controller, decoder.decode(value, { stream: true }));
+          const emitted = continuation + emitProcessedBlocks(controller);
           if (cancelled || emitted > 0) return;
         }
       } catch (error) {

@@ -72,6 +72,28 @@ describe("shared SSE line ending contract", () => {
     buffer.clear();
     expect(budget.snapshot().currentBytes).toBe(0);
   });
+  test("a late LF is reconciled before delimiter scanning without an empty callback", async () => {
+    const budget = createTestTranslatorBudget();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const upstream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    const seen: string[] = [];
+    const reader = relaySseWithBlockRewrite(upstream, block => { seen.push(block); return [block]; }, budget).getReader();
+    try {
+      controller.enqueue(encoder.encode("data: one\r\r"));
+      expect(decoder.decode((await reader.read()).value)).toBe("data: one\r\r");
+      controller.enqueue(encoder.encode("\n\n"));
+      expect(decoder.decode((await reader.read()).value)).toBe("\n");
+      expect(seen).toEqual(["data: one"]);
+      expect(budget.snapshot().currentBytes).toBe(1); // The second LF still belongs to the input buffer.
+      controller.enqueue(encoder.encode("data: two\n\n"));
+      expect(decoder.decode((await reader.read()).value)).toBe("\ndata: two\n\n");
+      expect(seen).toEqual(["data: one", "\ndata: two"]);
+    } finally {
+      await reader.cancel();
+      expect(budget.snapshot().currentBytes).toBe(0);
+    }
+  });
+
   test("incremental delimiter search and byte counts stay linear for CR fragments", () => {
     const budget = createTestTranslatorBudget();
     const buffer = createSseBlockBuffer(budget);
