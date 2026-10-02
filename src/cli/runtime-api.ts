@@ -200,6 +200,7 @@ export function takeOption(args: string[], flag: string): string | undefined {
   return value;
 }
 
+/** Consume one boolean option using the supported on/off synonyms; reject other values. */
 export function takeBooleanOption(args: string[], flag: string): boolean | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
