@@ -1679,6 +1679,7 @@
   "spend-ledger-owner.test.ts": "lib",
   "spend-reservation-ledger.test.ts": "lib",
   "sponsor-presets.test.ts": "providers",
+  "sse-carriage-return.test.ts": "responses",
   "sse-client-frame-bounds.test.ts": "responses",
   "sse-decoder.test.ts": "responses",
   "sse-failed-tail.test.ts": "responses",
