@@ -1,3 +1,4 @@
+import { getMainAccountExternalUsageWarning, type MainAccountExternalUsageWarning } from "../main-account-external-usage";
 import { codexCreditsDtoField, hasCodexCreditsObservation, pruneCodexCredits } from "../credits";
 import type { CodexCredits } from "../credits";
 import { getMainChatgptAccountId } from "../auth-collision";
@@ -15,7 +16,7 @@ import { codexPlanValue, isThirtyDayOnlyCodexPlan } from "../plan";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
 import { getValidMainAccountToken, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
-import { captureMainAccountIdentityGeneration, getMainAccountCredentialPresence, getMainAccountInfoCache, isMainAccountIdentityGenerationLive } from "../main-account-cache";
+import { captureMainAccountIdentityGeneration, getMainAccountCredentialPresence, getMainAccountInfoCache, getObservedMainQuotaIdentityKey, isMainAccountIdentityGenerationLive } from "../main-account-cache";
 import type { CodexQuotaRefreshOutcome } from "../quota-refresh-outcome";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
 import type { MainAccountHardLockStatus } from "../main-account-hard-lock";
@@ -183,7 +184,7 @@ export interface CodexAuthAccountDto {
   healthAction?: string;
   quotaProbeSkipped?: true;
   quotaRefresh?: CodexQuotaRefreshOutcome;
-  mainAccountHardLock?: MainAccountHardLockStatus;
+  mainAccountHardLock?: MainAccountHardLockStatus & { externalUsage?: MainAccountExternalUsageWarning };
 }
 
 export interface FreshPoolPlanUpdate {
@@ -371,7 +372,8 @@ export async function listCodexAuthAccountsSnapshot(
     logLabel: "main",
     isMain: true,
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
-    mainAccountHardLock: getMainAccountHardLockStatus(runtimeConfig),
+    mainAccountHardLock: { ...getMainAccountHardLockStatus(runtimeConfig),
+      externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,

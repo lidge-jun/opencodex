@@ -13,6 +13,8 @@ const STOP_RESTORE_SOURCE = readFileSync(repoPath("src", "cli", "stop-restore.ts
 const SERVICE_SOURCE = readFileSync(repoPath("src", "service", "cli.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(repoPath("src", "server", "management-api.ts"), "utf8");
 const PROCESS_CONTROL_SOURCE = readFileSync(repoPath("src", "lib", "process-control.ts"), "utf8");
+// The startup Desktop-3P registry build (and its catch) lives in this shared helper.
+const REGISTRY_STARTUP_SOURCE = readFileSync(repoPath("src", "claude", "desktop-3p-startup.ts"), "utf8");
 
 function sliceFn(source: string, start: string, end: string): string {
   const from = source.indexOf(start);
@@ -29,7 +31,7 @@ describe("Grok fence lifecycle wiring", () => {
   test("handleStart syncs the Grok fence outside the Desktop-3P try", () => {
     const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleEnsure(");
     const startupAt = startFn.indexOf("await reconcileClientStartupBeforeReady(");
-    const registryAt = startFn.indexOf("buildDesktop3pRegistry(");
+    const registryAt = startFn.indexOf("initDesktop3pRegistry(");
     const afterStartupAt = startFn.indexOf("if (!startupSync.ran)", registryAt);
     const grokSyncAt = startFn.indexOf('await import("../grok/sync")');
 
@@ -37,7 +39,9 @@ describe("Grok fence lifecycle wiring", () => {
     expect(registryAt).toBeGreaterThan(startupAt);
     expect(afterStartupAt).toBeGreaterThan(registryAt);
     const initialization = startFn.slice(startupAt, afterStartupAt);
-    expect(initialization).toMatch(/\}\s*catch\s*(?:\([^)]*\)\s*)?\{/);
+    // The build never throws into the startup callback: its failure is caught inside the helper.
+    expect(REGISTRY_STARTUP_SOURCE).toMatch(/\}\s*catch\s*(?:\([^)]*\)\s*)?\{/);
+    expect(REGISTRY_STARTUP_SOURCE).not.toContain("grok");
     expect(initialization).not.toContain('import("../grok/sync")');
     // Grok follows the completed initialization call, outside its callback/try.
     // A comment wording change must not masquerade as a lifecycle regression.

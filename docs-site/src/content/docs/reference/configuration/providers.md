@@ -212,6 +212,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noProxy?` | `string \| string[]` | Destinations this provider reaches directly, using `NO_PROXY` host-pattern syntax. A match bypasses both this provider's own proxy and an inherited global proxy. |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. `maxConcurrentRequests` is a positive integer cap on in-flight requests. A provider or model rule may use the concurrency cap alone; provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay or narrow concurrency. Queue waits do not consume the upstream response-header timeout. HTTP and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. A concurrency-capped canonical Responses WebSocket turn uses HTTP/SSE so its lease can be released when the response body completes, errors, or is cancelled. For `runTurn` adapters, including Cursor, the cap counts active turns rather than physical sends: RunSSE and BidiAppend may overlap within one turn, while another turn waits. Follow-up sends still obey start intervals. |
 | `upstreamHttpVersion?` | `"auto" \| "http1.1" \| "h1" \| "http2" \| "h2"` | Pin the HTTP version used for upstream requests to this provider. Defaults to `auto`, which lets Bun negotiate. An explicit pin requires an HTTPS target and fails locally when it cannot be honored. Set `http1.1` when a provider's HTTP/2 SSE stream stalls instead of delivering events — the symptom is a long-running streaming request that produces nothing and eventually times out. For Cursor, `http1.1`/`h1` selects its `RunSSE` + `BidiAppend` compatibility transport for inference and also pins live model discovery. Management `POST`/`PATCH` accept `null` to clear it back to `auto`. |
+| `tlsProfile?` | `"antigravity-browser"` | **Use at your own risk.** Opt-in browser-like TLS handshake (through the optional `wreq-js` dependency) for the canonical `google-antigravity` OAuth provider. It changes only how the connection looks on the wire; it is not an official Google client, and it does not change what Google's terms allow. Google can still detect, rate-limit, suspend, or ban the account you signed in with, and you alone carry that risk. It is off by default and accepted only with the Google adapter, Cloud Code Assist mode, and Google's canonical HTTPS Antigravity hosts. Redirects stay manual. The provider's own `proxy`/`noProxy` route is carried by the TLS transport; a route it cannot keep fails the request instead of leaving by another path, which includes any direct route while `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` is set. `GET /api/providers` reports the profile state as `pending`, `active`, or `failed`. Omitting the field keeps the normal Bun transport and never loads the dependency. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
 | `chatCompletionsPath?` | `string` | Relative resource path for `openai-chat` requests, the mirror of `responsesPath` and subject to the same shape rules. Needed when one upstream serves Chat Completions and Responses under different prefixes: a per-model wire override changes the adapter and leaves `baseUrl` alone, so without this an opted-in Chat request would be sent to the Responses base. Z.AI is the shipped example. |
 | `allowEncryptedV2AgentTasks?` | `boolean` | Disabled by default. Trust a direct key-auth `openai-responses` provider to consume or relay opaque encrypted V2 sub-agent tasks unchanged. Eligible routes skip `agentTaskRecovery`; all other routes keep the existing recovery or fail-closed behavior. OpenCodex does not decrypt, translate, or recover tasks sent through this opt-in. |
@@ -729,6 +730,15 @@ record `grok-4.7-build-fast` as the wire model. API-key mode is unchanged: build
 public API, so Grok 4.7 Fast there still means priority processing. An explicit
 `xai/grok-4.7-build-fast` selection from an earlier configuration keeps working.
 
+When no explicit provider `fastWire` is configured, an opencodex API key restricted by
+`allowedModels` must permit `xai/grok-4.7-build-fast` (or its bare model id) for OAuth Fast.
+Allowing only `xai/grok-4.7` does not authorize this Fast model variant. A key allowing only
+the Fast wire model can use it; plain requests or disabled Fast still require `xai/grok-4.7`.
+With an explicit provider `fastWire`, permit the actual wire model instead. For example, a
+`service-tier` wire keeps `xai/grok-4.7` and requires permission for that model. Provider
+restrictions continue to apply.
+These rules apply to Responses, Chat Completions, Messages, and routed compaction requests.
+
 xAI charges Priority Processing at 2× the standard token price for input, output, cached, and
 reasoning tokens; cache discounts are applied before the multiplier. Cost estimates use that premium
 only when xAI's response confirms `service_tier: "priority"`. A missing or unparsed response tier is
@@ -874,6 +884,13 @@ rotation may trigger provider restrictions.
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | The cached provider-reported utilization bar used for usage-aware account selection. `five-hour` keeps the original behavior. `weekly` scores the weekly bar and skips accounts whose 5-hour bar is exhausted while another eligible account remains, but falls back to exhausted candidates when none do. `max-utilization` scores the highest known bar, so it can use 5-hour usage before weekly usage is available; if neither is known, the account follows unknown-usage ordering. Known usage ranks before unknown usage under the opt-in `weekly` and `max-utilization` windows only; an omitted or explicit `five-hour` preserves the legacy ordering. If every eligible account is unknown, selection still returns one in eligible order. After the documented lower-5-hour tie-break, exact ties preserve eligible order. A healthy affinity-bound session is not proactively rebalanced. For new-session assignment and routing recovery after an eligible 429 replacement, `quota` ranks eligible candidates directly with this window; `fill-first` advances in stable order using this window's threshold and exhaustion rules; `round-robin` ignores it. Cooldown, failover limits, and reauthentication eligibility remain separate local state. Per-account weekly bars come from usage probes or observed response headers. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Successful new-session binds retained on one round-robin selection. Range 1–100. |
 | `anthropicAccountPool.routes?` | `{name, match, accounts, fallback?}[]` | — | Ordered model routes for the enabled Anthropic OAuth pool. `match` is a full, case-sensitive model ID glob (`*` and `?`); first match wins. `accounts` contains stored account IDs, not aliases. Eligible accounts are limited to the route for initial selection and 429 retry. Without fallback, an empty route returns a local 401, or 429 with route-scoped `Retry-After` if all its declared accounts are cooling. With `fallback: true`, an all-cooling ordinary pool returns 429 with its earliest usable cooldown, even if a saved route account was removed; the client response never names the route; the proxy log uses `route:#<n>` for the rule’s 1-based position. `fallback: true` widens only when no routed account is eligible; fill-first then uses ordinary pool order. No matching rule retains normal selection; disabling the pool makes saved routes inactive. Invalid rules fail validated writes and prevent routed dispatch until corrected. `null` clears routes through the settings API. |
+
+Anthropic OAuth vision and web-search helpers match these routes using each helper's own model,
+independently of the main request model. Each helper authenticates with its routed account, which
+can differ from the globally active account. If a strict helper route has no eligible account, the
+helper fails locally before any provider request; it does not silently use an account outside the
+route. When the main request works but image description or web search fails, check the helper's
+configured model and the accounts eligible for that model's route.
 
 When enabled, 429 records a cooldown and may rotate within the request. The cooldown length comes
 from a usable `Retry-After`, otherwise from the latest valid reset time among rate-limit windows
@@ -1139,6 +1156,33 @@ and must write one JSON result to stdout.
 The default loopback bind admits any local process without auth, including other users on a
 multi-user host. Leave local exec off unless every data-plane caller is trusted and you deliberately
 accept bypassing Codex approval and sandbox semantics.
+:::
+
+## Zed provider (`adapter: "zed"`)
+
+The Zed Hosted AI bridge is experimental and login-only. Run `ocx login zed` before using it; the
+login stores the Zed account identity with its native-app access token in the normal OAuth store.
+
+```json
+{
+  "providers": {
+    "zed": {
+      "adapter": "zed",
+      "baseUrl": "https://cloud.zed.dev",
+      "authMode": "oauth",
+      "defaultModel": "auto"
+    }
+  }
+}
+```
+
+The bridge obtains a short-lived hosted-inference token and sends `POST /completions`. The live
+`/models` roster is used for account-specific picker metadata only: arbitrary model ids remain
+forwardable, with the backend family inferred from the live provider field or model name.
+
+:::caution[Unofficial — use at your own risk]
+Zed does not provide or endorse this integration, and it may be outside Zed's terms of service.
+Zed may limit or suspend an account that uses it. The provider is never enabled by default.
 :::
 
 ## OpenRouter provider routing

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses/core";
-import { handleResponsesWithPolicyFallback, rankPolicyFallbackCandidates } from "../../src/server/responses/policy-fallback";
+import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import { tryAdmitTurn } from "../../src/server/lifecycle";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
@@ -129,14 +129,10 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
   test("native failure leaves policy-hop request headers free of synthesized identity", async () => {
     clearHealthHistoryCacheForTests();
     const cfg = config();
-    cfg.routingProfiles = { "native-hop": { candidates: [{ provider: "openai", model: "gpt-5.6-luna" }] } };
-    const trace = { version: 1, decisionId: "native-hop", createdAt: Date.now(), requestedModel: "policy/native-hop",
-      routeKind: "policy", profile: { id: "native-hop", revision: "1" }, requirements: [],
-      candidates: [
-        { provider: "openai", model: "gpt-5.6-luna", eligible: true, exclusions: [], score: { total: 2 } },
-        { provider: "other", model: "m", eligible: true, exclusions: [], score: { total: 1 } },
-      ], selected: { candidateIndex: 0, provider: "openai", model: "gpt-5.6-luna", reason: "fixture" },
-    } as unknown as Parameters<typeof rankPolicyFallbackCandidates>[0];
+    // Both physical routes belong to the original evaluation; a diagnostic trace cannot add one.
+    cfg.routingProfiles = { "native-hop": { candidates: [
+      { provider: "openai", model: "gpt-5.6-luna" }, { provider: "other", model: "m" },
+    ] } };
     const requests: Request[] = [];
     const wires: Headers[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -149,9 +145,7 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
       body: JSON.stringify({ model: "policy/native-hop", input: "ping", stream: false }) });
     const runCore: NonNullable<Parameters<typeof handleResponsesWithPolicyFallback>[4]>["runCore"] = async (request, current, log, options) => {
       requests.push(request);
-      const response = await handleResponses(request, current, log, options);
-      if (requests.length === 1) log.routeDecision = trace;
-      return response;
+      return handleResponses(request, current, log, options);
     };
     const response = await handleResponsesWithPolicyFallback(req, cfg, { model: "", provider: "" },
       { claudeNativeSessionId: expectedSession }, { runCore });

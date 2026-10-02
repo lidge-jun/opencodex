@@ -1,3 +1,4 @@
+import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import * as z from "zod/v4";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
@@ -17,6 +18,7 @@ import {
   remoteGuiConfigSchema,
   runtimeRoleSchema,
   spendSchema,
+  chatgptDesktopSchema,
   skillsConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
@@ -53,10 +55,13 @@ import {
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
 import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
-import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
+// The schema boundary uses a string-only stand-in for the ingress grammar: importing the server
+// parser here would cycle back through config loading and run Cursor detection during validation.
+import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
 import { redactSecretString } from "../../lib/redact";
 import { openRouterRoutingConfigError } from "../../providers/openrouter-routing";
 import { vercelGatewayRoutingConfigError } from "../../providers/vercel-gateway-routing";
@@ -69,6 +74,7 @@ import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/inte
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
 export const configSchema = z.object({
+  chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
   port: z.number().int().min(0).max(65535).default(10100),
@@ -186,6 +192,10 @@ export const configSchema = z.object({
   // Default-on policy (#5694): absence and malformed hand edits both mean "on", and only an
   // explicit `false` written by the settings PUT opts out.
   codexMainAccountHardLock: z.boolean().optional().catch(undefined),
+  codexMainAccountHardLockThresholds: z.object({
+    short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
+    long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
+  }).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
@@ -237,6 +247,12 @@ export const configSchema = z.object({
     z.string(),
     z.array(z.string().trim().min(1)).min(1),
   ).optional().catch(undefined),
+  // Advisory input to role auto-assign only; a malformed block falls back to price ranking.
+  codexRoleTiers: z.object({
+    fast: z.array(z.string().trim().min(1)).optional(),
+    standard: z.array(z.string().trim().min(1)).optional(),
+    frontier: z.array(z.string().trim().min(1)).optional(),
+  }).strict().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
@@ -469,6 +485,14 @@ export const configSchema = z.object({
           message: sendPathError,
         });
       }
+    }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
+      });
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {
@@ -720,6 +744,7 @@ export const configSchema = z.object({
         for (const issue of comboConfigIssues(id, raw, config.providers, {
           combos: combos as Record<string, import("../../types").OcxComboConfig>,
           excludeComboId: id,
+          normalizeDecisionModel: model => lexicalDecisionModelBase(model, config.cursorEffortRows === true),
         })) {
           ctx.addIssue({
             code: "custom",

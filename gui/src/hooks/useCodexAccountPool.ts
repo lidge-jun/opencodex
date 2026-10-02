@@ -25,10 +25,28 @@ import {
  */
 
 export interface MainAccountHardLockStatus {
+  thresholds?: { short: number; long: number };
+  window?: "short" | "long";
+  externalUsage?: { window: "short" | "long"; fromPercent: number; toPercent: number; observedAt: number };
   enabled: boolean;
   state: "off" | "unknown" | "ready" | "blocked";
   /** Server timestamp in milliseconds; not a client-side unlock instruction. */
   resetAt?: number;
+}
+
+/** The server defaults, used whenever the management payload does not carry a usable pair. */
+export const DEFAULT_MAIN_HARD_LOCK_THRESHOLDS = { short: 90, long: 98 } as const;
+
+/**
+ * The thresholds as UI copy may show them. The management API is trusted for shape but not
+ * relied on: anything other than two finite percentages falls back to the server defaults,
+ * so translated strings never render "undefined" or a non-number.
+ */
+export function hardLockThresholds(value: unknown): { short: number; long: number } {
+  const pair = value && typeof value === "object" ? value as { short?: unknown; long?: unknown } : undefined;
+  const percent = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 100;
+  if (pair && percent(pair.short) && percent(pair.long)) return { short: pair.short, long: pair.long };
+  return { ...DEFAULT_MAIN_HARD_LOCK_THRESHOLDS };
 }
 
 export interface CodexCredits {

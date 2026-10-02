@@ -32,7 +32,13 @@ wrapper-protocol marker. Legacy WinSW definitions carrying only `OCX_SERVICE=1` 
 delegate until `ocx service repair` rewrites the XML. The census update uses the shared
 cross-process config mutation lock; recorded paths must resolve to files owned
 by the current user without group/world write permission on POSIX. Candidate
-probes are newest-recorded first, capped at four three-second attempts; a failed probe
+execution additionally requires a live service-manager registration whose generated
+definition names the current homes; environment markers alone never authorize a census
+probe because Bun can load them from a project dotenv file. For WinSW, whose SCM
+registration is machine-wide, the gate also requires trusted `sc.exe qc` to report that
+definition's own executable as the registered `BINARY_PATH_NAME`, and refuses on any query
+failure or mismatch. Candidate probes are
+newest-recorded first, capped at four three-second attempts; a failed probe
 falls through within that cap, and a failed launch or any pre-bind child exit (0 and the
 stay-out code included) leaves this install serving: its own lease-held bind fence then
 re-applies every stay-out condition, so a deliberate stand-down is still honored. A one-hop
@@ -76,6 +82,17 @@ two naming different homes, and on macOS a logged-out user can have the plist on
 domain to query. The probe returns what it saw and does not decide ownership; callers such as
 `src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
 read-only and time-bounded, so it is safe while the proxy runs under that same manager.
+Systemd home parsing in `src/service/systemd-env.ts` decodes the generated quoted escapes and
+doubled percent signs, with legacy simple bare assignments retained. Unknown escapes, unresolved
+specifiers, malformed quotes, resets and duplicate home assignments make the whole definition
+unknown in both online and offline probes; they never become omitted homes for ownership comparison.
+Non-comment physical line continuations also make the definition unknown before directive matching;
+the generated format uses single physical lines, while systemd otherwise folds continuations first.
+Directive names are matched literally like systemd's parser: only an exact `Environment` is
+decoded, while env-bearing siblings (`EnvironmentFile=`, `PassEnvironment=`, `UnsetEnvironment=`),
+escaped or malformed directive names, and `.include` all invalidate the definition instead of
+being skipped, because a directive the parser ignored could still change the environment the
+unit applies.
 On Windows, the generated-wrapper check accepts package installs that invoke the source CLI.
 A standalone wrapper that invokes `start` directly must carry the generated protocol and runtime
 markers, one quoted `OCX_BUN` assignment, and no `OCX_CLI` assignment in either quoting form.
@@ -335,14 +352,30 @@ lease boundary before exiting, and thrown failures release it after owner-aware 
 Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
 Malformed or unreadable records remain unknown. Recovery requires the same complete owner
 identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
-manual-runtime update still prints the existing restart hint.
+The lease is released before any service-manager-mediated start (`service repair` in recovery
+or the post-install refresh): the manager's `ocx start` child cannot join it, and holding it
+through the repair's health wait keeps that proxy from starting (#5760). The recovery decision
+is made again after the release, and the lease is re-acquired before each fallback's ownership
+re-read so a claim landing in the unleased window is vetoed rather than killed unleased.
+Direct recovery retains the lease until readiness or its bounded deadline. The normal successful manual-runtime update still prints the existing
+restart hint.
 
-The npm launcher in `bin/ocx.mjs` makes one exception after a failed update: a service recovery
-releases the lease before the service refresh, as a successful update does. The service manager
-starts the proxy outside the updater's process tree, so that proxy has to take the lease itself;
-held through the repair's health wait, the lease kept it from starting, and recovery fell through
-to a second, directly started proxy (#5760). The recovery decision is made again after the release.
+Every updater lane makes the same exception where the service manager starts the proxy outside
+the updater's process tree, so that proxy has to take the lease itself; held through the
+repair's health wait, the lease kept it from starting, and recovery fell through to a second,
+directly started proxy (#5760). The npm launcher in `bin/ocx.mjs` releases the lease before a
+post-failure service recovery, as a successful update does, and makes the recovery decision
+again after the release. The Bun updater releases before `service repair` in both the recovery
+branch and the post-install refresh — the port reclaim that authorizes kills already ran under
+the lease — and re-acquires before each fallback's ownership re-read, so the re-read and any
+direct start stay serialized with a claim that landed in the unleased window; after the package
+swap, a lease that stays claimed is reported with manual recovery steps and a non-zero exit. The
+dashboard restart worker in `src/update/job.ts` releases the lease immediately before `ocx
+service repair` and re-acquires it at the direct-start fallthrough, waiting long enough to
+outlast one service-wrapper respawn, then re-runs the recorded-owner veto under it before
+mutating the port, because a claim could have landed during the now-unleased refresh window. A
+lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
+the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.
 
 The npm transaction creates each staging directory exclusively and may clean that fresh path
 while the creating process still owns it. On POSIX it also creates the stage's `lib` directory,
@@ -350,6 +383,26 @@ because npm's strict script policy plans the global tree before it creates the p
 (#5760). A later update only reports staging leftovers. It does not recursively delete them
 from a marker: the marker is not an authorization secret, and a neighbouring writer could
 replace a previously checked pathname with a link before traversal.
+
+Before any tray or proxy stop, `src/update/npm-cache-preflight.mjs` checks npm's cache on every
+platform (#6288). The cache root, or the nearest existing folder npm would create it under, must
+resolve to a directory. A file in its place is `cache_root_not_directory`, and a link or Windows
+junction whose target is gone is `cache_root_dangling_link`; both abort with fixed guidance that
+names neither the path nor npm output. Windows runs only this root check, because it has no uid
+or Unix owner bits, while POSIX also runs the bounded ownership/mode walk. Windows skipped the
+gate entirely before #6288, so there only those two root reasons block; an unresolvable npm cache
+path, a worker timeout or any other inconclusive result returns `windows_skip` and the update
+proceeds unpinned as before. POSIX keeps failing closed on them. The npm launcher
+resolves `npm config get cache --global` once, from the home directory and with the environment
+staging uses, checks that path and passes it to the stage as `--cache`. Global mode and the home
+directory keep a project `.npmrc` in the caller's cwd from choosing the pinned cache, matching the
+`npm install -g` stage that never reads project config. On Windows a resolved path containing
+`" % ! ^ & | < >` is refused rather than escaped, because `npm.cmd` re-parses `%*` after our
+cmd.exe quoting; the update then proceeds unpinned. The pin is required: `--prefix <stage>` moves npm's
+globalconfig to `<stage>/etc/npmrc`, so a `cache=` from the operator's global npmrc would
+otherwise be dropped and staging would use npm's default root, which the pre-flight never
+checked (`tests/update/update-npm-cache-preflight.test.ts`,
+`tests/update/update-transactional.test.ts`).
 
 The probe ceilings are module-load constants in `src/server/proxy-liveness.ts`: 750 ms for the
 shared default and 1500 ms (three attempts) for `SERVICE_STOP_LIVENESS` and

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
 import { useT } from "../i18n/shared";
-import type { MainAccountHardLockStatus } from "../hooks/useCodexAccountPool";
+import { hardLockThresholds, type MainAccountHardLockStatus } from "../hooks/useCodexAccountPool";
 
 type Props = { apiBase: string; onSaved: () => Promise<boolean> };
 type Snapshot = { codexMainAccountHardLock: boolean; mainAccountHardLock: MainAccountHardLockStatus };
@@ -20,8 +20,9 @@ function readSnapshot(value: unknown): Snapshot {
   return payload as Snapshot;
 }
 
-function HardLockConfirmation({ pending, onCancel, onConfirm }: {
+function HardLockConfirmation({ pending, thresholds, onCancel, onConfirm }: {
   pending: boolean;
+  thresholds: { short: number; long: number };
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -49,7 +50,7 @@ function HardLockConfirmation({ pending, onCancel, onConfirm }: {
       <button type="button" className="modal-backdrop-dismiss" tabIndex={-1}
         aria-label={t("common.close")} disabled={pending} onClick={onCancel} />
       <div className="modal-card codex-main-hard-lock-dialog" role="document">
-        <h3 id={`${id}-title`}>{t("codexAuth.mainHardLockConfirmTitle")}</h3>
+        <h3 id={`${id}-title`}>{t("codexAuth.mainHardLockConfirmTitle", thresholds)}</h3>
         <p id={`${id}-body`} className="modal-desc">{t("codexAuth.mainHardLockConfirmBody")}</p>
         <div className="modal-actions">
           <button ref={cancelRef} type="button" className="btn btn-ghost" disabled={pending} onClick={onCancel}>
@@ -199,6 +200,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     if (mountedRef.current) setSaving(false);
   };
   const enabled = snapshot?.codexMainAccountHardLock;
+  const thresholds = hardLockThresholds(snapshot?.mainAccountHardLock.thresholds);
   return (
     <section ref={sectionRef} id="codex-main-hard-lock-setting" tabIndex={-1}
       className="card card-row codex-main-hard-lock-setting" aria-labelledby={`${id}-title`}
@@ -210,12 +212,12 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         }
       }}>
       <div className="codex-main-hard-lock-copy">
-        <strong id={`${id}-title`}>{t("codexAuth.mainHardLockTitle")}</strong>
-        <div id={`${id}-desc`} className="card-sub">{t("codexAuth.mainHardLockDesc")}</div>
+        <strong id={`${id}-title`}>{t("codexAuth.mainHardLockTitle", thresholds)}</strong>
+        <div id={`${id}-desc`} className="card-sub">{t("codexAuth.mainHardLockDesc", thresholds)}</div>
       </div>
       <button ref={toggleRef} type="button" className={`toggle ${enabled === true ? "on" : ""}`}
         disabled={saving || enabled === undefined || loadError} aria-pressed={enabled}
-        aria-label={t("codexAuth.mainHardLockTitle")} aria-describedby={`${id}-desc`}
+        aria-label={t("codexAuth.mainHardLockTitle", thresholds)} aria-describedby={`${id}-desc`}
         onClick={() => {
           if (busyRef.current || enabled === undefined || loadError) return;
           restoreFocusRef.current = true;
@@ -223,15 +225,16 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
           else setConfirming(true);
         }}><span className="toggle-knob" /></button>
       <div className="codex-main-hard-lock-feedback">
+        {snapshot?.mainAccountHardLock.externalUsage && <div className="codex-main-hard-lock-status is-blocked"><p role="status">{t("codexAuth.mainExternalUsageWarning")}</p></div>}
         {(saveError || loadError) && <p role="alert">{t(saveError ? "codexAuth.mainHardLockSaveFailed" : "codexAuth.mainHardLockLoadFailed")}{" "}
           <button type="button" className="link-btn" disabled={saving} onClick={() => { void load(); }}>{t("common.retry")}</button>
         </p>}
-        {saved !== null && !refreshError && <p role="status">{t(saved ? "codexAuth.mainHardLockEnabled" : "codexAuth.mainHardLockDisabled")}</p>}
+        {saved !== null && !refreshError && <p role="status">{t(saved ? "codexAuth.mainHardLockEnabled" : "codexAuth.mainHardLockDisabled", thresholds)}</p>}
         {refreshError && <p role="status">{t("codexAuth.mainHardLockRefreshFailed")}{" "}
           <button type="button" className="link-btn" disabled={saving} onClick={() => { void retryRefresh(); }}>{t("common.retry")}</button>
         </p>}
       </div>
-      {confirming && <HardLockConfirmation pending={saving} onCancel={cancel} onConfirm={() => { void save(true); }} />}
+      {confirming && <HardLockConfirmation pending={saving} thresholds={thresholds} onCancel={cancel} onConfirm={() => { void save(true); }} />}
     </section>
   );
 }

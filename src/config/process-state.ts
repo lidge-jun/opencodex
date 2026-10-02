@@ -328,14 +328,23 @@ export function readProcessCommandLine(pid: number): string | undefined {
       } catch {
         /* WMIC missing or failed — fall through */
       }
-      const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile",
-        "-NoLogo",
-        "-NonInteractive",
-        "-Command",
-        `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-      return output.trim() || undefined;
+      // One bounded retry: a transient CIM timeout answers "unreadable" for an
+      // unchanged process and turns a guarded stop into a false approval-changed.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
+            "-NoProfile",
+            "-NoLogo",
+            "-NonInteractive",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
+          ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
+          return output.trim() || undefined;
+        } catch {
+          /* timed out or CIM unavailable — try once more, then unreadable */
+        }
+      }
+      return undefined;
     }
     for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
       try {

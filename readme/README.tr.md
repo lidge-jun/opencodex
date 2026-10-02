@@ -368,6 +368,11 @@ bilgisi, ağ hatası veya geçersiz karar durumunda şu anda uygun olan ilk hede
 çağıranın iptali isteği yine iptal eder. Otomatik testler sahte bir TypeSafe uç noktası kullanır ve
 gerçek bir JEV hesabını doğrulamaz.
 
+Bir JEV Combo bunun yerine Ollama'nın anahtarsız `tev1` modeli gibi kendi barındırdığınız bir karar
+modeline de sorabilir: `baseUrl` değeri tam `/v1/systemone` uç noktası olan bir `jev-decision`
+sağlayıcısı ekleyin ve Combo'nun `decisionProvider` alanına yazın. TypeSafe kimlik bilgileri oraya asla
+gönderilmez. Ayrıntılar: [kendi barındırılan karar modeli](https://opencodex.me/tr/guides/combos/).
+
 ## Sağlayıcılar ve adaptörler
 
 <!-- sponsors:main-first-mention -->

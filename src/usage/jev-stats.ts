@@ -18,6 +18,7 @@ export const JEV_DECISION_GATES = [
 export type JevDecisionGate = (typeof JEV_DECISION_GATES)[number];
 
 const JEV_GATE_SET = new Set<string>(JEV_DECISION_GATES);
+const JEV_STATS_BACKENDS = ["typesafe", "systemone", "model", "unknown"] as const;
 const JEV_EFFORTS = new Set<OcxComboDefaultEffort>([
   "low", "medium", "high", "xhigh", "max", "ultra",
 ]);
@@ -30,6 +31,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
 export interface PersistedJevDecisionV1 {
   version: 1;
   comboId: string;
+  backend?: "typesafe" | "systemone" | "model";
   selected: {
     provider: string;
     model: string;
@@ -103,6 +105,12 @@ export interface JevStatsResponse {
     averageChosenProbability: number | null;
   };
   gates: Array<{ gate: JevDecisionGate; decisions: number }>;
+  backends: Array<{
+    backend: "typesafe" | "systemone" | "model" | "unknown";
+    decisions: number;
+    applied: number;
+    averageLatencyMs: number | null;
+  }>;
   models: JevStatsModelRow[];
   snapshotWindowStart: number | null;
   snapshotWindowEnd: number | null;
@@ -174,9 +182,13 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
   const confidence = probability(value.confidence);
   const chosenProbability = probability(value.chosenProbability);
   const usage = normalizedDecisionUsage(value.usage);
+  const backend = value.backend === "typesafe" || value.backend === "systemone" || value.backend === "model"
+    ? value.backend
+    : undefined;
   return {
     version: 1,
     comboId,
+    ...(backend !== undefined ? { backend } : {}),
     selected: {
       provider,
       model,
@@ -269,6 +281,9 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
   private readonly models = new Map<string, MutableModelRow>();
   private overflowModel: MutableModelRow | null = null;
   private readonly gates = new Map<JevDecisionGate, number>();
+  private readonly backends = new Map<
+    JevStatsResponse["backends"][number]["backend"], JevStatsResponse["backends"][number]
+  >();
   private snapshotWindowStart: number | null = null;
   private snapshotWindowEnd: number | null = null;
   private decisions = 0;
@@ -300,7 +315,7 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
   }
 
   get estimatedBytes(): number {
-    let bytes = 512;
+    let bytes = 512 + this.backends.size * 96;
     for (const row of this.models.values()) {
       bytes += 256 + (row.provider.length + row.model.length) * 2 + row.effortCounts.size * 32;
     }
@@ -340,6 +355,13 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
     const decision = normalizePersistedJevDecision(entry.jevDecision);
     if (!decision || (this.comboId !== null && decision.comboId !== this.comboId)) return;
 
+    const backend = decision.backend ?? "unknown";
+    const backendRow = this.backends.get(backend)
+      ?? { backend, decisions: 0, applied: 0, averageLatencyMs: null };
+    backendRow.averageLatencyMs = nextMean(backendRow.averageLatencyMs, backendRow.decisions, decision.latencyMs);
+    backendRow.decisions = saturatingAdd(backendRow.decisions, 1);
+    if (decision.gate === "apply") backendRow.applied = saturatingAdd(backendRow.applied, 1);
+    this.backends.set(backend, backendRow);
     this.averageLatencyMs = nextMean(this.averageLatencyMs, this.decisions, decision.latencyMs);
     this.decisions = saturatingAdd(this.decisions, 1);
     if (decision.gate === "apply") this.appliedDecisions = saturatingAdd(this.appliedDecisions, 1);
@@ -419,6 +441,7 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
     for (const [key, row] of this.models) cloned.models.set(key, cloneModelRow(row));
     cloned.overflowModel = this.overflowModel ? cloneModelRow(this.overflowModel) : null;
     for (const [gate, count] of this.gates) cloned.gates.set(gate, count);
+    for (const [backend, row] of this.backends) cloned.backends.set(backend, { ...row });
     cloned.snapshotWindowStart = this.snapshotWindowStart;
     cloned.snapshotWindowEnd = this.snapshotWindowEnd;
     cloned.decisions = this.decisions;
@@ -486,6 +509,10 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
       gates: JEV_DECISION_GATES.flatMap(gate => {
         const count = this.gates.get(gate) ?? 0;
         return count > 0 ? [{ gate, decisions: count }] : [];
+      }),
+      backends: JEV_STATS_BACKENDS.flatMap(backend => {
+        const row = this.backends.get(backend);
+        return row && row.decisions > 0 ? [{ ...row }] : [];
       }),
       models: rows,
       snapshotWindowStart: this.snapshotWindowStart,
