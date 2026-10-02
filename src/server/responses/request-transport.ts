@@ -12,7 +12,7 @@ import {
   getAccountSet,
 } from "../../oauth/store";
 import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
-import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
+import { adapterIsPassthrough, type ProviderAdapter, type AdapterRequest } from "../../adapters/base";
 import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
@@ -122,6 +122,7 @@ export async function prepareResponsesTransport(
   // existing openai-chat / anthropic adapters authenticate with no change.
   const isOAuth401ReplayProvider = (
     route.providerName === "xai"
+    || route.providerName === "mirasim"
     || route.providerName === "github-copilot"
     || route.providerName === "kiro"
     || route.providerName === "google-antigravity"
@@ -864,7 +865,7 @@ export async function prepareResponsesTransport(
     );
     if (passiveSubjectId) logCtx.activeAttempt.labRouteSubjectId = passiveSubjectId;
   }
-  const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
+  const isPassthrough = adapterIsPassthrough(adapter, parsed);
 
   const rawInput = (parsed._rawBody as { input?: unknown }).input;
   if (!isPassthrough && Array.isArray(rawInput) && rawInput.some(

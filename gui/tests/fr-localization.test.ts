@@ -160,6 +160,13 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "claudeDesktop.family.fable",
   "claudeDesktop.family.sonnet",
   "claudeDesktop.family.haiku",
+  // Mirasim quota rows use the same Claude model-family proper nouns. French keeps these
+  // product/model names unchanged rather than inventing translated family names.
+  "quota.modelFamily.claude",
+  "quota.modelFamily.fable",
+  "quota.modelFamily.sonnet",
+  "quota.modelFamily.opus",
+  "quota.modelFamily.haiku",
   "claudeDesktop.supports1m",
   "claudeDesktop.effort.supported",
   // Correct French words whose spelling is identical to English.

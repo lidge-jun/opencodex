@@ -2,6 +2,7 @@ import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anth
 import { observeAnthropicFamilyQuota, clearAnthropicRequestedFamilyQuota, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
+import { mirasimCredentialNeedsMigration } from "../../oauth/mirasim";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
@@ -187,8 +188,8 @@ export function supportsPerAccountQuota(provider: string): boolean {
 }
 
 export function explicitAccountReader(provider: string): boolean {
-  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
-    || provider === "devin";
+  return provider === "xai" || provider === "cursor" || provider === "kimi"
+    || provider === "command-code" || provider === "devin" || provider === "mirasim";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -466,7 +467,11 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
   // An operator-paused account is excluded from every automatic upstream use, quota reads included.
   if (row.paused) throw new Error("account is paused; quota probe skipped");
   const stored = row.credential;
-  if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
+  // A fresh legacy Mirasim bearer is still unusable by the signed control plane when its
+  // persisted device metadata is missing. Let the OAuth resolver refresh once so it can
+  // migrate the credential instead of returning a token that fetchMirasimControl cannot sign.
+  const requiresCredentialMigration = provider === "mirasim" && mirasimCredentialNeedsMigration(stored);
+  if (!requiresCredentialMigration && stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;
   if (activeId !== accountId && stored.source === "local-cli") {
     throw new Error("background local-cli token expired; skip CLI-adopting refresh for quota probe");
@@ -502,6 +507,9 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
   return createHash("sha256").update(JSON.stringify([
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
+    credential.mirasim?.devicePrivateKey,
+    credential.mirasim?.relayUrl,
+    credential.mirasim?.clientVersion,
     target.adapter, target.baseUrl, target.authMode, target.disabled === true,
     // Only credentials that carry their own endpoint (Devin tenants) extend the identity, so
     // every other provider's existing cache keys stay valid.
@@ -513,6 +521,17 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (config.disabled === true || config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
+  if (provider === "mirasim") {
+    try {
+      const normalized = new URL(config.baseUrl);
+      return config.adapter === "mirasim"
+        && normalized.protocol === "https:"
+        && normalized.origin === "https://relay.mirasim.ai"
+        && normalized.pathname.replace(/\/+$/, "") === "";
+    } catch {
+      return false;
+    }
+  }
   // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
   // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
   return provider === "xai" || provider === "cursor" || provider === "devin";

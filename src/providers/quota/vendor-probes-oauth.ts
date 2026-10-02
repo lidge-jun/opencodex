@@ -5,6 +5,7 @@ import { getValidAccessToken } from "../../oauth";
 import { captureOAuthAccountSelection, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
+import { fetchMirasimQuota } from "../../adapters/mirasim/control-plane";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { CLAUDE_CLI_USER_AGENT } from "../claude-cli-identity";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
@@ -44,6 +45,15 @@ import { AnthropicQuotaProbeOwnershipError, assertAnthropicQuotaSendAllowed, pro
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
+
+export async function fetchMirasimQuotaReport(
+  provider: string,
+  config: OcxProviderConfig,
+  accessToken: string,
+): Promise<ProviderQuotaReport | null> {
+  const quota = await fetchMirasimQuota(provider, config, accessToken);
+  return quota ? report(provider, "mirasim:/v1/limits", quota) : null;
+}
 
 export async function fetchChatGptForwardQuota(
   config: OcxConfig,

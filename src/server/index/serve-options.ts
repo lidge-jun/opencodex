@@ -660,6 +660,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return new Response(resp.body, { status: 503, headers });
       }
 
+      if (url.pathname === "/oauth/mirasim/start" || url.pathname.startsWith("/oauth/mirasim/callback/")) {
+        const { handleMirasimBrowserOAuthRequest } = await import("../../oauth/mirasim");
+        const oauthResponse = await handleMirasimBrowserOAuthRequest(req, url);
+        if (oauthResponse) return oauthResponse;
+      }
+
       if (url.pathname.startsWith("/api/")) {
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
@@ -1523,7 +1529,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, policy);
         }
         return runAdmittedHttpTurn(req, policy, async () => withCors(
-          await handleClaudeCountTokens(req, config, policy, { claudeIntercept: ingress === "claude-intercept" }),
+          await handleClaudeCountTokens(req, config, policy, { claudeIntercept: ingress === "claude-intercept" }, admission),
           req,
           policy,
         ));

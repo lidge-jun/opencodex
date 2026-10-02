@@ -60,7 +60,7 @@ import {
   fetchChatGptForwardQuota,
   fetchCursorQuota,
   fetchKiroQuota,
-  fetchMuseKeyQuota,
+  fetchMirasimQuotaReport, fetchMuseKeyQuota,
   fetchPassiveProviderQuota,
   fetchXaiQuota,
 } from "./quota/vendor-probes-oauth";
@@ -350,8 +350,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
   if (!credential || credential.access !== accessToken) return null;
   // Pair the post-renewal credential with the destination captured before renewal.
   const identity = explicitQuotaIdentity(provider, accountId, config);
-  const isCurrent = () => epoch === explicitAccountEpoch
-    && identity === explicitQuotaIdentity(provider, accountId, configured);
+  const isCurrent = () => epoch === explicitAccountEpoch && identity === explicitQuotaIdentity(provider, accountId, configured);
   if (!isCurrent()) return null;
   let result: ProviderQuotaProbeResult;
   switch (provider) {
@@ -360,6 +359,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
     case "devin": result = await (await import("./quota/devin")).fetchDevinQuota(provider, accessToken, credential.apiBaseUrl, config.baseUrl); break;
+    case "mirasim": result = await fetchMirasimQuotaReport(provider, config, accessToken); break;
     default: return null;
   }
   return { result, identity, isCurrent };

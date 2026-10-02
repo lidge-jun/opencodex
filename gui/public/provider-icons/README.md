@@ -202,6 +202,11 @@ Sourced for the providers that were rendering a coloured initial tile. Every
 entry below was fetched from the vendor's own domain, taken from the registry's
 `baseUrl`/`dashboardUrl` rather than guessed.
 
+- `mirasim.svg` — supplied by the operator on 2026-09-21 as a 793x698 RGBA
+  logo image. The committed SVG is a geometric vector reconstruction of that
+  exact black plate / eight white rounded bars so the small provider tile stays
+  sharp; no external brand asset was substituted.
+
 Published as SVG and committed with only comments, `<title>`/`<desc>` and
 `data-name` attributes stripped:
 
