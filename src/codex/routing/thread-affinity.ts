@@ -102,6 +102,8 @@ export type CodexAffinityReason =
   | "unusable"
   | "paused"
   | "plan_excluded"
+  /** Credits are off for the account and one of its usage windows is full (#6334). */
+  | "credits_off"
   | "cooldown"
   | "quota_avoided"
   | "generation"

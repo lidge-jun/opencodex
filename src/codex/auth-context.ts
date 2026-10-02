@@ -64,7 +64,8 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./cata
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
 import { maskAccountId } from "../lib/privacy";
 import { formatErrorResponse } from "../bridge";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, getMainPolicyQuota, parseUsageQuota, parseMainPolicyUsageQuota, setAccountQuotaFromParsed } from "./quota";
+import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "./account-credit-use";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
@@ -118,7 +119,7 @@ function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
  *
  * Read-free by construction, which is what makes it usable on the fenced side. Every input is
  * config, policy, or in-memory runtime state: the pin fields, the paused list, the cached quota
- * score, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
+ * score, the main policy quota the hard lock and the credits switch read, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
  * credential record in `main-account-cache.ts`. Nothing here opens a file.
  *
  * `candidate` is the pin before the hard-lock question, because the caller still owes the
@@ -142,6 +143,7 @@ export function requestOwnedMainPinState(
     candidate,
     preserve: candidate && !(callerMatchesObservedMain(headers)
       && (isMainAccountHardLocked(policy)
+        || mainCreditsHoldResetAt(policy) !== undefined
         || getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope)?.cooldownUntil)),
   };
 }
@@ -520,6 +522,19 @@ export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
   }
 }
 
+/** Credits are off for the main login and one of its usage windows is full (#6334). */
+export class CodexMainAccountCreditsOffError extends CodexAccountCooldownError {
+  readonly resetAt?: number;
+
+  constructor(resetAt?: number) {
+    super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
+    this.name = "CodexMainAccountCreditsOffError";
+    this.resetAt = resetAt;
+    this.message = "Codex main account reached its usage limit and is set not to spend ChatGPT credits."
+      + " Choose another account, wait for the limit to reset, or turn on \"Use credits after limit\" on the main account card.";
+  }
+}
+
 export class CodexReserveUnavailableError extends CodexAccountCooldownError {
   constructor() {
     super(MAIN_CODEX_ACCOUNT_ID, 0);
@@ -579,6 +594,7 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
   "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
+  | "noCreditCodexAccountIds"
 >>;
 
 interface CodexAuthMaterializationOptions {
@@ -701,10 +717,24 @@ export function unwrapUpstreamRetryEvidenceError(error: unknown): unknown {
   return error;
 }
 
-function assertMainAccountPolicy(config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds"> | undefined): void {
+/**
+ * When the main login's full window ends, if credits are off for it and a window is full (#6334).
+ * Same evidence the hard lock reads, and no plan lookup: the plan can live in the physical auth
+ * file, which several callers are forbidden to open, so every long window counts instead.
+ */
+function mainCreditsHoldResetAt(config: Pick<OcxConfig, "noCreditCodexAccountIds">): number | undefined {
+  if (codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)) return undefined;
+  return codexUsageLimitResetAt(getMainPolicyQuota(), undefined, Date.now());
+}
+
+function assertMainAccountPolicy(
+  config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "noCreditCodexAccountIds"> | undefined,
+): void {
   if (config) {
     const status = getMainAccountHardLockStatus(config);
     if (status.state === "blocked") throw new CodexMainAccountHardLockError(status.resetAt, status.thresholds);
+    const creditsResetAt = mainCreditsHoldResetAt(config);
+    if (creditsResetAt !== undefined) throw new CodexMainAccountCreditsOffError(creditsResetAt);
   }
   // Only an admitted request is opencodex's own use of the main account. Counting a refused one
   // would hide outside usage from the warning exactly while the lock is holding.

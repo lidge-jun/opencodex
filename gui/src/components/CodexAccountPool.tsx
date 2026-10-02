@@ -305,6 +305,16 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     return result.ok;
   };
 
+  const toggleCreditsAfterLimit = async (account: CodexAccountEntry, enabled: boolean) => {
+    const result = await controller.setAccountCreditsAfterLimit(account.id, enabled);
+    if (!result.ok && result.reason === "busy") return;
+    showActionFeedback(t(result.ok
+      ? enabled ? "codexAuth.creditsOnSucceeded" : "codexAuth.creditsOffSucceeded"
+      : "codexAuth.creditsUpdateFailed", {
+      email: account.alias ?? account.email,
+    }), result.ok ? "ok" : "err");
+  };
+
   const remove = async (id: string) => {
     const label = accounts.find(account => account.id === id)?.email ?? t("pws.accountOrdinal", { count: "1" });
     if (!(await confirmAction({ message: t("codexAuth.removeConfirm", { id: label }), confirmLabel: t("common.remove"), tone: "danger" }))) return;
@@ -520,6 +530,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             priorityUpdatingId={priorityUpdatingId}
             onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
             autoSwitchDisabled={accountAutoSwitchDisabled}
+            onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
+            creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onOpenReset={openResetPopup}
@@ -566,6 +578,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             priorityUpdatingId={priorityUpdatingId}
             onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
             autoSwitchDisabled={accountAutoSwitchDisabled}
+            onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
+            creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onReauth={openReauth}
