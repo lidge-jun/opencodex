@@ -260,7 +260,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 **OpenGateway**는 Sionic AI가 운영하는 OpenAI 호환 게이트웨이입니다. Base URL은
 `https://apis.opengateway.ai/v1`이며 공개 카탈로그에는 활성 모델이 약 80개 있습니다
 (2026-10-02 확인). 프리셋은 공개 `GET /v1/models`에서 모델 목록을 자동 갱신하고 활성
-Chat Completions 또는 Responses 모델만 가져옵니다. Sionic이 제공하는
+Chat Completions 모델(그리고 Responses 전용이라 Responses로 보내는 `openai/o3-pro`)만 가져옵니다. Sionic이 제공하는
 `deepseek/deepseek-v4.1-flash-ultrafast`와 `z-ai/glm-5.3-flash-ultrafast`를 먼저 표시합니다.
 [OpenGateway 대시보드](https://opengateway.ai/api-keys)에서 키를 발급한 뒤
 `ocx provider add opengateway`를 실행하거나 대시보드에서 **OpenGateway**를 선택하세요.

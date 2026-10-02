@@ -366,7 +366,7 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 **OpenGateway** est une passerelle compatible OpenAI exploitée par Sionic AI à
 `https://apis.opengateway.ai/v1`. Son catalogue public compte environ 80 modèles actifs
 (vérifiés le 2026-10-02). Le préréglage actualise automatiquement la liste via le
-`GET /v1/models` public et conserve les modèles Chat Completions ou Responses actifs. Les modèles servis
+`GET /v1/models` public et conserve les modèles Chat Completions actifs (ainsi que `openai/o3-pro`, réservé à Responses et routé vers Responses). Les modèles servis
 par Sionic, `deepseek/deepseek-v4.1-flash-ultrafast` et `z-ai/glm-5.3-flash-ultrafast`,
 sont affichés en premier. Créez une clé dans le [tableau de bord OpenGateway](https://opengateway.ai/api-keys),
 puis lancez `ocx provider add opengateway` ou sélectionnez **OpenGateway** dans le tableau de bord.

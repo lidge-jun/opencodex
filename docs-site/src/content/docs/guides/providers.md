@@ -591,7 +591,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
 (as verified on 2026-10-02); the preset automatically refreshes the live model list from
-public `GET /v1/models` and keeps active Chat Completions or Responses models. Sionic-served
+public `GET /v1/models` and keeps active Chat Completions models (plus the Responses-only `openai/o3-pro`, which is pinned to Responses). Sionic-served
 `deepseek/deepseek-v4.1-flash-ultrafast` and `z-ai/glm-5.3-flash-ultrafast` are listed first.
 Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), then run
 `ocx provider add opengateway` or select **OpenGateway** in the dashboard. Chat requests

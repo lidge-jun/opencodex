@@ -277,7 +277,7 @@ opencodex поставляется с 102 встроенными пресета�
 **OpenGateway** — OpenAI-совместимый шлюз компании Sionic AI по адресу
 `https://apis.opengateway.ai/v1`. Публичный каталог содержит около 80 активных моделей
 (проверено 2026-10-02). Пресет автоматически обновляет список через публичный
-`GET /v1/models`, оставляя активные модели Chat Completions или Responses. Модели, обслуживаемые Sionic,
+`GET /v1/models`, оставляя активные модели Chat Completions (а также `openai/o3-pro`, доступную только через Responses и направляемую в Responses). Модели, обслуживаемые Sionic,
 `deepseek/deepseek-v4.1-flash-ultrafast` и `z-ai/glm-5.3-flash-ultrafast`, показаны первыми.
 Создайте ключ в [панели OpenGateway](https://opengateway.ai/api-keys), затем выполните
 `ocx provider add opengateway` или выберите **OpenGateway** в панели. Chat-запросы используют

@@ -317,7 +317,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 
 **OpenGateway** 是 Sionic AI 營運的 OpenAI 相容閘道，base URL 為
 `https://apis.opengateway.ai/v1`。公開目錄包含約 80 個活躍模型（2026-10-02 確認）。
-preset 透過公開 `GET /v1/models` 自動更新清單，只保留活躍的 Chat Completions 或 Responses 模型。
+preset 透過公開 `GET /v1/models` 自動更新清單，只保留活躍的 Chat Completions 模型（以及僅支援 Responses、並固定走 Responses 的 `openai/o3-pro`）。
 Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 與
 `z-ai/glm-5.3-flash-ultrafast` 排在最前。請在
 [OpenGateway 控制台](https://opengateway.ai/api-keys)建立金鑰，再執行

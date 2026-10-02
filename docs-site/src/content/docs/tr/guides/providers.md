@@ -404,7 +404,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 **OpenGateway**, Sionic AI tarafından işletilen OpenAI uyumlu bir ağ geçididir:
 `https://apis.opengateway.ai/v1`. Genel katalogda yaklaşık 80 etkin model bulunur
 (2026-10-02 tarihinde doğrulandı). Önayar, genel `GET /v1/models` üzerinden listeyi otomatik
-yeniler ve etkin Chat Completions veya Responses modellerini tutar. Sionic tarafından sunulan
+yeniler ve etkin Chat Completions modellerini (ve yalnızca Responses ile sunulup Responses'a yönlendirilen `openai/o3-pro` modelini) tutar. Sionic tarafından sunulan
 `deepseek/deepseek-v4.1-flash-ultrafast` ve `z-ai/glm-5.3-flash-ultrafast` ilk sırada listelenir.
 [OpenGateway panelinde](https://opengateway.ai/api-keys) bir anahtar oluşturun, ardından
 `ocx provider add opengateway` çalıştırın veya panelde **OpenGateway** seçin. Chat istekleri

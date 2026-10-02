@@ -250,7 +250,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 
 **OpenGateway** 是 Sionic AI 运营的 OpenAI 兼容网关，base URL 为
 `https://apis.opengateway.ai/v1`。公开目录包含约 80 个活跃模型（2026-10-02 核实）。
-预设通过公开 `GET /v1/models` 自动刷新列表，仅保留活跃的 Chat Completions 或 Responses 模型。
+预设通过公开 `GET /v1/models` 自动刷新列表，仅保留活跃的 Chat Completions 模型（以及仅支持 Responses、并固定走 Responses 的 `openai/o3-pro`）。
 Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 和
 `z-ai/glm-5.3-flash-ultrafast` 排在最前。请在
 [OpenGateway 控制台](https://opengateway.ai/api-keys)创建密钥，再运行

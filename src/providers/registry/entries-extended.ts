@@ -1154,6 +1154,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     dashboardUrl: "https://opengateway.ai/api-keys",
     liveModels: true,
+    // GET /v1/models is public and answers 200 for any Bearer value, so it cannot verify a key.
+    apiKeyValidation: "unknown",
     preserveCustomDestination: true,
     // Both cold-start seeds are active Sionic-served vision models with 1M context.
     // GLM is the default, not a quality ranking: a verified, large-output coding seed.
@@ -1182,13 +1184,19 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     },
     modelDiscovery: {
       path: "models", // Public GET; lower-case ?status=active returns 400, so filter locally.
-      filter: { allOf: [
-        { path: ["status"], equalsAny: ["active"] },
-        { path: ["endpoints"], containsAny: ["chat_completions", "responses"] },
-      ] },
+      // Admit a row only on a wire it is served on: the Chat default needs chat_completions,
+      // and Responses-only rows are admitted only when pinned to Responses above. A future
+      // Responses-only row stays hidden until it is pinned, rather than 404ing on Chat.
+      filter: {
+        allOf: [{ path: ["status"], equalsAny: ["active"] }],
+        anyOf: [
+          { path: ["endpoints"], containsAny: ["chat_completions"] },
+          { path: ["id"], equalsAny: ["openai/o3-pro"] },
+        ],
+      },
       preferFirst: [{ path: ["providers", "*", "id"], containsAny: ["sionic-ai"] }],
     },
-    note: "Sionic AI's OpenAI-compatible gateway. Public live discovery lists active Chat/Responses models, with Sionic-served ultrafast models first.",
+    note: "Sionic AI's OpenAI-compatible gateway. Public live discovery lists active models served on Chat Completions (plus pinned Responses-only rows), with Sionic-served ultrafast models first. The public catalog cannot validate keys.",
   },
   {
     // Public contract checked 2026-09-29: https://docs.tokenlab.sh/api-reference/models/list-models

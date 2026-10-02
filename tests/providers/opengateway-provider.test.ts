@@ -39,9 +39,20 @@ describe("OpenGateway", () => {
     expect(ids(fixture, { ...discovery, spec: { ...spec, preferFirst: [{ path: ["providers", "*", "id"], containsAny: ["not-present"] }] } })).toEqual([expected[2], expected[3], expected[0], expected[1]]);
   });
   test("enrichment cannot manufacture a preferred row and malformed provider arrays fail closed", () => {
-    const data = [{ id: "a", status: "active", endpoints: ["chat_completions"], providers: [{ id: "other" }] }, { id: "b", status: "active", endpoints: ["responses"], providers: [{ id: "sionic-ai" }] }];
+    const data = [{ id: "a", status: "active", endpoints: ["chat_completions"], providers: [{ id: "other" }] }, { id: "b", status: "active", endpoints: ["chat_completions", "responses"], providers: [{ id: "sionic-ai" }] }];
     expect(ids({data, models: [{id:"a",providers:[{id:"sionic-ai"}]}]})).toEqual(["b", "a"]);
     expect(ids({data: data.map(row=>({...row,providers: {id:"sionic-ai"}}))})).toEqual(["a", "b"]);
+  });
+  test("hides Responses-only rows unless pinned to Responses, so the Chat default never 404s", () => {
+    const data = [
+      { id: "openai/o3-pro", status: "active", endpoints: ["responses"], providers: [{ id: "openai" }] },
+      { id: "openai/future-responses-only", status: "active", endpoints: ["responses"], providers: [{ id: "openai" }] },
+      { id: "openai/chat-row", status: "active", endpoints: ["chat_completions", "responses"], providers: [{ id: "openai" }] },
+    ];
+    expect(ids({ data })).toEqual(["openai/o3-pro", "openai/chat-row"]);
+  });
+  test("declares the public catalog as unable to validate keys", () => {
+    expect(entry.apiKeyValidation).toBe("unknown");
   });
   test("uses Responses-only o3-pro on every inbound and verified Sionic Responses only for Codex", () => {
     expect(providerModelWireDefault("opengateway", provider, "openai/o3-pro", new Set(["openai-chat", "openai-responses"]), "chat")).toBe("openai-responses");
