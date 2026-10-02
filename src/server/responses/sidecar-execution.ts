@@ -177,6 +177,11 @@ export async function executeResponsesSidecars(
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !transportState.adapter.runTurn;
+  let sidecarOutputStarted = false;
+  const sidecarHasCommittedOutput = () => sidecarOutputStarted
+    || (logCtx.activeAttempt?.deliverySummary?.semanticBytes ?? 0) > 0
+    || (logCtx.activeAttempt?.deliverySummary?.sideEffectEvents ?? 0) > 0;
+  const noteSidecarOutput = () => { sidecarOutputStarted = true; options.onFirstOutput?.(); };
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
     responseHeaders?: Headers,
@@ -270,7 +275,8 @@ export async function executeResponsesSidecars(
       const nextAccountId = await rotateAnthropicAccountOnResponse(
         originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
+          allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
           canRetry: hop.allowed && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
       if (!nextAccountId) {
@@ -422,7 +428,7 @@ export async function executeResponsesSidecars(
       on429: rotateSidecarProviderOn429,
       retryOn429Policy: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro")
         ? null : rateLimitRetryPolicyFor(route.provider),
-      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onFirstOutput: noteSidecarOutput,
       ...(options.forceEmptyResponseId ? { forceEmptyResponseId: true } : {}),
       onCompletedResponse: (response, providerState) => {
         const served = transportState.replayOAuthCredentialSnapshot;
@@ -493,7 +499,7 @@ export async function executeResponsesSidecars(
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
-      ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+      onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);

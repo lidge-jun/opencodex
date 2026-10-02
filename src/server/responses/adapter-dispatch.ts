@@ -995,7 +995,7 @@ export async function prepareAdapterExchange(
       ) {
         const nextAccountId = await rotateAnthropicAccountOnResponse(upstreamResponse, {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
           canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
         if (!nextAccountId) break;

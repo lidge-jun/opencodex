@@ -1,3 +1,4 @@
+import { anthropicModelFamily } from "./anthropic-model-quota";
 /** Narrow pre-output account recovery, fenced to the bearer that physically sent the turn. */
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyAnthropic429, anthropicRetryAfterMs, pauseAnthropicRateAdmission, anthropicRatePauseUntil, ANTHROPIC_SHORT_RETRY_MS, ANTHROPIC_MAX_INLINE_THROTTLE_MS } from "./anthropic-rate-limit-policy";
@@ -9,7 +10,7 @@ import type { AnthropicRouteDecision } from "./anthropic-model-routes";
 import { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal, hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } from "./anthropic-routing";
 
 const responseCredentials = new WeakMap<Response, Pick<OAuthAccessSnapshot, "accountId" | "generation">>();
-const retryStates = new WeakMap<object, { sameAccount: boolean; detour: boolean }>();
+const retryStates = new WeakMap<object, { firstAccountId: string; sameAccount: boolean; detour: boolean }>();
 const verdicts = new WeakMap<Response, Promise<boolean>>();
 
 /** Called only when the outgoing headers prove ownership of the selected stored bearer. */
@@ -45,6 +46,7 @@ export async function rotateAnthropicAccountOnResponse(
   options: {
     config: OcxConfig;
     accountId: string;
+    model?: string;
     sessionKey?: string | null;
     decision?: AnthropicRouteDecision | null;
     signal?: AbortSignal;
@@ -62,7 +64,10 @@ export async function rotateAnthropicAccountOnResponse(
     if (!sent || sent.accountId !== options.accountId || !current || current.needsReauth
       || credentialGeneration(current.credential) !== sent.generation) return null;
     const kind = classifyAnthropic429(response.headers);
-    if (kind === "family-quota") return null; // WP06 supplies model-scoped evidence.
+    if (kind === "family-quota") {
+      if (anthropicModelFamily(options.model) !== "Fable" || !options.canRetry || options.allow429Recovery === false) return null;
+      return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), options.decision ?? null, options.model);
+    }
     if (kind !== "shared-quota") {
       if (!isAnthropicAccountPoolEnabled(options.config) && !hasAnthropicFailoverQuorum() && !current.paused) return null;
       const now = Date.now();
@@ -70,7 +75,9 @@ export async function rotateAnthropicAccountOnResponse(
       if (kind === "transient-rate") pauseAnthropicRateAdmission(sent.accountId, now + delay);
       if (!options.canRetry || options.allow429Recovery === false || !options.requestKey) return null;
       let state = retryStates.get(options.requestKey);
-      if (!state) { state = { sameAccount: false, detour: false }; retryStates.set(options.requestKey, state); }
+      if (!state) { state = { firstAccountId: sent.accountId, sameAccount: false, detour: false }; retryStates.set(options.requestKey, state); }
+      // A concurrent committed selection may have moved the same-account proposal.
+      if (state.firstAccountId !== sent.accountId) state.detour = true;
       const wait = Math.max(delay, (anthropicRatePauseUntil(sent.accountId) ?? now) - now);
       if (!state.sameAccount && wait <= ANTHROPIC_MAX_INLINE_THROTTLE_MS && !current.paused) {
         state.sameAccount = true;
@@ -82,7 +89,7 @@ export async function rotateAnthropicAccountOnResponse(
       }
       if (kind === "transient-rate" && !state.detour) {
         state.detour = true;
-        return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), options.decision ?? null);
+        return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), options.decision ?? null, options.model);
       }
       return null;
     }
@@ -111,5 +118,5 @@ export async function rotateAnthropicAccountOnResponse(
     return null;
   }
   return rotateAnthropicAccountOnRefusal(options.config, options.accountId, status,
-    response.headers.get("retry-after"), options.sessionKey, Date.now(), response.headers, options.decision);
+    response.headers.get("retry-after"), options.sessionKey, Date.now(), response.headers, options.decision, options.model);
 }

@@ -901,7 +901,12 @@ that account's admission, preserves affinity, and permits one short same-account
 at most one sibling detour per request. A headerless 429 permits at most one short retry on
 the same account, leaves account health intact, and adds no synthetic Retry-After. These
 retries share the physical-send budget and stop on cancellation or committed streamed output.
-Default single-account behavior is unchanged.
+Default single-account behavior is unchanged. The requested model's shared 5-hour/weekly and
+family weekly evidence determine its pool admission. A Fable-only rejection keeps Sonnet
+eligible on the same account. Passive Fable evidence ages out after thirty minutes or its
+known reset and is revalidated by one serving request at a time. Usage thresholds remain
+soft preferences with an all-drained fallback; these controls are not hard usage or billing caps.
+Active usage probes preserve absent family windows unless the response authoritatively enumerates limits.
 Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.

@@ -20,6 +20,8 @@ Shared parsing and streaming follow the [request-copy](byte-accounting.md#reques
 
 [Anthropic seed image metadata](../runtime.md#capability-aware-image-admission) supplies missing capability evidence; transport selection and image wire handling remain unchanged.
 
+Anthropic managed sends recheck [family admission](../providers/anthropic-account-pool.md#family-weekly-admission) at the physical boundary in `src/server/responses/request-transport.ts`; stale family exclusions permit one header-stage revalidation send at a time.
+
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport

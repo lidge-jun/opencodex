@@ -1,3 +1,6 @@
+import { mergeAnthropicFamilyWindows, hasAnthropicFamilyEnumeration } from "./anthropic-family-headers";
+import { getCachedProviderAccountQuota } from "./account-cache";
+import { observeAnthropicFamilyQuota } from "../../oauth/anthropic-model-quota";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus } from "../../oauth/store";
 import type { ProviderQuota } from "../quota-types";
 
@@ -107,6 +110,12 @@ export async function probeAnthropicQuotaWithRecovery(
   }
   // Clearing the claimed cooldown intentionally advances the fence. Adopt that exact new
   // generation; any later observation/429 then invalidates publication before a cache write.
+  const authoritative = hasAnthropicFamilyEnumeration(quota);
+  observeAnthropicFamilyQuota(accountId, quota.customWindows ?? [], quota.updatedAt, authoritative);
+  if (!authoritative) {
+    const windows = mergeAnthropicFamilyWindows(getCachedProviderAccountQuota("anthropic", accountId)?.customWindows, quota.customWindows);
+    if (windows.length) quota = { ...quota, customWindows: windows };
+  }
   const publicationGeneration = anthropicCooldownGeneration(accountId);
   afterSettlementForTests?.();
   return {

@@ -152,6 +152,7 @@
     "anthropic-pool-toggle-copy.test.ts": "adapters/anthropic",
     "anthropic-quorum-cache.test.ts": "routing",
     "anthropic-quota-dispatch.test.ts": "adapters/anthropic",
+    "anthropic-model-weekly-admission.test.ts": "adapters/anthropic",
     "anthropic-429-policy.test.ts": "adapters/anthropic",
     "anthropic-ratelimit-headers.test.ts": "adapters/anthropic",
     "anthropic-reasoning.test.ts": "adapters/anthropic",

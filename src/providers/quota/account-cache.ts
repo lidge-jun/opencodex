@@ -1,6 +1,8 @@
+import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anthropic-family-headers";
+import { observeAnthropicFamilyQuota, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
-import { getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
+import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
@@ -34,6 +36,8 @@ export type AccountQuotaCacheEntry = {
   quotaFailureIsCurrent?: () => boolean;
   /** Private new-reader identity; never persisted or serialized. */
   identity?: string;
+  /** Private passive Anthropic ownership fence; not serialized with quota bars. */
+  anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
 };
 /** Expired measurements become unknown; missing reset evidence never implies a fresh allowance. */
@@ -67,7 +71,10 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
         changed = true;
         continue;
       }
-      if (validReset(window.resetAt) && window.resetAt <= now) {
+      if ((window.passiveObservedAt !== undefined && (typeof window.passiveObservedAt !== "number"
+          || !Number.isFinite(window.passiveObservedAt) || window.passiveObservedAt <= 0 || window.passiveObservedAt > now
+          || now - window.passiveObservedAt >= ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS))
+        || validReset(window.resetAt) && window.resetAt <= now) {
         changed = true;
         continue;
       }
@@ -202,6 +209,10 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
     if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return null;
   }
+  if (provider === "anthropic" && entry?.anthropicCredentialGeneration) {
+    const credential = getAccountCredential(provider, accountId);
+    if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
+  }
   if (entry?.isCurrent && !entry.isCurrent()) return null;
   return provider === "anthropic" ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }
@@ -233,7 +244,8 @@ function anthropicHeaderResetAt(value: string | null): number | undefined {
 export function parseAnthropicRateLimitHeaders(headers: Headers): ProviderQuota | null {
   const fiveHourPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-5h-utilization"));
   const weeklyPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-7d-utilization"));
-  if (fiveHourPercent === undefined && weeklyPercent === undefined) return null;
+  const customWindows = parseAnthropicFamilyHeaders(headers, Date.now());
+  if (fiveHourPercent === undefined && weeklyPercent === undefined && !customWindows.length) return null;
   const fiveHourResetAt = anthropicHeaderResetAt(headers.get("anthropic-ratelimit-unified-5h-reset"));
   const weeklyResetAt = anthropicHeaderResetAt(headers.get("anthropic-ratelimit-unified-7d-reset"));
   return {
@@ -241,6 +253,7 @@ export function parseAnthropicRateLimitHeaders(headers: Headers): ProviderQuota 
     ...(fiveHourPercent !== undefined && fiveHourResetAt !== undefined ? { fiveHourResetAt } : {}),
     ...(weeklyPercent !== undefined ? { weeklyPercent } : {}),
     ...(weeklyPercent !== undefined && weeklyResetAt !== undefined ? { weeklyResetAt } : {}),
+    ...(customWindows.length ? { customWindows } : {}),
     updatedAt: Date.now(),
   };
 }
@@ -273,13 +286,19 @@ export function recordAnthropicAccountQuotaFromHeaders(
   // every other provider's saved row.
   hydrateAccountQuotaCache();
   const candidate = accountQuotaCache.get(key);
-  const previous = candidate?.isCurrent?.() === false ? undefined : candidate;
+  const credential = getAccountCredential("anthropic", accountId);
+  const generation = credential && credentialGeneration(credential);
+  const previous = candidate?.isCurrent?.() === false
+    || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
+  if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
   accountQuotaCache.set(key, {
     ...previous,
+    ...(generation ? { anthropicCredentialGeneration: generation, isCurrent: undefined } : {}),
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
     quota: normalizeAnthropicQuota({
       ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
+      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
     }, observed.updatedAt),
   });
   persistAccountQuotaCache();

@@ -77,3 +77,22 @@ ambiguous-send markers, replaced credentials and committed streaming output forb
 Default single-account users acquire no new retry or admission pause.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.
+
+## Family weekly admission
+
+`src/providers/quota/anthropic-family-headers.ts` attributes 7d_oi only to fixture-confirmed
+Fable 5 models. It preserves independent shared and model windows, including rejection-only
+family evidence, without advancing the usage-probe clock. `src/oauth/anthropic-model-quota.ts`
+reads shared 5h/weekly and only the requested family's scoped weekly. Manual, affinity,
+strategy, reactive selection and physical dispatch use that model. A family-only refusal
+preserves unrelated sessions and account-wide health. Numeric thresholds stay soft: zero
+and the all-drained fallback remain preferences, with no hard billing cap introduced.
+
+Passive family evidence expires after thirty minutes or its known reset. An expired
+exclusion admits one request-driven revalidation send at a time, released at response
+headers or error, without a background probe. Credential replacement discards old passive
+ownership. Active non-enumerating probes preserve absent family windows; an authoritative
+limits array retires absent families. Shared rejection and family rejection keep independent
+resets, so Fable must wait for both relevant windows while Sonnet need only wait for shared quota.
+
+Regression coverage: `tests/adapters/anthropic/anthropic-model-weekly-admission.test.ts`.

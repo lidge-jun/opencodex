@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOn429 } from "../helpers/anthropic-shared-quota";
 /**
  * Anthropic OAuth on the managed native Messages lane (PF-10) against an in-process transport.
  * With `managedMessagesNative` and `managedMessagesNativeOAuth` on, an unpooled Anthropic OAuth
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
-import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum, formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot, rotateAnthropicAccountOn429 } from "../../src/oauth/anthropic-routing";
+import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum, formatAnthropicProviderForLog, getAnthropicAccountHealthSnapshot,} from "../../src/oauth/anthropic-routing";
 import { getAccountSet, markAccountNeedsReauth, replaceProviderAccountSet, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey } from "../../src/codex/upstream-host-health";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
