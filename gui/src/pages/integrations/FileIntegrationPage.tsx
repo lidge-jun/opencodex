@@ -253,7 +253,7 @@ export default function FileIntegrationPage({
           : {}),
       });
       setPlannedMutation(null);
-      if (client === "droid") resetDroidDraft();
+      if (client === "droid") setDroidReasoningDraft(null);
     } catch (error) {
       refresh();
       if (error instanceof IntegrationApiError && error.stalePlan) throw error;
