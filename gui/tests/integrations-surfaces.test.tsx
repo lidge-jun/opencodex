@@ -1385,7 +1385,7 @@ test("every reachable client gets a card, not just the file six", async () => {
     ".integration-card[data-client='claudeDesktop'] .integration-card-link",
   ) as unknown as HTMLButtonElement | null;
   await act(async () => { desktopLink!.click(); });
-  expect(testWindow.location.hash).toBe("#integrations/claude/desktop");
+  expect(testWindow.location.hash).toBe("#claude/desktop");
 });
 
 test("Codex disable uses Codex consequences and refreshes observed routing", async () => {

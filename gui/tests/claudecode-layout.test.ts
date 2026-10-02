@@ -15,22 +15,13 @@ test("ClaudeCode renders the denser workspace rail layout", async () => {
   // Save stays in the pane head (visibility-toggled) so the Code/Desktop chrome does not jump.
   expect(page).toContain('data-visible={sectionEditable ? "true" : "false"}');
 
-  // Claude is now a panel of the Integrations tab strip rather than its own
-  // top-level page, so App renders the shell and the shell renders Claude.
-  expect(app).toContain('<Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />');
-  const integrations = await Bun.file(new URL("../src/pages/Integrations.tsx", import.meta.url)).text();
-  expect(integrations).toContain("<Claude apiBase={apiBase} active={active} />");
-  // Title/subtitle sit above the Code/Desktop strip (not inside each panel).
-  expect(claude).toContain("claude-page-intro");
-  expect(claude).toContain("claude.pageTitle");
-  expect(claude.indexOf("claude-page-intro")).toBeLessThan(claude.indexOf("claude-tabs"));
-  // Both children stay mounted so drafts survive a tab switch; `active` is what keeps the hidden
-  // one from fetching, so the two panels must be wired symmetrically.
-  // The inner gate is now ANDed with the outer panel's own `active`: a hidden
-  // Integrations tab must not leave its selected inner panel polling.
-  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === \"code\"} />");
-  expect(claude).toContain("active={active && tab === \"desktop\"}");
-  expect(claude).toContain("onPortChange={setDesktopPort}");
+  expect(app).toContain("<Claude apiBase={sharedBase} />");
+  // One stable page head above the tab strip; the panels carry no titles of their own.
+  expect(claude).toContain('<h2>{t("nav.claude")}</h2>');
+  expect(claude).toContain("claude.pageSub");
+  expect(claude).toContain('className="page-tabs" role="tablist"');
+  expect(claude).toContain("<ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === value} />");
+  expect(claude).toContain("<ClaudeDesktop key={apiBase} apiBase={apiBase} active={active && tab === value} />");
 });
 
 test("ClaudeCode workspace sections remain available in source order", async () => {

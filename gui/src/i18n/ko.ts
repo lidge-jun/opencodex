@@ -4,6 +4,26 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "nav.claude": "Claude",
+  "claude.tabAccount": "계정",
+  "claude.tabSettings": "기타 설정",
+  "claude.pageSub": "Claude 계정과 Claude Code·Claude Desktop의 OpenCodex 라우팅을 관리합니다.",
+  "claude.addAnthropic": "Anthropic 추가",
+  "claude.changeOnCode": "{tab} 탭에서 변경",
+  "claude.interceptRunning": "실행 중",
+  "claude.interceptStopped": "중지됨",
+  "claude.routingLoadFail": "Claude 라우팅 상태를 불러오지 못했습니다.",
+  "claude.interceptLoadFail": "트래픽 가로채기 상태를 불러오지 못했습니다.",
+  "claude.accountEmpty": "Anthropic 프로바이더를 추가하고 Claude 계정으로 로그인하세요. 계정, 할당량, 설정이 여기에 표시됩니다.",
+  "claude.accountEmptyTitle": "Anthropic이 아직 설정되지 않았습니다",
+  "claude.interceptStatus": "트래픽 가로채기",
+  "claude.interceptDesc": "Claude Code/Desktop의 퍼스트 파티 트래픽을 라우팅합니다.",
+  "claude.interceptPort": "인터셉트 포트",
+  "claude.interceptPortDesc": "가로채기 프록시의 로컬 포트로, OpenCodex 프록시 포트와 별개입니다.",
+  "claude.stateOn": "켜짐",
+  "claude.stateOff": "꺼짐",
+  "claude.settingsHint": "호환성, 에이전트 지침, 컨텍스트 설정은 Code 탭에서 바꿀 수 있습니다.",
+
   "pws.anthropicAccountThresholdHint": "Claude 풀 기본값을 재정의합니다. 0은 이 계정의 사용량 기반 전환만 끄며, 일시정지와 요청 제한 복구는 계속 적용됩니다.",
   "kiroLogin.title": "Kiro에 로그인",
   "kiroLogin.chooseMethod": "로그인 방법 선택",
@@ -2902,7 +2922,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.addIdPlaceholder": "codex-work, codex-alt, team…",
   "codexAuth.resetCreditsAria": "리셋 크레딧 {count}개",
   "claude.pageTitle": "Claude Code",
-  "claude.workspace.settings": "설정",
+  "claude.workspace.settings": "일반",
 
   // Combos workspace
   "cws.loading": "콤보 불러오는 중…",
@@ -3122,7 +3142,7 @@ export const ko: Record<TKey, string> = {
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",
   "claudeDesktop.title": "Claude Desktop",
-  "claudeDesktop.subtitle": "각 Claude 모델 패밀리를 포트 {port}의 사용 가능한 모델로 연결합니다.",
+  "claudeDesktop.subtitle": "각 Claude 모델 패밀리를 프록시 포트 {port}의 사용 가능한 모델로 연결합니다.",
   "claudeDesktop.importJson": "JSON 가져오기",
   "claudeDesktop.exportJson": "JSON 내보내기",
   "claudeDesktop.loading": "Claude Desktop 프로필을 불러오는 중…",
@@ -3221,6 +3241,7 @@ export const ko: Record<TKey, string> = {
   "claude.intercept.reason.failed": "가로채기를 시작하지 못했습니다. 로컬 프록시 설정을 확인한 뒤 다시 시도하세요.",
   "claude.intercept.reason.stopped": "가로채기 수명주기가 종료됐습니다. OpenCodex 서비스를 실행하세요.",
   "claude.firstParty.label": "Claude Code CLI 1P",
+  "claude.firstParty.desc": "단독 claude CLI가 Claude 로그인을 유지한 채 로컬 가로채기 프록시를 거치도록 합니다.",
   "claude.firstParty.aria": "Claude Code CLI 1P 켜기/끄기",
   "claude.firstParty.risk": "계정 위험: 1P를 켜면 Claude 구독 트래픽이 로컬 가로채기 프록시를 거칩니다. Anthropic이 약관 위반으로 판단해 계정을 정지할 수 있습니다.",
   "claude.firstParty.shared": "공유 프록시 설정이 적용되어 있으면 다른 Claude 클라이언트도 로컬 프록시를 거치지만 요청은 그대로 전달됩니다. TLS는 로컬에서 종료됩니다. 터미널에서 직접 연결하려면 셸에 NO_PROXY='*'를 설정하세요.",

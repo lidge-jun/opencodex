@@ -5,6 +5,26 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "nav.claude": "Claude",
+  "claude.tabAccount": "Konto",
+  "claude.tabSettings": "Einstellungen",
+  "claude.pageSub": "Konten und OpenCodex-Routing für Claude Code und Claude Desktop.",
+  "claude.addAnthropic": "Anthropic hinzufügen",
+  "claude.changeOnCode": "Im Tab {tab} ändern",
+  "claude.interceptRunning": "Läuft",
+  "claude.interceptStopped": "Gestoppt",
+  "claude.routingLoadFail": "Claude-Routingstatus konnte nicht geladen werden.",
+  "claude.interceptLoadFail": "Abfangstatus konnte nicht geladen werden.",
+  "claude.accountEmpty": "Fügen Sie den Anbieter Anthropic hinzu und melden Sie sich mit Ihrem Claude-Konto an. Konten, Kontingent und Einstellungen erscheinen dann hier.",
+  "claude.accountEmptyTitle": "Anthropic ist noch nicht eingerichtet",
+  "claude.interceptStatus": "Abfangen",
+  "claude.interceptDesc": "Leitet Erstanbieter-Traffic von Claude Code/Desktop weiter.",
+  "claude.interceptPort": "Abfangport",
+  "claude.interceptPortDesc": "Lokaler Port des Abfang-Proxys, getrennt vom OpenCodex-Proxy-Port.",
+  "claude.stateOn": "An",
+  "claude.stateOff": "Aus",
+  "claude.settingsHint": "Kompatibilität, Agent-Anweisungen und Kontexteinstellungen lassen sich im Tab Code ändern.",
+
   "pws.anthropicAccountThresholdHint": "Überschreibt den Standard des Claude-Pools. 0 deaktiviert den nutzungsbasierten Wechsel nur für dieses Konto; Pause und Wiederherstellung bei Ratenlimits gelten weiterhin.",
   "kiroLogin.title": "Bei Kiro anmelden",
   "kiroLogin.chooseMethod": "Anmeldemethode wählen",
@@ -2855,7 +2875,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.addIdPlaceholder": "codex-work, codex-alt, team…",
   "codexAuth.resetCreditsAria": "{count} Reset-Guthaben",
   "claude.pageTitle": "Claude Code",
-  "claude.workspace.settings": "Einstellungen",
+  "claude.workspace.settings": "Allgemein",
 
   // Combos workspace
   "cws.loading": "Combos werden geladen…",
@@ -3075,7 +3095,7 @@ export const de: Record<TKey, string> = {
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",
   "claudeDesktop.title": "Claude Desktop",
-  "claudeDesktop.subtitle": "Leite jede Claude-Modellfamilie über ein verfügbares Modell auf Port {port}.",
+  "claudeDesktop.subtitle": "Leite jede Claude-Modellfamilie über ein verfügbares Modell auf Proxy-Port {port}.",
   "claudeDesktop.importJson": "JSON importieren",
   "claudeDesktop.exportJson": "JSON exportieren",
   "claudeDesktop.loading": "Claude-Desktop-Profil wird geladen…",
@@ -3174,6 +3194,7 @@ export const de: Record<TKey, string> = {
   "claude.intercept.reason.failed": "Abfangen konnte nicht starten. Prüfen Sie die lokale Proxy-Konfiguration und versuchen Sie es erneut.",
   "claude.intercept.reason.stopped": "Abfangen wurde beendet. Starten Sie den OpenCodex-Dienst.",
   "claude.firstParty.label": "Claude Code CLI First-Party",
+  "claude.firstParty.desc": "Die eigenständige claude-CLI behält ihre Claude-Anmeldung, ihr Traffic läuft aber über den lokalen Abfang-Proxy.",
   "claude.firstParty.aria": "Claude Code CLI First-Party umschalten",
   "claude.firstParty.risk": "Kontorisiko: First-Party leitet Claude-Abonnementverkehr über einen lokalen Abfangproxy. Anthropic kann dies als Verstoß gegen die Nutzungsbedingungen werten und das Konto sperren.",
   "claude.firstParty.shared": "Wenn die gemeinsame Proxy-Umgebung angewendet ist, läuft auch der andere Claude-Client unverändert über den lokalen Proxy; TLS endet lokal. Für nativen Terminalverkehr NO_PROXY='*' in der Shell setzen.",

@@ -4,6 +4,26 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "nav.claude": "Claude",
+  "claude.tabAccount": "账户",
+  "claude.tabSettings": "设置",
+  "claude.pageSub": "Claude 账户，以及 Claude Code 和 Claude Desktop 的 OpenCodex 路由。",
+  "claude.addAnthropic": "添加 Anthropic",
+  "claude.changeOnCode": "在 {tab} 标签页更改",
+  "claude.interceptRunning": "运行中",
+  "claude.interceptStopped": "已停止",
+  "claude.routingLoadFail": "无法加载 Claude 路由状态。",
+  "claude.interceptLoadFail": "无法加载拦截状态。",
+  "claude.accountEmpty": "添加 Anthropic 提供商并使用 Claude 账户登录。其账户、配额和设置随后会显示在这里。",
+  "claude.accountEmptyTitle": "尚未设置 Anthropic",
+  "claude.interceptStatus": "拦截",
+  "claude.interceptDesc": "路由 Claude Code/Desktop 的第一方流量。",
+  "claude.interceptPort": "拦截端口",
+  "claude.interceptPortDesc": "拦截代理的本地端口，与 OpenCodex 代理端口不同。",
+  "claude.stateOn": "开启",
+  "claude.stateOff": "关闭",
+  "claude.settingsHint": "兼容性、智能体指令和上下文设置可以在 Code 标签页更改。",
+
   "pws.anthropicAccountThresholdHint": "覆盖 Claude 池默认阈值。0 仅禁用此账户的按用量切换；暂停和速率限制恢复仍然生效。",
   "kiroLogin.title": "登录 Kiro",
   "kiroLogin.chooseMethod": "选择登录方式",
@@ -2875,7 +2895,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.addIdPlaceholder": "codex-work, codex-alt, team…",
   "codexAuth.resetCreditsAria": "{count} 个重置额度",
   "claude.pageTitle": "Claude Code",
-  "claude.workspace.settings": "设置",
+  "claude.workspace.settings": "常规",
 
   // Combos workspace
   "cws.loading": "正在加载组合…",
@@ -3095,7 +3115,7 @@ export const zh: Record<TKey, string> = {
   "claude.tabCode": "Code",
   "claude.tabDesktop": "Desktop",
   "claudeDesktop.title": "Claude Desktop",
-  "claudeDesktop.subtitle": "将每个 Claude 模型系列路由到端口 {port} 上的可用模型。",
+  "claudeDesktop.subtitle": "将每个 Claude 模型系列路由到代理端口 {port} 上的可用模型。",
   "claudeDesktop.importJson": "导入 JSON",
   "claudeDesktop.exportJson": "导出 JSON",
   "claudeDesktop.loading": "正在加载 Claude Desktop 配置…",
@@ -3194,6 +3214,7 @@ export const zh: Record<TKey, string> = {
   "claude.intercept.reason.failed": "无法启动拦截。请检查本地代理配置后重试。",
   "claude.intercept.reason.stopped": "拦截已停止。请启动OpenCodex服务。",
   "claude.firstParty.label": "Claude Code CLI 第一方",
+  "claude.firstParty.desc": "独立的 claude CLI 保留其 Claude 登录，同时流量经过本地拦截代理。",
   "claude.firstParty.aria": "切换 Claude Code CLI 第一方模式",
   "claude.firstParty.risk": "账户风险：第一方模式让 Claude 订阅流量经过本地拦截代理。Anthropic 可能将其视为违反条款并暂停账户。",
   "claude.firstParty.shared": "如果共享代理设置已应用，另一个 Claude 客户端也会经由本地代理原样转发；TLS 在本地终止。若要在终端直连，请在 shell 中设置 NO_PROXY='*'。",

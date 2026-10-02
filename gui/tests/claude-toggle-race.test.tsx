@@ -6,7 +6,7 @@ import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 /**
  * Rapid clicks on the Claude connection switch must serialize to a single
- * in-flight PUT (ClaudeCode.tsx `connectionInFlight` + disabled while pending).
+ * in-flight PUT (useClaudeConnection `inFlight` + disabled while pending).
  *
  * The control moved out of the sidebar when the three integration pages
  * collapsed into one Integrations route, but its semantics did not: it still
@@ -69,7 +69,7 @@ beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
   // The switch now lives on the Claude Code surface, so the route has to be
   // the one that mounts it.
-  testWindow = new Window({ url: "http://localhost/#integrations/claude" });
+  testWindow = new Window({ url: "http://localhost/#claude/code" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -97,6 +97,13 @@ beforeEach(() => {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
 
     if (url.includes("/api/machine/status")) return jsonResponse({}, 404);
+    if (url.endsWith("/api/native-integrations/claude") && method === "PUT") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { enabled: boolean };
+      putBodies.push(body);
+      await putGate;
+      claudeEnabled = body.enabled;
+      return jsonResponse({ ok: true, clientId: "claude", desiredEnabled: claudeEnabled, changed: true, state: "current" });
+    }
     if (url.includes("/api/claude-code") && method === "PUT") {
       const body = JSON.parse(String(init?.body ?? "{}")) as { enabled?: boolean; cliFirstParty?: boolean };
       putBodies.push(body);

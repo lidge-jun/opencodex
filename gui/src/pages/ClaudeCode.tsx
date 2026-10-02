@@ -1,5 +1,6 @@
 import ClaudeInterceptStart from "../components/ClaudeInterceptStart";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useClaudeConnection } from "./use-claude-connection";
 import { Notice, Switch } from "../ui";
 import { useI18n, useT, LOCALES, type TKey } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
@@ -79,8 +80,7 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
    * control's meaning would be worse than moving it. The in-flight ref
    * serializes rapid clicks so three taps cannot become three PUTs.
    */
-  const [connectionPending, setConnectionPending] = useState(false);
-  const connectionInFlight = useRef(false);
+  const { pending: connectionPending, change: changeConnection } = useClaudeConnection(apiBase);
   const [firstPartyPending, setFirstPartyPending] = useState(false);
   const firstPartyInFlight = useRef(false);
 
@@ -164,27 +164,15 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
    * that showed "on" after a failed PUT would be lying about their config.
    */
   const toggleConnection = async () => {
-    if (!state || connectionInFlight.current) return;
-    connectionInFlight.current = true;
-    setConnectionPending(true);
+    if (!state) return;
     setStatus("");
-    const next = !state.enabled;
-    try {
-      const response = await fetch(`${apiBase}/api/claude-code`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
-      });
-      await readJsonOrThrow(response, t("claude.saveFailed"));
-      setState({ ...state, enabled: next });
+    await changeConnection(!state.enabled, enabled => {
+      setState({ ...state, enabled });
       codeResource.refresh();
-    } catch (error) {
+    }, error => {
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("claude.networkError"));
-    } finally {
-      connectionInFlight.current = false;
-      setConnectionPending(false);
-    }
+    });
   };
 
   const toggleFirstParty = async () => {
@@ -331,12 +319,14 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
 
   return (
     <div className="claudecode-workspace-shell">
-      {/* Page title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {loadState.showError && <Notice tone="err">{t("claude.loadFail")}</Notice>}
-      {state && (
-        <div className="claudecode-connection-head">
-          <span id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
+      <div className="card claudecode-connection-card">
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="title" id="claudecode-connection-label">{t("claude.enabledLabel")}</span>
+            <span className="desc">{t("claude.subtitle")}</span>
+          </div>
           <Switch
             on={state.enabled}
             onClick={() => void toggleConnection()}
@@ -344,29 +334,28 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
             label={t("claude.toggleAria")}
           />
         </div>
-      )}
-      {state && (
-        <>
-          <div className="claudecode-connection-head">
-            <span id="claudecode-first-party-label">{t("claude.firstParty.label")}</span>
-            <Switch
-              on={state.cliFirstParty}
-              onClick={() => void toggleFirstParty()}
-              disabled={firstPartyPending}
-              label={t("claude.firstParty.aria")}
-            />
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="title" id="claudecode-first-party-label">{t("claude.firstParty.label")}</span>
+            <span className="desc">{t("claude.firstParty.desc")}</span>
           </div>
-          {!state.interceptRunning && <ClaudeInterceptStart apiBase={apiBase} reason={state.interceptReason} port={state.interceptFailurePort} onStarted={() => codeResource.refresh()} />}
-          {state.cliFirstParty && (
-            <Notice tone="warn">{t("claude.firstParty.risk")}</Notice>
-          )}
-          {(() => {
-            const notice = selectFirstPartyNotice(state);
-            const key = notice && firstPartyNoticeKeys[notice];
-            return key ? <Notice tone="warn">{t(key)}</Notice> : null;
-          })()}
-        </>
+          <Switch
+            on={state.cliFirstParty}
+            onClick={() => void toggleFirstParty()}
+            disabled={firstPartyPending}
+            label={t("claude.firstParty.aria")}
+          />
+        </div>
+      </div>
+      {!state.interceptRunning && <ClaudeInterceptStart apiBase={apiBase} reason={state.interceptReason} port={state.interceptFailurePort} onStarted={() => codeResource.refresh()} />}
+      {state.cliFirstParty && (
+        <Notice tone="warn">{t("claude.firstParty.risk")}</Notice>
       )}
+      {(() => {
+        const notice = selectFirstPartyNotice(state);
+        const key = notice && firstPartyNoticeKeys[notice];
+        return key ? <Notice tone="warn">{t(key)}</Notice> : null;
+      })()}
       <div className="claudecode-workspace-root">
         <aside className="claudecode-workspace-rail" aria-label={t("claude.pageTitle")}>
           <div className="claudecode-workspace-rail-list">

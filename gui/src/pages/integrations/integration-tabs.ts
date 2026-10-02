@@ -16,7 +16,6 @@ export type IntegrationTab =
   | "overview"
   | "keys"
   | "codex"
-  | "claude"
   | "grok"
   | "cursor"
   | FileIntegrationClientId;
@@ -31,7 +30,6 @@ export const TABS: readonly TabDefinition[] = [
   { id: "overview", hash: "integrations", labelKey: "integrations.tab.overview" },
   { id: "keys", hash: "integrations/keys", labelKey: "integrations.tab.keys" },
   { id: "codex", hash: "integrations/codex", labelKey: "integrations.tab.codex" },
-  { id: "claude", hash: "integrations/claude", labelKey: "integrations.tab.claude" },
   { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
   { id: "cursor", hash: "integrations/cursor", labelKey: "integrations.tab.cursor" },
   { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },

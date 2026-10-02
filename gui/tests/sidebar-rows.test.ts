@@ -22,7 +22,7 @@ test("every row maps one-to-one onto a page", () => {
   // The duplicate-row machinery is gone with the row that needed it.
   expect(src).not.toContain("activeHashes");
   expect(src).not.toContain("isNavEntryActive");
-  expect(src).not.toContain('tkey: "nav.claude"');
+  expect(src).toContain('tkey: "nav.claude"');
 
   const navBlock = src.slice(src.indexOf("const NAV: NavEntry[] = ["), src.indexOf("];", src.indexOf("const NAV: NavEntry[] = [")));
   const ids = [...navBlock.matchAll(/\{ id: "([^"]+)"/g)].map(m => m[1]);
@@ -30,7 +30,7 @@ test("every row maps one-to-one onto a page", () => {
   // The exact rows, in order. A count alone would pass if a row were swapped for
   // another, and Routing folding into Models is precisely that kind of change.
   expect(ids).toEqual([
-    "dashboard", "codex-set", "providers", "models", "subagents",
+    "dashboard", "codex-set", "claude", "providers", "models", "subagents",
     "logs", "usage", "storage", "remote", "remote-workspace", "integrations",
   ]);
   // No two rows share a page id, which is what made the correction helper necessary.

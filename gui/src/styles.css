@@ -2797,7 +2797,7 @@ button.prov-account-row.active { cursor: default; }
 }
 .claude-desktop-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-bottom: 12px;
 }
 .claude-tabs button {

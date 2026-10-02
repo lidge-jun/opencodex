@@ -17,7 +17,7 @@ import type { GatewayInboundProtocol } from "../api-access-models";
 import type { ApiEndpointInfo, ApiSurfaceInfo, ApiSurfaceSource, ApiSurfacesInfo } from "./api-keys-utils";
 import { EndpointUrl } from "./api-keys-copy";
 
-const CLAUDE_HASH = "integrations/claude";
+const CLAUDE_HASH = "claude/code";
 
 const SOURCE_KEYS: Record<ApiSurfaceSource, TKey> = {
   fixed: "api.surface.source.fixed",
