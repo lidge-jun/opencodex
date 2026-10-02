@@ -857,4 +857,4 @@ Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, 
 
 ## Setup port validation
 
-`ocx init` accepts TCP ports 1–65535 as decimal whole numbers. Press Enter to use 10100. Invalid input stops setup before writing config; values such as `0`, `10100oops` and `1.5` are not silently replaced or truncated.
+`ocx init` accepts TCP ports 1–65535 as decimal whole numbers. Press Enter to use 10100. Invalid input such as `0`, `10100oops` or `1.5` is never silently replaced or truncated; setup reports it and asks for the port again.

@@ -203,13 +203,13 @@ export async function runInit(): Promise<void> {
       };
     }
 
-    const portStr = await prompt.ask("\nProxy port [10100]: ");
-    const port = parseInitPort(portStr);
-    if (port === null) {
-      console.error("Proxy port must be a whole decimal number from 1 to 65535. No config was saved.");
-      process.exitCode = 1;
-      return;
-    }
+    // A mistyped port re-asks instead of discarding every earlier answer; EOF and SIGINT
+    // still reject the pending question with InitCancelledError.
+    let port: number | null;
+    do {
+      port = parseInitPort(await prompt.ask("\nProxy port [10100]: "));
+      if (port === null) console.error("Proxy port must be a whole decimal number from 1 to 65535. Please try again.");
+    } while (port === null);
 
     initializeProviderModelSelection(providerName, providerConfig);
     const config: OcxConfig = {
