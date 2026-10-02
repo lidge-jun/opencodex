@@ -22,6 +22,8 @@ function Pending() {
   return <span className="data-surface-skeleton__block claude-status-pending" aria-hidden="true" />;
 }
 
+const openCodeTab = () => navigateHash("claude/code");
+
 /**
  * Read-only status. The Claude connection switch lives on the Code tab only: two switches
  * writing one value read as two settings.
@@ -43,7 +45,6 @@ export default function ClaudeSettings({ apiBase, active }: { apiBase: string; a
   const interceptPort = firstParty && !firstParty.interceptRunning && firstParty.interceptFailurePort !== undefined
     ? firstParty.interceptFailurePort
     : firstParty?.proxyPort;
-  const openCode = () => navigateHash("claude/code");
   return (
     <div className="claude-settings">
       {native.state.showError && (
@@ -110,7 +111,7 @@ export default function ClaudeSettings({ apiBase, active }: { apiBase: string; a
             <span className="desc">{t("claude.settingsHint")}</span>
           </div>
           <div className="setting-controls">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={openCode}>{t("claude.changeOnCode", { tab: t("claude.tabCode") })}</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={openCodeTab}>{t("claude.changeOnCode", { tab: t("claude.tabCode") })}</button>
           </div>
         </div>
       </div>
