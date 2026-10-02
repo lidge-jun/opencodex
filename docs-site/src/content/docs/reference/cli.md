@@ -156,3 +156,7 @@ refreshes the update-notification cache in a detached process, and
 implementation details, not stable user-facing commands. The dashboard records the worker PID,
 recovers an active job whose worker died, treats older PID-less active records as stale after ten
 minutes, and protects a live worker from concurrent updates.
+
+## Integer option values
+
+Integer options such as `--limit` require decimal whole numbers within JavaScript safe-integer bounds. Digit separators such as `1_000` and `1,000` are accepted. Empty values, hexadecimal, exponent notation and fractions are rejected before a request is sent.

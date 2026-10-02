@@ -405,6 +405,7 @@
     "cli-head.test.ts": "cli",
     "cli-headless-parity.test.ts": "cli",
     "cli-help.test.ts": "cli",
+    "cli-integer-options.test.ts": "cli",
     "cli-json-contract.test.ts": "cli",
     "cli-management-auth.test.ts": "cli",
     "cli-models-free-only.test.ts": "cli",

@@ -40,3 +40,7 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 `ocx --version`, `ocx -v`, `ocx version`은 스크립트가 읽기 좋은 한 줄짜리 버전을 출력하고 종료합니다.
 
 일반 도움말에는 두 개의 디스패치 대상이 의도적으로 빠져 있습니다. `__refresh-version [preview]`는 분리된 프로세스에서 업데이트 알림 캐시를 새로 고치고, `__gui-update-worker <job-id> [latest|preview] [restart]`는 대시보드 업데이트 작업을 실행합니다. 이들은 구현 세부 사항일 뿐이며 안정적인 사용자 명령이 아닙니다. 대시보드는 worker PID를 기록하고, worker가 죽은 활성 작업은 복구하며, PID가 없는 오래된 활성 기록은 10분 뒤 오래된 것으로 취급하고, 살아 있는 worker를 동시 업데이트로부터 보호합니다.
+
+## Integer option values
+
+`--limit` 같은 정수 옵션은 안전하게 표현 가능한 십진 정수를 받습니다. `1_000`, `1,000` 같은 숫자 구분자는 허용합니다. 빈 값, 16진수, 지수 표기 및 소수는 요청을 보내기 전에 거부합니다.
