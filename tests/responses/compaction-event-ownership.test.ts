@@ -91,6 +91,37 @@ describe("Responses bridge transferred event ownership", () => {
     } finally { budget.dispose(); }
   });
 
+  test.each(["throw", "reject"] as const)("bootstrap next() %s still closes its resource-owning iterator", async failure => {
+    const budget = budgetWithSentinel();
+    let cancelled = 0;
+    let returned = 0;
+    const source = new ReadableStream({ cancel() { cancelled++; } });
+    const reader = source.getReader();
+    const events: AsyncIterable<AdapterEvent> = { [Symbol.asyncIterator]() { return {
+      next() {
+        if (failure === "throw") throw new Error("fixture synchronous next failure");
+        return Promise.reject(new Error("fixture rejected next failure"));
+      },
+      async return() {
+        returned++;
+        await reader.cancel();
+        reader.releaseLock();
+        return { done: true, value: undefined };
+      },
+    }; } };
+    try {
+      await bridge(events, budget).cancel();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(returned).toBe(1);
+      expect(cancelled).toBe(1);
+      expect(source.locked).toBe(false);
+      expect(budget.snapshot().currentBytes).toBe(sentinelBytes);
+    } finally {
+      if (source.locked) { await reader.cancel(); reader.releaseLock(); }
+      budget.dispose();
+    }
+  });
+
   test("compaction continues release serialized heartbeat and text leases", async () => {
     const budget = budgetWithSentinel();
     const events: AdapterEvent[] = [{ type: "heartbeat" }, { type: "text_delta", text: "summary" }, { type: "done" }];

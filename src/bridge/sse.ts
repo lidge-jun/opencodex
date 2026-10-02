@@ -740,8 +740,9 @@ export function bridgeToResponsesSSE(
           try {
             void it.next().then(next => {
               try { if (!next.done) releaseEvent(next.value); } finally { finishReturn(); }
-            }, () => {}).catch(() => {});
+            }, finishReturn).catch(() => {});
           } catch {
+            finishReturn();
             /* synchronous iterator start failure is also best-effort */
           }
           return;
