@@ -278,4 +278,4 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 ## Choose the number of usage model rows
 
-`ocx usage --top 25`는 기본 10개 대신 최대 25개 모델을 표시합니다. 1–1000을 지정할 수 있으며 서버 정렬 순서, 제공자·계정 표와 전체 합계는 유지됩니다. 전체 JSON 보고서는 `--top` 없이 `--json`으로 조회합니다.
+`ocx usage --top 25`(또는 `ocx observe usage --top 25`)는 기본 10개 대신 최대 25개 모델을 표시합니다. 1–1000을 지정할 수 있으며 서버 정렬 순서, 제공자·계정 표와 전체 합계는 유지됩니다. `--top`은 사람이 읽는 출력에만 적용되며 `--json`과 함께 쓰면 사용법 오류로 종료 코드 2를 반환합니다. 전체 JSON 보고서는 `--top` 없이 `--json`으로 조회합니다.

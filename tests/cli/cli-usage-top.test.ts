@@ -27,6 +27,20 @@ describe("usage human model limit", () => {
     const err = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(await handleObserveCommand(["usage", "--top", "2", "--json"], { baseUrl: "http://cli.test", fetchImpl: async () => { throw new Error("unexpected fetch"); } })).toBe(2);
+      const message = err.mock.calls.map(call => String(call[0])).join("\n");
+      expect(message).toContain("--top cannot be combined with --json");
+      expect(message).not.toContain("--top must be");
+    } finally { err.mockRestore(); }
+  });
+  test("reports an out-of-range limit before the JSON combination", async () => {
+    let calls = 0;
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleObserveCommand(["usage", "--top", "1001", "--json"], { baseUrl: "http://cli.test", fetchImpl: async () => { calls++; return Response.json(report); } })).toBe(2);
+      expect(calls).toBe(0);
+      const message = err.mock.calls.map(call => String(call[0])).join("\n");
+      expect(message).toContain("--top must be an integer 1-1000");
+      expect(message).not.toContain("--top cannot be combined");
     } finally { err.mockRestore(); }
   });
 });

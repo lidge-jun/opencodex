@@ -53,6 +53,7 @@ function logRows(data: unknown): LogEntry[] {
 }
 
 /** Render one human log row with an exact, control-free request ID suitable for history lookup. */
+/** Render a human log row with its exact persisted request ID when printable. */
 function formatLog(row: LogEntry): string {
   const time = String(row.timestamp ?? row.createdAt ?? "");
   const route = [row.provider, row.model].filter(Boolean).join("/");
@@ -77,6 +78,7 @@ function formatLog(row: LogEntry): string {
 }
 
 /** Read or follow request logs while preserving raw JSON and JSONL output. */
+/** Read matching request logs and print human, JSON, or streaming JSONL output. */
 async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
@@ -167,9 +169,8 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
   const top = takeIntegerOption(args, "--top", { min: 1 });
-  if (top !== undefined && (top > 1000 || wantsJson)) {
-    throw new CliUsageError("--top must be 1-1000 and cannot be combined with --json", USAGE);
-  }
+  if (top !== undefined && top > 1000) throw new CliUsageError("--top must be an integer 1-1000", USAGE);
+  if (top !== undefined && wantsJson) throw new CliUsageError("--top cannot be combined with --json", USAGE);
   const range = takeOption(args, "--range") ?? "30d";
   const surface = takeOption(args, "--surface") ?? "all";
   const provider = takeOption(args, "--provider");
