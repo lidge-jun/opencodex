@@ -69,7 +69,9 @@ function formatLog(row: LogEntry): string {
   const account = typeof row.accountLogLabel === "string" && row.accountLogLabel.length > 0
     ? `acct=${row.accountLogLabel}`
     : "";
-  return [time, String(status), route, duration, account, conversation].filter(Boolean).join("  ");
+  const requestId = typeof row.requestId === "string" && row.requestId.length > 0
+    ? `id=${row.requestId.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "?")}` : "";
+  return [time, String(status), route, duration, account, conversation, requestId].filter(Boolean).join("  ");
 }
 
 async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
