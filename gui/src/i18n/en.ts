@@ -2428,7 +2428,7 @@ export const en = {
   "codexAuth.creditsAfterLimit": "Use credits after limit",
   "codexAuth.creditsAfterLimitHint": "Off by default: an account whose usage window reaches 100% is switched out until it resets, so its ChatGPT credits are not spent. Turn an account on to let it keep working from its credits. New accounts start off.",
   "codexAuth.creditsAfterLimitAria": "Use credits after the usage limit for {email}",
-  "codexAuth.creditsAfterLimitMainHint": "The main account's hard lock (98% by default) still stops it first. Turn the lock off or raise it to 100% to let the main account spend credits.",
+  "codexAuth.creditsAfterLimitMainHint": "The main account's hard lock (on by default) still stops it first. Turn the lock off to let the main account spend credits.",
   "codexAuth.creditSpend": "Use credits",
   "codexAuth.creditSpendAria": "Use ChatGPT credits after the usage limit",
   "codexAuth.creditsOn": "Uses credits",

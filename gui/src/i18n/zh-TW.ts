@@ -1781,7 +1781,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "達到上限後使用額度",
   "codexAuth.creditsAfterLimitHint": "預設關閉：用量視窗達到 100% 的帳戶會被切換出去，直到重設，不消耗其 ChatGPT 額度。開啟某個帳戶後，它在達到上限後仍會使用額度繼續運作。新帳戶預設關閉。",
   "codexAuth.creditsAfterLimitAria": "{email} 達到上限後使用額度",
-  "codexAuth.creditsAfterLimitMainHint": "主帳戶的硬鎖（預設 98%）仍會先擋下它。若要讓主帳戶使用額度，請關閉硬鎖或將其調到 100%。",
+  "codexAuth.creditsAfterLimitMainHint": "主帳戶的硬鎖（預設開啟）仍會先擋下它。若要讓主帳戶使用額度，請關閉硬鎖。",
   "codexAuth.creditSpend": "使用額度",
   "codexAuth.creditSpendAria": "達到用量上限後使用 ChatGPT 額度",
   "codexAuth.creditsOn": "使用額度",

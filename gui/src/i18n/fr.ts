@@ -2355,7 +2355,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "Utiliser les crédits après la limite",
   "codexAuth.creditsAfterLimitHint": "Désactivé par défaut : un compte dont une fenêtre d’utilisation atteint 100 % est remplacé jusqu’à sa réinitialisation, et ses crédits ChatGPT ne sont pas dépensés. Activez un compte pour qu’il continue avec ses crédits. Les nouveaux comptes démarrent désactivés.",
   "codexAuth.creditsAfterLimitAria": "Utiliser les crédits après la limite d’utilisation pour {email}",
-  "codexAuth.creditsAfterLimitMainHint": "Le verrou strict du compte principal (98 % par défaut) l’arrête toujours en premier. Désactivez-le ou réglez-le à 100 % pour que le compte principal puisse dépenser des crédits.",
+  "codexAuth.creditsAfterLimitMainHint": "Le verrou strict du compte principal (activé par défaut) l’arrête toujours en premier. Désactivez-le pour que le compte principal puisse dépenser des crédits.",
   "codexAuth.creditSpend": "Utiliser les crédits",
   "codexAuth.creditSpendAria": "Utiliser les crédits ChatGPT après la limite d’utilisation",
   "codexAuth.creditsOn": "Utilise des crédits",

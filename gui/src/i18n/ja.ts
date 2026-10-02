@@ -2250,7 +2250,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "上限後にクレジットを使用",
   "codexAuth.creditsAfterLimitHint": "既定はオフです。使用量ウィンドウが100%に達したアカウントはリセットまで別のアカウントに切り替わり、ChatGPTクレジットを消費しません。オンにしたアカウントだけが上限後もクレジットで使われます。新しいアカウントはオフで始まります。",
   "codexAuth.creditsAfterLimitAria": "{email} の上限後クレジット使用",
-  "codexAuth.creditsAfterLimitMainHint": "メインアカウントはハードロック（既定98%）が先に止めます。クレジットを使わせるには、ロックをオフにするか100%に上げてください。",
+  "codexAuth.creditsAfterLimitMainHint": "メインアカウントはハードロック（既定でオン）が先に止めます。クレジットを使わせるには、ロックをオフにしてください。",
   "codexAuth.creditSpend": "クレジット使用",
   "codexAuth.creditSpendAria": "上限後にChatGPTクレジットを使用",
   "codexAuth.creditsOn": "クレジット使用",

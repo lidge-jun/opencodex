@@ -2383,7 +2383,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.creditsAfterLimit": "Dùng tín dụng sau giới hạn",
   "codexAuth.creditsAfterLimitHint": "Mặc định tắt: tài khoản có cửa sổ sử dụng đạt 100% sẽ được thay thế cho đến khi đặt lại, nên tín dụng ChatGPT của nó không bị tiêu. Bật một tài khoản để nó tiếp tục chạy bằng tín dụng. Tài khoản mới bắt đầu ở trạng thái tắt.",
   "codexAuth.creditsAfterLimitAria": "Dùng tín dụng sau giới hạn sử dụng cho {email}",
-  "codexAuth.creditsAfterLimitMainHint": "Khóa cứng của tài khoản chính (mặc định 98%) vẫn chặn trước. Tắt khóa hoặc nâng lên 100% để tài khoản chính được dùng tín dụng.",
+  "codexAuth.creditsAfterLimitMainHint": "Khóa cứng của tài khoản chính (mặc định bật) vẫn chặn trước. Tắt khóa để tài khoản chính được dùng tín dụng.",
   "codexAuth.creditSpend": "Dùng tín dụng",
   "codexAuth.creditSpendAria": "Dùng tín dụng ChatGPT sau giới hạn sử dụng",
   "codexAuth.creditsOn": "Dùng tín dụng",
