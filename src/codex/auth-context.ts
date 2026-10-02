@@ -522,7 +522,7 @@ export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
   }
 }
 
-/** Credits are off for the main login and one of its usage windows is full (#6334). */
+/** The main login may not spend credits and one of its usage windows is full (#6334). */
 export class CodexMainAccountCreditsOffError extends CodexAccountCooldownError {
   readonly resetAt?: number;
 
@@ -530,8 +530,8 @@ export class CodexMainAccountCreditsOffError extends CodexAccountCooldownError {
     super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
     this.name = "CodexMainAccountCreditsOffError";
     this.resetAt = resetAt;
-    this.message = "Codex main account reached its usage limit and is set not to spend ChatGPT credits."
-      + " Choose another account, wait for the limit to reset, or turn on \"Use credits after limit\" on the main account card.";
+    this.message = "Codex main account reached its usage limit, and spending ChatGPT credits is off for it."
+      + " Choose another account, wait for the limit to reset, or allow the main account under \"Use credits\" in Codex Auth.";
   }
 }
 
@@ -594,7 +594,7 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
   "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
-  | "noCreditCodexAccountIds"
+  | "creditCodexAccountIds"
 >>;
 
 interface CodexAuthMaterializationOptions {
@@ -722,13 +722,13 @@ export function unwrapUpstreamRetryEvidenceError(error: unknown): unknown {
  * Same evidence the hard lock reads, and no plan lookup: the plan can live in the physical auth
  * file, which several callers are forbidden to open, so every long window counts instead.
  */
-function mainCreditsHoldResetAt(config: Pick<OcxConfig, "noCreditCodexAccountIds">): number | undefined {
+function mainCreditsHoldResetAt(config: Pick<OcxConfig, "creditCodexAccountIds">): number | undefined {
   if (codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)) return undefined;
   return codexUsageLimitResetAt(getMainPolicyQuota(), undefined, Date.now());
 }
 
 function assertMainAccountPolicy(
-  config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "noCreditCodexAccountIds"> | undefined,
+  config: Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "creditCodexAccountIds"> | undefined,
 ): void {
   if (config) {
     const status = getMainAccountHardLockStatus(config);

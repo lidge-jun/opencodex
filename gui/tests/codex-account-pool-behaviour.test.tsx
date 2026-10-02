@@ -111,7 +111,14 @@ beforeEach(() => {
         } as unknown as Response;
       }
       if (path === "codex-auth/accounts/credits") {
-        const body = JSON.parse(String(init?.body)) as { id: string; creditsAfterLimit: boolean };
+        const body = JSON.parse(String(init?.body)) as { id?: string; creditsAfterLimit?: boolean; all?: boolean };
+        if (typeof body.all === "boolean") {
+          const all = body.all;
+          accounts = accounts.map(account => (
+            typeof account === "object" && account !== null ? { ...account, creditsAfterLimit: all } : account
+          ));
+          return { ok: true, json: async () => ({ ok: true, all }) } as unknown as Response;
+        }
         if (body.id === "a1") return { ok: false, json: async () => ({}) } as unknown as Response;
         accounts = accounts.map(account => (
           typeof account === "object" && account !== null && "id" in account && account.id === body.id
@@ -552,6 +559,24 @@ test("a credits switch save updates the pool row and a refusal leaves it alone",
     expect(await seen.current!.setAccountCreditsAfterLimit("a1", false)).toEqual({ ok: false, reason: "request" });
   });
   expect(seen.current!.accounts.find(account => account.id === "a1")?.creditsAfterLimit).toBeUndefined();
+});
+
+test("the global credits switch writes every row at once", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a2", email: "pool", isMain: false, paused: false, priority: 0, hasCredential: true, quota: null },
+  ];
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.setAllCreditsAfterLimit(true)).toEqual({ ok: true });
+  });
+  expect(seen.current!.accounts.map(account => account.creditsAfterLimit)).toEqual([true, true]);
+  await act(async () => {
+    expect(await seen.current!.setAllCreditsAfterLimit(false)).toEqual({ ok: true });
+  });
+  expect(seen.current!.accounts.map(account => account.creditsAfterLimit)).toEqual([false, false]);
+  expect(seen.current!.creditsAfterLimitUpdatingId).toBeNull();
 });
 
 test("an accepted selection-order write clears the pin before reconciliation lands", async () => {

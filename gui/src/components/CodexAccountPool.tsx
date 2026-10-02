@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { IconPlus } from "../icons";
 import { EmptyState, type NoticeTone } from "../ui";
@@ -28,6 +28,8 @@ import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 import CodexQuotaAutoRefreshSetting from "./CodexQuotaAutoRefreshSetting";
+import { CodexCreditSpendPanel, CodexCreditSpendSwitch } from "./CodexCreditSpend";
+import { creditSpendSummary } from "../codex-credit-spend";
 import { quotaActivationWindows, readQuotaActivationSettings, type QuotaAutoRefreshSettings } from "../codex-quota-activation";
 
 // Single definition lives with the controller that owns this data (WP3).
@@ -84,6 +86,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     || mainReauth.state.phase === "committing";
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [creditSpendExpanded, setCreditSpendExpanded] = useState(false);
+  const creditSpendPanelId = useId();
   const [modelsNotice, setModelsNotice] = useState<{ catalogRefreshPending: boolean } | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const hardLockFocusPending = useRef(false);
@@ -274,6 +278,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }), result.ok ? "ok" : "err");
   };
 
+  const toggleAllCreditsAfterLimit = async (enabled: boolean) => {
+    const result = await controller.setAllCreditsAfterLimit(enabled);
+    if (!result.ok && result.reason === "busy") return;
+    showActionFeedback(t(result.ok
+      ? enabled ? "codexAuth.creditsAllOnSucceeded" : "codexAuth.creditsAllOffSucceeded"
+      : "codexAuth.creditsAllUpdateFailed"), result.ok ? "ok" : "err");
+  };
+
   const changePriority = async (account: CodexAccountEntry, priority: number) => {
     // Same guard as the pool strategy control (CodexPoolStrategySetting.tsx), and here it is
     // load-bearing rather than just thrift: `Select` calls onChange for the clicked option
@@ -458,6 +470,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const main = accounts.find(a => a.isMain);
   const pool = accounts.filter(a => !a.isMain);
+  // The rows the credit switches cover: the main login once it has a credential, then the pool.
+  const creditRows = [...(main?.hasCredential ? [main] : []), ...pool];
+  const creditSummary = creditSpendSummary(creditRows);
   const isMainActive = !main?.paused && (!activeId || activeId === "__main__");
   const switchActionLabel = t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext");
   const pauseBusy = pauseUpdatingId !== null || pausingExhausted;
@@ -475,6 +490,16 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         creditsVisible={credits.visible}
         creditsBusy={credits.busy}
         onToggleCredits={() => { void credits.toggle(); }}
+        creditSpendControl={loadState === "loading" && accounts.length === 0 ? undefined : (
+          <CodexCreditSpendSwitch
+            summary={creditSummary}
+            busy={controller.creditsAfterLimitUpdatingId !== null}
+            expanded={creditSpendExpanded && creditRows.length > 0}
+            panelId={creditSpendPanelId}
+            onToggleAll={enabled => { void toggleAllCreditsAfterLimit(enabled); }}
+            onToggleExpanded={() => setCreditSpendExpanded(open => !open)}
+          />
+        )}
         refreshingQuota={refreshingQuota}
         actionFeedback={actionFeedback}
         actionFeedbackTone={actionFeedbackTone}
@@ -483,6 +508,15 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         onRefresh={() => { void refreshQuotas(); }}
         onPauseExhausted={() => { void pauseExhausted(); }}
       />
+
+      {creditSpendExpanded && creditRows.length > 0 && (
+        <CodexCreditSpendPanel
+          id={creditSpendPanelId}
+          rows={creditRows}
+          updatingId={controller.creditsAfterLimitUpdatingId}
+          onToggle={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
+        />
+      )}
 
       {banner}
 
@@ -530,8 +564,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             priorityUpdatingId={priorityUpdatingId}
             onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
             autoSwitchDisabled={accountAutoSwitchDisabled}
-            onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
-            creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onOpenReset={openResetPopup}
@@ -578,8 +610,6 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             priorityUpdatingId={priorityUpdatingId}
             onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
             autoSwitchDisabled={accountAutoSwitchDisabled}
-            onToggleCreditsAfterLimit={(entry, enabled) => { void toggleCreditsAfterLimit(entry, enabled); }}
-            creditsAfterLimitUpdatingId={controller.creditsAfterLimitUpdatingId}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onReauth={openReauth}

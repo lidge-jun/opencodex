@@ -6,7 +6,7 @@ import { readUsageSnapshotForManagement } from "../../usage/log";
 import { getAccountQuotaHistory, listAccountQuotas } from "../quota";
 import { deleteCodexAccount } from "../account-lifecycle";
 import { isCodexAccountPaused, setCodexAccountPaused } from "../account-pause";
-import { setCodexAccountCreditsAfterLimit } from "../account-credit-use";
+import { setAllCodexAccountsCreditsAfterLimit, setCodexAccountCreditsAfterLimit } from "../account-credit-use";
 import { clearCodexAccountPin, isCodexAccountPriorityKey, pinnedCodexAccountId, setCodexAccountPin, setCodexAccountPriority } from "../account-priority";
 import { codexAccountPinDrainReason, codexQuotaScopeForModel, clearCodexAccountCooldown, clearThreadAccountMapForAccount, getEffectiveActiveCodexAccountId, isEffectiveCodexAccountPinned, resetCodexRoutingForManualSelection } from "../routing";
 import { DEFAULT_ACCOUNT_PRIORITY, MAX_ACCOUNT_PRIORITY, MIN_ACCOUNT_PRIORITY, normalizeAccountPoolStickyLimit, normalizeCodexAccountPoolStrategy, parseAccountPoolStickyLimit, parseCodexAccountPoolStrategy, parseAccountPriority } from "../pool-rotation";
@@ -115,16 +115,26 @@ export async function handleCodexAuthAPI(
     });
   }
 
-  // Pool accounts and `__main__`, like pause. Turning credits off takes effect on the next
-  // selection, which skips the account while a usage window is full; a bound thread is released
-  // through the usual block reason, so nothing is cleared here.
+  // Pool accounts and `__main__`, like pause. Spending is opt-in: an account not on the list is
+  // skipped by the next selection while a usage window is full, and a bound thread is released
+  // through the usual block reason, so nothing is cleared here. `{ all }` is the dashboard's
+  // global switch: on lists every current account, off clears the list.
   if (url.pathname === "/api/codex-auth/accounts/credits" && req.method === "PUT") {
-    const body = await req.json().catch(() => ({})) as { id?: unknown; creditsAfterLimit?: unknown };
+    const body = await req.json().catch(() => ({})) as { id?: unknown; creditsAfterLimit?: unknown; all?: unknown };
+    const runtimeConfig = getRuntimeConfig(config);
+    if (body.all !== undefined) {
+      if (typeof body.all !== "boolean") return jsonResponse({ error: "all must be a boolean" }, 400);
+      const ids = [MAIN_CODEX_ACCOUNT_ID, ...(runtimeConfig.codexAccounts ?? [])
+        .filter(isSelectableCodexPoolAccount)
+        .map(account => account.id)];
+      setAllCodexAccountsCreditsAfterLimit(runtimeConfig, ids, body.all);
+      saveRuntimeConfig(config, runtimeConfig);
+      return jsonResponse({ ok: true, all: body.all, ids: runtimeConfig.creditCodexAccountIds ?? [] });
+    }
     const id = typeof body.id === "string" ? body.id.trim() : "";
     if (id !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
     if (typeof body.creditsAfterLimit !== "boolean") return jsonResponse({ error: "creditsAfterLimit must be a boolean" }, 400);
 
-    const runtimeConfig = getRuntimeConfig(config);
     const exists = id === MAIN_CODEX_ACCOUNT_ID
       || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
     if (!exists) return jsonResponse({ error: "Account not found" }, 404);

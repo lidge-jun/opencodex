@@ -111,16 +111,16 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-test("by default a full main login keeps serving", async () => {
+test("a full main login allowed to use credits keeps serving", async () => {
   const cfg = config();
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
   mainWeekly(100, Date.now() + DAY_MS);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
 });
 
-test("with credits off, a full main login is refused as a cooldown that names its reset", async () => {
+test("by default a full main login is refused as a cooldown that names its reset", async () => {
   const cfg = config();
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, false);
   const resetAt = Date.now() + DAY_MS;
   mainWeekly(100, resetAt);
   const refused = await resolveCodexAuthContext(new Headers(), cfg, "pool").catch(error => error);
@@ -132,10 +132,9 @@ test("with credits off, a full main login is refused as a cooldown that names it
     .rejects.toBeInstanceOf(CodexMainAccountCreditsOffError);
 });
 
-test("with credits off, the pool moves to another account instead of the full main login", async () => {
+test("by default the pool moves to another account instead of the full main login", async () => {
   const cfg = config();
   addPoolAccount(cfg);
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, false);
   mainWeekly(100, Date.now() + DAY_MS);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .resolves.toMatchObject({ kind: "pool", accountId: POOL });
@@ -146,7 +145,6 @@ test("a caller using the main credential is held too, without reading the physic
   addPoolAccount(cfg);
   cfg.activeCodexAccountPinned = MAIN;
   observeMainQuotaCredential(bearer(), accountId);
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, false);
   mainWeekly(100, Date.now() + DAY_MS);
   const forbidden = () => { throw new Error("caller-owned path read physical main"); };
   spyOn(authCollision, "readCodexTokens").mockImplementation(forbidden);
@@ -159,7 +157,6 @@ test("a caller using the main credential is held too, without reading the physic
 
 test("an elapsed reset or a reading below 100% releases the main login", async () => {
   const cfg = config();
-  setCodexAccountCreditsAfterLimit(cfg, MAIN, false);
   mainWeekly(100, Date.now() - 60_000);
   await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
     .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
@@ -175,6 +172,7 @@ test("selection leaves a held main login out of the candidates on its own", () =
   addPoolAccount(cfg);
   setAccountQuotaFromParsed(POOL, { weeklyPercent: 50 });
   mainWeekly(100, Date.now() + DAY_MS);
+  setCodexAccountCreditsAfterLimit(cfg, MAIN, true);
   expect(pickLowestUsageCodexAccount(cfg, POOL)).toBe(MAIN);
   setCodexAccountCreditsAfterLimit(cfg, MAIN, false);
   expect(pickLowestUsageCodexAccount(cfg, POOL)).toBeNull();

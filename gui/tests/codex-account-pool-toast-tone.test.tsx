@@ -93,6 +93,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     setAccountPriority: async () => ({ ok: true }),
     setAccountAutoSwitchThreshold: async () => ({ ok: true }),
     setAccountCreditsAfterLimit: async () => ({ ok: true }),
+    setAllCreditsAfterLimit: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: false, reason: "request" }),

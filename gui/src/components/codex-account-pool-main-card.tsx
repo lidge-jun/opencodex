@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
-import AccountCreditsToggle, { CreditsOffBadge } from "./AccountCreditsToggle";
+import { CreditsOnBadge } from "./CodexCreditSpend";
 import QuotaBars from "./QuotaBars";
 import CodexCreditsRow from "./CodexCreditsRow";
 import { useI18n } from "../i18n/shared";
@@ -40,8 +40,6 @@ export function CodexAccountPoolMainCard({
   priorityUpdatingId,
   onAutoSwitchThresholdChange,
   autoSwitchDisabled,
-  onToggleCreditsAfterLimit,
-  creditsAfterLimitUpdatingId = null,
   switchingId,
   pinnedId = null,
   onOpenReset,
@@ -68,8 +66,6 @@ export function CodexAccountPoolMainCard({
   priorityUpdatingId: string | null;
   onAutoSwitchThresholdChange: (entry: CodexAccountEntry, threshold: number | null) => Promise<boolean>;
   autoSwitchDisabled: boolean;
-  onToggleCreditsAfterLimit?: (entry: CodexAccountEntry, enabled: boolean) => void;
-  creditsAfterLimitUpdatingId?: string | null;
   /** In-flight manual switch, which writes the same pin an order write clears. */
   switchingId: string | null;
   /**
@@ -101,7 +97,6 @@ export function CodexAccountPoolMainCard({
     paused: main?.paused ?? false,
     priority: main?.priority ?? 0,
     autoSwitchThresholdOverride: main?.autoSwitchThresholdOverride ?? null,
-    creditsAfterLimit: main?.creditsAfterLimit,
     hasCredential: true,
     quota: main?.quota ?? null,
     quotaAutoRefresh: main?.quotaAutoRefresh ?? {
@@ -127,13 +122,13 @@ export function CodexAccountPoolMainCard({
         <strong>{t("codexAuth.mainAccount")}</strong>
         <span className="card-badges">
           {main?.plan && <span className="badge badge-green">{main.plan}</span>}
-          {creditsVisible !== true && <CreditsOffBadge enabled={main?.creditsAfterLimit} />}
           {main?.paused && (
             <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
               {t("codexAuth.paused")}
             </span>
           )}
           <AccountPriorityBadge value={mainSwitchEntry.priority} />
+          <CreditsOnBadge enabled={main?.creditsAfterLimit} />
           {pinnedId === "__main__" && !main?.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
           {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
           {healthLabel && (
@@ -205,15 +200,6 @@ export function CodexAccountPoolMainCard({
               disabled={autoSwitchDisabled}
               onChange={(next) => onAutoSwitchThresholdChange(mainSwitchEntry, next)}
             />
-            {onToggleCreditsAfterLimit && creditsVisible === true && (
-              <AccountCreditsToggle
-                accountLabel={mainSwitchEntry.email}
-                enabled={mainSwitchEntry.creditsAfterLimit}
-                saving={creditsAfterLimitUpdatingId === mainSwitchEntry.id}
-                disabled={creditsAfterLimitUpdatingId !== null}
-                onChange={(enabled) => onToggleCreditsAfterLimit(mainSwitchEntry, enabled)}
-              />
-            )}
           </div>
         )}
       </div>
@@ -303,6 +289,7 @@ export function CodexAccountPoolPageHead({
   creditsVisible,
   creditsBusy,
   onToggleCredits,
+  creditSpendControl,
 }: {
   t: TFn;
   embedded: boolean;
@@ -310,6 +297,8 @@ export function CodexAccountPoolPageHead({
   creditsVisible?: boolean;
   creditsBusy?: boolean;
   onToggleCredits?: () => void;
+  /** The global "use credits" switch, rendered beside the credits display switch. */
+  creditSpendControl?: ReactNode;
   refreshingQuota: boolean;
   pausingExhausted: boolean;
   pauseBusy?: boolean;
@@ -348,6 +337,7 @@ export function CodexAccountPoolPageHead({
             </button>
           </span>
         )}
+        {creditSpendControl}
         {/* The standalone pause/refresh row sits next to the account cards. Embedded
             surfaces keep those actions beside feedback because there is no page title. */}
         {embedded && (

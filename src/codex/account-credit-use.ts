@@ -13,29 +13,41 @@ import {
  *
  * Upstream does not refuse an account that holds ChatGPT credits at 100%: it serves the request
  * and draws the balance. Selection only takes an account off on quota after a refusal, so an
- * account with credits was never moved off. On is the default and is stored as absence, so a pool
- * that never touched the switch routes exactly as before. Pool accounts and the `__main__` login
- * both carry the switch; the main login is also checked where the main-account hard lock is.
+ * account with credits was never moved off. Spending is opt-in: only the ids in
+ * `creditCodexAccountIds` may keep serving from credits, and every other account leaves rotation
+ * at 100% and comes back after its reset. Pool accounts and the `__main__` login both carry the
+ * switch; the main login is also checked where the main-account hard lock is.
  */
 export function codexAccountUsesCreditsAfterLimit(
-  config: Pick<OcxConfig, "noCreditCodexAccountIds">,
+  config: Pick<OcxConfig, "creditCodexAccountIds">,
   accountId: string,
 ): boolean {
-  return !(config.noCreditCodexAccountIds?.includes(accountId) ?? false);
+  return config.creditCodexAccountIds?.includes(accountId) ?? false;
 }
 
-/** Persist the switch for one account. Only the accounts that turned it off are stored. */
+/** Persist the switch for one account. Only the accounts allowed to spend credits are stored. */
 export function setCodexAccountCreditsAfterLimit(config: OcxConfig, accountId: string, enabled: boolean): void {
-  const ids = new Set(config.noCreditCodexAccountIds ?? []);
-  if (enabled) ids.delete(accountId);
-  else ids.add(accountId);
+  const ids = new Set(config.creditCodexAccountIds ?? []);
+  if (enabled) ids.add(accountId);
+  else ids.delete(accountId);
+  writeCreditAccountIds(config, ids);
+}
 
-  if (ids.size > 0) config.noCreditCodexAccountIds = [...ids];
-  else deleteConfigTopLevelKey(config, "noCreditCodexAccountIds");
+/**
+ * The dashboard's global switch. On allows every account the caller passes, which is every
+ * current account; off clears the list, so a later account still starts with spending off.
+ */
+export function setAllCodexAccountsCreditsAfterLimit(config: OcxConfig, accountIds: readonly string[], enabled: boolean): void {
+  writeCreditAccountIds(config, new Set(enabled ? accountIds : []));
+}
+
+function writeCreditAccountIds(config: OcxConfig, ids: ReadonlySet<string>): void {
+  if (ids.size > 0) config.creditCodexAccountIds = [...ids];
+  else deleteConfigTopLevelKey(config, "creditCodexAccountIds");
 }
 
 export function forgetCodexAccountCreditUse(config: OcxConfig, accountId: string): void {
-  setCodexAccountCreditsAfterLimit(config, accountId, true);
+  setCodexAccountCreditsAfterLimit(config, accountId, false);
 }
 
 /**
@@ -77,7 +89,7 @@ export function codexUsageLimitResetAt(quota: StoredAccountQuota | null, plan: u
 
 /** Whether automatic selection must skip this account so that it keeps its credits. */
 export function isCodexAccountHeldForCredits(
-  config: Pick<OcxConfig, "noCreditCodexAccountIds">,
+  config: Pick<OcxConfig, "creditCodexAccountIds">,
   accountId: string,
   quota: StoredAccountQuota | null,
   plan: unknown,

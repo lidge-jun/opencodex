@@ -14,6 +14,7 @@ import {
   codexAccountUsesCreditsAfterLimit,
   forgetCodexAccountCreditUse,
   isCodexUsageLimitReached,
+  setAllCodexAccountsCreditsAfterLimit,
   setCodexAccountCreditsAfterLimit,
 } from "../../src/codex/account-credit-use";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
@@ -112,28 +113,30 @@ describe("codex credits after the usage limit", () => {
     }
   });
 
-  test("by default an account at 100% keeps serving, as it did before the switch existed", () => {
+  test("by default an account at 100% is skipped and the pool moves on", () => {
     const config = makeConfig();
     recordWeekly("spender", 100, Date.now() + DAY_MS);
     recordWeekly("saver", 40, Date.now() + DAY_MS);
-    expect(codexAccountUsesCreditsAfterLimit(config, "spender")).toBe(true);
-    expect(resolveCodexAccountForThread("default", config)).toBe("spender");
+    expect(codexAccountUsesCreditsAfterLimit(config, "spender")).toBe(false);
+    expect(resolveCodexAccountForThread("default", config)).toBe("saver");
+    expect(previewCodexAccountForRequest("default", config)).toBe("saver");
+    expect(codexAccountBlockReason(config, "spender", Date.now())).toBe("credits_off");
   });
 
-  test("with credits off, an account at 100% is skipped and the pool moves on", () => {
+  test("an account allowed to use credits keeps serving at 100%", () => {
     const config = makeConfig();
-    setCodexAccountCreditsAfterLimit(config, "spender", false);
+    setCodexAccountCreditsAfterLimit(config, "spender", true);
     recordWeekly("spender", 100, Date.now() + DAY_MS);
     recordWeekly("saver", 40, Date.now() + DAY_MS);
-    expect(resolveCodexAccountForThread("credits-off", config)).toBe("saver");
-    expect(previewCodexAccountForRequest("credits-off", config)).toBe("saver");
-    expect(codexAccountBlockReason(config, "spender", Date.now())).toBe("credits_off");
+    expect(resolveCodexAccountForThread("credits-on", config)).toBe("spender");
+    expect(codexAccountBlockReason(config, "spender", Date.now())).toBeUndefined();
   });
 
   test("a thread already served by the account leaves it once credits are turned off", () => {
     // The active, bound account is served without passing through the eligible list, which is
     // exactly the account that would otherwise keep spending.
     const config = makeConfig();
+    setCodexAccountCreditsAfterLimit(config, "spender", true);
     recordWeekly("spender", 100, Date.now() + DAY_MS);
     recordWeekly("saver", 40, Date.now() + DAY_MS);
     expect(resolveCodexAccountForThread("bound", config)).toBe("spender");
@@ -143,9 +146,8 @@ describe("codex credits after the usage limit", () => {
     expect(resolveCodexAccountForThread("bound", config)).toBe("saver");
   });
 
-  test("credits off below 100% changes nothing", () => {
+  test("below 100% the default changes nothing", () => {
     const config = makeConfig();
-    setCodexAccountCreditsAfterLimit(config, "spender", false);
     recordWeekly("spender", 99, Date.now() + DAY_MS);
     recordWeekly("saver", 40, Date.now() + DAY_MS);
     expect(resolveCodexAccountForThread("below-limit", config)).toBe("spender");
@@ -155,7 +157,6 @@ describe("codex credits after the usage limit", () => {
   test("an elapsed reset releases the account without a new observation", () => {
     // A held account receives no traffic, so nothing else would ever replace the 100% reading.
     const config = makeConfig();
-    setCodexAccountCreditsAfterLimit(config, "spender", false);
     recordWeekly("spender", 100, Date.now() - 60_000);
     recordWeekly("saver", 40, Date.now() + DAY_MS);
     expect(resolveCodexAccountForThread("after-reset", config)).toBe("spender");
@@ -163,34 +164,40 @@ describe("codex credits after the usage limit", () => {
 
   test("a full reading without a reset time does not hold the account", () => {
     const config = makeConfig();
-    setCodexAccountCreditsAfterLimit(config, "spender", false);
     recordWeekly("spender", 100);
     recordWeekly("saver", 40, Date.now() + DAY_MS);
     expect(resolveCodexAccountForThread("no-reset", config)).toBe("spender");
   });
 
-  test("automatic routing refuses the last account when its credits are off", () => {
+  test("automatic routing finds no account rather than spend credits on the last one", () => {
     const config = makeConfig({
       codexAccounts: [{ id: "spender", email: "spender@test", isMain: false, plan: "pro" }],
     } as Partial<OcxConfig>);
-    setCodexAccountCreditsAfterLimit(config, "spender", false);
     recordWeekly("spender", 100, Date.now() + DAY_MS);
     expect(pickLowestUsageCodexAccount(config)).toBeNull();
     expect(resolveCodexAccountForThread("last-account", config)).toBeNull();
     expect(previewCodexAccountForRequest("last-account", config)).toBeNull();
   });
 
-  test("only the accounts that turned credits off are stored, the main login included", () => {
+  test("only the accounts allowed to use credits are stored, the main login included", () => {
     const config = makeConfig();
-    setCodexAccountCreditsAfterLimit(config, "spender", false);
-    setCodexAccountCreditsAfterLimit(config, "__main__", false);
-    expect(config.noCreditCodexAccountIds).toEqual(["spender", "__main__"]);
-    expect(codexAccountUsesCreditsAfterLimit(config, "__main__")).toBe(false);
-    expect(codexAccountUsesCreditsAfterLimit(config, "saver")).toBe(true);
-    forgetCodexAccountCreditUse(config, "spender");
-    expect(config.noCreditCodexAccountIds).toEqual(["__main__"]);
+    setCodexAccountCreditsAfterLimit(config, "spender", true);
     setCodexAccountCreditsAfterLimit(config, "__main__", true);
-    expect(config.noCreditCodexAccountIds).toBeUndefined();
+    expect(config.creditCodexAccountIds).toEqual(["spender", "__main__"]);
+    expect(codexAccountUsesCreditsAfterLimit(config, "__main__")).toBe(true);
+    expect(codexAccountUsesCreditsAfterLimit(config, "saver")).toBe(false);
+    forgetCodexAccountCreditUse(config, "spender");
+    expect(config.creditCodexAccountIds).toEqual(["__main__"]);
+    setCodexAccountCreditsAfterLimit(config, "__main__", false);
+    expect(config.creditCodexAccountIds).toBeUndefined();
+  });
+
+  test("the global switch lists every given account and clears them all", () => {
+    const config = makeConfig();
+    setAllCodexAccountsCreditsAfterLimit(config, ["__main__", "spender", "saver"], true);
+    expect(config.creditCodexAccountIds).toEqual(["__main__", "spender", "saver"]);
+    setAllCodexAccountsCreditsAfterLimit(config, ["__main__", "spender", "saver"], false);
+    expect(config.creditCodexAccountIds).toBeUndefined();
   });
 
   describe("which windows count as full", () => {
@@ -219,35 +226,49 @@ describe("codex credits after the usage limit", () => {
   });
 
   describe("PUT /api/codex-auth/accounts/credits", () => {
-    test("turns credits off and on for a pool account and applies to the next request", async () => {
+    test("turns credits on and off for a pool account and applies to the next request", async () => {
       const config = makeConfig();
       recordWeekly("spender", 100, Date.now() + DAY_MS);
       recordWeekly("saver", 40, Date.now() + DAY_MS);
 
-      const off = await putCredits(config, { id: "spender", creditsAfterLimit: false });
-      expect(off.status).toBe(200);
-      expect(await off.json()).toEqual({ ok: true, id: "spender", creditsAfterLimit: false });
-      expect(config.noCreditCodexAccountIds).toEqual(["spender"]);
-      expect(resolveCodexAccountForThread("api", config)).toBe("saver");
-
       const on = await putCredits(config, { id: "spender", creditsAfterLimit: true });
       expect(on.status).toBe(200);
-      expect(config.noCreditCodexAccountIds).toBeUndefined();
+      expect(await on.json()).toEqual({ ok: true, id: "spender", creditsAfterLimit: true });
+      expect(config.creditCodexAccountIds).toEqual(["spender"]);
+      expect(resolveCodexAccountForThread("api", config)).toBe("spender");
+
+      const off = await putCredits(config, { id: "spender", creditsAfterLimit: false });
+      expect(off.status).toBe(200);
+      expect(config.creditCodexAccountIds).toBeUndefined();
+      expect(resolveCodexAccountForThread("api", config)).toBe("saver");
     });
 
     test("accepts the main login", async () => {
       const config = makeConfig();
-      const resp = await putCredits(config, { id: "__main__", creditsAfterLimit: false });
+      const resp = await putCredits(config, { id: "__main__", creditsAfterLimit: true });
       expect(resp.status).toBe(200);
-      expect(config.noCreditCodexAccountIds).toEqual(["__main__"]);
+      expect(config.creditCodexAccountIds).toEqual(["__main__"]);
+    });
+
+    test("all: true lists the main login and every pool account, all: false clears the list", async () => {
+      const config = makeConfig();
+      const on = await putCredits(config, { all: true });
+      expect(on.status).toBe(200);
+      expect(await on.json()).toEqual({ ok: true, all: true, ids: ["__main__", "spender", "saver"] });
+      expect(config.creditCodexAccountIds).toEqual(["__main__", "spender", "saver"]);
+
+      const off = await putCredits(config, { all: false });
+      expect(off.status).toBe(200);
+      expect(config.creditCodexAccountIds).toBeUndefined();
+      expect((await putCredits(config, { all: "yes" })).status).toBe(400);
     });
 
     test("refuses bad ids, unknown accounts and non-boolean values", async () => {
       const config = makeConfig();
-      expect((await putCredits(config, { id: "../etc", creditsAfterLimit: false })).status).toBe(400);
-      expect((await putCredits(config, { id: "missing", creditsAfterLimit: false })).status).toBe(404);
-      expect((await putCredits(config, { id: "spender", creditsAfterLimit: "no" })).status).toBe(400);
-      expect(config.noCreditCodexAccountIds).toBeUndefined();
+      expect((await putCredits(config, { id: "../etc", creditsAfterLimit: true })).status).toBe(400);
+      expect((await putCredits(config, { id: "missing", creditsAfterLimit: true })).status).toBe(404);
+      expect((await putCredits(config, { id: "spender", creditsAfterLimit: "yes" })).status).toBe(400);
+      expect(config.creditCodexAccountIds).toBeUndefined();
     });
   });
 });

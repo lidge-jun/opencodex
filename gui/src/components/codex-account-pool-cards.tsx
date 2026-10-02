@@ -6,7 +6,7 @@ import { displayAccountId } from "../lib/privacy";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "../account-priority";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
-import AccountCreditsToggle, { CreditsOffBadge } from "./AccountCreditsToggle";
+import { CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
@@ -39,8 +39,6 @@ export function CodexAccountPoolCards({
   priorityUpdatingId,
   onAutoSwitchThresholdChange,
   autoSwitchDisabled,
-  onToggleCreditsAfterLimit,
-  creditsAfterLimitUpdatingId = null,
   switchingId,
   pinnedId = null,
   onReauth,
@@ -65,8 +63,6 @@ export function CodexAccountPoolCards({
   priorityUpdatingId: string | null;
   onAutoSwitchThresholdChange: (account: CodexAccountEntry, threshold: number | null) => Promise<boolean>;
   autoSwitchDisabled: boolean;
-  onToggleCreditsAfterLimit?: (account: CodexAccountEntry, enabled: boolean) => void;
-  creditsAfterLimitUpdatingId?: string | null;
   /** In-flight manual switch, which writes the same pin an order write clears. */
   switchingId: string | null;
   /**
@@ -118,8 +114,8 @@ export function CodexAccountPoolCards({
                   {t("codexAuth.paused")}
                 </span>
               )}
-              {creditsVisible !== true && <CreditsOffBadge enabled={a.creditsAfterLimit} />}
               <AccountPriorityBadge value={a.priority} />
+              <CreditsOnBadge enabled={a.creditsAfterLimit} />
               {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
@@ -221,15 +217,6 @@ export function CodexAccountPoolCards({
                 disabled={autoSwitchDisabled}
                 onChange={(next) => onAutoSwitchThresholdChange(a, next)}
               />
-              {onToggleCreditsAfterLimit && creditsVisible === true && (
-                <AccountCreditsToggle
-                  accountLabel={a.alias ?? a.email}
-                  enabled={a.creditsAfterLimit}
-                  saving={creditsAfterLimitUpdatingId === a.id}
-                  disabled={creditsAfterLimitUpdatingId !== null}
-                  onChange={(enabled) => onToggleCreditsAfterLimit(a, enabled)}
-                />
-              )}
             </div>
           </div>
           {healthSummary && (

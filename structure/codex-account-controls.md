@@ -34,19 +34,20 @@ Mounted coverage lives in `gui/tests/codex-account-pool-pinned-badge.test.tsx`.
 
 Upstream keeps serving an account that holds ChatGPT credits at 100% and draws the balance, and
 selection only leaves an account on quota after a refusal, so such an account was never moved off
-(#6334). `noCreditCodexAccountIds` lists the accounts, `__main__` included, whose card switch "Use
-credits after limit" is off; absence is the default and routes exactly as before.
-`src/codex/account-credit-use.ts` owns the list and the full-window rule. A listed account is held
-while a usage window reads 100%: the long window (weekly, or monthly on 30-day plans) only while its
-reset is still ahead, the burst window through `isTerminalShortWindow`. A held account receives no
-traffic and therefore no new observation, so the reading has to end on its own; a long window
-without a reset is not trusted.
+(#6334). Spending is opt-in: `creditCodexAccountIds` lists the accounts, `__main__` included,
+allowed to keep serving from credits, and absence means none. Every other account is switched out
+at 100% and returns after its reset, so a new account also starts with spending off.
+`src/codex/account-credit-use.ts` owns the list and the full-window rule. An unlisted account is
+held while a usage window reads 100%: the long window (weekly, or monthly on 30-day plans) only
+while its reset is still ahead, the burst window through `isTerminalShortWindow`. A held account
+receives no traffic and therefore no new observation, so the reading has to end on its own; a long
+window without a reset is not trusted.
 
 The hold is checked wherever plan exclusion is checked in `src/codex/routing/selection.ts`: the
 eligible list (its pool filter and its main branch), `isCodexAccountSelectable`, and
 `codexAccountBlockReason`, which reports `credits_off`. `isCodexAccountRotationExcluded` carries
 both policies into the two legacy keep-the-active-account fallbacks and the transient-only affinity
-check in `src/codex/routing.ts`, so a pool whose last account is held selects none instead of
+check in `src/codex/routing.ts`, so a pool whose accounts are all held selects none instead of
 spending. The main login has paths that never reach selection, so `src/codex/auth-context.ts` also
 checks it where the main-account hard lock is checked: `assertMainAccountPolicy` throws
 `CodexMainAccountCreditsOffError` (a cooldown error, mapped like the hard lock), and
@@ -54,12 +55,16 @@ checks it where the main-account hard lock is checked: `assertMainAccountPolicy`
 policy quota the lock reads and no plan, because several of those callers may not open the physical
 auth file.
 
-`PUT /api/codex-auth/accounts/credits` writes the switch for pool accounts and `__main__`. It has no
-CLI verb yet (`deferred-verb`, owner "#6334 follow-up"); `ocx config set noCreditCodexAccountIds`
-covers scripted use. The card control is `gui/src/components/AccountCreditsToggle.tsx`. Both cards
-render it only while the page's "Codex credits" display (`showCodexCredits`) is on, so the credits
-row and the switch appear and hide together; with the display off, `CreditsOffBadge` marks an
-account whose switch is off, so a held account never looks ordinary. The display setting never
-changes routing. Coverage: `tests/codex-integration/codex-credits-after-limit.test.ts`,
+`PUT /api/codex-auth/accounts/credits` writes one account (`{ id, creditsAfterLimit }`, pool
+accounts and `__main__`) or the whole list (`{ all }`: on lists `__main__` and every selectable
+pool account, off clears it). It has no CLI verb yet (`deferred-verb`, owner "#6334 follow-up");
+`ocx config set creditCodexAccountIds` covers scripted use. The dashboard control is
+`gui/src/components/CodexCreditSpend.tsx`: one global switch in the Codex Auth header beside the
+"Codex credits" display switch, derived from the rows (off when none may spend, mixed when some
+may, on when all may, matching the quota auto-refresh control), and a count button that opens a
+panel below the header with one switch per account. Clicking the global switch from off or mixed
+allows every account; from on it clears them all. Cards carry no switch of their own;
+`CreditsOnBadge` marks an account allowed to spend, independent of the display switch, which
+still never changes routing. Coverage: `tests/codex-integration/codex-credits-after-limit.test.ts`,
 `tests/codex-integration/codex-credits-after-limit-main.test.ts` and
-`gui/tests/codex-credits-after-limit-toggle.test.tsx`.
+`gui/tests/codex-credit-spend.test.tsx`.

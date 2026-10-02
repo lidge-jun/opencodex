@@ -27,3 +27,59 @@
   font-size: var(--text-label);
   color: var(--muted);
 }
+
+/* Credit spending (#6334): one global switch beside the credits display, and a count button that
+   opens the per-account panel below the header. The mixed knob matches the quota auto-refresh
+   control on the same page. */
+.codex-credit-spend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+.codex-credit-spend .toggle[aria-pressed="mixed"] .toggle-knob { transform: translate(8px, -50%); }
+.codex-credit-spend__disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.codex-credit-spend__count { font-size: var(--text-label); color: var(--muted); }
+.codex-credit-spend__chevron { color: var(--muted); transition: transform var(--motion-normal); }
+.codex-credit-spend__disclosure[aria-expanded="true"] .codex-credit-spend__chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .codex-credit-spend__chevron { transition: none; }
+}
+.codex-credit-spend-panel {
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.codex-credit-spend-panel__hint { margin: 0; max-width: 80ch; word-break: keep-all; }
+.codex-credit-spend-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.codex-credit-spend-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 0 16px;
+  border-top: 1px solid var(--border);
+}
+.codex-credit-spend-panel__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.codex-credit-spend-panel__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
