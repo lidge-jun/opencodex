@@ -990,7 +990,16 @@ export async function preparePassthroughExchange(
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
-            .then(adoptObservedResponse);
+            .then(adoptObservedResponse)
+            .then(async (observed) => {
+              // A quota refusal wrapped in 502 is not an outage. Leaving it for the
+              // transient ladder spends the request's send budget on the same account
+              // and can leave no send for a roster account that still has quota.
+              if (!usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)
+                || observed.status < 500 || observed.status >= 600
+                || !await shouldRetryCodexPoolAccountQuota(observed, upstream.signal)) return observed;
+              return new Response(await observed.arrayBuffer(), { status: 429, headers: observed.headers });
+            });
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url),
           attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends,

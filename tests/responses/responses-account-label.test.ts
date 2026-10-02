@@ -350,6 +350,35 @@ describe("Responses account usage attribution", () => {
     });
   });
 
+  test("a quota-shaped 502 then a 429 still reaches a third roster account", async () => {
+    await withPoolHome(async () => {
+      takeSpendHome();
+      const config = poolConfig(["pool-a", "pool-b", "pool-c"]);
+      for (const [id, usage] of [["pool-a", 10], ["pool-b", 20], ["pool-c", 30]] as const) {
+        savePoolCredential(id);
+        updateAccountQuota(id, usage);
+      }
+      const bearers: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization") ?? "";
+        bearers.push(bearer);
+        if (bearer === "Bearer pool-a-access-token") {
+          return Response.json({ error: { message: "The usage limit has been reached" } }, { status: 502 });
+        }
+        if (bearer === "Bearer pool-b-access-token") {
+          return Response.json({ error: { message: "The usage limit has been reached" } }, { status: 429 });
+        }
+        return completedResponse("pool-c-response");
+      }) as typeof fetch;
+
+      const response = await handleResponses(request(), config, { model: "", provider: "" }, {});
+      expect(response.status).toBe(200);
+      expect(bearers.filter(bearer => bearer === "Bearer pool-c-access-token")).toEqual([
+        "Bearer pool-c-access-token",
+      ]);
+    });
+  });
+
   test("roster rotation stops when every account refuses before output", async () => {
     await withPoolHome(async () => {
       takeSpendHome();
@@ -400,8 +429,6 @@ describe("Responses account usage attribution", () => {
 
       expect(response.status).toBe(200);
       expect(bearers).toEqual([
-        "Bearer pool-a-access-token",
-        "Bearer pool-a-access-token",
         "Bearer pool-a-access-token",
         "Bearer pool-b-access-token",
       ]);
@@ -456,8 +483,8 @@ describe("Responses account usage attribution", () => {
 
       const response = await handleResponses(request(), config, { model: "", provider: "" }, {});
 
-      expect(response.status).toBe(502);
-      expect(sends).toBe(3);
+      expect(response.status).toBe(429);
+      expect(sends).toBe(1);
       expect(getCodexUpstreamHealth("pool-a")).toMatchObject({
         cooldownSource: "default",
       });
