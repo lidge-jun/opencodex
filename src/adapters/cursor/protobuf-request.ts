@@ -172,10 +172,15 @@ function rootBlobCandidate(
   };
 }
 
+/** Wrap tool-result text in the role/content envelope used by serialized replay roots. */
 function toolResultRootPayload(text: string, role: "assistant" | "user" = "assistant"): { role: "assistant" | "user"; content: [{ type: "text"; text: string }] } {
   return { role, content: [{ type: "text", text }] };
 }
 
+/**
+ * Fit a tool-result root within its serialized byte budget without splitting UTF-8 characters.
+ * Marks results whose output was elided and returns null when no usable root fits.
+ */
 function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): RootBlobCandidate | null {
   if (entry.byteLength <= maxBytes) return entry;
   if (entry.role !== "toolResult" || entry.text === undefined) return null;
@@ -1380,6 +1385,7 @@ function assistantStep(part: OcxAssistantContentPart, requestScope: CursorBlobRe
   })), requestScope);
 }
 
+/** Locate the latest user/developer action, or return -1 when the history contains none. */
 function lastActionIndex(messages: readonly OcxMessage[] | undefined): number {
   if (!messages) return -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -1390,6 +1396,10 @@ function lastActionIndex(messages: readonly OcxMessage[] | undefined): number {
   return -1;
 }
 
+/**
+ * Serialize replay history into Cursor turn blobs, pairing tool calls with their results.
+ * Excludes the current user action and respects the covered-history offset for external models.
+ */
 function conversationTurns(
   request: CursorRunRequest,
   requestScope: CursorBlobRequestScopeToken,

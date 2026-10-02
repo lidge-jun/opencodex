@@ -381,6 +381,7 @@ export function resolveCursorConversationId(
   return generatedCursorConversationId();
 }
 
+/** Return the nonblank client thread identity, preferring the shared field over the Cursor alias. */
 export function cursorClientThreadOwner(parsed: OcxParsedRequest): string | undefined {
   return parsed._clientThreadId?.trim() || parsed._cursorClientThreadId?.trim() || undefined;
 }
@@ -432,6 +433,7 @@ export interface CreateCursorRequestOptions {
   liveRosterScope?: string;
 }
 
+/** Find the longest covered history prefix with matching instructions, credential scope and model. */
 function lookupPrefixSnapshot(
   parsed: OcxParsedRequest,
   request: CursorRunRequest,
@@ -453,6 +455,7 @@ function lookupPrefixSnapshot(
   return undefined;
 }
 
+/** Reject changed instructions/history or a checkpoint that already covers the trailing tool result. */
 function lineageMismatch(
   parsed: OcxParsedRequest,
   snapshot: CursorCheckpointSnapshot,
@@ -469,6 +472,10 @@ function lineageMismatch(
   return undefined;
 }
 
+/**
+ * Admit a saved checkpoint only when its conversation, credentials, model and history still match.
+ * Returns an invalidation reason for full replay when the checkpoint cannot safely resume.
+ */
 function resolveCursorCheckpoint(
   parsed: OcxParsedRequest,
   request: CursorRunRequest,
