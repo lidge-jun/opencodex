@@ -156,3 +156,7 @@ refreshes the update-notification cache in a detached process, and
 implementation details, not stable user-facing commands. The dashboard records the worker PID,
 recovers an active job whose worker died, treats older PID-less active records as stale after ten
 minutes, and protects a live worker from concurrent updates.
+
+## Capability argument validation
+
+`ocx capabilities` rejects unknown arguments, repeated flags and blank `--route` values with exit 64. A valid route with no declared capability exits 4.
