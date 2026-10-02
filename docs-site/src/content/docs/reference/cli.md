@@ -163,3 +163,6 @@ minutes, and protects a live worker from concurrent updates.
 ## Integer option values
 
 Integer options such as `--limit` require decimal whole numbers within JavaScript safe-integer bounds. Digit separators such as `1_000` and `1,000` are accepted. Empty values, hexadecimal, exponent notation and fractions are rejected before a request is sent.
+## Windows JSON configuration files
+
+`ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.

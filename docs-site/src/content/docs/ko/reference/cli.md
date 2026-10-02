@@ -47,3 +47,6 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 ## Integer option values
 
 `--limit` 같은 정수 옵션은 안전하게 표현 가능한 십진 정수를 받습니다. `1_000`, `1,000` 같은 숫자 구분자는 허용합니다. 빈 값, 16진수, 지수 표기 및 소수는 요청을 보내기 전에 거부합니다.
+## Windows JSON configuration files
+
+`ocx config validate <file>`과 `ocx config import <file> --yes`는 선행 BOM이 있는 UTF-8 JSON도 읽습니다. 표준 입력(`-`)에도 적용되므로 Windows PowerShell이나 편집기의 UTF-8 내보내기를 사용할 수 있습니다. UTF-16은 지원하지 않습니다.
