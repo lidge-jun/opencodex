@@ -266,4 +266,4 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 ## Explain a listed request
 
-`ocx logs`의 일반 출력에 `id=<request-id>`가 표시됩니다. 이 값을 `ocx logs explain <request-id>`에 넣어 라우팅 결정을 확인할 수 있습니다. ID가 없는 이전 기록은 이 항목을 생략하며 JSON과 JSONL 형식은 유지됩니다.
+`ocx logs`의 일반 출력에 `id=<request-id>`가 표시됩니다. 이 값을 `ocx logs explain <request-id>`에 넣어 라우팅 결정을 확인할 수 있습니다. ID가 없거나 ID에 제어 문자가 있으면 조회 키를 바꾸어 표시하지 않고 이 항목을 생략합니다. JSON과 JSONL은 원래 ID와 형식을 유지합니다.

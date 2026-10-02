@@ -52,6 +52,7 @@ function logRows(data: unknown): LogEntry[] {
   return [];
 }
 
+/** Render one human log row with an exact, control-free request ID suitable for history lookup. */
 function formatLog(row: LogEntry): string {
   const time = String(row.timestamp ?? row.createdAt ?? "");
   const route = [row.provider, row.model].filter(Boolean).join("/");
@@ -70,10 +71,12 @@ function formatLog(row: LogEntry): string {
     ? `acct=${row.accountLogLabel}`
     : "";
   const requestId = typeof row.requestId === "string" && row.requestId.length > 0
-    ? `id=${row.requestId.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "?")}` : "";
+    && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(row.requestId)
+    ? `id=${row.requestId}` : "";
   return [time, String(status), route, duration, account, conversation, requestId].filter(Boolean).join("  ");
 }
 
+/** Read or follow request logs while preserving raw JSON and JSONL output. */
 async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");

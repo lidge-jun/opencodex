@@ -488,4 +488,4 @@ The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key
 
 ## Explain a listed request
 
-Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Older rows without an ID omit the field. JSON and JSONL output retain their existing schema.
+Human `ocx logs` output includes `id=<request-id>`. Pass that value to `ocx logs explain <request-id>` to inspect routing decisions. Rows without an ID or with control characters in their ID omit the field instead of displaying a different lookup key. JSON and JSONL output retain their existing schema.
