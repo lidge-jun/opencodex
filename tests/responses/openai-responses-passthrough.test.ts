@@ -156,7 +156,7 @@ describe("Responses request and compaction byte accounting", () => {
       expect(await iterator.next()).toEqual({ done: false, value: { type: "heartbeat" } });
       await expect(iterator.next()).rejects.toMatchObject({ code: "translation_buffer_limit" });
       expect(cancelled).toBe(true);
-      expect(budget.snapshot()).toMatchObject({ currentBytes: fragment.length, overflows: 1 });
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, overflows: 1 });
     } finally { await iterator.return(undefined); budget.dispose(); }
     expect(budget.snapshot().currentBytes).toBe(0);
   });
@@ -200,7 +200,7 @@ describe("Responses request and compaction byte accounting", () => {
   });
 
   test.each(["response.failed", "response.incomplete", "consumer return"])(
-    "%s leaves collector cleanup with the owning budget and cancels upstream", async ending => {
+    "%s releases partial collectors and cancels upstream", async ending => {
       const partial = "中\ud800";
       const endingPayload = ending === "response.failed"
         ? { type: ending, response: { error: { message: "stopped" } } }
@@ -224,7 +224,7 @@ describe("Responses request and compaction byte accounting", () => {
           await iterator.return(undefined);
         }
         expect(cancelled).toBe(true);
-        expect(budget.snapshot().currentBytes).toBe(encoder.encode(partial).byteLength);
+        expect(budget.snapshot().currentBytes).toBe(0);
       } finally { await iterator.return(undefined); budget.dispose(); }
       expect(budget.snapshot().currentBytes).toBe(0);
     },

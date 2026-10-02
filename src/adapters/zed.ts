@@ -5,7 +5,7 @@ import { createGoogleAdapter } from "./google";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
-import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
+import { createTranslatorBudget, releaseTranslatedEvent, retainTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
 import { redactSecretString } from "../lib/redact";
 import {
   normalizeZedProvider,
@@ -365,12 +365,33 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
         status: response.status,
         headers: { "Content-Type": "text/event-stream" },
       });
-      yield* delegate.adapter.parseStream(translated, budget);
+      try {
+        yield* delegate.adapter.parseStream(translated, budget);
+      } finally {
+        // Some delegates only unlock their reader when a collector stops early.
+        try { await translated.body?.cancel(); } catch { /* already closed/errored */ }
+      }
     },
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const events: AdapterEvent[] = [];
-      for await (const event of adapter.parseStream(response, budget)) events.push(event);
-      return events;
+      try {
+        for await (const event of adapter.parseStream(response, budget)) {
+          try {
+            retainTranslatedEvent(event, budget, events.at(-1));
+          } catch (error) {
+            // A refused Responses done event never transfers its source ciphertext lease.
+            if (delegate?.provider === "open_ai" && event.type === "done" && event.compactionEncryptedContent) {
+              budget.releaseRetained(Buffer.byteLength(event.compactionEncryptedContent), { kind: "retained_collectors" });
+            }
+            throw error;
+          }
+          events.push(event);
+        }
+        return events;
+      } catch (error) {
+        for (const event of events) releaseTranslatedEvent(event, budget);
+        throw error;
+      }
     },
   };
   return adapter;

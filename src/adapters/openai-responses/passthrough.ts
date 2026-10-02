@@ -590,112 +590,119 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let compactionEncryptedContent: string | undefined;
       let compactionEncryptedContentBytes = 0;
       let completedSeen = false;
-      for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
-        let payload: unknown;
-        try { payload = JSON.parse(event.data); } catch { continue; }
-        if (!isPlainObject(payload)) continue;
-        switch (payload.type) {
-          case "response.output_text.delta":
-            if (typeof payload.delta === "string") {
-              const next = deltas + payload.delta;
-              const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              deltas = next;
-              reservation.commitRetained();
-              budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
-              deltasBytes = nextBytes;
-              if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
-            }
-            break;
-          case "response.output_text.done":
-            if (typeof payload.text === "string") {
-              const next = doneText + payload.text;
-              const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              doneText = next;
-              reservation.commitRetained();
-              budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
-              doneTextBytes = nextBytes;
-              if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
-            }
-            break;
-          case "response.failed":
-          case "error":
-            yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
-            return;
-          case "response.incomplete":
-            yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
-            return;
-          case "response.completed":
-            {
-              completedSeen = true;
-              const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
-              const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
-              const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
-              if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
-                const nextEncryptedContent = compaction.encrypted_content;
-                const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
-                const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
-                compactionEncryptedContent = nextEncryptedContent;
+      let ciphertextTransferred = false;
+      try {
+        for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
+          let payload: unknown;
+          try { payload = JSON.parse(event.data); } catch { continue; }
+          if (!isPlainObject(payload)) continue;
+          switch (payload.type) {
+            case "response.output_text.delta":
+              if (typeof payload.delta === "string") {
+                const next = deltas + payload.delta;
+                const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                deltas = next;
                 reservation.commitRetained();
-                budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
-                compactionEncryptedContentBytes = nextEncryptedContentBytes;
+                budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
+                deltasBytes = nextBytes;
+                if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
               }
-              const next = responsesPayloadText(payload.response);
-              const nextBytes = Buffer.byteLength(next, "utf8");
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              snapshot = next;
-              reservation.commitRetained();
-              budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
-              snapshotBytes = nextBytes;
-            }
-            {
-              const nextUsage = usageFromResponsesPayload(payload.response);
-              // The attached raw usage object can be event-sized (unknown keys carry arbitrary
-              // values); it stays reachable until the terminal yields, so charge it like the
-              // adjacent retained collectors or it would defeat the per-request memory cap.
-              const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
-                : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
-              if (nextRawBytes > 0) {
-                const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
-                usage = nextUsage;
+              break;
+            case "response.output_text.done":
+              if (typeof payload.text === "string") {
+                const next = doneText + payload.text;
+                const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                doneText = next;
                 reservation.commitRetained();
-              } else {
-                usage = nextUsage;
+                budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
+                doneTextBytes = nextBytes;
+                if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
               }
-              if (usageRawBytes > 0) {
-                budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
+              break;
+            case "response.failed":
+            case "error":
+              yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
+              return;
+            case "response.incomplete":
+              yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
+              return;
+            case "response.completed":
+              {
+                completedSeen = true;
+                const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
+                const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
+                const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
+                if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
+                  const nextEncryptedContent = compaction.encrypted_content;
+                  const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
+                  const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
+                  compactionEncryptedContent = nextEncryptedContent;
+                  reservation.commitRetained();
+                  budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
+                  compactionEncryptedContentBytes = nextEncryptedContentBytes;
+                }
+                const next = responsesPayloadText(payload.response);
+                const nextBytes = Buffer.byteLength(next, "utf8");
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                snapshot = next;
+                reservation.commitRetained();
+                budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
+                snapshotBytes = nextBytes;
               }
-              usageRawBytes = nextRawBytes;
-            }
-            break;
+              {
+                const nextUsage = usageFromResponsesPayload(payload.response);
+                // The attached raw usage object can be event-sized (unknown keys carry arbitrary
+                // values); it stays reachable until the terminal yields, so charge it like the
+                // adjacent retained collectors or it would defeat the per-request memory cap.
+                const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
+                  : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
+                if (nextRawBytes > 0) {
+                  const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
+                  usage = nextUsage;
+                  reservation.commitRetained();
+                } else {
+                  usage = nextUsage;
+                }
+                if (usageRawBytes > 0) {
+                  budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
+                }
+                usageRawBytes = nextRawBytes;
+              }
+              break;
+          }
+          // Buffered text is still upstream progress, but gateway keepalives are not.
+          // Yield after accounting, directly to the consumer: no progress queue or content leak.
+          if (
+            !completedSeen
+            && (payload.type === "response.output_text.delta"
+              || payload.type === "response.reasoning_summary_text.delta"
+              || payload.type === "response.reasoning_text.delta")
+            && typeof payload.delta === "string"
+            && payload.delta.length > 0
+          ) {
+            yield { type: "heartbeat" };
+          }
         }
-        // Buffered text is still upstream progress, but gateway keepalives are not.
-        // Yield after accounting, directly to the consumer: no progress queue or content leak.
-        if (
-          !completedSeen
-          && (payload.type === "response.output_text.delta"
-            || payload.type === "response.reasoning_summary_text.delta"
-            || payload.type === "response.reasoning_text.delta")
-          && typeof payload.delta === "string"
-          && payload.delta.length > 0
-        ) {
-          yield { type: "heartbeat" };
-        }
+        // Gateways differ in which of these they emit; prefer the authoritative
+        // completed snapshot so text is never double-counted.
+        const text = snapshot || doneText || deltas;
+        if (text) yield { type: "text_delta", text };
+        // The bridge owns the raw ciphertext lease once it receives done.
+        ciphertextTransferred = true;
+        yield {
+          type: "done",
+          ...(usage ? { usage } : {}),
+          ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
+        };
+      } finally {
+        budget.releaseRetained(
+          deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes
+            + (ciphertextTransferred ? 0 : compactionEncryptedContentBytes),
+          { kind: "retained_collectors" },
+        );
       }
-      // Gateways differ in which of these they emit; prefer the authoritative
-      // completed snapshot so text is never double-counted.
-      const text = snapshot || doneText || deltas;
-      if (text) yield { type: "text_delta", text };
-      budget.releaseRetained(
-        deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes,
-        { kind: "retained_collectors" },
-      );
-      yield {
-        type: "done",
-        ...(usage ? { usage } : {}),
-        ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
-      };
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
