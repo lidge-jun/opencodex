@@ -27,6 +27,11 @@ describe("i18n locale contracts", () => {
     expect(DICTS.vi["lang.nativeName"]).toBe("Tiếng Việt");
   });
 
+  test("Brazilian Portuguese locale is registered", () => {
+    expect(LOCALES.find(locale => locale.code === "pt")?.htmlLang).toBe("pt-BR");
+    expect(DICTS.pt["lang.nativeName"]).toBe("Português");
+  });
+
   test("every locale has a catalog-backed display name", () => {
     for (const { code } of LOCALES) {
       const displayName = DICTS[code]["lang.nativeName"];

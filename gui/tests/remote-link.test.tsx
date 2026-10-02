@@ -479,7 +479,7 @@ test("readLinkJson preserves unknown server codes and status", async () => {
   expect((caught as LinkApiError).code).toBe("future_code");
   expect((caught as LinkApiError).status).toBe(418);
   expect((caught as LinkApiError).hint).toBeNull();
-  expect(LOCALES).toHaveLength(10);
+  expect(LOCALES).toHaveLength(11);
   let hinted: unknown;
   try { await readLinkJson(new Response(JSON.stringify({ error: { code: "probe_failed", hint: `bad\u202e\u0007 line ${"x".repeat(300)}` } }), { status: 502 })); } catch (error) { hinted = error; }
   const hint = (hinted as LinkApiError).hint ?? "";

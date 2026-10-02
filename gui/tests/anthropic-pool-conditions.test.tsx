@@ -230,7 +230,7 @@ describe("every locale carries the same pool claims", () => {
   ] as const;
 
   test("keys exist and the checkable tokens survive translation", () => {
-    expect(LOCALES.length).toBe(10);
+    expect(LOCALES.length).toBe(11);
     for (const { code } of LOCALES) {
       const dict = DICTS[code];
       for (const key of KEYS) {
